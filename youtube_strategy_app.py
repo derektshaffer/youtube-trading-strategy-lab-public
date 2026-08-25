@@ -306,7 +306,7 @@ with st.sidebar:
             st.caption("Your free Gemini key is used first; paid credits are used only after its quota is reached.")
     else:
         st.caption("Optional paid Gemini backup is not configured.")
-    st.success("Alpaca connected") if alpaca_ready else st.warning("Alpaca credentials needed")
+    _ =st.success("Alpaca connected") if alpaca_ready else st.warning("Alpaca credentials needed")
     st.caption(f'Model: {setting("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)}')
     st.caption(f'Live feed: {setting("ALPACA_LIVE_FEED", "iex").upper()}')
     st.caption(f'Historical feed: {setting("ALPACA_HISTORICAL_FEED", "sip").upper()}')
