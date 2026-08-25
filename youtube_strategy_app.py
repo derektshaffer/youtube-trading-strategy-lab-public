@@ -1176,9 +1176,9 @@ with optimizer_tab:
             optimizer_risk = third_row[0].number_input(
                 "Maximum risk per trade to test (%)",
                 min_value=0.05,
-                max_value=10.0,
-                value=2.0,
-                step=0.05,
+                max_value=100.0,
+                value=10.0,
+                step=1,
                 help="The optimizer compares lower risk levels and will never recommend more than this ceiling.",
             )
             optimizer_position = third_row[1].number_input(
