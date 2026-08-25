@@ -1280,6 +1280,8 @@ with optimizer_tab:
             )
 
         if optimization_requested:
+            # A new optimization request must never leave a previous ticker's report on screen.
+            st.session_state.pop("stock_optimization_report", None)
             requested_symbols = parse_symbols(optimizer_symbol_raw)
             if len(requested_symbols) != 1:
                 st.error("Enter exactly one stock ticker, such as SDOT, LUCY, or NVDA.")
@@ -1374,6 +1376,8 @@ with optimizer_tab:
                         st.session_state["stock_optimization_report"] = report
                         progress_bar.progress(1.0, text=f"Strategy optimization complete for {ticker}")
                     except AppError as error:
+                        # Keep the previous result cleared if the new ticker fails to optimize.
+                        st.session_state.pop("stock_optimization_report", None)
                         st.error(str(error))
 
         saved_notice = st.session_state.pop("optimizer_saved_notice", None)
@@ -1381,6 +1385,18 @@ with optimizer_tab:
             st.success(str(saved_notice))
 
         optimization_report = st.session_state.get("stock_optimization_report") or {}
+        current_optimizer_symbols = parse_symbols(optimizer_symbol_raw)
+        current_optimizer_symbol = current_optimizer_symbols[0] if len(current_optimizer_symbols) == 1 else ""
+        stored_optimizer_symbol = str(optimization_report.get("symbol") or "").strip().upper()
+        if optimization_report.get("rankings") and (
+            not current_optimizer_symbol or stored_optimizer_symbol != current_optimizer_symbol
+        ):
+            if stored_optimizer_symbol:
+                st.info(
+                    f"Previous {stored_optimizer_symbol} optimization results are hidden because the optimizer is now set to "
+                    f"{current_optimizer_symbol or 'a different/invalid ticker'}. Run the optimizer to create a new matching report."
+                )
+            optimization_report = {}
         if optimization_report.get("rankings"):
             optimized_symbol = str(optimization_report.get("symbol") or "?")
             winning = optimization_report["winner"]
