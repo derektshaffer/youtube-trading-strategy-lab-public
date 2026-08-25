@@ -1175,7 +1175,7 @@ with optimizer_tab:
             third_row = st.columns(4)
             optimizer_risk = third_row[0].number_input(
                 "Maximum risk per trade to test (%)",
-                min_value=0.05,
+                min_value=1.0,
                 max_value=100.0,
                 value=10.0,
                 step=1,
