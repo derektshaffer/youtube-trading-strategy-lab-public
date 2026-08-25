@@ -1,0 +1,70 @@
+name: Runtime funnel optimizer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/runtime-funnel-optimizer.yml"
+      - ".github/scripts/runtime_funnel_optimizer.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m pip install -r requirements.txt
+      - name: Apply funnel patch
+        run: python .github/scripts/runtime_funnel_optimizer.py
+      - name: Verify
+        run: |
+          python -m py_compile youtube_strategy_engine.py youtube_strategy_app.py
+          python -m unittest -q test_youtube_strategy_engine.py
+          python - <<'PY'
+          from datetime import datetime, timedelta, timezone
+          from zoneinfo import ZoneInfo
+          import youtube_strategy_engine as e
+
+          ET = ZoneInfo("America/New_York")
+          def bar(day, minute, o, h, l, c, v=1000):
+              local = datetime(2026, 8, day, 9, 30, tzinfo=ET) + timedelta(minutes=minute)
+              return {"t": local.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"), "o":o,"h":h,"l":l,"c":c,"v":v}
+
+          rows=[]
+          for day in range(1, 13):
+              base=10+day*0.05
+              for minute in range(60):
+                  o=base+minute*0.01
+                  c=o+(0.03 if minute%3 else -0.01)
+                  rows.append(bar(day,minute,o,max(o,c)+0.05,min(o,c)-0.03,c,1000+minute*25+day*10))
+
+          strategies=[]
+          for idx in range(7):
+              strategies.append({
+                  "id":f"s{idx}","name":f"Strategy {idx}","direction":"long",
+                  "machine_rules":e.normalize_machine_rules({"min_price":1,"stop_loss_pct":2+idx*0.5,"reward_risk":1+(idx%3)*0.5,"max_hold_minutes":20+idx}),
+                  "unresolved_rules":[],
+              })
+          settings=e.BacktestSettings(starting_cash=2000,risk_per_trade_pct=10,max_position_pct=100,default_stop_pct=2,default_reward_risk=2,spread_bps=12,slippage_bps=8)
+          opt=e.OptimizationSettings(max_variants_per_strategy=240,finalists_per_strategy=24,max_execution_variants_per_finalist=64,minimum_training_trades=1,minimum_validation_trades=1,selection_mode="historical_pnl")
+          report=e.optimize_stock_timeframes(rows,strategies,"DFNS",settings,opt,timeframes=("1Min","5Min","15Min"))
+          assert report.get("rankings") and report.get("winner"), report
+          assert report.get("strategies_screened") == 7, report
+          assert report.get("strategies_deep_optimized") <= 2, report
+          assert report.get("timeframe") in {"1Min","5Min","15Min"}, report
+          print("funnel ok", report["timeframe"], report["strategies_deep_optimized"], report["variants_tested"])
+          PY
+      - name: Commit funnel optimizer
+        run: |
+          if git diff --quiet -- youtube_strategy_engine.py youtube_strategy_app.py; then
+            echo "Funnel optimizer already applied."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add youtube_strategy_engine.py youtube_strategy_app.py
+          git commit -m "Use runtime-safe optimizer funnel"
+          git push
