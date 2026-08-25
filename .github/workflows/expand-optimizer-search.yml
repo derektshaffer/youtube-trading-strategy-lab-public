@@ -1,0 +1,894 @@
+name: Expand optimizer search
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/expand-optimizer-search.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-optimizer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Expand optimizer and add full-window objective
+        shell: python
+        run: |
+          from pathlib import Path
+          import textwrap
+
+          engine_path = Path("youtube_strategy_engine.py")
+          engine = engine_path.read_text(encoding="utf-8")
+
+          # Widen optimizer limits and add an explicit selection objective.
+          engine = engine.replace(
+              "    maximum_drawdown_pct: float = 15.0\n\n    def validate(self) -> None:\n",
+              "    maximum_drawdown_pct: float = 15.0\n    selection_mode: str = \"validated\"\n\n    def validate(self) -> None:\n",
+              1,
+          )
+          engine = engine.replace(
+              "if not 1 <= self.max_variants_per_strategy <= 120:\n            raise AppError(\"Test between 1 and 120 settings combinations per strategy.\")",
+              "if not 1 <= self.max_variants_per_strategy <= 320:\n            raise AppError(\"Test between 1 and 320 settings combinations per strategy.\")",
+              1,
+          )
+          engine = engine.replace(
+              "if not 1 <= self.finalists_per_strategy <= min(20, self.max_variants_per_strategy):",
+              "if not 1 <= self.finalists_per_strategy <= min(32, self.max_variants_per_strategy):",
+              1,
+          )
+          engine = engine.replace(
+              "if not 1 <= self.max_execution_variants_per_finalist <= 24:\n            raise AppError(\"Test between 1 and 24 risk and position-size combinations per finalist.\")",
+              "if not 1 <= self.max_execution_variants_per_finalist <= 64:\n            raise AppError(\"Test between 1 and 64 risk and position-size combinations per finalist.\")",
+              1,
+          )
+          validation_anchor = "        if not 0.5 <= self.maximum_drawdown_pct <= 75.0:\n"
+          selection_check = (
+              "        if self.selection_mode not in {\"validated\", \"historical_pnl\"}:\n"
+              "            raise AppError(\"Choose either validated or historical-P/L optimization.\")\n"
+          )
+          if selection_check not in engine:
+              if validation_anchor not in engine:
+                  raise SystemExit("Could not find OptimizationSettings validation anchor")
+              engine = engine.replace(validation_anchor, selection_check + validation_anchor, 1)
+
+          # Replace the narrow rule generator with a broad, bounded search that includes
+          # stop/reward cross-products and every currently measurable rule family.
+          start = engine.index("def generate_strategy_variants(")
+          end = engine.index("\ndef generate_execution_variants(", start)
+          new_strategy_generator = textwrap.dedent(r'''
+          def generate_strategy_variants(
+              strategy: dict[str, Any],
+              backtest_settings: BacktestSettings | None = None,
+              *,
+              maximum: int = 36,
+          ) -> list[dict[str, Any]]:
+              """Create a broad but bounded grid across all measurable strategy settings."""
+              settings = backtest_settings or BacktestSettings()
+              settings.validate()
+              limit = max(1, min(320, int(maximum)))
+              original = normalize_machine_rules(strategy.get("machine_rules"))
+              baseline = dict(original)
+              baseline["stop_loss_pct"] = original.get("stop_loss_pct") or settings.default_stop_pct
+              baseline["reward_risk"] = original.get("reward_risk") or settings.default_reward_risk
+              variants: list[dict[str, Any]] = []
+              seen: set[str] = set()
+
+              def add(updates: dict[str, Any]) -> None:
+                  if len(variants) >= limit:
+                      return
+                  candidate = normalize_machine_rules({**baseline, **updates})
+                  if candidate.get("session_start") and candidate.get("session_end"):
+                      start_clock = parse_clock_minutes(candidate["session_start"])
+                      end_clock = parse_clock_minutes(candidate["session_end"])
+                      if start_clock is not None and end_clock is not None and start_clock >= end_clock:
+                          return
+                  min_price = safe_float(candidate.get("min_price"))
+                  max_price = safe_float(candidate.get("max_price"))
+                  if min_price is not None and max_price is not None and min_price >= max_price:
+                      return
+                  signature = json.dumps(candidate, sort_keys=True, separators=(",", ":"))
+                  if signature not in seen:
+                      seen.add(signature)
+                      variants.append(candidate)
+
+              add({})
+
+              # Broad absolute stop grid. 4.2% is deliberately present because values around
+              # 4-5% are common enough that a multiplier-only search can easily miss them.
+              stop_values = sorted({
+                  round(float(baseline["stop_loss_pct"]), 4),
+                  0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 3.5,
+                  4.0, 4.2, 4.5, 5.0, 6.0, 7.5, 10.0, 12.5, 15.0,
+              })
+              reward_values = sorted({
+                  round(float(baseline["reward_risk"]), 4),
+                  0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0,
+              })
+
+              # Test individual values first so every stop and target level gets considered,
+              # then test their cross-product instead of changing only one at a time.
+              for stop in stop_values:
+                  add({"stop_loss_pct": stop})
+              for reward in reward_values:
+                  add({"reward_risk": reward})
+              for stop in stop_values:
+                  for reward in reward_values:
+                      add({"stop_loss_pct": stop, "reward_risk": reward})
+
+              tunable = (
+                  ("min_price", (0.60, 0.80, 1.20, 1.50), 0.01, 1_000.0, False),
+                  ("max_price", (0.70, 0.85, 1.20, 1.50), 0.01, 5_000.0, False),
+                  ("min_day_change_pct", (0.50, 0.70, 0.85, 1.15, 1.30, 1.60), -50.0, 200.0, False),
+                  ("min_relative_volume", (0.50, 0.70, 0.85, 1.15, 1.30, 1.60), 0.10, 50.0, False),
+                  ("min_dollar_volume", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 100.0, 2_000_000_000.0, False),
+                  ("max_spread_pct", (0.60, 0.80, 1.25, 1.60), 0.01, 50.0, False),
+                  ("max_vwap_distance_pct", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 0.05, 100.0, False),
+                  ("breakout_lookback_bars", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 1.0, 150.0, True),
+                  ("opening_range_minutes", (0.50, 0.75, 1.25, 1.50, 2.0), 1.0, 180.0, True),
+                  ("volume_surge_ratio", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 0.10, 50.0, False),
+                  ("minimum_green_bars", (0.50, 0.75, 1.25, 1.50, 2.0), 1.0, 12.0, True),
+                  ("max_hold_minutes", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 1.0, 390.0, True),
+              )
+              single_adjustments: list[dict[str, Any]] = []
+              for field_name, multipliers, minimum, maximum_value, integer in tunable:
+                  current = safe_float(original.get(field_name))
+                  if current is None:
+                      continue
+                  for option in _optimizer_number_options(
+                      current,
+                      multipliers,
+                      minimum=minimum,
+                      maximum=maximum_value,
+                      integer=integer,
+                  ):
+                      if option != current:
+                          update = {field_name: option}
+                          single_adjustments.append(update)
+                          add(update)
+
+              # Session boundaries are executable settings too; sweep both tighter and wider windows.
+              for field_name in ("session_start", "session_end"):
+                  clock = original.get(field_name)
+                  if not clock:
+                      continue
+                  for offset in (-60, -30, -15, 15, 30, 60):
+                      adjusted = _shift_strategy_clock(str(clock), offset, earliest=9 * 60 + 30, latest=15 * 60 + 55)
+                      if adjusted != clock:
+                          update = {field_name: adjusted}
+                          single_adjustments.append(update)
+                          add(update)
+
+              # If the source explicitly specifies a boolean filter, test whether requiring it
+              # helps or hurts. Null/unknown rules are not invented.
+              for field_name in ("above_vwap", "vwap_reclaim"):
+                  current = original.get(field_name)
+                  if isinstance(current, bool):
+                      update = {field_name: not current}
+                      single_adjustments.append(update)
+                      add(update)
+
+              # Use remaining budget for pairwise interactions among threshold/session settings.
+              # This catches combinations a one-variable-at-a-time search cannot discover.
+              for left_index, left in enumerate(single_adjustments):
+                  for right in single_adjustments[left_index + 1:]:
+                      if set(left).isdisjoint(right):
+                          add({**left, **right})
+                      if len(variants) >= limit:
+                          break
+                  if len(variants) >= limit:
+                      break
+
+              return variants[:limit]
+          ''').strip() + "\n\n"
+          engine = engine[:start] + new_strategy_generator + engine[end + 1:]
+
+          # Replace the partial sizing search with an explicit risk x position grid.
+          start = engine.index("def generate_execution_variants(")
+          end = engine.index("\ndef _optimization_score(", start)
+          new_execution_generator = textwrap.dedent(r'''
+          def generate_execution_variants(
+              settings: BacktestSettings,
+              *,
+              maximum: int = 7,
+          ) -> list[BacktestSettings]:
+              """Test a broad risk-per-trade x maximum-position grid while holding costs fixed."""
+              settings.validate()
+              limit = max(1, min(64, int(maximum)))
+              risk_ceiling = float(settings.risk_per_trade_pct)
+              position_ceiling = float(settings.max_position_pct)
+
+              risk_grid = [0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 7.5, 10.0]
+              position_grid = [10.0, 20.0, 25.0, 33.0, 50.0, 67.0, 75.0, 100.0]
+              risk_values = [risk_ceiling] + [value for value in risk_grid if value < risk_ceiling]
+              position_values = [position_ceiling] + [value for value in position_grid if value < position_ceiling]
+              risk_values = list(dict.fromkeys(round(max(0.01, value), 4) for value in risk_values))
+              position_values = list(dict.fromkeys(round(max(0.01, value), 4) for value in position_values))
+
+              candidates: list[BacktestSettings] = []
+              seen: set[tuple[float, float]] = set()
+              for risk in risk_values:
+                  for position in position_values:
+                      if len(candidates) >= limit:
+                          return candidates
+                      signature = (risk, position)
+                      if signature in seen:
+                          continue
+                      seen.add(signature)
+                      candidates.append(
+                          replace(settings, risk_per_trade_pct=risk, max_position_pct=position)
+                      )
+              return candidates
+          ''').strip() + "\n\n"
+          engine = engine[:start] + new_execution_generator + engine[end + 1:]
+
+          # Add an explicit full-window optimizer. This is intentionally separate from the
+          # validated optimizer so the UI can distinguish curve fitting from out-of-sample evidence.
+          optimize_anchor = "def optimize_stock_strategies(\n"
+          if "def _optimize_stock_strategies_historical(" not in engine:
+              insert_at = engine.index(optimize_anchor)
+              historical_helpers = textwrap.dedent(r'''
+              def _historical_metric_key(metrics: dict[str, Any], maximum_drawdown_pct: float) -> tuple[Any, ...]:
+                  pnl = safe_float(metrics.get("net_pnl"), 0.0) or 0.0
+                  drawdown = safe_float(metrics.get("max_drawdown_pct"), 0.0) or 0.0
+                  return_pct = safe_float(metrics.get("return_pct"), 0.0) or 0.0
+                  profit_factor = safe_float(metrics.get("profit_factor"), -1.0)
+                  trades = int(safe_float(metrics.get("trade_count"), 0.0) or 0.0)
+                  return (
+                      drawdown <= maximum_drawdown_pct,
+                      pnl,
+                      return_pct,
+                      profit_factor if profit_factor is not None else -1.0,
+                      -drawdown,
+                      trades,
+                  )
+
+
+              def _optimize_stock_strategies_historical(
+                  rows: list[dict[str, Any]],
+                  strategies: list[dict[str, Any]],
+                  symbol: str,
+                  backtest_settings: BacktestSettings | None = None,
+                  optimization_settings: OptimizationSettings | None = None,
+                  *,
+                  progress: Callable[[int, int, str], None] | None = None,
+              ) -> dict[str, Any]:
+                  """Search the complete requested window for maximum historical P/L.
+
+                  This mode is useful for discovering what settings best fit a known period, but it
+                  intentionally does not claim out-of-sample validation.
+                  """
+                  settings = backtest_settings or BacktestSettings()
+                  settings.validate()
+                  optimizer = optimization_settings or OptimizationSettings(selection_mode="historical_pnl")
+                  optimizer.validate()
+                  tickers = parse_symbols(symbol)
+                  if len(tickers) != 1:
+                      raise AppError("Enter exactly one valid stock ticker to optimize.")
+                  target_symbol = tickers[0]
+                  frame = bars_to_frame(rows)
+                  sessions = list(dict.fromkeys(frame.get("session", pd.Series(dtype=str)).tolist()))
+                  if not sessions:
+                      raise AppError("No regular-session historical candles were available for optimization.")
+
+                  warnings = [
+                      "Maximum historical P/L mode uses the same period to choose and score settings. "
+                      "It is useful for finding the best fit to this history, but it can overfit and is not an out-of-sample validation."
+                  ]
+                  if len(sessions) < 8:
+                      warnings.append(
+                          f"Only {len(sessions)} trading sessions are available, so the historical optimum can be especially noisy."
+                      )
+                  eligible: list[dict[str, Any]] = []
+                  for strategy in strategies:
+                      if not isinstance(strategy, dict) or not strategy.get("id"):
+                          continue
+                      if str(strategy.get("direction", "long")).lower() not in {"long", "both"}:
+                          warnings.append(f'{strategy.get("name", "Unnamed strategy")}: skipped because short-only strategies are not supported.')
+                          continue
+                      target = str(strategy.get("optimized_for_symbol") or "").strip().upper()
+                      if target and target != target_symbol:
+                          warnings.append(f'{strategy.get("name", "Unnamed strategy")}: skipped because it is locked to {target}.')
+                          continue
+                      eligible.append(strategy)
+                  if not eligible:
+                      raise AppError("No saved long strategies are available for this stock. Add or review a strategy first.")
+
+                  search_plan = [
+                      (strategy, generate_strategy_variants(strategy, settings, maximum=optimizer.max_variants_per_strategy))
+                      for strategy in eligible
+                  ]
+                  execution_variants = (
+                      generate_execution_variants(settings, maximum=optimizer.max_execution_variants_per_finalist)
+                      if optimizer.optimize_position_sizing else [settings]
+                  )
+                  total_steps = sum(
+                      len(variants) + min(len(variants), optimizer.finalists_per_strategy) * max(1, len(execution_variants)) + 1
+                      for _, variants in search_plan
+                  )
+                  completed = 0
+
+                  def notify(message: str) -> None:
+                      nonlocal completed
+                      completed += 1
+                      if progress:
+                          progress(min(completed, total_steps), total_steps, message)
+
+                  ranked: list[dict[str, Any]] = []
+                  for source_strategy, variants in search_plan:
+                      name = str(source_strategy.get("name") or "Unnamed strategy")
+                      original = normalize_machine_rules(source_strategy.get("machine_rules"))
+                      indicator_cache: dict[tuple[int, int], pd.DataFrame] = {}
+
+                      def evaluate(candidate_rules: dict[str, Any], chosen_settings: BacktestSettings) -> dict[str, Any]:
+                          candidate_strategy = {**source_strategy, "machine_rules": candidate_rules}
+                          key = (
+                              int(candidate_rules.get("breakout_lookback_bars") or 20),
+                              int(candidate_rules.get("opening_range_minutes") or 15),
+                          )
+                          if key not in indicator_cache:
+                              indicator_cache[key] = add_indicators(frame, candidate_strategy)
+                          return run_backtest(
+                              [], candidate_strategy, target_symbol, chosen_settings,
+                              prepared_indicators=indicator_cache[key],
+                          )
+
+                      rule_candidates: list[dict[str, Any]] = []
+                      for variant_index, rules in enumerate(variants):
+                          candidate_settings = replace(
+                              settings,
+                              default_stop_pct=float(rules.get("stop_loss_pct") or settings.default_stop_pct),
+                              default_reward_risk=float(rules.get("reward_risk") or settings.default_reward_risk),
+                          )
+                          result = evaluate(rules, candidate_settings)
+                          metrics = result["metrics"]
+                          rule_candidates.append({
+                              "variant_index": variant_index,
+                              "execution_index": 0,
+                              "rules": rules,
+                              "settings": candidate_settings,
+                              "metrics": metrics,
+                          })
+                          notify(f"{name}: rule set {variant_index + 1} of {len(variants)}")
+
+                      rule_candidates.sort(
+                          key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct),
+                          reverse=True,
+                      )
+                      finalists = rule_candidates[:min(len(rule_candidates), optimizer.finalists_per_strategy)]
+                      baseline = rule_candidates[0] if rule_candidates else None
+                      original_candidate = next((item for item in rule_candidates if item["variant_index"] == 0), None)
+                      if original_candidate and finalists and all(item["variant_index"] != 0 for item in finalists):
+                          finalists[-1] = original_candidate
+
+                      sized_candidates: list[dict[str, Any]] = []
+                      for finalist in finalists:
+                          for execution_index, execution in enumerate(execution_variants):
+                              candidate_settings = replace(
+                                  execution,
+                                  default_stop_pct=float(finalist["rules"].get("stop_loss_pct") or execution.default_stop_pct),
+                                  default_reward_risk=float(finalist["rules"].get("reward_risk") or execution.default_reward_risk),
+                              )
+                              result = evaluate(finalist["rules"], candidate_settings)
+                              sized_candidates.append({
+                                  **finalist,
+                                  "execution_index": execution_index,
+                                  "settings": candidate_settings,
+                                  "metrics": result["metrics"],
+                              })
+                              notify(
+                                  f"{name}: {candidate_settings.risk_per_trade_pct:g}% risk / "
+                                  f"{candidate_settings.max_position_pct:g}% max position"
+                              )
+
+                      if not sized_candidates:
+                          continue
+                      sized_candidates.sort(
+                          key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct),
+                          reverse=True,
+                      )
+                      best = sized_candidates[0]
+                      chosen_settings = best["settings"]
+                      stressed_settings = replace(
+                          chosen_settings,
+                          spread_bps=chosen_settings.spread_bps * optimizer.stress_cost_multiplier,
+                          slippage_bps=chosen_settings.slippage_bps * optimizer.stress_cost_multiplier,
+                      )
+                      stress_metrics = evaluate(best["rules"], stressed_settings)["metrics"]
+                      notify(f"{name}: higher-cost stress test")
+
+                      metrics = best["metrics"]
+                      pnl = safe_float(metrics.get("net_pnl"), 0.0) or 0.0
+                      drawdown = safe_float(metrics.get("max_drawdown_pct"), 0.0) or 0.0
+                      if pnl <= 0:
+                          status = "NO HISTORICAL PROFIT"
+                      elif drawdown > optimizer.maximum_drawdown_pct:
+                          status = "HIGH DRAWDOWN"
+                      else:
+                          status = "HISTORICAL BEST FIT"
+                      changed_rules = {
+                          key: {"original": original.get(key), "optimized": value}
+                          for key, value in best["rules"].items()
+                          if value != original.get(key)
+                      }
+                      changed_backtest_settings = {
+                          field_name: {"original": getattr(settings, field_name), "optimized": getattr(chosen_settings, field_name)}
+                          for field_name in ("risk_per_trade_pct", "max_position_pct", "default_stop_pct", "default_reward_risk")
+                          if getattr(settings, field_name) != getattr(chosen_settings, field_name)
+                      }
+                      settings_tested = len(variants) + len(finalists) * len(execution_variants)
+                      ranked.append({
+                          "source_strategy_id": source_strategy["id"],
+                          "strategy_name": name,
+                          "symbol": target_symbol,
+                          "optimized_rules": best["rules"],
+                          "changed_rules": changed_rules,
+                          "optimized_backtest_settings": asdict(chosen_settings),
+                          "changed_backtest_settings": changed_backtest_settings,
+                          "variants_tested": settings_tested,
+                          "rule_variants_tested": len(variants),
+                          "execution_variants_tested": len(finalists) * len(execution_variants),
+                          "finalists_tested": len(finalists),
+                          "training_metrics": metrics,
+                          "validation_metrics": metrics,
+                          "full_metrics": metrics,
+                          "holdout_metrics": {},
+                          "stress_metrics": stress_metrics,
+                          "score": round(pnl, 2),
+                          "status": status,
+                          "adequate_sample": int(safe_float(metrics.get("trade_count"), 0) or 0) >= 1,
+                          "baseline_training_metrics": original_candidate["metrics"] if original_candidate else metrics,
+                          "limitations": backtest_limitations(source_strategy),
+                      })
+
+                  if not ranked:
+                      raise AppError("No strategy/settings combinations could be evaluated for this stock.")
+                  ranked.sort(
+                      key=lambda item: _historical_metric_key(item["full_metrics"], optimizer.maximum_drawdown_pct),
+                      reverse=True,
+                  )
+                  winner = ranked[0]
+                  winner_source = next(item for item in eligible if item.get("id") == winner.get("source_strategy_id"))
+                  winner_settings = BacktestSettings(**winner["optimized_backtest_settings"])
+                  winner_strategy = {**winner_source, "machine_rules": winner["optimized_rules"]}
+                  winning_backtest = run_backtest(rows, winner_strategy, target_symbol, winner_settings)
+                  winner["full_metrics"] = winning_backtest["metrics"]
+                  winner["training_metrics"] = winning_backtest["metrics"]
+                  winner["validation_metrics"] = winning_backtest["metrics"]
+
+                  return {
+                      "symbol": target_symbol,
+                      "generated_at": isoformat_utc(utc_now()),
+                      "selection_mode": "historical_pnl",
+                      "session_count": len(sessions),
+                      "strategies_tested": len(eligible),
+                      "variants_tested": sum(item["variants_tested"] for item in ranked),
+                      "rule_variants_tested": sum(item["rule_variants_tested"] for item in ranked),
+                      "execution_variants_tested": sum(item["execution_variants_tested"] for item in ranked),
+                      "training_sessions": sessions,
+                      "validation_sessions": [],
+                      "holdout_sessions": [],
+                      "backtest_settings": asdict(settings),
+                      "optimization_settings": asdict(optimizer),
+                      "rankings": ranked,
+                      "winner": winner,
+                      "winning_backtest": winning_backtest,
+                      "recommended_backtest_settings": winner["optimized_backtest_settings"],
+                      "warnings": list(dict.fromkeys(warnings)),
+                  }
+
+
+              def _optimize_stock_timeframes_historical(
+                  one_minute_rows: list[dict[str, Any]],
+                  strategies: list[dict[str, Any]],
+                  symbol: str,
+                  backtest_settings: BacktestSettings | None,
+                  optimization_settings: OptimizationSettings,
+                  *,
+                  timeframes: tuple[str, ...],
+                  progress: Callable[[int, int, str], None] | None = None,
+              ) -> dict[str, Any]:
+                  requested = list(dict.fromkeys(str(item) for item in timeframes))
+                  if not requested or any(item not in {"1Min", "5Min", "15Min"} for item in requested):
+                      raise AppError("Select one or more supported candle intervals: 1Min, 5Min, or 15Min.")
+                  by_interval: list[tuple[str, dict[str, Any]]] = []
+                  for interval_index, interval in enumerate(requested):
+                      interval_rows = resample_intraday_bars(one_minute_rows, interval)
+
+                      def interval_progress(completed: int, total: int, message: str) -> None:
+                          if progress:
+                              portion = min(1.0, completed / max(total, 1))
+                              progress(
+                                  int((interval_index + portion) * 1000),
+                                  len(requested) * 1000,
+                                  f"{interval}: {message}",
+                              )
+
+                      report = _optimize_stock_strategies_historical(
+                          interval_rows,
+                          strategies,
+                          symbol,
+                          backtest_settings,
+                          optimization_settings,
+                          progress=interval_progress,
+                      )
+                      report["timeframe"] = interval
+                      report["timeframes_tested"] = [interval]
+                      for candidate in report["rankings"]:
+                          candidate["timeframe"] = interval
+                      report["winner"]["timeframe"] = interval
+                      by_interval.append((interval, report))
+
+                  candidates = [candidate for _, report in by_interval for candidate in report["rankings"]]
+                  candidates.sort(
+                      key=lambda item: _historical_metric_key(item["full_metrics"], optimization_settings.maximum_drawdown_pct),
+                      reverse=True,
+                  )
+                  winner = candidates[0]
+                  chosen_interval, chosen_report = next(
+                      item for item in by_interval if item[0] == winner["timeframe"]
+                  )
+                  # winner is already the top candidate in the chosen interval report because both
+                  # layers use the same historical metric key.
+                  combined = {
+                      **chosen_report,
+                      "selection_mode": "historical_pnl",
+                      "timeframe": chosen_interval,
+                      "timeframes_tested": requested,
+                      "strategies_tested": len({item["source_strategy_id"] for item in candidates}),
+                      "variants_tested": sum(report["variants_tested"] for _, report in by_interval),
+                      "rule_variants_tested": sum(report["rule_variants_tested"] for _, report in by_interval),
+                      "execution_variants_tested": sum(report["execution_variants_tested"] for _, report in by_interval),
+                      "rankings": candidates,
+                      "winner": winner,
+                      "timeframe_comparison": [
+                          {
+                              "timeframe": interval,
+                              "strategy_name": report["winner"]["strategy_name"],
+                              "validation_metrics": report["winner"]["full_metrics"],
+                              "full_metrics": report["winner"]["full_metrics"],
+                              "score": report["winner"]["score"],
+                              "status": report["winner"]["status"],
+                              "variants_tested": report["variants_tested"],
+                          }
+                          for interval, report in by_interval
+                      ],
+                      "warnings": list(dict.fromkeys(note for _, report in by_interval for note in report.get("warnings") or [])),
+                  }
+                  # Use the chosen interval's already-computed full backtest.
+                  combined["winning_backtest"] = chosen_report["winning_backtest"]
+                  combined["recommended_backtest_settings"] = winner["optimized_backtest_settings"]
+                  if progress:
+                      progress(len(requested) * 1000, len(requested) * 1000, f"Historical optimum: {chosen_interval}")
+                  return combined
+
+
+              ''')
+              engine = engine[:insert_at] + historical_helpers + engine[insert_at:]
+
+          # Branch the existing validated optimizer when historical-P/L mode is selected.
+          branch_anchor = (
+              "    optimizer = optimization_settings or OptimizationSettings()\n"
+              "    optimizer.validate()\n"
+              "    tickers = parse_symbols(symbol)\n"
+          )
+          branch_replacement = (
+              "    optimizer = optimization_settings or OptimizationSettings()\n"
+              "    optimizer.validate()\n"
+              "    if optimizer.selection_mode == \"historical_pnl\":\n"
+              "        return _optimize_stock_strategies_historical(\n"
+              "            rows, strategies, symbol, settings, optimizer, progress=progress\n"
+              "        )\n"
+              "    tickers = parse_symbols(symbol)\n"
+          )
+          if branch_replacement not in engine:
+              if branch_anchor not in engine:
+                  raise SystemExit("Could not find optimize_stock_strategies branch anchor")
+              engine = engine.replace(branch_anchor, branch_replacement, 1)
+
+          # Branch timeframe comparison before the validated holdout logic.
+          timeframe_anchor = (
+              "    \"\"\"Choose candle size on validation data before one global final holdout.\"\"\"\n"
+              "    requested = list(dict.fromkeys(str(item) for item in timeframes))\n"
+          )
+          timeframe_replacement = (
+              "    \"\"\"Choose candle size using the selected optimization objective.\"\"\"\n"
+              "    optimizer = optimization_settings or OptimizationSettings()\n"
+              "    optimizer.validate()\n"
+              "    if optimizer.selection_mode == \"historical_pnl\":\n"
+              "        return _optimize_stock_timeframes_historical(\n"
+              "            one_minute_rows, strategies, symbol, backtest_settings, optimizer,\n"
+              "            timeframes=timeframes, progress=progress,\n"
+              "        )\n"
+              "    requested = list(dict.fromkeys(str(item) for item in timeframes))\n"
+          )
+          if timeframe_replacement not in engine:
+              if timeframe_anchor not in engine:
+                  raise SystemExit("Could not find optimize_stock_timeframes branch anchor")
+              engine = engine.replace(timeframe_anchor, timeframe_replacement, 1)
+
+          engine_path.write_text(engine, encoding="utf-8")
+
+          # ---------------- App/UI changes ----------------
+          app_path = Path("youtube_strategy_app.py")
+          app = app_path.read_text(encoding="utf-8")
+
+          # Remember the exact assumptions from the most recent manual backtest so the optimizer
+          # can start apples-to-apples in the same Streamlit session.
+          manual_anchor = (
+              "                    fee_per_order=order_fee,\n"
+              "                )\n"
+              "                try:\n"
+          )
+          manual_replacement = (
+              "                    fee_per_order=order_fee,\n"
+              "                )\n"
+              "                st.session_state[\"last_manual_backtest_settings\"] = {\n"
+              "                    \"starting_cash\": float(starting_cash),\n"
+              "                    \"risk_per_trade_pct\": float(risk_per_trade),\n"
+              "                    \"max_position_pct\": float(position_cap),\n"
+              "                    \"default_stop_pct\": float(default_stop),\n"
+              "                    \"default_reward_risk\": float(default_ratio),\n"
+              "                    \"spread_bps\": float(spread_bps),\n"
+              "                    \"slippage_bps\": float(slippage_bps),\n"
+              "                    \"fee_per_order\": float(order_fee),\n"
+              "                }\n"
+              "                st.session_state[\"last_manual_history_days\"] = int(history_days)\n"
+              "                st.session_state[\"last_manual_timeframe\"] = str(timeframe)\n"
+              "                try:\n"
+          )
+          if manual_replacement not in app:
+              if manual_anchor not in app:
+                  raise SystemExit("Could not find manual backtest settings anchor")
+              app = app.replace(manual_anchor, manual_replacement, 1)
+
+          optimizer_form = app.index('        with st.form("stock_optimizer_form"):\n')
+          optimizer_end = app.index("        if optimization_requested:\n", optimizer_form)
+          before, form_section, after = app[:optimizer_form], app[optimizer_form:optimizer_end], app[optimizer_end:]
+
+          # Add objective selector and reuse last manual assumptions when available.
+          form_section = form_section.replace(
+              '        with st.form("stock_optimizer_form"):\n',
+              '        manual_optimizer_defaults = st.session_state.get("last_manual_backtest_settings") or {}\n'
+              '        with st.form("stock_optimizer_form"):\n',
+              1,
+          )
+          form_section = form_section.replace(
+              "                value=90,\n",
+              '                value=max(7, min(180, int(st.session_state.get("last_manual_history_days", 90)))),\n',
+              1,
+          )
+          objective_block = (
+              '            optimizer_goal = st.selectbox(\n'
+              '                "Optimization goal",\n'
+              '                [\n'
+              '                    "Maximum historical P/L — search the full selected window",\n'
+              '                    "Validated edge — keep training, validation, and holdout separate",\n'
+              '                ],\n'
+              '                index=0,\n'
+              '                help=(\n'
+              '                    "Maximum historical P/L is designed to find the best settings for the period you chose, "\n'
+              '                    "including settings the holdout-only validator is not allowed to learn from. Validated edge "\n'
+              '                    "is more conservative for judging whether the result may generalize."\n'
+              '                ),\n'
+              '            )\n'
+              '            if optimizer_goal.startswith("Maximum historical"):\n'
+              '                st.caption("Historical-P/L mode searches the whole window and can overfit. Use Validated edge afterward as a robustness check.")\n\n'
+          )
+          if "Optimization goal" not in form_section:
+              form_section = form_section.replace("            second_row = st.columns(4)\n", objective_block + "            second_row = st.columns(4)\n", 1)
+
+          form_section = form_section.replace(
+              '["Quick — 16 combinations", "Balanced — 36 combinations", "Thorough — 64 combinations"]',
+              '["Quick — 48 combinations", "Balanced — 120 combinations", "Comprehensive — 240 combinations", "Exhaustive — 320 combinations"]',
+              1,
+          )
+          form_section = form_section.replace(
+              '                index=1,\n                help="The combination limit applies to each saved strategy. Thorough searches take longer.",',
+              '                index=2,\n                help="The combination limit applies to each saved strategy. Comprehensive and Exhaustive search stop/target interactions and more rule thresholds.",',
+              1,
+          )
+          form_section = form_section.replace(
+              '["Quick — 4 sizing combinations", "Balanced — 7 sizing combinations", "Thorough — 12 sizing combinations"]',
+              '["Quick — 8 sizing combinations", "Balanced — 24 sizing combinations", "Comprehensive — 48 sizing combinations", "Exhaustive — 64 sizing combinations"]',
+              1,
+          )
+          form_section = form_section.replace(
+              '                index=1,\n            )\n            use_live_spread = protection_row[2].checkbox(',
+              '                index=2,\n            )\n            use_live_spread = protection_row[2].checkbox(',
+              1,
+          )
+          form_section = form_section.replace(
+              '                value=True,\n                help="The optimizer uses whichever is larger: your spread estimate or the latest quoted spread.",',
+              '                value=False,\n                help="Leave this off when you want an apples-to-apples comparison with the manual backtest. Turn it on for a more conservative live-spread assumption.",',
+              1,
+          )
+
+          # Prefill optimizer assumptions from the manual run where available.
+          replacements = {
+              "                value=2_000.0,\n                step=100.0,\n": "                value=float(manual_optimizer_defaults.get(\"starting_cash\", 2_000.0)),\n                step=100.0,\n",
+              "                value=10.0,\n                step=0.25,\n": "                value=float(manual_optimizer_defaults.get(\"risk_per_trade_pct\", 10.0)),\n                step=0.25,\n",
+              "                value=100.0,\n                step=1.0,\n": "                value=float(manual_optimizer_defaults.get(\"max_position_pct\", 100.0)),\n                step=1.0,\n",
+              "                value=2.0,\n                step=0.1,\n": "                value=float(manual_optimizer_defaults.get(\"default_stop_pct\", 2.0)),\n                step=0.1,\n",
+          }
+          for old, new in replacements.items():
+              if old in form_section:
+                  form_section = form_section.replace(old, new, 1)
+
+          # Target the reward/spread/slippage/fee fields by replacing their nearby fixed defaults.
+          form_section = form_section.replace(
+              '            optimizer_reward = third_row[3].number_input(\n                "Fallback reward/risk",\n',
+              '            optimizer_reward = third_row[3].number_input(\n                "Fallback reward/risk",\n',
+              1,
+          )
+          reward_marker = '                value=2.0,\n                step=0.1,\n            )\n\n            friction_row = st.columns(3)'
+          if reward_marker in form_section:
+              form_section = form_section.replace(
+                  reward_marker,
+                  '                value=float(manual_optimizer_defaults.get("default_reward_risk", 2.0)),\n                step=0.1,\n            )\n\n            friction_row = st.columns(3)',
+                  1,
+              )
+          form_section = form_section.replace(
+              '                value=12.0,\n                step=1.0,\n',
+              '                value=float(manual_optimizer_defaults.get("spread_bps", 12.0)),\n                step=1.0,\n',
+              1,
+          )
+          form_section = form_section.replace(
+              '                value=8.0,\n                step=1.0,\n',
+              '                value=float(manual_optimizer_defaults.get("slippage_bps", 8.0)),\n                step=1.0,\n',
+              1,
+          )
+          form_section = form_section.replace(
+              '                value=0.0,\n                step=0.1,\n',
+              '                value=float(manual_optimizer_defaults.get("fee_per_order", 0.0)),\n                step=0.1,\n',
+              1,
+          )
+
+          app = before + form_section + after
+
+          # Expand depth mappings and pass the selected objective into the engine.
+          app = app.replace(
+              '                    limits = {"Quick": 16, "Balanced": 36, "Thorough": 64}\n'
+              '                    combination_limit = limits.get(optimizer_depth.split(" — ", 1)[0], 36)\n'
+              '                    sizing_limits = {"Quick": 4, "Balanced": 7, "Thorough": 12}\n'
+              '                    sizing_limit = sizing_limits.get(sizing_depth.split(" — ", 1)[0], 7)\n',
+              '                    limits = {"Quick": 48, "Balanced": 120, "Comprehensive": 240, "Exhaustive": 320}\n'
+              '                    combination_limit = limits.get(optimizer_depth.split(" — ", 1)[0], 240)\n'
+              '                    sizing_limits = {"Quick": 8, "Balanced": 24, "Comprehensive": 48, "Exhaustive": 64}\n'
+              '                    sizing_limit = sizing_limits.get(sizing_depth.split(" — ", 1)[0], 48)\n',
+              1,
+          )
+          app = app.replace(
+              '                        finalists_per_strategy=min(7, combination_limit),\n',
+              '                        finalists_per_strategy=min(32, max(8, combination_limit // 10)),\n',
+              1,
+          )
+          settings_anchor = '                        maximum_drawdown_pct=float(optimizer_drawdown),\n                    )'
+          settings_replacement = (
+              '                        maximum_drawdown_pct=float(optimizer_drawdown),\n'
+              '                        selection_mode=("historical_pnl" if optimizer_goal.startswith("Maximum historical") else "validated"),\n'
+              '                    )'
+          )
+          if settings_replacement not in app:
+              if settings_anchor not in app:
+                  raise SystemExit("Could not find OptimizationSettings construction anchor")
+              app = app.replace(settings_anchor, settings_replacement, 1)
+
+          # Make the results page honest about which objective produced the ranking.
+          results_anchor = (
+              '            optimized_symbol = str(optimization_report.get("symbol") or "?")\n'
+              '            winning = optimization_report["winner"]\n'
+              '            validation = winning.get("validation_metrics") or {}\n'
+              '            holdout = winning.get("holdout_metrics") or {}\n'
+          )
+          results_replacement = (
+              '            optimized_symbol = str(optimization_report.get("symbol") or "?")\n'
+              '            winning = optimization_report["winner"]\n'
+              '            historical_fit_mode = optimization_report.get("selection_mode") == "historical_pnl"\n'
+              '            validation = winning.get("validation_metrics") or {}\n'
+              '            full_window = winning.get("full_metrics") or validation\n'
+              '            selection_metrics = full_window if historical_fit_mode else validation\n'
+              '            holdout = winning.get("holdout_metrics") or {}\n'
+          )
+          if results_replacement not in app:
+              if results_anchor not in app:
+                  raise SystemExit("Could not find optimizer results anchor")
+              app = app.replace(results_anchor, results_replacement, 1)
+
+          app = app.replace(
+              '                "Rankings use the separate validation period. Only the preselected winner is tested on the final untouched holdout.",\n',
+              '                ("Rankings maximize simulated P/L across the complete selected history. This is an in-sample best fit, not an untouched validation."\n'
+              '                 if historical_fit_mode else\n'
+              '                 "Rankings use the separate validation period. Only the preselected winner is tested on the final untouched holdout."),\n',
+              1,
+          )
+          app = app.replace(
+              '                "Validation P/L",\n                money(validation.get("net_pnl")),\n                f\'{int(safe_float(validation.get("trade_count"), 0) or 0)} separate validation trades\',\n                "good" if (safe_float(validation.get("net_pnl"), 0) or 0) > 0 else "bad",\n',
+              '                "Full-window P/L" if historical_fit_mode else "Validation P/L",\n                money(selection_metrics.get("net_pnl")),\n                (f\'{int(safe_float(selection_metrics.get("trade_count"), 0) or 0)} historical trades\' if historical_fit_mode else f\'{int(safe_float(validation.get("trade_count"), 0) or 0)} separate validation trades\'),\n                "good" if (safe_float(selection_metrics.get("net_pnl"), 0) or 0) > 0 else "bad",\n',
+              1,
+          )
+          app = app.replace(
+              '                "Final holdout P/L",\n                money(holdout.get("net_pnl")),\n                f\'{int(safe_float(holdout.get("trade_count"), 0) or 0)} untouched-period trades\',\n                "good" if (safe_float(holdout.get("net_pnl"), 0) or 0) > 0 else "bad",\n',
+              '                "Full-window return" if historical_fit_mode else "Final holdout P/L",\n                (percent(selection_metrics.get("return_pct"), signed=True) if historical_fit_mode else money(holdout.get("net_pnl"))),\n                (f\'{percent(selection_metrics.get("max_drawdown_pct"))} max drawdown\' if historical_fit_mode else f\'{int(safe_float(holdout.get("trade_count"), 0) or 0)} untouched-period trades\'),\n                ("good" if (safe_float(selection_metrics.get("net_pnl"), 0) or 0) > 0 else "bad") if historical_fit_mode else ("good" if (safe_float(holdout.get("net_pnl"), 0) or 0) > 0 else "bad"),\n',
+              1,
+          )
+          app = app.replace(
+              '                "Validation repeated with 50% higher spread and slippage",\n',
+              '                ("Full historical window repeated with 50% higher spread and slippage" if historical_fit_mode else "Validation repeated with 50% higher spread and slippage"),\n',
+              1,
+          )
+          app = app.replace(
+              '                "good" if winning.get("status") == "VALIDATED" else "bad",\n',
+              '                "good" if winning.get("status") in {"VALIDATED", "HISTORICAL BEST FIT"} else "bad",\n',
+              1,
+          )
+          app = app.replace(
+              '                "These stock-specific settings are selected using validation performance and saved with the optimized strategy.",\n',
+              '                ("These settings maximize simulated performance over the selected historical window; validate them on other dates before relying on them."\n'
+              '                 if historical_fit_mode else\n'
+              '                 "These stock-specific settings are selected using validation performance and saved with the optimized strategy."),\n',
+              1,
+          )
+
+          # Adjust table labels in historical-fit mode without rewriting the whole table block.
+          app = app.replace(
+              '            section("Strategy rankings", "Every strategy is tested using stock-specific rules, position sizing, and realistic costs; only the overall winner receives a final holdout test.")\n',
+              '            section("Strategy rankings", ("Every strategy is ranked by full-window historical P/L after broad rule and sizing sweeps." if historical_fit_mode else "Every strategy is tested using stock-specific rules, position sizing, and realistic costs; only the overall winner receives a final holdout test."))\n',
+              1,
+          )
+
+          app_path.write_text(app, encoding="utf-8")
+
+      - name: Verify syntax and optimizer features
+        shell: bash
+        run: |
+          python -m py_compile youtube_strategy_engine.py youtube_strategy_app.py
+          python - <<'PY'
+          from youtube_strategy_engine import BacktestSettings, OptimizationSettings, generate_execution_variants, generate_strategy_variants
+
+          settings = BacktestSettings(
+              starting_cash=2000,
+              risk_per_trade_pct=10,
+              max_position_pct=100,
+              default_stop_pct=2,
+              default_reward_risk=2,
+              spread_bps=12,
+              slippage_bps=6,
+          )
+          opt = OptimizationSettings(max_variants_per_strategy=320, max_execution_variants_per_finalist=64, selection_mode="historical_pnl")
+          opt.validate()
+          sample = {
+              "id": "smoke",
+              "name": "Smoke",
+              "direction": "long",
+              "machine_rules": {
+                  "stop_loss_pct": None,
+                  "reward_risk": None,
+                  "min_relative_volume": 2.0,
+                  "breakout_lookback_bars": 10,
+              },
+          }
+          variants = generate_strategy_variants(sample, settings, maximum=320)
+          assert any(abs(float(v.get("stop_loss_pct") or 0) - 4.2) < 1e-9 and abs(float(v.get("reward_risk") or 0) - 2.0) < 1e-9 for v in variants)
+          executions = generate_execution_variants(settings, maximum=64)
+          assert any(abs(v.risk_per_trade_pct - 10) < 1e-9 and abs(v.max_position_pct - 100) < 1e-9 for v in executions)
+          assert len(executions) <= 64
+          PY
+          python -m unittest -q test_youtube_strategy_engine.py
+
+      - name: Commit optimizer upgrade
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No optimizer changes needed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add youtube_strategy_engine.py youtube_strategy_app.py
+          git commit -m "Expand optimizer search and add full-window P/L mode"
+          git push
