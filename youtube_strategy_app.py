@@ -1206,7 +1206,7 @@ with optimizer_tab:
                 "Maximum risk per trade to test (%)",
                 min_value=0.05,
                 max_value=10.0,
-                value=2.0,
+                value=float(manual_optimizer_defaults.get("risk_per_trade_pct", 10.0)),
                 step=0.05,
                 help="The optimizer compares lower risk levels and will never recommend more than this ceiling.",
             )
@@ -1229,7 +1229,7 @@ with optimizer_tab:
                 "Fallback reward/risk",
                 min_value=0.2,
                 max_value=10.0,
-                value=2.0,
+                value=float(manual_optimizer_defaults.get("default_reward_risk", 2.0)),
                 step=0.1,
             )
 
