@@ -3244,18 +3244,33 @@ def historical_minimum_trade_count(session_count: int) -> int:
 def _historical_metric_key(
     metrics: dict[str, Any],
     maximum_drawdown_pct: float,
-    minimum_trades: int = 1,
+    minimum_trades: int | None = None,
 ) -> tuple[Any, ...]:
     pnl = safe_float(metrics.get("net_pnl"), 0.0) or 0.0
     drawdown = safe_float(metrics.get("max_drawdown_pct"), 0.0) or 0.0
     return_pct = safe_float(metrics.get("return_pct"), 0.0) or 0.0
     profit_factor = safe_float(metrics.get("profit_factor"), -1.0)
     trades = int(safe_float(metrics.get("trade_count"), 0.0) or 0.0)
+    drawdown_ok = drawdown <= maximum_drawdown_pct
+
+    # OFF must be byte-for-byte equivalent in ranking semantics to the historical
+    # optimizer before the minimum-trade feature existed. In particular, do not add
+    # a sample-size tuple component: the cheap 5-minute screening stage can have zero
+    # trades even when the same strategy later produces strong 1-minute candidates.
+    if minimum_trades is None:
+        return (
+            drawdown_ok,
+            pnl,
+            return_pct,
+            profit_factor if profit_factor is not None else -1.0,
+            -drawdown,
+            trades,
+        )
+
     required = max(1, int(minimum_trades))
     sample_ok = trades >= required
-    drawdown_ok = drawdown <= maximum_drawdown_pct
-    # A qualifying sample always outranks an undersized sample, regardless of raw P/L.
-    # If nothing qualifies, prefer the candidate with more observations before dollars.
+    # With the filter ON, any qualifying sample outranks an undersized sample.
+    # If no candidate qualifies, prefer more observations before raw dollars.
     return (
         sample_ok,
         drawdown_ok,
@@ -3297,6 +3312,9 @@ def _optimize_stock_strategies_historical(
         int(optimizer.minimum_historical_trades)
         if optimizer.enforce_historical_minimum_trades
         else 1
+    )
+    ranking_minimum_historical_trades = (
+        minimum_historical_trades if optimizer.enforce_historical_minimum_trades else None
     )
 
     warnings = [
@@ -3390,7 +3408,7 @@ def _optimize_stock_strategies_historical(
             notify(f"{name}: rule set {variant_index + 1} of {len(variants)}")
 
         rule_candidates.sort(
-            key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct, minimum_historical_trades),
+            key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct, ranking_minimum_historical_trades),
             reverse=True,
         )
 
@@ -3425,7 +3443,7 @@ def _optimize_stock_strategies_historical(
                 })
                 notify(f"{name}: adaptive rule refinement {adaptive_rule_tests} of {refinement_budget}")
         rule_candidates.sort(
-            key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct, minimum_historical_trades),
+            key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct, ranking_minimum_historical_trades),
             reverse=True,
         )
         sizing_finalist_count = min(len(rule_candidates), min(3, optimizer.finalists_per_strategy))
@@ -3458,7 +3476,7 @@ def _optimize_stock_strategies_historical(
         if not sized_candidates:
             continue
         sized_candidates.sort(
-            key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct, minimum_historical_trades),
+            key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct, ranking_minimum_historical_trades),
             reverse=True,
         )
 
@@ -3493,7 +3511,7 @@ def _optimize_stock_strategies_historical(
             notify(f"{name}: final rule refinement {adaptive_final_rule_tests}")
 
         sized_candidates.sort(
-            key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct, minimum_historical_trades),
+            key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct, ranking_minimum_historical_trades),
             reverse=True,
         )
         local_seed = sized_candidates[0]
@@ -3517,7 +3535,7 @@ def _optimize_stock_strategies_historical(
             notify(f"{name}: final sizing refinement {adaptive_final_execution_tests}")
 
         sized_candidates.sort(
-            key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct, minimum_historical_trades),
+            key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct, ranking_minimum_historical_trades),
             reverse=True,
         )
         best = sized_candidates[0]
@@ -3590,7 +3608,7 @@ def _optimize_stock_strategies_historical(
     if not ranked:
         raise AppError("No strategy/settings combinations could be evaluated for this stock.")
     ranked.sort(
-        key=lambda item: _historical_metric_key(item["full_metrics"], optimizer.maximum_drawdown_pct, minimum_historical_trades),
+        key=lambda item: _historical_metric_key(item["full_metrics"], optimizer.maximum_drawdown_pct, ranking_minimum_historical_trades),
         reverse=True,
     )
     winner = ranked[0]
@@ -3640,7 +3658,7 @@ def _screen_historical_strategies(
     symbol: str,
     settings: BacktestSettings,
     maximum_drawdown_pct: float,
-    minimum_historical_trades: int = 1,
+    minimum_historical_trades: int | None = None,
 ) -> list[dict[str, Any]]:
     """Cheaply rank saved strategies before expensive adaptive optimization.
 
@@ -3650,7 +3668,9 @@ def _screen_historical_strategies(
     frame = bars_to_frame(rows)
     if frame.empty:
         return []
-    minimum_historical_trades = max(1, int(minimum_historical_trades))
+    ranking_minimum_historical_trades = (
+        None if minimum_historical_trades is None else max(1, int(minimum_historical_trades))
+    )
     candidates: list[dict[str, Any]] = []
     stop_grid = [2.0, 4.0, 5.0, 7.5, 10.0]
     reward_grid = [1.0, 1.5, 2.0, 3.0]
@@ -3697,12 +3717,12 @@ def _screen_historical_strategies(
                     "rules": rules,
                     "settings": candidate_settings,
                 }
-                if best is None or _historical_metric_key(metrics, maximum_drawdown_pct, minimum_historical_trades) > _historical_metric_key(best["metrics"], maximum_drawdown_pct, minimum_historical_trades):
+                if best is None or _historical_metric_key(metrics, maximum_drawdown_pct, ranking_minimum_historical_trades) > _historical_metric_key(best["metrics"], maximum_drawdown_pct, ranking_minimum_historical_trades):
                     best = record
         if best is not None:
             candidates.append(best)
     candidates.sort(
-        key=lambda item: _historical_metric_key(item["metrics"], maximum_drawdown_pct, minimum_historical_trades),
+        key=lambda item: _historical_metric_key(item["metrics"], maximum_drawdown_pct, ranking_minimum_historical_trades),
         reverse=True,
     )
     return candidates
@@ -3743,7 +3763,7 @@ def _optimize_stock_timeframes_historical(
         (
             int(optimization_settings.minimum_historical_trades)
             if optimization_settings.enforce_historical_minimum_trades
-            else 1
+            else None
         ),
     )
     if not strategy_screen:
@@ -3787,7 +3807,11 @@ def _optimize_stock_timeframes_historical(
         key=lambda item: _historical_metric_key(
             (item[2].get("winner") or {}).get("full_metrics") or {},
             optimization_settings.maximum_drawdown_pct,
-            int(item[2].get("minimum_historical_trades") or 1),
+            (
+                int(item[2].get("minimum_historical_trades") or 8)
+                if item[2].get("historical_minimum_trades_enabled", True)
+                else None
+            ),
         ),
         reverse=True,
     )
