@@ -1,0 +1,34 @@
+name: Apply duplicate YouTube video protection
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/apply-duplicate-video-guard.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m pip install -r requirements.txt
+      - name: Apply patch
+        run: python .github/scripts/add_duplicate_video_guard.py
+      - name: Verify
+        run: |
+          python -m py_compile youtube_strategy_app.py youtube_strategy_engine.py
+          grep -F 'Previously analyzed YouTube videos' youtube_strategy_app.py
+          grep -F 'Allow re-analysis of videos already in my library' youtube_strategy_app.py
+          grep -F 'duplicate protection caught' youtube_strategy_app.py
+          python -m unittest -q test_youtube_strategy_engine.py
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add youtube_strategy_app.py
+          git commit -m "Prevent accidental duplicate YouTube analyses"
+          git push
