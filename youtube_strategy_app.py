@@ -293,6 +293,11 @@ def analyzed_youtube_video_index(data: dict[str, Any]) -> dict[str, dict[str, An
 
 
 HELP_GLOSSARY: list[dict[str, str]] = [
+    {"term": "AUTO-SEARCH optimizer input", "category": "Optimizer", "meaning": "An input where the displayed value is a seed or search control rather than the final answer. The optimizer tests multiple supported values and adaptively refines promising ones; it does not literally test every possible decimal value."},
+    {"term": "CEILING optimizer input", "category": "Optimizer", "meaning": "A user-set maximum. The optimizer may test and recommend values below it but is not allowed to test or recommend values above it."},
+    {"term": "FIXED optimizer input", "category": "Optimizer", "meaning": "A value the optimizer holds constant for every candidate in that run, such as starting cash or a trading-cost assumption."},
+    {"term": "THRESHOLD optimizer input", "category": "Optimizer", "meaning": "A qualification or ranking rule, such as minimum trades or maximum acceptable drawdown. It is not itself optimized."},
+    {"term": "SEARCH CONTROL optimizer input", "category": "Optimizer", "meaning": "A setting that controls the scope or amount of optimizer work, such as search depth, strategies to compare, or candle intervals to test."},
     {"term": "8-trade sample filter", "category": "Optimizer", "meaning": "Optional Maximum historical P/L safeguard. When ON, a configuration needs at least 8 completed trades to qualify ahead of tiny-sample results. Turn it OFF only when you intentionally want the optimizer to consider results based on fewer trades."},
     {"term": "Adaptive refinement", "category": "Optimizer", "meaning": "A second, finer search around promising optimizer settings instead of testing only a fixed coarse grid."},
     {"term": "Backtest", "category": "Backtesting", "meaning": "A simulation that applies strategy rules to historical price data to estimate how the rules would have behaved."},
@@ -1383,6 +1388,18 @@ with optimizer_tab:
             "the AI does not need to reanalyze your videos. Account size and realistic trading costs remain fixed."
         )
         manual_optimizer_defaults = st.session_state.get("last_manual_backtest_settings") or {}
+        st.markdown(
+            "**How optimizer inputs work**  "
+            "🟢 **AUTO-SEARCH** = tests multiple supported values and refines promising ones · "
+            "🟠 **CEILING** = auto-searches below the number you enter, but never above it · "
+            "🔒 **FIXED** = uses exactly the value you enter · "
+            "🟡 **THRESHOLD** = qualification/ranking rule, not a value being optimized · "
+            "🔵 **SEARCH CONTROL** = controls how much or what the optimizer searches."
+        )
+        st.caption(
+            "AUTO-SEARCH does not mean every possible decimal value. The optimizer uses broad grids and adaptive refinement. "
+            "Some fields may be prefilled from your most recent manual backtest; the label tells you how the optimizer treats that value."
+        )
         with st.form("stock_optimizer_form"):
             first_row = st.columns(4)
             optimizer_symbol_raw = first_row[0].text_input(
@@ -1392,25 +1409,25 @@ with optimizer_tab:
                 help="Enter one ticker. Every eligible saved strategy will be tested against this stock.",
             )
             optimizer_history_days = first_row[1].slider(
-                "Historical calendar days",
+                "🔒 FIXED · Historical calendar days",
                 min_value=7,
                 max_value=180,
                 value=max(7, min(180, int(st.session_state.get("last_manual_history_days", 90)))),
             )
             optimizer_timeframe = first_row[2].selectbox(
-                "Candle intervals to test",
+                "🔵 SEARCH CONTROL · Candle intervals to test",
                 ["Automatically compare 1, 5, and 15 minutes", "1Min only", "5Min only", "15Min only"],
                 index=0,
                 help="Automatic comparison first screens all saved strategies, keeps the strongest two, compares 1-, 5-, and 15-minute candles, then runs the full adaptive optimizer only on the best interval. This prevents long scans from exhausting Streamlit Cloud.",
             )
             optimizer_scope = first_row[3].selectbox(
-                "Strategies to compare",
+                "🔵 SEARCH CONTROL · Strategies to compare",
                 ["All saved long strategies", "Approved strategies only"],
                 index=0,
             )
 
             optimizer_goal = st.selectbox(
-                "Optimization goal",
+                "🔵 SEARCH CONTROL · Optimization goal",
                 [
                     "Maximum historical P/L — search the full selected window",
                     "Validated edge — keep training, validation, and holdout separate",
@@ -1426,7 +1443,7 @@ with optimizer_tab:
             if historical_pnl_mode:
                 st.caption("Historical-P/L mode searches the whole window and can overfit. Use Validated edge afterward as a robustness check. Automatic candle comparison screens all intervals first, then deeply optimizes only the strongest one.")
             require_eight_historical_trades = st.checkbox(
-                "Require at least 8 trades before a historical result can win",
+                "🟡 THRESHOLD · Require at least 8 trades before a historical result can win",
                 value=True,
                 disabled=not historical_pnl_mode,
                 help=(
@@ -1444,89 +1461,112 @@ with optimizer_tab:
 
             second_row = st.columns(4)
             optimizer_depth = second_row[0].selectbox(
-                "Search depth",
+                "🔵 SEARCH CONTROL · Search depth",
                 ["Quick — 48 combinations", "Balanced — 120 combinations", "Comprehensive — 240 combinations", "Exhaustive — 320 combinations"],
                 index=2,
                 help="This is the broad-search budget per saved strategy. The optimizer then automatically zooms in around the strongest candidates with finer parameter steps.",
             )
             minimum_training = second_row[1].number_input(
-                "Minimum training trades",
+                "🟡 THRESHOLD · Minimum training trades",
                 min_value=1,
                 max_value=100,
                 value=5,
                 step=1,
+                help="THRESHOLD used by Validated edge mode: training results with too few completed trades are treated as insufficient data.",
             )
             minimum_validation = second_row[2].number_input(
-                "Minimum validation trades",
+                "🟡 THRESHOLD · Minimum validation trades",
                 min_value=1,
                 max_value=30,
                 value=2,
                 step=1,
+                help="THRESHOLD used by Validated edge mode: validation results need at least this many completed trades to count as an adequate sample.",
             )
             optimizer_cash = second_row[3].number_input(
-                "Starting cash ($)",
+                "🔒 FIXED · Starting cash ($)",
                 min_value=100.0,
                 value=float(manual_optimizer_defaults.get("starting_cash", 2_000.0)),
                 step=100.0,
+                help="FIXED: every candidate in this optimizer run starts with exactly this simulated account size.",
             )
 
             third_row = st.columns(4)
             optimizer_risk = third_row[0].number_input(
-                "Maximum risk per trade to test (%)",
+                "🟠 CEILING · Risk per trade (%)",
                 min_value=0.05,
                 max_value=10.0,
                 value=float(manual_optimizer_defaults.get("risk_per_trade_pct", 10.0)),
                 step=0.05,
-                help="The optimizer compares lower risk levels and will never recommend more than this ceiling.",
+                help=(
+                    "CEILING: the optimizer automatically tests lower risk-per-trade values and may recommend any supported value below this number, "
+                    "but it will never test or recommend a higher risk percentage."
+                ),
             )
             optimizer_position = third_row[1].number_input(
-                "Maximum position size to test (%)",
+                "🟠 CEILING · Position size (% of account)",
                 min_value=1.0,
                 max_value=100.0,
                 value=float(manual_optimizer_defaults.get("max_position_pct", 100.0)),
                 step=1.0,
-                help="The optimizer compares smaller allocations and will never exceed this percentage of your account.",
+                help=(
+                    "CEILING: the optimizer automatically tests smaller position allocations and refines promising values, "
+                    "but it will never put more than this percentage of the account into a simulated trade."
+                ),
             )
             optimizer_stop = third_row[2].number_input(
-                "Fallback stop (%)",
+                "🟢 AUTO-SEARCH · Stop loss (fallback seed %)",
                 min_value=0.1,
                 max_value=30.0,
                 value=float(manual_optimizer_defaults.get("default_stop_pct", 2.0)),
                 step=0.1,
+                help=(
+                    "AUTO-SEARCH: this is the fallback/seed stop used when a saved strategy does not specify one. "
+                    "The optimizer then tests a broad stop-loss grid and adaptively refines around promising values."
+                ),
             )
             optimizer_reward = third_row[3].number_input(
-                "Fallback reward/risk",
+                "🟢 AUTO-SEARCH · Reward/risk (fallback seed)",
                 min_value=0.2,
                 max_value=10.0,
                 value=float(manual_optimizer_defaults.get("default_reward_risk", 2.0)),
                 step=0.1,
+                help=(
+                    "AUTO-SEARCH: this is the fallback/seed reward-to-risk target when a saved strategy does not specify one. "
+                    "The optimizer tests multiple reward/risk values and refines around promising settings."
+                ),
             )
 
             cost_row = st.columns(3)
             optimizer_spread = cost_row[0].number_input(
-                "Spread estimate (bps)",
+                "🔒 FIXED · Spread estimate (bps)",
                 min_value=0.0,
                 max_value=500.0,
                 value=float(manual_optimizer_defaults.get("spread_bps", 12.0)),
                 step=1.0,
+                help=(
+                    "FIXED trading-cost assumption: the optimizer does not search for a better spread. "
+                    "If the actual-quoted-spread option is enabled, the app may replace this with a wider live quoted spread."
+                ),
             )
             optimizer_slippage = cost_row[1].number_input(
-                "Slippage per fill (bps)",
+                "🔒 FIXED · Slippage per fill (bps)",
                 min_value=0.0,
                 max_value=500.0,
                 value=float(manual_optimizer_defaults.get("slippage_bps", 8.0)),
                 step=1.0,
+                help="FIXED trading-cost assumption: every candidate uses this slippage per simulated fill.",
             )
             optimizer_fee = cost_row[2].number_input(
-                "Fee per order ($)",
+                "🔒 FIXED · Fee per order ($)",
                 min_value=0.0,
                 max_value=50.0,
                 value=float(manual_optimizer_defaults.get("fee_per_order", 0.0)),
                 step=0.1,
+                help="FIXED trading-cost assumption: every candidate uses this fee per simulated order.",
             )
             protection_row = st.columns(3)
             optimizer_drawdown = protection_row[0].number_input(
-                "Maximum acceptable drawdown (%)",
+                "🟡 THRESHOLD · Maximum acceptable drawdown (%)",
                 min_value=0.5,
                 max_value=50.0,
                 value=15.0,
@@ -1534,12 +1574,12 @@ with optimizer_tab:
                 help="Settings that exceed this historical loss limit receive a strong ranking penalty.",
             )
             sizing_depth = protection_row[1].selectbox(
-                "Position-size search depth",
+                "🔵 SEARCH CONTROL · Position-size search depth",
                 ["Quick — 8 sizing combinations", "Balanced — 24 sizing combinations", "Comprehensive — 48 sizing combinations", "Exhaustive — 64 sizing combinations"],
                 index=2,
             )
             use_live_spread = protection_row[2].checkbox(
-                "Use the stock's actual quoted spread",
+                "🔒 FIXED/OVERRIDE · Use the stock's actual quoted spread",
                 value=False,
                 help="Leave this off when you want an apples-to-apples comparison with the manual backtest. Turn it on for a more conservative live-spread assumption.",
             )
