@@ -1,0 +1,50 @@
+name: Apply optional historical trade gate
+
+on:
+  push:
+    paths:
+      - '.github/scripts/add_optional_historical_trade_gate.py'
+      - '.github/workflows/apply-optional-historical-trade-gate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m pip install -r requirements.txt
+      - name: Apply patch
+        run: python .github/scripts/add_optional_historical_trade_gate.py
+      - name: Verify
+        run: |
+          python -m py_compile youtube_strategy_engine.py youtube_strategy_app.py
+          grep -F 'Require at least 8 trades before a historical result can win' youtube_strategy_app.py
+          grep -F 'enforce_historical_minimum_trades' youtube_strategy_engine.py
+          python - <<'PY'
+          from youtube_strategy_engine import OptimizationSettings, _historical_metric_key
+
+          on = OptimizationSettings(selection_mode='historical_pnl', enforce_historical_minimum_trades=True, minimum_historical_trades=8)
+          off = OptimizationSettings(selection_mode='historical_pnl', enforce_historical_minimum_trades=False, minimum_historical_trades=8)
+          on.validate(); off.validate()
+
+          huge_two_trade = {'net_pnl': 5000, 'return_pct': 250, 'profit_factor': None, 'max_drawdown_pct': 0, 'trade_count': 2}
+          modest_eight_trade = {'net_pnl': 500, 'return_pct': 25, 'profit_factor': 2.0, 'max_drawdown_pct': 5, 'trade_count': 8}
+          assert _historical_metric_key(modest_eight_trade, 15, 8) > _historical_metric_key(huge_two_trade, 15, 8)
+          assert _historical_metric_key(huge_two_trade, 15, 1) > _historical_metric_key(modest_eight_trade, 15, 1)
+          print('optional historical trade gate ok')
+          PY
+          python -m unittest -q test_youtube_strategy_engine.py
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add youtube_strategy_engine.py youtube_strategy_app.py
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Make historical trade minimum optional"
+            git push
+          fi
