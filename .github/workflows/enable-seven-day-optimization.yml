@@ -24,75 +24,57 @@ jobs:
 
           app_path = Path("youtube_strategy_app.py")
           app = app_path.read_text(encoding="utf-8")
-          old_slider = '''                "Historical calendar days",
-                          min_value=20,
-                          max_value=180,
-                          value=90,
-          '''
-          new_slider = '''                "Historical calendar days",
-                          min_value=7,
-                          max_value=180,
-                          value=90,
-          '''
-          if old_slider in app:
-              app = app.replace(old_slider, new_slider, 1)
-          elif new_slider not in app:
-              raise SystemExit("Could not find the Historical calendar days slider block.")
+          app = app.replace(
+              '"Historical calendar days",\n                min_value=20,',
+              '"Historical calendar days",\n                min_value=7,',
+              1,
+          )
+          if '"Historical calendar days",\n                min_value=7,' not in app:
+              raise SystemExit("Could not enable the seven-day slider minimum.")
           app_path.write_text(app, encoding="utf-8")
 
           engine_path = Path("youtube_strategy_engine.py")
           engine = engine_path.read_text(encoding="utf-8")
-          function_start = engine.index("def optimize_stock_strategies(")
-          function_end = engine.index("\ndef finalize_stock_optimization(", function_start)
-          before = engine[:function_start]
-          function = engine[function_start:function_end]
-          after = engine[function_end:]
+          start = engine.index("def optimize_stock_strategies(")
+          end = engine.index("\ndef finalize_stock_optimization(", start)
+          before, function, after = engine[:start], engine[start:end], engine[end:]
 
-          old_guard_and_split = '''    if len(sessions) < 8:
-              raise AppError(
-                  "Optimization needs at least eight separate trading sessions so training, validation, "
-                  "and final holdout periods stay separate. Request more historical data."
-              )
+          function = function.replace("if len(sessions) < 8:", "if len(sessions) < 3:", 1)
+          function = function.replace(
+              '"Optimization needs at least eight separate trading sessions so training, validation, "\n'
+              '            "and final holdout periods stay separate. Request more historical data."',
+              '"Optimization needs at least three separate trading sessions so training, validation, "\n'
+              '            "and final holdout periods stay separate. Seven calendar days normally provides enough sessions; "\n'
+              '            "holiday-shortened windows may need a few extra days."',
+              1,
+          )
+          function = function.replace(
+              "training_end = max(3, min(len(sessions) - 3, int(len(sessions) * optimizer.training_fraction)))",
+              "training_end = max(1, min(len(sessions) - 2, int(len(sessions) * optimizer.training_fraction)))",
+              1,
+          )
+          warning_anchor = "    warnings: list[str] = []\n"
+          warning_block = (
+              "    warnings: list[str] = []\n"
+              "    if len(sessions) < 8:\n"
+              "        warnings.append(\n"
+              "            f\"Short optimization window: only {len(sessions)} trading sessions are available. \"\n"
+              "            \"Results can be much noisier and more prone to overfitting than longer tests.\"\n"
+              "        )\n"
+          )
+          if "Short optimization window:" not in function:
+              if warning_anchor not in function:
+                  raise SystemExit("Could not find the optimizer warning insertion point.")
+              function = function.replace(warning_anchor, warning_block, 1)
 
-              training_end = max(3, min(len(sessions) - 3, int(len(sessions) * optimizer.training_fraction)))
-              validation_end = max(
-                  training_end + 1,
-                  min(len(sessions) - 1, int(len(sessions) * (optimizer.training_fraction + optimizer.validation_fraction))),
-              )
-          '''
-          new_guard_and_split = '''    if len(sessions) < 3:
-              raise AppError(
-                  "Optimization needs at least three separate trading sessions so training, validation, "
-                  "and final holdout periods stay separate. Seven calendar days normally provides enough sessions; "
-                  "holiday-shortened windows may need a few extra days."
-              )
-
-              training_end = max(1, min(len(sessions) - 2, int(len(sessions) * optimizer.training_fraction)))
-              validation_end = max(
-                  training_end + 1,
-                  min(len(sessions) - 1, int(len(sessions) * (optimizer.training_fraction + optimizer.validation_fraction))),
-              )
-          '''
-          if old_guard_and_split in function:
-              function = function.replace(old_guard_and_split, new_guard_and_split, 1)
-          elif new_guard_and_split not in function:
-              raise SystemExit("Could not find the optimizer session guard/split block.")
-
-          old_warning_anchor = '''    warnings: list[str] = []
-              eligible: list[dict[str, Any]] = []
-          '''
-          new_warning_anchor = '''    warnings: list[str] = []
-              if len(sessions) < 8:
-                  warnings.append(
-                      f"Short optimization window: only {len(sessions)} trading sessions are available. "
-                      "Results can be much noisier and more prone to overfitting than longer tests."
-                  )
-              eligible: list[dict[str, Any]] = []
-          '''
-          if old_warning_anchor in function:
-              function = function.replace(old_warning_anchor, new_warning_anchor, 1)
-          elif new_warning_anchor not in function:
-              raise SystemExit("Could not find the optimizer warnings block.")
+          required = (
+              "if len(sessions) < 3:",
+              "training_end = max(1, min(len(sessions) - 2",
+              "Short optimization window:",
+          )
+          missing = [item for item in required if item not in function]
+          if missing:
+              raise SystemExit(f"Seven-day optimizer patch incomplete: {missing}")
 
           engine_path.write_text(before + function + after, encoding="utf-8")
 
