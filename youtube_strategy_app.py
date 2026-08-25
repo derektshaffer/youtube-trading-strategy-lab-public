@@ -1118,8 +1118,8 @@ with backtest_tab:
 with optimizer_tab:
     section(
         "Find the strongest saved strategy for one stock",
-        "Test each stock's strategy, candle size, stop, target, risk per trade, and position size on earlier sessions. "
-        "Choose settings using separate validation data, then inspect one untouched final holdout.",
+        "Screen all saved strategies first, then deeply optimize the strongest candidates across candle size, stop, target, risk per trade, and position size. "
+        "Use Maximum historical P/L for best-fit research or Validated edge for a stricter robustness check.",
     )
     if not library["strategies"]:
         st.info("Analyze a YouTube video or load an example strategy before optimizing a stock.")
@@ -1149,7 +1149,7 @@ with optimizer_tab:
                 "Candle intervals to test",
                 ["Automatically compare 1, 5, and 15 minutes", "1Min only", "5Min only", "15Min only"],
                 index=0,
-                help="Automatic comparison quickly screens 1-, 5-, and 15-minute candles, then runs the full adaptive optimization only on the strongest interval. This is much faster and more reliable on long histories.",
+                help="Automatic comparison first screens all saved strategies, keeps the strongest two, compares 1-, 5-, and 15-minute candles, then runs the full adaptive optimizer only on the best interval. This prevents long scans from exhausting Streamlit Cloud.",
             )
             optimizer_scope = first_row[3].selectbox(
                 "Strategies to compare",

@@ -3235,7 +3235,7 @@ def _optimize_stock_strategies_historical(
         for strategy in eligible
     ]
     execution_variants = (
-        generate_execution_variants(settings, maximum=optimizer.max_execution_variants_per_finalist)
+        generate_execution_variants(settings, maximum=min(16, optimizer.max_execution_variants_per_finalist))
         if optimizer.optimize_position_sizing else [settings]
     )
     total_steps = sum(
@@ -3326,7 +3326,7 @@ def _optimize_stock_strategies_historical(
             key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct),
             reverse=True,
         )
-        sizing_finalist_count = min(len(rule_candidates), min(6, optimizer.finalists_per_strategy))
+        sizing_finalist_count = min(len(rule_candidates), min(3, optimizer.finalists_per_strategy))
         finalists = rule_candidates[:sizing_finalist_count]
         baseline = rule_candidates[0] if rule_candidates else None
         original_candidate = next((item for item in rule_candidates if item["variant_index"] == 0), None)
@@ -3518,6 +3518,78 @@ def _optimize_stock_strategies_historical(
     }
 
 
+def _screen_historical_strategies(
+    rows: list[dict[str, Any]],
+    strategies: list[dict[str, Any]],
+    symbol: str,
+    settings: BacktestSettings,
+    maximum_drawdown_pct: float,
+) -> list[dict[str, Any]]:
+    """Cheaply rank saved strategies before expensive adaptive optimization.
+
+    Each strategy gets the same small stop/target sweep. This is intentionally only a
+    screening stage; the winners are fully optimized afterward.
+    """
+    frame = bars_to_frame(rows)
+    if frame.empty:
+        return []
+    candidates: list[dict[str, Any]] = []
+    stop_grid = [2.0, 4.0, 5.0, 7.5, 10.0]
+    reward_grid = [1.0, 1.5, 2.0, 3.0]
+    for strategy in strategies:
+        if not isinstance(strategy, dict) or not strategy.get("id"):
+            continue
+        if str(strategy.get("direction", "long")).lower() not in {"long", "both"}:
+            continue
+        target = str(strategy.get("optimized_for_symbol") or "").strip().upper()
+        if target and target != symbol:
+            continue
+        original = normalize_machine_rules(strategy.get("machine_rules"))
+        baseline_stop = safe_float(original.get("stop_loss_pct"), settings.default_stop_pct) or settings.default_stop_pct
+        baseline_reward = safe_float(original.get("reward_risk"), settings.default_reward_risk) or settings.default_reward_risk
+        stops = list(dict.fromkeys([round(float(baseline_stop), 4), *stop_grid]))
+        rewards = list(dict.fromkeys([round(float(baseline_reward), 4), *reward_grid]))
+        best: dict[str, Any] | None = None
+        indicator_cache: dict[tuple[int, int], pd.DataFrame] = {}
+        for stop in stops:
+            for reward in rewards:
+                rules = normalize_machine_rules({**original, "stop_loss_pct": stop, "reward_risk": reward})
+                candidate_strategy = {**strategy, "machine_rules": rules}
+                key = (
+                    int(rules.get("breakout_lookback_bars") or 20),
+                    int(rules.get("opening_range_minutes") or 15),
+                )
+                if key not in indicator_cache:
+                    indicator_cache[key] = add_indicators(frame, candidate_strategy)
+                candidate_settings = replace(
+                    settings,
+                    default_stop_pct=float(stop),
+                    default_reward_risk=float(reward),
+                )
+                result = run_backtest(
+                    [], candidate_strategy, symbol, candidate_settings,
+                    prepared_indicators=indicator_cache[key],
+                )
+                metrics = result.get("metrics") or {}
+                record = {
+                    "strategy": strategy,
+                    "strategy_id": strategy.get("id"),
+                    "strategy_name": strategy.get("name") or "Unnamed strategy",
+                    "metrics": metrics,
+                    "rules": rules,
+                    "settings": candidate_settings,
+                }
+                if best is None or _historical_metric_key(metrics, maximum_drawdown_pct) > _historical_metric_key(best["metrics"], maximum_drawdown_pct):
+                    best = record
+        if best is not None:
+            candidates.append(best)
+    candidates.sort(
+        key=lambda item: _historical_metric_key(item["metrics"], maximum_drawdown_pct),
+        reverse=True,
+    )
+    return candidates
+
+
 def _optimize_stock_timeframes_historical(
     one_minute_rows: list[dict[str, Any]],
     strategies: list[dict[str, Any]],
@@ -3528,104 +3600,110 @@ def _optimize_stock_timeframes_historical(
     timeframes: tuple[str, ...],
     progress: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, Any]:
-    """Screen candle sizes cheaply, then deep-optimize only the best interval.
-
-    Running a comprehensive adaptive optimizer independently on 1-, 5-, and 15-minute
-    candles can require tens of thousands of full backtests. This two-stage approach
-    keeps the adaptive search while avoiding Streamlit Cloud time/memory exhaustion.
-    """
+    """Use a runtime-safe funnel before the expensive adaptive search."""
     requested = list(dict.fromkeys(str(item) for item in timeframes))
     if not requested or any(item not in {"1Min", "5Min", "15Min"} for item in requested):
         raise AppError("Select one or more supported candle intervals: 1Min, 5Min, or 15Min.")
-
     settings = backtest_settings or BacktestSettings()
     settings.validate()
     optimization_settings.validate()
+    target_symbols = parse_symbols(symbol)
+    if len(target_symbols) != 1:
+        raise AppError("Enter exactly one valid stock ticker to optimize.")
+    target_symbol = target_symbols[0]
 
-    # The screening pass is intentionally bounded. It still uses the adaptive engine,
-    # but with a small enough search to compare candle sizes without exhausting runtime.
+    # Stage 1: screen all saved strategies on 5-minute candles with a tiny, equal grid.
+    if progress:
+        progress(20, 1000, f"Screening {len(strategies)} saved strategies…")
+    five_minute_rows = resample_intraday_bars(one_minute_rows, "5Min")
+    strategy_screen = _screen_historical_strategies(
+        five_minute_rows,
+        strategies,
+        target_symbol,
+        settings,
+        optimization_settings.maximum_drawdown_pct,
+    )
+    if not strategy_screen:
+        raise AppError("No saved long strategy produced a screenable historical result for this stock.")
+    top_strategy_records = strategy_screen[:min(2, len(strategy_screen))]
+    top_strategies = [item["strategy"] for item in top_strategy_records]
+    screened_names = [item["strategy_name"] for item in top_strategy_records]
+    if progress:
+        progress(180, 1000, "Top strategy candidates: " + ", ".join(screened_names))
+
+    # Stage 2: compare candle intervals using only the top two strategies and a small
+    # optimizer budget. This keeps interval selection representative but cheap.
     screening_optimizer = replace(
         optimization_settings,
-        max_variants_per_strategy=min(48, optimization_settings.max_variants_per_strategy),
-        finalists_per_strategy=min(4, optimization_settings.finalists_per_strategy),
-        max_execution_variants_per_finalist=min(8, optimization_settings.max_execution_variants_per_finalist),
+        max_variants_per_strategy=min(24, optimization_settings.max_variants_per_strategy),
+        finalists_per_strategy=min(2, optimization_settings.finalists_per_strategy),
+        max_execution_variants_per_finalist=min(4, optimization_settings.max_execution_variants_per_finalist),
     )
     screening_optimizer.validate()
-
-    screened: list[tuple[str, list[dict[str, Any]], dict[str, Any]]] = []
-    screening_weight = 45
-    interval_weight = screening_weight / max(1, len(requested))
-
-    for interval_index, interval in enumerate(requested):
+    screened_intervals: list[tuple[str, list[dict[str, Any]], dict[str, Any]]] = []
+    for index, interval in enumerate(requested):
         interval_rows = resample_intraday_bars(one_minute_rows, interval)
-
-        def screen_progress(completed: int, total: int, message: str) -> None:
-            if progress:
-                fraction = min(1.0, completed / max(total, 1))
-                overall = int((interval_index * interval_weight + fraction * interval_weight) * 10)
-                progress(overall, 1000, f"Screening {interval}: {message}")
-
+        if progress:
+            progress(200 + index * 80, 1000, f"Comparing {interval} candles…")
         report = _optimize_stock_strategies_historical(
             interval_rows,
-            strategies,
-            symbol,
+            top_strategies,
+            target_symbol,
             settings,
             screening_optimizer,
-            progress=screen_progress,
+            progress=None,
         )
         report["timeframe"] = interval
-        report["timeframes_tested"] = [interval]
         for candidate in report.get("rankings") or []:
             candidate["timeframe"] = interval
         if report.get("winner"):
             report["winner"]["timeframe"] = interval
-        screened.append((interval, interval_rows, report))
+        screened_intervals.append((interval, interval_rows, report))
 
-    if not screened:
-        raise AppError("No candle interval produced an optimization result.")
-
-    screened.sort(
+    screened_intervals.sort(
         key=lambda item: _historical_metric_key(
             (item[2].get("winner") or {}).get("full_metrics") or {},
             optimization_settings.maximum_drawdown_pct,
         ),
         reverse=True,
     )
-    chosen_interval, chosen_rows, best_screen = screened[0]
-
+    chosen_interval, chosen_rows, _ = screened_intervals[0]
     if progress:
-        progress(450, 1000, f"Best preliminary candle size: {chosen_interval}. Starting deep adaptive search…")
+        progress(460, 1000, f"Best preliminary interval: {chosen_interval}. Starting deep adaptive search…")
 
+    # Stage 3: full adaptive search, but only for the two strategies that survived the
+    # initial fair screening. This is where fine values such as a 9.5% stop are found.
     def deep_progress(completed: int, total: int, message: str) -> None:
         if progress:
             fraction = min(1.0, completed / max(total, 1))
-            progress(450 + int(fraction * 540), 1000, f"Deep {chosen_interval} search: {message}")
+            progress(460 + int(fraction * 520), 1000, f"Deep {chosen_interval}: {message}")
 
     deep_report = _optimize_stock_strategies_historical(
         chosen_rows,
-        strategies,
-        symbol,
+        top_strategies,
+        target_symbol,
         settings,
         optimization_settings,
         progress=deep_progress,
     )
+    if not deep_report.get("rankings") or not deep_report.get("winner"):
+        raise AppError("The deep optimizer finished without a winning result.")
     deep_report["timeframe"] = chosen_interval
     deep_report["timeframes_tested"] = requested
+    deep_report["strategies_screened"] = len(strategy_screen)
+    deep_report["strategies_deep_optimized"] = len(top_strategies)
+    deep_report["strategy_screening"] = [
+        {
+            "strategy_name": item["strategy_name"],
+            "net_pnl": safe_float(item["metrics"].get("net_pnl"), 0.0) or 0.0,
+            "return_pct": safe_float(item["metrics"].get("return_pct"), 0.0) or 0.0,
+            "max_drawdown_pct": safe_float(item["metrics"].get("max_drawdown_pct"), 0.0) or 0.0,
+        }
+        for item in strategy_screen
+    ]
     for candidate in deep_report.get("rankings") or []:
         candidate["timeframe"] = chosen_interval
-    if deep_report.get("winner"):
-        deep_report["winner"]["timeframe"] = chosen_interval
-
-    screening_variants = sum(int(report.get("variants_tested") or 0) for _, _, report in screened)
-    screening_adaptive = sum(int(report.get("adaptive_refinement_tests") or 0) for _, _, report in screened)
-    deep_variants = int(deep_report.get("variants_tested") or 0)
-    deep_adaptive = int(deep_report.get("adaptive_refinement_tests") or 0)
-
-    deep_report["screening_variants_tested"] = screening_variants
-    deep_report["deep_variants_tested"] = deep_variants
-    deep_report["variants_tested"] = screening_variants + deep_variants
-    deep_report["screening_adaptive_refinements"] = screening_adaptive
-    deep_report["adaptive_refinement_tests"] = screening_adaptive + deep_adaptive
+    deep_report["winner"]["timeframe"] = chosen_interval
     deep_report["timeframe_comparison"] = [
         {
             "timeframe": interval,
@@ -3637,18 +3715,19 @@ def _optimize_stock_timeframes_historical(
             "variants_tested": report.get("variants_tested", 0),
             "screening_only": interval != chosen_interval,
         }
-        for interval, _, report in screened
+        for interval, _, report in screened_intervals
     ]
+    screening_variants = sum(int(report.get("variants_tested") or 0) for _, _, report in screened_intervals)
+    deep_report["screening_variants_tested"] = screening_variants
+    deep_report["deep_variants_tested"] = int(deep_report.get("variants_tested") or 0)
+    deep_report["variants_tested"] = screening_variants + int(deep_report.get("variants_tested") or 0)
     deep_report["warnings"] = list(dict.fromkeys([
-        *(
-            "Automatic candle comparison used a bounded screening pass for 1-, 5-, and 15-minute candles, "
-            f"then ran the full adaptive search only on {chosen_interval}."
-        ,),
+        f"Runtime-safe funnel screened {len(strategy_screen)} saved strategies, advanced {len(top_strategies)} to deep optimization, "
+        f"screened all requested candle intervals, then ran the full adaptive search on {chosen_interval}.",
         *(deep_report.get("warnings") or []),
     ]))
-
     if progress:
-        progress(990, 1000, f"Deep optimization complete for {chosen_interval}; preparing results…")
+        progress(985, 1000, "Deep optimizer finished; preparing results…")
     return deep_report
 
 def optimize_stock_strategies(
