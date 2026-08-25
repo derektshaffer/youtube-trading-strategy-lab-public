@@ -1038,6 +1038,18 @@ with backtest_tab:
                     slippage_bps=slippage_bps,
                     fee_per_order=order_fee,
                 )
+                st.session_state["last_manual_backtest_settings"] = {
+                    "starting_cash": float(starting_cash),
+                    "risk_per_trade_pct": float(risk_per_trade),
+                    "max_position_pct": float(position_cap),
+                    "default_stop_pct": float(default_stop),
+                    "default_reward_risk": float(default_ratio),
+                    "spread_bps": float(spread_bps),
+                    "slippage_bps": float(slippage_bps),
+                    "fee_per_order": float(order_fee),
+                }
+                st.session_state["last_manual_history_days"] = int(history_days)
+                st.session_state["last_manual_timeframe"] = str(timeframe)
                 try:
                     market = client()
                     # Basic Alpaca accounts can retrieve consolidated history, but not
@@ -1118,6 +1130,7 @@ with optimizer_tab:
             f'{len(library["strategies"])} saved strategies available. The stock history is downloaded once; '
             "the AI does not need to reanalyze your videos. Account size and realistic trading costs remain fixed."
         )
+        manual_optimizer_defaults = st.session_state.get("last_manual_backtest_settings") or {}
         with st.form("stock_optimizer_form"):
             first_row = st.columns(4)
             optimizer_symbol_raw = first_row[0].text_input(
@@ -1130,7 +1143,7 @@ with optimizer_tab:
                 "Historical calendar days",
                 min_value=7,
                 max_value=180,
-                value=90,
+                value=max(7, min(180, int(st.session_state.get("last_manual_history_days", 90)))),
             )
             optimizer_timeframe = first_row[2].selectbox(
                 "Candle intervals to test",
@@ -1144,12 +1157,28 @@ with optimizer_tab:
                 index=0,
             )
 
+            optimizer_goal = st.selectbox(
+                "Optimization goal",
+                [
+                    "Maximum historical P/L — search the full selected window",
+                    "Validated edge — keep training, validation, and holdout separate",
+                ],
+                index=0,
+                help=(
+                    "Maximum historical P/L is designed to find the best settings for the period you chose, "
+                    "including settings the holdout-only validator is not allowed to learn from. Validated edge "
+                    "is more conservative for judging whether the result may generalize."
+                ),
+            )
+            if optimizer_goal.startswith("Maximum historical"):
+                st.caption("Historical-P/L mode searches the whole window and can overfit. Use Validated edge afterward as a robustness check.")
+
             second_row = st.columns(4)
             optimizer_depth = second_row[0].selectbox(
                 "Search depth",
-                ["Quick — 16 combinations", "Balanced — 36 combinations", "Thorough — 64 combinations"],
-                index=1,
-                help="The combination limit applies to each saved strategy. Thorough searches take longer.",
+                ["Quick — 48 combinations", "Balanced — 120 combinations", "Comprehensive — 240 combinations", "Exhaustive — 320 combinations"],
+                index=2,
+                help="The combination limit applies to each saved strategy. Comprehensive and Exhaustive search stop/target interactions and more rule thresholds.",
             )
             minimum_training = second_row[1].number_input(
                 "Minimum training trades",
@@ -1168,7 +1197,7 @@ with optimizer_tab:
             optimizer_cash = second_row[3].number_input(
                 "Starting cash ($)",
                 min_value=100.0,
-                value=2_000.0,
+                value=float(manual_optimizer_defaults.get("starting_cash", 2_000.0)),
                 step=100.0,
             )
 
@@ -1185,7 +1214,7 @@ with optimizer_tab:
                 "Maximum position size to test (%)",
                 min_value=1.0,
                 max_value=100.0,
-                value=100.0,
+                value=float(manual_optimizer_defaults.get("max_position_pct", 100.0)),
                 step=1.0,
                 help="The optimizer compares smaller allocations and will never exceed this percentage of your account.",
             )
@@ -1193,7 +1222,7 @@ with optimizer_tab:
                 "Fallback stop (%)",
                 min_value=0.1,
                 max_value=30.0,
-                value=2.0,
+                value=float(manual_optimizer_defaults.get("default_stop_pct", 2.0)),
                 step=0.1,
             )
             optimizer_reward = third_row[3].number_input(
@@ -1209,21 +1238,21 @@ with optimizer_tab:
                 "Spread estimate (bps)",
                 min_value=0.0,
                 max_value=500.0,
-                value=12.0,
+                value=float(manual_optimizer_defaults.get("spread_bps", 12.0)),
                 step=1.0,
             )
             optimizer_slippage = cost_row[1].number_input(
                 "Slippage per fill (bps)",
                 min_value=0.0,
                 max_value=500.0,
-                value=8.0,
+                value=float(manual_optimizer_defaults.get("slippage_bps", 8.0)),
                 step=1.0,
             )
             optimizer_fee = cost_row[2].number_input(
                 "Fee per order ($)",
                 min_value=0.0,
                 max_value=50.0,
-                value=0.0,
+                value=float(manual_optimizer_defaults.get("fee_per_order", 0.0)),
                 step=0.1,
             )
             protection_row = st.columns(3)
@@ -1237,13 +1266,13 @@ with optimizer_tab:
             )
             sizing_depth = protection_row[1].selectbox(
                 "Position-size search depth",
-                ["Quick — 4 sizing combinations", "Balanced — 7 sizing combinations", "Thorough — 12 sizing combinations"],
-                index=1,
+                ["Quick — 8 sizing combinations", "Balanced — 24 sizing combinations", "Comprehensive — 48 sizing combinations", "Exhaustive — 64 sizing combinations"],
+                index=2,
             )
             use_live_spread = protection_row[2].checkbox(
                 "Use the stock's actual quoted spread",
-                value=True,
-                help="The optimizer uses whichever is larger: your spread estimate or the latest quoted spread.",
+                value=False,
+                help="Leave this off when you want an apples-to-apples comparison with the manual backtest. Turn it on for a more conservative live-spread assumption.",
             )
             optimization_requested = st.form_submit_button(
                 "Find the best strategy and settings for this stock",
@@ -1263,10 +1292,10 @@ with optimizer_tab:
                 if not source_strategies:
                     st.error("No approved strategies are available. Choose all strategies or approve one first.")
                 else:
-                    limits = {"Quick": 16, "Balanced": 36, "Thorough": 64}
-                    combination_limit = limits.get(optimizer_depth.split(" — ", 1)[0], 36)
-                    sizing_limits = {"Quick": 4, "Balanced": 7, "Thorough": 12}
-                    sizing_limit = sizing_limits.get(sizing_depth.split(" — ", 1)[0], 7)
+                    limits = {"Quick": 48, "Balanced": 120, "Comprehensive": 240, "Exhaustive": 320}
+                    combination_limit = limits.get(optimizer_depth.split(" — ", 1)[0], 240)
+                    sizing_limits = {"Quick": 8, "Balanced": 24, "Comprehensive": 48, "Exhaustive": 64}
+                    sizing_limit = sizing_limits.get(sizing_depth.split(" — ", 1)[0], 48)
                     engine_settings = BacktestSettings(
                         starting_cash=optimizer_cash,
                         risk_per_trade_pct=optimizer_risk,
@@ -1279,11 +1308,12 @@ with optimizer_tab:
                     )
                     tuning_settings = OptimizationSettings(
                         max_variants_per_strategy=combination_limit,
-                        finalists_per_strategy=min(7, combination_limit),
+                        finalists_per_strategy=min(32, max(8, combination_limit // 10)),
                         minimum_training_trades=int(minimum_training),
                         minimum_validation_trades=int(minimum_validation),
                         max_execution_variants_per_finalist=sizing_limit,
                         maximum_drawdown_pct=float(optimizer_drawdown),
+                        selection_mode=("historical_pnl" if optimizer_goal.startswith("Maximum historical") else "validated"),
                     )
                     try:
                         market = client()
@@ -1354,11 +1384,16 @@ with optimizer_tab:
         if optimization_report.get("rankings"):
             optimized_symbol = str(optimization_report.get("symbol") or "?")
             winning = optimization_report["winner"]
+            historical_fit_mode = optimization_report.get("selection_mode") == "historical_pnl"
             validation = winning.get("validation_metrics") or {}
+            full_window = winning.get("full_metrics") or validation
+            selection_metrics = full_window if historical_fit_mode else validation
             holdout = winning.get("holdout_metrics") or {}
             section(
                 f"Best strategy found for {optimized_symbol}",
-                "Rankings use the separate validation period. Only the preselected winner is tested on the final untouched holdout.",
+                ("Rankings maximize simulated P/L across the complete selected history. This is an in-sample best fit, not an untouched validation."
+                 if historical_fit_mode else
+                 "Rankings use the separate validation period. Only the preselected winner is tested on the final untouched holdout."),
             )
             highlights = st.columns(5)
             metric_card(
@@ -1369,30 +1404,30 @@ with optimizer_tab:
             )
             metric_card(
                 highlights[1],
-                "Validation P/L",
-                money(validation.get("net_pnl")),
-                f'{int(safe_float(validation.get("trade_count"), 0) or 0)} separate validation trades',
-                "good" if (safe_float(validation.get("net_pnl"), 0) or 0) > 0 else "bad",
+                "Full-window P/L" if historical_fit_mode else "Validation P/L",
+                money(selection_metrics.get("net_pnl")),
+                (f'{int(safe_float(selection_metrics.get("trade_count"), 0) or 0)} historical trades' if historical_fit_mode else f'{int(safe_float(validation.get("trade_count"), 0) or 0)} separate validation trades'),
+                "good" if (safe_float(selection_metrics.get("net_pnl"), 0) or 0) > 0 else "bad",
             )
             metric_card(
                 highlights[2],
-                "Final holdout P/L",
-                money(holdout.get("net_pnl")),
-                f'{int(safe_float(holdout.get("trade_count"), 0) or 0)} untouched-period trades',
-                "good" if (safe_float(holdout.get("net_pnl"), 0) or 0) > 0 else "bad",
+                "Full-window return" if historical_fit_mode else "Final holdout P/L",
+                (percent(selection_metrics.get("return_pct"), signed=True) if historical_fit_mode else money(holdout.get("net_pnl"))),
+                (f'{percent(selection_metrics.get("max_drawdown_pct"))} max drawdown' if historical_fit_mode else f'{int(safe_float(holdout.get("trade_count"), 0) or 0)} untouched-period trades'),
+                ("good" if (safe_float(selection_metrics.get("net_pnl"), 0) or 0) > 0 else "bad") if historical_fit_mode else ("good" if (safe_float(holdout.get("net_pnl"), 0) or 0) > 0 else "bad"),
             )
             metric_card(
                 highlights[3],
                 "Higher-cost P/L",
                 money((winning.get("stress_metrics") or {}).get("net_pnl")),
-                "Validation repeated with 50% higher spread and slippage",
+                ("Full historical window repeated with 50% higher spread and slippage" if historical_fit_mode else "Validation repeated with 50% higher spread and slippage"),
             )
             metric_card(
                 highlights[4],
                 "Quality assessment",
                 str(winning.get("status") or "UNKNOWN"),
                 f'{optimization_report.get("session_count", 0)} trading sessions reviewed',
-                "good" if winning.get("status") == "VALIDATED" else "bad",
+                "good" if winning.get("status") in {"VALIDATED", "HISTORICAL BEST FIT"} else "bad",
             )
             st.markdown(
                 f'**Top strategy:** {escape(winning.get("strategy_name") or "Unnamed strategy")}  \n'
@@ -1411,7 +1446,9 @@ with optimizer_tab:
             winning_rules = normalize_machine_rules(winning.get("optimized_rules"))
             section(
                 f"Recommended trading settings for {optimized_symbol}",
-                "These stock-specific settings are selected using validation performance and saved with the optimized strategy.",
+                ("These settings maximize simulated performance over the selected historical window; validate them on other dates before relying on them."
+                 if historical_fit_mode else
+                 "These stock-specific settings are selected using validation performance and saved with the optimized strategy."),
             )
             recommendation_cards = st.columns(5)
             metric_card(
@@ -1465,7 +1502,7 @@ with optimizer_tab:
                     )
                 st.dataframe(pd.DataFrame(interval_rows), hide_index=True, use_container_width=True)
 
-            section("Strategy rankings", "Every strategy is tested using stock-specific rules, position sizing, and realistic costs; only the overall winner receives a final holdout test.")
+            section("Strategy rankings", ("Every strategy is ranked by full-window historical P/L after broad rule and sizing sweeps." if historical_fit_mode else "Every strategy is tested using stock-specific rules, position sizing, and realistic costs; only the overall winner receives a final holdout test."))
             rankings_table = []
             for index, candidate in enumerate(optimization_report["rankings"], start=1):
                 candidate_validation = candidate.get("validation_metrics") or {}
