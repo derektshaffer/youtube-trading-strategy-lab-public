@@ -1,0 +1,37 @@
+name: Apply Help and Glossary tab
+
+on:
+  push:
+    paths:
+      - '.github/workflows/apply-help-glossary-tab.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m pip install -r requirements.txt
+      - name: Apply patch
+        run: python .github/scripts/add_help_glossary_tab.py
+      - name: Verify
+        run: |
+          python -m py_compile youtube_strategy_app.py youtube_strategy_engine.py
+          grep -F 'Help & Glossary' youtube_strategy_app.py
+          grep -F 'Ask ChatGPT' youtube_strategy_app.py
+          grep -F 'Validation trade' youtube_strategy_app.py
+          grep -F 'def ask_chatgpt_help' youtube_strategy_engine.py
+          python -m unittest -q test_youtube_strategy_engine.py
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add youtube_strategy_app.py youtube_strategy_engine.py
+          if git diff --cached --quiet; then
+            echo 'No app changes to commit.'
+          else
+            git commit -m 'Add Help and Glossary tab with ChatGPT Q&A'
+            git push
+          fi
