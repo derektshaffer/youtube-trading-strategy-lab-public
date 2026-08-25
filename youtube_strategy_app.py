@@ -1128,7 +1128,7 @@ with optimizer_tab:
             )
             optimizer_history_days = first_row[1].slider(
                 "Historical calendar days",
-                min_value=20,
+                min_value=7,
                 max_value=180,
                 value=90,
             )
