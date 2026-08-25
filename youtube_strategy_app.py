@@ -296,7 +296,7 @@ st.markdown(
 
 with st.sidebar:
     st.markdown("### App connections")
-    _ = st.success("Gemini connected") if gemini_ready else st.warning("Gemini API key needed")     st.success("Gemini connected") else:     st.warning("Gemini API key needed")
+        _ = st.success("Gemini connected") if gemini_ready else st.warning("Gemini API key needed")
     paid_gemini_key = setting("GEMINI_PAID_API_KEY")
     if paid_gemini_key:
         if paid_gemini_key == setting("GEMINI_API_KEY"):
