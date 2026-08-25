@@ -1,0 +1,58 @@
+name: Apply seven-day optimizer patch
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-seven-day-optimizer.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-optimizer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Change optimizer minimum to seven days
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("youtube_strategy_app.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''            optimizer_history_days = first_row[1].slider(
+                "Historical calendar days",
+                min_value=20,
+                max_value=180,
+                value=90,
+            )'''
+          new = '''            optimizer_history_days = first_row[1].slider(
+                "Historical calendar days",
+                min_value=7,
+                max_value=180,
+                value=90,
+            )'''
+
+          if old in text:
+              path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          elif new in text:
+              print("Optimizer is already set to seven days.")
+          else:
+              raise SystemExit("Could not find the expected Historical calendar days slider block.")
+          PY
+
+      - name: Commit the one-line app change
+        run: |
+          if git diff --quiet -- youtube_strategy_app.py; then
+            echo "No app change needed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add youtube_strategy_app.py
+          git commit -m "Allow 7-day strategy optimization"
+          git push origin HEAD:main
