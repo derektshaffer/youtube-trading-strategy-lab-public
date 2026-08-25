@@ -1149,7 +1149,7 @@ with optimizer_tab:
                 "Candle intervals to test",
                 ["Automatically compare 1, 5, and 15 minutes", "1Min only", "5Min only", "15Min only"],
                 index=0,
-                help="Automatic comparison downloads one-minute candles once, then builds the other intervals locally.",
+                help="Automatic comparison quickly screens 1-, 5-, and 15-minute candles, then runs the full adaptive optimization only on the strongest interval. This is much faster and more reliable on long histories.",
             )
             optimizer_scope = first_row[3].selectbox(
                 "Strategies to compare",
@@ -1171,7 +1171,7 @@ with optimizer_tab:
                 ),
             )
             if optimizer_goal.startswith("Maximum historical"):
-                st.caption("Historical-P/L mode searches the whole window and can overfit. Use Validated edge afterward as a robustness check.")
+                st.caption("Historical-P/L mode searches the whole window and can overfit. Use Validated edge afterward as a robustness check. Automatic candle comparison screens all intervals first, then deeply optimizes only the strongest one.")
 
             second_row = st.columns(4)
             optimizer_depth = second_row[0].selectbox(

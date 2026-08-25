@@ -3326,7 +3326,8 @@ def _optimize_stock_strategies_historical(
             key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct),
             reverse=True,
         )
-        finalists = rule_candidates[:min(len(rule_candidates), optimizer.finalists_per_strategy)]
+        sizing_finalist_count = min(len(rule_candidates), min(6, optimizer.finalists_per_strategy))
+        finalists = rule_candidates[:sizing_finalist_count]
         baseline = rule_candidates[0] if rule_candidates else None
         original_candidate = next((item for item in rule_candidates if item["variant_index"] == 0), None)
         if original_candidate and finalists and all(item["variant_index"] != 0 for item in finalists):
@@ -3527,81 +3528,128 @@ def _optimize_stock_timeframes_historical(
     timeframes: tuple[str, ...],
     progress: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, Any]:
+    """Screen candle sizes cheaply, then deep-optimize only the best interval.
+
+    Running a comprehensive adaptive optimizer independently on 1-, 5-, and 15-minute
+    candles can require tens of thousands of full backtests. This two-stage approach
+    keeps the adaptive search while avoiding Streamlit Cloud time/memory exhaustion.
+    """
     requested = list(dict.fromkeys(str(item) for item in timeframes))
     if not requested or any(item not in {"1Min", "5Min", "15Min"} for item in requested):
         raise AppError("Select one or more supported candle intervals: 1Min, 5Min, or 15Min.")
-    by_interval: list[tuple[str, dict[str, Any]]] = []
+
+    settings = backtest_settings or BacktestSettings()
+    settings.validate()
+    optimization_settings.validate()
+
+    # The screening pass is intentionally bounded. It still uses the adaptive engine,
+    # but with a small enough search to compare candle sizes without exhausting runtime.
+    screening_optimizer = replace(
+        optimization_settings,
+        max_variants_per_strategy=min(48, optimization_settings.max_variants_per_strategy),
+        finalists_per_strategy=min(4, optimization_settings.finalists_per_strategy),
+        max_execution_variants_per_finalist=min(8, optimization_settings.max_execution_variants_per_finalist),
+    )
+    screening_optimizer.validate()
+
+    screened: list[tuple[str, list[dict[str, Any]], dict[str, Any]]] = []
+    screening_weight = 45
+    interval_weight = screening_weight / max(1, len(requested))
+
     for interval_index, interval in enumerate(requested):
         interval_rows = resample_intraday_bars(one_minute_rows, interval)
 
-        def interval_progress(completed: int, total: int, message: str) -> None:
+        def screen_progress(completed: int, total: int, message: str) -> None:
             if progress:
-                portion = min(1.0, completed / max(total, 1))
-                progress(
-                    int((interval_index + portion) * 1000),
-                    len(requested) * 1000,
-                    f"{interval}: {message}",
-                )
+                fraction = min(1.0, completed / max(total, 1))
+                overall = int((interval_index * interval_weight + fraction * interval_weight) * 10)
+                progress(overall, 1000, f"Screening {interval}: {message}")
 
         report = _optimize_stock_strategies_historical(
             interval_rows,
             strategies,
             symbol,
-            backtest_settings,
-            optimization_settings,
-            progress=interval_progress,
+            settings,
+            screening_optimizer,
+            progress=screen_progress,
         )
         report["timeframe"] = interval
         report["timeframes_tested"] = [interval]
-        for candidate in report["rankings"]:
+        for candidate in report.get("rankings") or []:
             candidate["timeframe"] = interval
-        report["winner"]["timeframe"] = interval
-        by_interval.append((interval, report))
+        if report.get("winner"):
+            report["winner"]["timeframe"] = interval
+        screened.append((interval, interval_rows, report))
 
-    candidates = [candidate for _, report in by_interval for candidate in report["rankings"]]
-    candidates.sort(
-        key=lambda item: _historical_metric_key(item["full_metrics"], optimization_settings.maximum_drawdown_pct),
+    if not screened:
+        raise AppError("No candle interval produced an optimization result.")
+
+    screened.sort(
+        key=lambda item: _historical_metric_key(
+            (item[2].get("winner") or {}).get("full_metrics") or {},
+            optimization_settings.maximum_drawdown_pct,
+        ),
         reverse=True,
     )
-    winner = candidates[0]
-    chosen_interval, chosen_report = next(
-        item for item in by_interval if item[0] == winner["timeframe"]
-    )
-    # winner is already the top candidate in the chosen interval report because both
-    # layers use the same historical metric key.
-    combined = {
-        **chosen_report,
-        "selection_mode": "historical_pnl",
-        "timeframe": chosen_interval,
-        "timeframes_tested": requested,
-        "strategies_tested": len({item["source_strategy_id"] for item in candidates}),
-        "variants_tested": sum(report["variants_tested"] for _, report in by_interval),
-        "rule_variants_tested": sum(report["rule_variants_tested"] for _, report in by_interval),
-        "execution_variants_tested": sum(report["execution_variants_tested"] for _, report in by_interval),
-        "adaptive_refinement_tests": sum(report.get("adaptive_refinement_tests", 0) for _, report in by_interval),
-        "rankings": candidates,
-        "winner": winner,
-        "timeframe_comparison": [
-            {
-                "timeframe": interval,
-                "strategy_name": report["winner"]["strategy_name"],
-                "validation_metrics": report["winner"]["full_metrics"],
-                "full_metrics": report["winner"]["full_metrics"],
-                "score": report["winner"]["score"],
-                "status": report["winner"]["status"],
-                "variants_tested": report["variants_tested"],
-            }
-            for interval, report in by_interval
-        ],
-        "warnings": list(dict.fromkeys(note for _, report in by_interval for note in report.get("warnings") or [])),
-    }
-    # Use the chosen interval's already-computed full backtest.
-    combined["winning_backtest"] = chosen_report["winning_backtest"]
-    combined["recommended_backtest_settings"] = winner["optimized_backtest_settings"]
-    if progress:
-        progress(len(requested) * 1000, len(requested) * 1000, f"Historical optimum: {chosen_interval}")
-    return combined
+    chosen_interval, chosen_rows, best_screen = screened[0]
 
+    if progress:
+        progress(450, 1000, f"Best preliminary candle size: {chosen_interval}. Starting deep adaptive search…")
+
+    def deep_progress(completed: int, total: int, message: str) -> None:
+        if progress:
+            fraction = min(1.0, completed / max(total, 1))
+            progress(450 + int(fraction * 540), 1000, f"Deep {chosen_interval} search: {message}")
+
+    deep_report = _optimize_stock_strategies_historical(
+        chosen_rows,
+        strategies,
+        symbol,
+        settings,
+        optimization_settings,
+        progress=deep_progress,
+    )
+    deep_report["timeframe"] = chosen_interval
+    deep_report["timeframes_tested"] = requested
+    for candidate in deep_report.get("rankings") or []:
+        candidate["timeframe"] = chosen_interval
+    if deep_report.get("winner"):
+        deep_report["winner"]["timeframe"] = chosen_interval
+
+    screening_variants = sum(int(report.get("variants_tested") or 0) for _, _, report in screened)
+    screening_adaptive = sum(int(report.get("adaptive_refinement_tests") or 0) for _, _, report in screened)
+    deep_variants = int(deep_report.get("variants_tested") or 0)
+    deep_adaptive = int(deep_report.get("adaptive_refinement_tests") or 0)
+
+    deep_report["screening_variants_tested"] = screening_variants
+    deep_report["deep_variants_tested"] = deep_variants
+    deep_report["variants_tested"] = screening_variants + deep_variants
+    deep_report["screening_adaptive_refinements"] = screening_adaptive
+    deep_report["adaptive_refinement_tests"] = screening_adaptive + deep_adaptive
+    deep_report["timeframe_comparison"] = [
+        {
+            "timeframe": interval,
+            "strategy_name": (report.get("winner") or {}).get("strategy_name"),
+            "validation_metrics": (report.get("winner") or {}).get("full_metrics") or {},
+            "full_metrics": (report.get("winner") or {}).get("full_metrics") or {},
+            "score": (report.get("winner") or {}).get("score"),
+            "status": (report.get("winner") or {}).get("status"),
+            "variants_tested": report.get("variants_tested", 0),
+            "screening_only": interval != chosen_interval,
+        }
+        for interval, _, report in screened
+    ]
+    deep_report["warnings"] = list(dict.fromkeys([
+        *(
+            "Automatic candle comparison used a bounded screening pass for 1-, 5-, and 15-minute candles, "
+            f"then ran the full adaptive search only on {chosen_interval}."
+        ,),
+        *(deep_report.get("warnings") or []),
+    ]))
+
+    if progress:
+        progress(990, 1000, f"Deep optimization complete for {chosen_interval}; preparing results…")
+    return deep_report
 
 def optimize_stock_strategies(
     rows: list[dict[str, Any]],
