@@ -1345,7 +1345,14 @@ with optimizer_tab:
                         candles = market.bars([ticker], start=start, end=end, timeframe=selected_interval).get(ticker, [])
 
                         def optimization_progress(completed: int, total: int, message: str) -> None:
-                            progress_bar.progress(min(1.0, completed / max(total, 1)), text=message)
+                            # Adaptive refinement can add work after the engine's original coarse
+                            # progress total. Never show 100% until the report has actually returned
+                            # and been stored in session state below.
+                            reported_fraction = completed / max(total, 1)
+                            progress_bar.progress(
+                                min(0.97, max(0.0, reported_fraction)),
+                                text=message,
+                            )
 
                         if automatic_intervals:
                             report = optimize_stock_timeframes(
@@ -1369,16 +1376,40 @@ with optimizer_tab:
                             report["timeframes_tested"] = [selected_interval]
                             for candidate in report.get("rankings") or []:
                                 candidate["timeframe"] = selected_interval
+                        if not isinstance(report, dict) or not report.get("rankings") or not report.get("winner"):
+                            raise AppError(
+                                f"The optimizer finished for {ticker}, but it did not return a usable ranked result. "
+                                "Try a shorter history or a smaller search depth, then report this message if it repeats."
+                            )
+                        returned_symbol = str(report.get("symbol") or "").strip().upper()
+                        if returned_symbol != ticker:
+                            raise AppError(
+                                f"The optimizer returned results for {returned_symbol or 'an unknown ticker'} instead of {ticker}. "
+                                "The mismatched result was discarded."
+                            )
                         report["history_days"] = int(optimizer_history_days)
                         report["observed_spread_bps"] = observed_spread
                         if quote_warning:
                             report["warnings"] = list(dict.fromkeys([quote_warning, *(report.get("warnings") or [])]))
                         st.session_state["stock_optimization_report"] = report
-                        progress_bar.progress(1.0, text=f"Strategy optimization complete for {ticker}")
+                        st.session_state["optimizer_last_completed_symbol"] = ticker
+                        progress_bar.progress(1.0, text=f"Strategy optimization complete for {ticker} — results ready below")
+                        st.success(
+                            f"Optimization complete for {ticker}: "
+                            f"{int(report.get('variants_tested', 0)):,} settings tested. Results are shown below."
+                        )
                     except AppError as error:
                         # Keep the previous result cleared if the new ticker fails to optimize.
                         st.session_state.pop("stock_optimization_report", None)
+                        progress_bar.progress(0.0, text=f"Optimization failed for {ticker}")
                         st.error(str(error))
+                    except Exception as error:
+                        # Do not silently lose unexpected failures after a long adaptive run.
+                        st.session_state.pop("stock_optimization_report", None)
+                        progress_bar.progress(0.0, text=f"Optimization failed for {ticker}")
+                        st.error(
+                            f"The optimizer hit an unexpected {type(error).__name__} while processing {ticker}: {error}"
+                        )
 
         saved_notice = st.session_state.pop("optimizer_saved_notice", None)
         if saved_notice:
@@ -1397,6 +1428,11 @@ with optimizer_tab:
                     f"{current_optimizer_symbol or 'a different/invalid ticker'}. Run the optimizer to create a new matching report."
                 )
             optimization_report = {}
+        if optimization_report and not optimization_report.get("rankings"):
+            st.warning(
+                "An optimization report was returned without ranked results, so it was not displayed. "
+                "Run the optimizer again; if this repeats, the visible error message will identify the failure."
+            )
         if optimization_report.get("rankings"):
             optimized_symbol = str(optimization_report.get("symbol") or "?")
             winning = optimization_report["winner"]
