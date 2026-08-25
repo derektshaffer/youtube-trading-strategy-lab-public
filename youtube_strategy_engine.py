@@ -264,6 +264,66 @@ def _json_request(
         raise AppError("The provider returned a response that was not valid JSON.") from exc
 
 
+def ask_chatgpt_help(
+    api_key: str,
+    question: str,
+    *,
+    model: str = "gpt-5.6-luna",
+    glossary_context: str = "",
+) -> str:
+    """Ask OpenAI for a plain-language explanation inside the app's help tab."""
+    key = str(api_key or "").strip()
+    if not key:
+        raise AppError("Add OPENAI_API_KEY to Streamlit Secrets to use Ask ChatGPT.")
+    prompt = str(question or "").strip()
+    if not prompt:
+        raise AppError("Type a question for ChatGPT first.")
+    if len(prompt) > 4000:
+        raise AppError("Keep Help questions under 4,000 characters.")
+    chosen_model = str(model or "gpt-5.6-luna").strip() or "gpt-5.6-luna"
+    context = str(glossary_context or "").strip()
+    instructions = (
+        "You are the in-app Help assistant for YouTube Trading Strategy Lab, a research and paper-trading app. "
+        "Explain trading, market-data, backtesting, optimization, and app terminology clearly and concretely. "
+        "Prefer short plain-English explanations first, then a simple example when useful. "
+        "Distinguish training, validation, and holdout data carefully. Do not imply that backtest results guarantee future returns. "
+        "Do not claim access to live prices, the user's brokerage account, or unseen app state. "
+        "If a question could affect real-money trading, explain the concept and risk rather than telling the user to buy or sell."
+    )
+    if context:
+        instructions += " Relevant glossary context from the app: " + context[:12000]
+    request_text = instructions + "\n\nUser question: " + prompt
+    response = _json_request(
+        "https://api.openai.com/v1/responses",
+        {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+        payload={"model": chosen_model, "input": request_text},
+        timeout=60,
+    )
+    if isinstance(response, dict):
+        direct = response.get("output_text")
+        if isinstance(direct, str) and direct.strip():
+            return direct.strip()
+        parts: list[str] = []
+        for item in response.get("output") or []:
+            if not isinstance(item, dict):
+                continue
+            for content in item.get("content") or []:
+                if not isinstance(content, dict):
+                    continue
+                if content.get("type") == "output_text" and isinstance(content.get("text"), str):
+                    text = content["text"].strip()
+                    if text:
+                        parts.append(text)
+        if parts:
+            return "\n\n".join(parts)
+    raise AppError("ChatGPT returned a response without readable text. Try the question again.")
+
+
 NULLABLE_NUMBER = {"type": ["number", "null"]}
 NULLABLE_INTEGER = {"type": ["integer", "null"]}
 NULLABLE_BOOLEAN = {"type": ["boolean", "null"]}
