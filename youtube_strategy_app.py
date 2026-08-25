@@ -293,6 +293,7 @@ def analyzed_youtube_video_index(data: dict[str, Any]) -> dict[str, dict[str, An
 
 
 HELP_GLOSSARY: list[dict[str, str]] = [
+    {"term": "8-trade sample filter", "category": "Optimizer", "meaning": "Optional Maximum historical P/L safeguard. When ON, a configuration needs at least 8 completed trades to qualify ahead of tiny-sample results. Turn it OFF only when you intentionally want the optimizer to consider results based on fewer trades."},
     {"term": "Adaptive refinement", "category": "Optimizer", "meaning": "A second, finer search around promising optimizer settings instead of testing only a fixed coarse grid."},
     {"term": "Backtest", "category": "Backtesting", "meaning": "A simulation that applies strategy rules to historical price data to estimate how the rules would have behaved."},
     {"term": "Basis point (bps)", "category": "Execution", "meaning": "One hundredth of one percent. 100 bps = 1%. The app uses bps for spread and slippage assumptions."},
@@ -1421,8 +1422,25 @@ with optimizer_tab:
                     "is more conservative for judging whether the result may generalize."
                 ),
             )
-            if optimizer_goal.startswith("Maximum historical"):
+            historical_pnl_mode = optimizer_goal.startswith("Maximum historical")
+            if historical_pnl_mode:
                 st.caption("Historical-P/L mode searches the whole window and can overfit. Use Validated edge afterward as a robustness check. Automatic candle comparison screens all intervals first, then deeply optimizes only the strongest one.")
+            require_eight_historical_trades = st.checkbox(
+                "Require at least 8 trades before a historical result can win",
+                value=True,
+                disabled=not historical_pnl_mode,
+                help=(
+                    "ON: configurations with fewer than 8 completed trades cannot beat configurations that meet the minimum. "
+                    "OFF: Maximum historical P/L can select a result based on only a few trades, which can make overfitting much easier. "
+                    "This setting applies only to Maximum historical P/L mode."
+                ),
+            )
+            if historical_pnl_mode:
+                st.caption(
+                    "8-trade sample filter is ON for this run."
+                    if require_eight_historical_trades
+                    else "Minimum-trade filter is OFF for this run; tiny-sample results are allowed to rank first."
+                )
 
             second_row = st.columns(4)
             optimizer_depth = second_row[0].selectbox(
@@ -1564,9 +1582,11 @@ with optimizer_tab:
                         finalists_per_strategy=min(32, max(8, combination_limit // 10)),
                         minimum_training_trades=int(minimum_training),
                         minimum_validation_trades=int(minimum_validation),
+                        enforce_historical_minimum_trades=bool(historical_pnl_mode and require_eight_historical_trades),
+                        minimum_historical_trades=8,
                         max_execution_variants_per_finalist=sizing_limit,
                         maximum_drawdown_pct=float(optimizer_drawdown),
-                        selection_mode=("historical_pnl" if optimizer_goal.startswith("Maximum historical") else "validated"),
+                        selection_mode=("historical_pnl" if historical_pnl_mode else "validated"),
                     )
                     try:
                         market = client()
@@ -1716,8 +1736,12 @@ with optimizer_tab:
                 "Full-window P/L" if historical_fit_mode else "Validation P/L",
                 money(selection_metrics.get("net_pnl")),
                 (
-                    f'{int(safe_float(selection_metrics.get("trade_count"), 0) or 0)} historical trades · '
-                    f'{int(optimization_report.get("minimum_historical_trades") or 1)} required'
+                    (
+                        f'{int(safe_float(selection_metrics.get("trade_count"), 0) or 0)} historical trades · '
+                        f'{int(optimization_report.get("minimum_historical_trades") or 8)} required'
+                        if optimization_report.get("historical_minimum_trades_enabled", True)
+                        else f'{int(safe_float(selection_metrics.get("trade_count"), 0) or 0)} historical trades · minimum-trade filter OFF'
+                    )
                     if historical_fit_mode else
                     f'{int(safe_float(validation.get("trade_count"), 0) or 0)} separate validation trades'
                 ),
@@ -1741,8 +1765,12 @@ with optimizer_tab:
                 "Quality assessment",
                 str(winning.get("status") or "UNKNOWN"),
                 (
-                    f'{optimization_report.get("session_count", 0)} sessions · '
-                    f'{optimization_report.get("minimum_historical_trades", 1)} trades required'
+                    (
+                        f'{optimization_report.get("session_count", 0)} sessions · '
+                        f'{optimization_report.get("minimum_historical_trades", 8)}-trade filter ON'
+                        if optimization_report.get("historical_minimum_trades_enabled", True)
+                        else f'{optimization_report.get("session_count", 0)} sessions · minimum-trade filter OFF'
+                    )
                     if historical_fit_mode else
                     f'{optimization_report.get("session_count", 0)} trading sessions reviewed'
                 ),

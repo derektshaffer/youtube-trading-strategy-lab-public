@@ -2517,6 +2517,8 @@ class OptimizationSettings:
     finalists_per_strategy: int = 6
     minimum_training_trades: int = 5
     minimum_validation_trades: int = 2
+    enforce_historical_minimum_trades: bool = True
+    minimum_historical_trades: int = 8
     training_fraction: float = 0.60
     validation_fraction: float = 0.20
     stress_cost_multiplier: float = 1.5
@@ -2532,6 +2534,8 @@ class OptimizationSettings:
             raise AppError("The number of validation finalists must be between 1 and the combination limit.")
         if self.minimum_training_trades < 1 or self.minimum_validation_trades < 1:
             raise AppError("Minimum trade counts must be at least one.")
+        if not 1 <= int(self.minimum_historical_trades) <= 100:
+            raise AppError("The historical minimum trade count must be between 1 and 100.")
         if not 0.30 <= self.training_fraction <= 0.80:
             raise AppError("The training period must contain between 30% and 80% of the available sessions.")
         if not 0.10 <= self.validation_fraction <= 0.40:
@@ -3289,16 +3293,26 @@ def _optimize_stock_strategies_historical(
     sessions = list(dict.fromkeys(frame.get("session", pd.Series(dtype=str)).tolist()))
     if not sessions:
         raise AppError("No regular-session historical candles were available for optimization.")
-    minimum_historical_trades = historical_minimum_trade_count(len(sessions))
+    minimum_historical_trades = (
+        int(optimizer.minimum_historical_trades)
+        if optimizer.enforce_historical_minimum_trades
+        else 1
+    )
 
     warnings = [
         "Maximum historical P/L mode uses the same period to choose and score settings. "
         "It is useful for finding the best fit to this history, but it can overfit and is not an out-of-sample validation."
     ]
-    warnings.append(
-        f"Historical best-fit candidates must produce at least {minimum_historical_trades} completed trades "
-        f"across these {len(sessions)} trading sessions. Smaller samples cannot outrank qualifying candidates."
-    )
+    if optimizer.enforce_historical_minimum_trades:
+        warnings.append(
+            f"Historical best-fit candidates must produce at least {minimum_historical_trades} completed trades. "
+            "Smaller samples cannot outrank qualifying candidates."
+        )
+    else:
+        warnings.append(
+            "The historical minimum-trade filter is OFF for this run. Very small samples can rank first, "
+            "so treat unusually large P/L from only a few trades with extra caution."
+        )
     if len(sessions) < 8:
         warnings.append(
             f"Only {len(sessions)} trading sessions are available, so the historical optimum can be especially noisy."
@@ -3599,6 +3613,7 @@ def _optimize_stock_strategies_historical(
         "generated_at": isoformat_utc(utc_now()),
         "selection_mode": "historical_pnl",
         "session_count": len(sessions),
+        "historical_minimum_trades_enabled": bool(optimizer.enforce_historical_minimum_trades),
         "minimum_historical_trades": minimum_historical_trades,
         "qualifying_strategy_count": len(qualifying_candidates),
         "strategies_tested": len(eligible),
@@ -3625,6 +3640,7 @@ def _screen_historical_strategies(
     symbol: str,
     settings: BacktestSettings,
     maximum_drawdown_pct: float,
+    minimum_historical_trades: int = 1,
 ) -> list[dict[str, Any]]:
     """Cheaply rank saved strategies before expensive adaptive optimization.
 
@@ -3634,8 +3650,7 @@ def _screen_historical_strategies(
     frame = bars_to_frame(rows)
     if frame.empty:
         return []
-    screen_sessions = list(dict.fromkeys(frame.get("session", pd.Series(dtype=str)).tolist()))
-    minimum_historical_trades = historical_minimum_trade_count(len(screen_sessions))
+    minimum_historical_trades = max(1, int(minimum_historical_trades))
     candidates: list[dict[str, Any]] = []
     stop_grid = [2.0, 4.0, 5.0, 7.5, 10.0]
     reward_grid = [1.0, 1.5, 2.0, 3.0]
@@ -3725,6 +3740,11 @@ def _optimize_stock_timeframes_historical(
         target_symbol,
         settings,
         optimization_settings.maximum_drawdown_pct,
+        (
+            int(optimization_settings.minimum_historical_trades)
+            if optimization_settings.enforce_historical_minimum_trades
+            else 1
+        ),
     )
     if not strategy_screen:
         raise AppError("No saved long strategy produced a screenable historical result for this stock.")
