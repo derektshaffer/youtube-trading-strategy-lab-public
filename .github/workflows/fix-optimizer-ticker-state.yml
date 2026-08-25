@@ -1,0 +1,39 @@
+name: Fix optimizer ticker state
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/fix-optimizer-ticker-state.yml"
+      - ".github/scripts/fix_optimizer_ticker_state.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Patch ticker state handling
+        run: python .github/scripts/fix_optimizer_ticker_state.py
+      - name: Verify
+        run: |
+          python -m py_compile youtube_strategy_app.py youtube_strategy_engine.py
+          python -m unittest -q test_youtube_strategy_engine.py
+          grep -F 'st.session_state.pop("stock_optimization_report", None)' youtube_strategy_app.py
+          grep -F 'Previous {stored_optimizer_symbol} optimization results are hidden' youtube_strategy_app.py
+      - name: Commit fix
+        run: |
+          if git diff --quiet -- youtube_strategy_app.py; then
+            echo "Ticker state fix already applied."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add youtube_strategy_app.py
+          git commit -m "Prevent stale optimizer ticker results"
+          git push
