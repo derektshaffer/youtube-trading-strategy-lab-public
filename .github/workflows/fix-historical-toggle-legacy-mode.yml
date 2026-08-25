@@ -1,0 +1,75 @@
+name: Fix historical toggle legacy mode
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-historical-toggle-legacy-mode.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m pip install -r requirements.txt
+      - name: Apply patch
+        run: python .github/scripts/fix_historical_toggle_legacy_mode.py
+      - name: Verify
+        run: |
+          python -m py_compile youtube_strategy_engine.py youtube_strategy_app.py
+          python - <<'PY'
+          import youtube_strategy_engine as e
+
+          zero = {
+              'net_pnl': 0.0,
+              'max_drawdown_pct': 0.0,
+              'return_pct': 0.0,
+              'profit_factor': None,
+              'trade_count': 0,
+          }
+          one_loser = {
+              'net_pnl': -100.0,
+              'max_drawdown_pct': 5.0,
+              'return_pct': -5.0,
+              'profit_factor': 0.0,
+              'trade_count': 1,
+          }
+          two_big = {
+              'net_pnl': 2500.0,
+              'max_drawdown_pct': 0.0,
+              'return_pct': 125.0,
+              'profit_factor': None,
+              'trade_count': 2,
+          }
+          eight_small = {
+              'net_pnl': 100.0,
+              'max_drawdown_pct': 4.0,
+              'return_pct': 5.0,
+              'profit_factor': 1.2,
+              'trade_count': 8,
+          }
+
+          # Exact pre-filter semantics: drawdown, P/L, return, PF, inverse DD, trades.
+          assert e._historical_metric_key(two_big, 15.0, None) == (
+              True, 2500.0, 125.0, -1.0, -0.0, 2
+          )
+          # This specifically catches the bug where OFF was silently behaving like min=1.
+          assert e._historical_metric_key(zero, 15.0, None) > e._historical_metric_key(one_loser, 15.0, None)
+          # Filter ON still protects against a huge but undersized sample.
+          assert e._historical_metric_key(eight_small, 15.0, 8) > e._historical_metric_key(two_big, 15.0, 8)
+          print('legacy OFF and 8-trade ON ranking checks passed')
+          PY
+          python -m unittest -q test_youtube_strategy_engine.py
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add youtube_strategy_engine.py
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Make historical trade filter OFF use legacy ranking"
+            git push
+          fi
