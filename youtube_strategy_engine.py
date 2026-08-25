@@ -1929,6 +1929,7 @@ class StrategyStore:
         symbol: str,
         machine_rules: dict[str, Any],
         optimization_summary: dict[str, Any] | None = None,
+        custom_name: str | None = None,
     ) -> dict[str, Any]:
         symbols = parse_symbols(symbol)
         if len(symbols) != 1:
@@ -1948,6 +1949,7 @@ class StrategyStore:
             self._remember_strategy(data, existing, "Before updating stock-specific optimization")
         optimized = json.loads(json.dumps(source, default=str))
         source_name = str(source.get("name") or "Trading strategy")
+        saved_name = str(custom_name or "").strip()[:120] or f"{source_name} — {target_symbol} optimized"
         summary = optimization_summary or {}
         execution_profile = summary.get("optimized_backtest_settings") or {}
         if execution_profile:
@@ -1968,7 +1970,7 @@ class StrategyStore:
         optimized.update(
             {
                 "id": optimized_id,
-                "name": f"{source_name} — {target_symbol} optimized",
+                "name": saved_name,
                 "machine_rules": normalized,
                 "approved": bool(existing.get("approved")) if existing and not profile_changed else False,
                 "optimized_for_symbol": target_symbol,

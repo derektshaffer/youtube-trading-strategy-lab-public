@@ -155,6 +155,26 @@ div[data-testid="stDataFrame"] {border:1px solid var(--line); border-radius:11px
  border-color:#7ac7ff !important;
  background:linear-gradient(115deg,#25567f,#316fa1) !important;
 }
+/* Immediate visual acknowledgement that a button click registered. */
+.stApp .stButton button:focus:not(:disabled),
+.stApp .stButton button:active:not(:disabled),
+.stApp [data-testid="stFormSubmitButton"] button:focus:not(:disabled),
+.stApp [data-testid="stFormSubmitButton"] button:active:not(:disabled) {
+ border-color:#48e0a8 !important;
+ background:linear-gradient(115deg,#13724f,#1d8e65) !important;
+ box-shadow:0 0 0 2px rgba(53,213,151,.20) !important;
+}
+.stApp .stButton button:focus:not(:disabled) p::before,
+.stApp .stButton button:active:not(:disabled) p::before,
+.stApp [data-testid="stFormSubmitButton"] button:focus:not(:disabled) p::before,
+.stApp [data-testid="stFormSubmitButton"] button:active:not(:disabled) p::before {
+ content:"✓ "; font-weight:900;
+}
+.action-success {
+ border:1px solid rgba(53,213,151,.65); border-radius:10px; padding:12px 14px;
+ background:linear-gradient(115deg,rgba(19,114,79,.95),rgba(29,142,101,.92));
+ color:#f4fff9; font-weight:850; text-align:center; margin-top:8px; margin-bottom:8px;
+}
 div[data-baseweb="tab-list"] {gap:14px}
 @media (max-width:760px) {.hero-title {font-size:27px}.metric-value {font-size:25px}}
 </style>
@@ -229,6 +249,46 @@ def section(title: str, subtitle: str = "") -> None:
 
 def status_pill(label: str, color: str = "blue") -> str:
     return f'<span class="pill pill-{escape(color)}">{escape(label)}</span>'
+
+
+def action_success(message: str) -> None:
+    st.markdown(f'<div class="action-success">✓ {escape(message)}</div>', unsafe_allow_html=True)
+
+
+def analyzed_youtube_video_index(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Return canonical URLs for videos already represented in the saved library."""
+    result: dict[str, dict[str, Any]] = {}
+    for video in data.get("videos") or []:
+        if not isinstance(video, dict):
+            continue
+        raw_url = str(video.get("url") or video.get("source_url") or "").strip()
+        if not raw_url:
+            continue
+        try:
+            normalized_url = normalize_youtube_url(raw_url)
+        except AppError:
+            continue
+        result[normalized_url] = {
+            "url": normalized_url,
+            "video_title": video.get("video_title") or "Untitled video",
+            "creator": video.get("creator") or "Unknown creator",
+            "analyzed_at": video.get("analyzed_at"),
+        }
+    for strategy in video_source_strategies(data.get("strategies") or []):
+        raw_url = str(strategy.get("source_url") or "").strip()
+        if not raw_url:
+            continue
+        try:
+            normalized_url = normalize_youtube_url(raw_url)
+        except AppError:
+            continue
+        result.setdefault(normalized_url, {
+            "url": normalized_url,
+            "video_title": strategy.get("video_title") or strategy.get("source_video_title") or "Previously analyzed video",
+            "creator": strategy.get("creator") or "Unknown creator",
+            "analyzed_at": strategy.get("created_at") or strategy.get("analyzed_at"),
+        })
+    return result
 
 
 def credentials_ready() -> tuple[bool, bool]:
@@ -402,6 +462,26 @@ with overview_tab:
 
 
 with videos_tab:
+    analyzed_video_lookup = analyzed_youtube_video_index(library)
+    section(
+        "Previously analyzed YouTube videos",
+        "Duplicate protection is on. Videos already listed here are skipped unless you explicitly allow re-analysis.",
+    )
+    if analyzed_video_lookup:
+        analyzed_video_rows = [
+            {
+                "Video": item.get("video_title") or "Untitled video",
+                "Creator": item.get("creator") or "Unknown creator",
+                "Analyzed": local_timestamp(item.get("analyzed_at")) if item.get("analyzed_at") else "Previously saved",
+                "YouTube URL": item.get("url"),
+            }
+            for item in analyzed_video_lookup.values()
+        ]
+        st.dataframe(pd.DataFrame(analyzed_video_rows), hide_index=True, use_container_width=True)
+        st.caption(f"{len(analyzed_video_lookup)} unique YouTube video(s) are already in your library.")
+    else:
+        st.info("No previously analyzed YouTube videos are currently saved.")
+
     section("Give the AI trading videos to inspect", "Paste one public YouTube video link per line. The app reads both the visible charts and the audio.")
     with st.form("analyze_video_form"):
         raw_urls = st.text_area(
@@ -424,10 +504,30 @@ with videos_tab:
                 "If a long video fails, enter its total length here and analyze that video by itself."
             ),
         )
+        allow_duplicate_reanalysis = st.checkbox(
+            "Allow re-analysis of videos already in my library",
+            value=False,
+            help="Leave this off to prevent accidental duplicate analysis and unnecessary Gemini usage.",
+        )
         submitted = st.form_submit_button("Analyze YouTube videos", use_container_width=True)
 
     if submitted:
         urls, invalid = parse_youtube_urls(raw_urls)
+        duplicate_urls = [url for url in urls if url in analyzed_video_lookup]
+        if duplicate_urls:
+            duplicate_names = [
+                str(analyzed_video_lookup[url].get("video_title") or url)
+                for url in duplicate_urls
+            ]
+            st.warning(
+                "Already analyzed — duplicate protection caught: "
+                + "; ".join(duplicate_names[:12])
+                + (f"; and {len(duplicate_names) - 12} more" if len(duplicate_names) > 12 else "")
+            )
+            if not allow_duplicate_reanalysis:
+                duplicate_set = set(duplicate_urls)
+                urls = [url for url in urls if url not in duplicate_set]
+                st.info(f"Skipped {len(duplicate_urls)} already-analyzed video(s). They will not be sent to Gemini again.")
         duration_override = None
         duration_error = ""
         try:
@@ -437,7 +537,13 @@ with videos_tab:
         for problem in invalid:
             st.warning(problem)
         if not urls:
-            st.error("Add at least one valid public YouTube video link.")
+            if duplicate_urls and not allow_duplicate_reanalysis:
+                st.warning(
+                    "Nothing new to analyze. Every valid YouTube link entered is already in your library. "
+                    "Enable re-analysis only if you intentionally want to process it again."
+                )
+            else:
+                st.error("Add at least one valid public YouTube video link.")
         elif duration_error:
             st.error(duration_error)
         elif duration_override is not None and len(urls) != 1:
@@ -1676,11 +1782,29 @@ with optimizer_tab:
                     f"This historical fit has only {inspected_trades} completed trades; at least {required_trades} are required. "
                     "It can be inspected, but it cannot be saved as the optimized strategy."
                 )
-            if st.button(
+            source_strategy_name = str(inspected.get("strategy_name") or "Trading strategy")
+            default_optimized_name = f"{source_strategy_name} — {optimized_symbol} optimized"
+            saved_name_key = f"optimized_saved_name_{optimized_symbol}_{inspected.get('source_strategy_id', 'unknown')}"
+            custom_optimized_name = st.text_input(
+                "Saved strategy name",
+                value=default_optimized_name,
+                key=saved_name_key,
+                max_chars=120,
+                help="Edit this before saving. This is the name that will appear in Strategy library and Backtesting.",
+            ).strip()
+            save_confirmation = st.session_state.get("optimized_save_confirmation") or {}
+            saved_this_exact_name = (
+                save_confirmation.get("symbol") == optimized_symbol
+                and save_confirmation.get("source_strategy_id") == inspected.get("source_strategy_id")
+                and save_confirmation.get("name") == custom_optimized_name
+            )
+            if saved_this_exact_name:
+                action_success(f'Saved as “{custom_optimized_name}”')
+            elif st.button(
                 f"Save optimized {optimized_symbol} strategy",
                 key=f"save_optimized_{optimized_symbol}_{inspected.get('source_strategy_id', 'unknown')}",
                 use_container_width=True,
-                disabled=save_blocked_for_sample,
+                disabled=save_blocked_for_sample or not bool(custom_optimized_name),
             ):
                 try:
                     summary = {
@@ -1705,12 +1829,18 @@ with optimizer_tab:
                         optimized_symbol,
                         inspected.get("optimized_rules") or {},
                         summary,
+                        custom_name=custom_optimized_name,
                     )
                     st.session_state["optimizer_saved_notice"] = (
-                        f"Saved the {optimized_symbol}-specific strategy and its recommended risk, position size, "
+                        f'Saved “{custom_optimized_name}” with the {optimized_symbol}-specific risk, position size, '
                         "stop, reward target, trading costs, and candle interval. Select it in Backtesting "
                         "to load those settings automatically."
                     )
+                    st.session_state["optimized_save_confirmation"] = {
+                        "symbol": optimized_symbol,
+                        "source_strategy_id": inspected.get("source_strategy_id"),
+                        "name": custom_optimized_name,
+                    }
                     st.rerun()
                 except AppError as error:
                     st.error(str(error))
