@@ -1178,7 +1178,7 @@ with optimizer_tab:
                 min_value=1.0,
                 max_value=100.0,
                 value=10.0,
-                step=1,
+                step=0.5,
                 help="The optimizer compares lower risk levels and will never recommend more than this ceiling.",
             )
             optimizer_position = third_row[1].number_input(
