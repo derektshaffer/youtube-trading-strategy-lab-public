@@ -1178,7 +1178,7 @@ with optimizer_tab:
                 "Search depth",
                 ["Quick — 48 combinations", "Balanced — 120 combinations", "Comprehensive — 240 combinations", "Exhaustive — 320 combinations"],
                 index=2,
-                help="The combination limit applies to each saved strategy. Comprehensive and Exhaustive search stop/target interactions and more rule thresholds.",
+                help="This is the broad-search budget per saved strategy. The optimizer then automatically zooms in around the strongest candidates with finer parameter steps.",
             )
             minimum_training = second_row[1].number_input(
                 "Minimum training trades",
@@ -1416,7 +1416,13 @@ with optimizer_tab:
                 highlights[0],
                 "Strategies compared",
                 str(optimization_report.get("strategies_tested", 0)),
-                f'{optimization_report.get("variants_tested", 0)} settings combinations tested',
+                (
+                    f'{optimization_report.get("variants_tested", 0)} settings combinations tested'
+                    + (
+                        f' · {optimization_report.get("adaptive_refinement_tests", 0)} adaptive refinements'
+                        if optimization_report.get("adaptive_refinement_tests") else ""
+                    )
+                ),
             )
             metric_card(
                 highlights[1],
