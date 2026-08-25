@@ -3164,16 +3164,37 @@ def _period_metrics(
 
 
 
-def _historical_metric_key(metrics: dict[str, Any], maximum_drawdown_pct: float) -> tuple[Any, ...]:
+def historical_minimum_trade_count(session_count: int) -> int:
+    """Require a meaningful sample without making short windows impossible.
+
+    The gate scales at roughly 40% of trading sessions, with a floor of 3 trades and
+    a cap of 10. A typical 30-calendar-day window with 22 sessions therefore requires
+    9 completed trades before a result can rank as a historical best fit.
+    """
+    sessions = max(0, int(session_count))
+    return max(3, min(10, int(math.ceil(sessions * 0.40))))
+
+
+def _historical_metric_key(
+    metrics: dict[str, Any],
+    maximum_drawdown_pct: float,
+    minimum_trades: int = 1,
+) -> tuple[Any, ...]:
     pnl = safe_float(metrics.get("net_pnl"), 0.0) or 0.0
     drawdown = safe_float(metrics.get("max_drawdown_pct"), 0.0) or 0.0
     return_pct = safe_float(metrics.get("return_pct"), 0.0) or 0.0
     profit_factor = safe_float(metrics.get("profit_factor"), -1.0)
     trades = int(safe_float(metrics.get("trade_count"), 0.0) or 0.0)
+    required = max(1, int(minimum_trades))
+    sample_ok = trades >= required
+    drawdown_ok = drawdown <= maximum_drawdown_pct
+    # A qualifying sample always outranks an undersized sample, regardless of raw P/L.
+    # If nothing qualifies, prefer the candidate with more observations before dollars.
     return (
-        drawdown <= maximum_drawdown_pct,
-        pnl,
-        return_pct,
+        sample_ok,
+        drawdown_ok,
+        pnl if sample_ok else trades,
+        return_pct if sample_ok else pnl,
         profit_factor if profit_factor is not None else -1.0,
         -drawdown,
         trades,
@@ -3206,11 +3227,16 @@ def _optimize_stock_strategies_historical(
     sessions = list(dict.fromkeys(frame.get("session", pd.Series(dtype=str)).tolist()))
     if not sessions:
         raise AppError("No regular-session historical candles were available for optimization.")
+    minimum_historical_trades = historical_minimum_trade_count(len(sessions))
 
     warnings = [
         "Maximum historical P/L mode uses the same period to choose and score settings. "
         "It is useful for finding the best fit to this history, but it can overfit and is not an out-of-sample validation."
     ]
+    warnings.append(
+        f"Historical best-fit candidates must produce at least {minimum_historical_trades} completed trades "
+        f"across these {len(sessions)} trading sessions. Smaller samples cannot outrank qualifying candidates."
+    )
     if len(sessions) < 8:
         warnings.append(
             f"Only {len(sessions)} trading sessions are available, so the historical optimum can be especially noisy."
@@ -3288,7 +3314,7 @@ def _optimize_stock_strategies_historical(
             notify(f"{name}: rule set {variant_index + 1} of {len(variants)}")
 
         rule_candidates.sort(
-            key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct),
+            key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct, minimum_historical_trades),
             reverse=True,
         )
 
@@ -3323,7 +3349,7 @@ def _optimize_stock_strategies_historical(
                 })
                 notify(f"{name}: adaptive rule refinement {adaptive_rule_tests} of {refinement_budget}")
         rule_candidates.sort(
-            key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct),
+            key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct, minimum_historical_trades),
             reverse=True,
         )
         sizing_finalist_count = min(len(rule_candidates), min(3, optimizer.finalists_per_strategy))
@@ -3356,7 +3382,7 @@ def _optimize_stock_strategies_historical(
         if not sized_candidates:
             continue
         sized_candidates.sort(
-            key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct),
+            key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct, minimum_historical_trades),
             reverse=True,
         )
 
@@ -3391,7 +3417,7 @@ def _optimize_stock_strategies_historical(
             notify(f"{name}: final rule refinement {adaptive_final_rule_tests}")
 
         sized_candidates.sort(
-            key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct),
+            key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct, minimum_historical_trades),
             reverse=True,
         )
         local_seed = sized_candidates[0]
@@ -3415,7 +3441,7 @@ def _optimize_stock_strategies_historical(
             notify(f"{name}: final sizing refinement {adaptive_final_execution_tests}")
 
         sized_candidates.sort(
-            key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct),
+            key=lambda item: _historical_metric_key(item["metrics"], optimizer.maximum_drawdown_pct, minimum_historical_trades),
             reverse=True,
         )
         best = sized_candidates[0]
@@ -3431,7 +3457,11 @@ def _optimize_stock_strategies_historical(
         metrics = best["metrics"]
         pnl = safe_float(metrics.get("net_pnl"), 0.0) or 0.0
         drawdown = safe_float(metrics.get("max_drawdown_pct"), 0.0) or 0.0
-        if pnl <= 0:
+        trade_count = int(safe_float(metrics.get("trade_count"), 0.0) or 0.0)
+        adequate_sample = trade_count >= minimum_historical_trades
+        if not adequate_sample:
+            status = "INSUFFICIENT SAMPLE"
+        elif pnl <= 0:
             status = "NO HISTORICAL PROFIT"
         elif drawdown > optimizer.maximum_drawdown_pct:
             status = "HIGH DRAWDOWN"
@@ -3475,7 +3505,8 @@ def _optimize_stock_strategies_historical(
             "stress_metrics": stress_metrics,
             "score": round(pnl, 2),
             "status": status,
-            "adequate_sample": int(safe_float(metrics.get("trade_count"), 0) or 0) >= 1,
+            "adequate_sample": adequate_sample,
+            "minimum_historical_trades": minimum_historical_trades,
             "baseline_training_metrics": original_candidate["metrics"] if original_candidate else metrics,
             "limitations": backtest_limitations(source_strategy),
         })
@@ -3483,10 +3514,16 @@ def _optimize_stock_strategies_historical(
     if not ranked:
         raise AppError("No strategy/settings combinations could be evaluated for this stock.")
     ranked.sort(
-        key=lambda item: _historical_metric_key(item["full_metrics"], optimizer.maximum_drawdown_pct),
+        key=lambda item: _historical_metric_key(item["full_metrics"], optimizer.maximum_drawdown_pct, minimum_historical_trades),
         reverse=True,
     )
     winner = ranked[0]
+    qualifying_candidates = [item for item in ranked if item.get("adequate_sample")]
+    if not qualifying_candidates:
+        warnings.append(
+            f"No tested configuration reached the {minimum_historical_trades}-trade minimum. "
+            "The highest-ranked result is shown for research only and is not eligible to be saved as a historical best fit."
+        )
     winner_source = next(item for item in eligible if item.get("id") == winner.get("source_strategy_id"))
     winner_settings = BacktestSettings(**winner["optimized_backtest_settings"])
     winner_strategy = {**winner_source, "machine_rules": winner["optimized_rules"]}
@@ -3500,6 +3537,8 @@ def _optimize_stock_strategies_historical(
         "generated_at": isoformat_utc(utc_now()),
         "selection_mode": "historical_pnl",
         "session_count": len(sessions),
+        "minimum_historical_trades": minimum_historical_trades,
+        "qualifying_strategy_count": len(qualifying_candidates),
         "strategies_tested": len(eligible),
         "variants_tested": sum(item["variants_tested"] for item in ranked),
         "rule_variants_tested": sum(item["rule_variants_tested"] for item in ranked),
@@ -3533,6 +3572,8 @@ def _screen_historical_strategies(
     frame = bars_to_frame(rows)
     if frame.empty:
         return []
+    screen_sessions = list(dict.fromkeys(frame.get("session", pd.Series(dtype=str)).tolist()))
+    minimum_historical_trades = historical_minimum_trade_count(len(screen_sessions))
     candidates: list[dict[str, Any]] = []
     stop_grid = [2.0, 4.0, 5.0, 7.5, 10.0]
     reward_grid = [1.0, 1.5, 2.0, 3.0]
@@ -3579,12 +3620,12 @@ def _screen_historical_strategies(
                     "rules": rules,
                     "settings": candidate_settings,
                 }
-                if best is None or _historical_metric_key(metrics, maximum_drawdown_pct) > _historical_metric_key(best["metrics"], maximum_drawdown_pct):
+                if best is None or _historical_metric_key(metrics, maximum_drawdown_pct, minimum_historical_trades) > _historical_metric_key(best["metrics"], maximum_drawdown_pct, minimum_historical_trades):
                     best = record
         if best is not None:
             candidates.append(best)
     candidates.sort(
-        key=lambda item: _historical_metric_key(item["metrics"], maximum_drawdown_pct),
+        key=lambda item: _historical_metric_key(item["metrics"], maximum_drawdown_pct, minimum_historical_trades),
         reverse=True,
     )
     return candidates
@@ -3664,6 +3705,7 @@ def _optimize_stock_timeframes_historical(
         key=lambda item: _historical_metric_key(
             (item[2].get("winner") or {}).get("full_metrics") or {},
             optimization_settings.maximum_drawdown_pct,
+            int(item[2].get("minimum_historical_trades") or 1),
         ),
         reverse=True,
     )

@@ -1464,7 +1464,12 @@ with optimizer_tab:
                 highlights[1],
                 "Full-window P/L" if historical_fit_mode else "Validation P/L",
                 money(selection_metrics.get("net_pnl")),
-                (f'{int(safe_float(selection_metrics.get("trade_count"), 0) or 0)} historical trades' if historical_fit_mode else f'{int(safe_float(validation.get("trade_count"), 0) or 0)} separate validation trades'),
+                (
+                    f'{int(safe_float(selection_metrics.get("trade_count"), 0) or 0)} historical trades · '
+                    f'{int(optimization_report.get("minimum_historical_trades") or 1)} required'
+                    if historical_fit_mode else
+                    f'{int(safe_float(validation.get("trade_count"), 0) or 0)} separate validation trades'
+                ),
                 "good" if (safe_float(selection_metrics.get("net_pnl"), 0) or 0) > 0 else "bad",
             )
             metric_card(
@@ -1484,7 +1489,12 @@ with optimizer_tab:
                 highlights[4],
                 "Quality assessment",
                 str(winning.get("status") or "UNKNOWN"),
-                f'{optimization_report.get("session_count", 0)} trading sessions reviewed',
+                (
+                    f'{optimization_report.get("session_count", 0)} sessions · '
+                    f'{optimization_report.get("minimum_historical_trades", 1)} trades required'
+                    if historical_fit_mode else
+                    f'{optimization_report.get("session_count", 0)} trading sessions reviewed'
+                ),
                 "good" if winning.get("status") in {"VALIDATED", "HISTORICAL BEST FIT"} else "bad",
             )
             training_sessions = optimization_report.get("training_sessions") or []
@@ -1658,10 +1668,19 @@ with optimizer_tab:
                     "Only the top-ranked strategy has an untouched final holdout result. "
                     "Saving a lower-ranked strategy does not provide the same independent confirmation."
                 )
+            save_blocked_for_sample = historical_fit_mode and not bool(inspected.get("adequate_sample"))
+            if save_blocked_for_sample:
+                inspected_trades = int(safe_float((inspected.get("full_metrics") or {}).get("trade_count"), 0) or 0)
+                required_trades = int(inspected.get("minimum_historical_trades") or optimization_report.get("minimum_historical_trades") or 1)
+                st.warning(
+                    f"This historical fit has only {inspected_trades} completed trades; at least {required_trades} are required. "
+                    "It can be inspected, but it cannot be saved as the optimized strategy."
+                )
             if st.button(
                 f"Save optimized {optimized_symbol} strategy",
                 key=f"save_optimized_{optimized_symbol}_{inspected.get('source_strategy_id', 'unknown')}",
                 use_container_width=True,
+                disabled=save_blocked_for_sample,
             ):
                 try:
                     summary = {
