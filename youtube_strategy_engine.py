@@ -2946,13 +2946,14 @@ def optimize_stock_strategies(
     target_symbol = tickers[0]
     frame = bars_to_frame(rows)
     sessions = list(dict.fromkeys(frame.get("session", pd.Series(dtype=str)).tolist()))
-    if len(sessions) < 8:
+    if len(sessions) < 3:
         raise AppError(
-            "Optimization needs at least eight separate trading sessions so training, validation, "
-            "and final holdout periods stay separate. Request more historical data."
+            "Optimization needs at least three separate trading sessions so training, validation, "
+            "and final holdout periods stay separate. Seven calendar days normally provides enough sessions; "
+            "holiday-shortened windows may need a few extra days."
         )
 
-    training_end = max(3, min(len(sessions) - 3, int(len(sessions) * optimizer.training_fraction)))
+    training_end = max(1, min(len(sessions) - 2, int(len(sessions) * optimizer.training_fraction)))
     validation_end = max(
         training_end + 1,
         min(len(sessions) - 1, int(len(sessions) * (optimizer.training_fraction + optimizer.validation_fraction))),
@@ -2966,6 +2967,11 @@ def optimize_stock_strategies(
         "full": frame.copy().reset_index(drop=True),
     }
     warnings: list[str] = []
+    if len(sessions) < 8:
+        warnings.append(
+            f"Short optimization window: only {len(sessions)} trading sessions are available. "
+            "Results can be much noisier and more prone to overfitting than longer tests."
+        )
     eligible: list[dict[str, Any]] = []
     for strategy in strategies:
         if not isinstance(strategy, dict) or not strategy.get("id"):
