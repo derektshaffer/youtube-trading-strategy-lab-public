@@ -1429,16 +1429,32 @@ with optimizer_tab:
                 f'{optimization_report.get("session_count", 0)} trading sessions reviewed',
                 "good" if winning.get("status") in {"VALIDATED", "HISTORICAL BEST FIT"} else "bad",
             )
-            st.markdown(
-                f'**Top strategy:** {escape(winning.get("strategy_name") or "Unnamed strategy")}  \n'
-                f'**Recommended candle interval:** {winning.get("timeframe") or optimization_report.get("timeframe") or "5Min"}  \n'
-                f'**Training:** {optimization_report["training_sessions"][0]} to '
-                f'{optimization_report["training_sessions"][-1]}  \n'
-                f'**Validation:** {optimization_report["validation_sessions"][0]} to '
-                f'{optimization_report["validation_sessions"][-1]}  \n'
-                f'**Final untouched holdout:** {optimization_report["holdout_sessions"][0]} to '
-                f'{optimization_report["holdout_sessions"][-1]}'
-            )
+            training_sessions = optimization_report.get("training_sessions") or []
+            validation_sessions = optimization_report.get("validation_sessions") or []
+            holdout_sessions = optimization_report.get("holdout_sessions") or []
+            result_period_lines = [
+                f'**Top strategy:** {escape(winning.get("strategy_name") or "Unnamed strategy")}',
+                f'**Recommended candle interval:** {winning.get("timeframe") or optimization_report.get("timeframe") or "5Min"}',
+            ]
+            if historical_fit_mode:
+                if training_sessions:
+                    result_period_lines.append(
+                        f'**Historical optimization window:** {training_sessions[0]} to {training_sessions[-1]}'
+                    )
+            else:
+                if training_sessions:
+                    result_period_lines.append(f'**Training:** {training_sessions[0]} to {training_sessions[-1]}')
+                if validation_sessions:
+                    result_period_lines.append(f'**Validation:** {validation_sessions[0]} to {validation_sessions[-1]}')
+                else:
+                    result_period_lines.append('**Validation:** No separate validation sessions available')
+                if holdout_sessions:
+                    result_period_lines.append(
+                        f'**Final untouched holdout:** {holdout_sessions[0]} to {holdout_sessions[-1]}'
+                    )
+                else:
+                    result_period_lines.append('**Final untouched holdout:** No separate holdout sessions available')
+            st.markdown("  \n".join(result_period_lines))
             for warning in optimization_report.get("warnings") or []:
                 st.warning(str(warning))
 
