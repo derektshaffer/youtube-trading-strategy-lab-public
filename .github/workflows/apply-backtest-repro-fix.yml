@@ -1,0 +1,114 @@
+name: Apply backtest reproducibility fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/apply-backtest-repro-fix.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply Full Lab backtest changes directly
+        shell: python
+        run: |
+          import ast
+          from pathlib import Path
+
+          wrapper_path = Path("pages/Full_Trading_Lab.py")
+          core_path = Path("youtube_strategy_app_core.py")
+          wrapper = wrapper_path.read_text(encoding="utf-8")
+          tree = ast.parse(wrapper)
+          values = {}
+          wanted = {
+              "old_form", "new_form", "old_window", "new_window",
+              "old_save", "new_save", "old_results_header", "new_results_header",
+          }
+          for node in tree.body:
+              if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+                  continue
+              target = node.targets[0]
+              if isinstance(target, ast.Name) and target.id in wanted:
+                  value = ast.literal_eval(node.value)
+                  if isinstance(value, str):
+                      values[target.id] = value
+
+          missing = wanted - values.keys()
+          if missing:
+              raise SystemExit(f"Missing wrapper patch strings: {sorted(missing)}")
+
+          # Make run-history persistence non-fatal. A completed backtest must remain
+          # visible even if a cloud/history save has a transient failure.
+          new_save = values["new_save"]
+          old_history_save = '''                    previous_history = list(chosen.get("backtest_run_history") or [])
+                    store.update_strategy(
+                        str(chosen.get("id") or ""),
+                        {"backtest_run_history": [run_record, *previous_history][:20]},
+                    )
+                    st.session_state["backtest_results"] = results
+                    st.session_state["backtest_strategy_id"] = chosen.get("id")
+                    st.session_state["backtest_run_context"] = run_record
+'''
+          new_history_save = '''                    previous_history = list(chosen.get("backtest_run_history") or [])
+                    # Show successful results before attempting the extra history save.
+                    st.session_state["backtest_results"] = results
+                    st.session_state["backtest_strategy_id"] = chosen.get("id")
+                    st.session_state["backtest_run_context"] = run_record
+                    try:
+                        store.update_strategy(
+                            str(chosen.get("id") or ""),
+                            {"backtest_run_history": [run_record, *previous_history][:20]},
+                        )
+                    except AppError as history_error:
+                        st.warning(
+                            "The backtest completed and the results below are valid for this run, but the extra run-history record "
+                            f"could not be saved permanently: {history_error}"
+                        )
+'''
+          if old_history_save not in new_save:
+              raise SystemExit("Could not locate run-history save block inside new_save")
+          values["new_save"] = new_save.replace(old_history_save, new_history_save, 1)
+
+          core = core_path.read_text(encoding="utf-8")
+          for old_name, new_name in (
+              ("old_form", "new_form"),
+              ("old_window", "new_window"),
+              ("old_save", "new_save"),
+              ("old_results_header", "new_results_header"),
+          ):
+              old = values[old_name]
+              new = values[new_name]
+              if old not in core:
+                  raise SystemExit(f"Could not find {old_name} in core; refusing partial patch")
+              core = core.replace(old, new, 1)
+
+          core_path.write_text(core, encoding="utf-8")
+
+          # The page no longer rewrites the core at runtime. It simply executes the
+          # now-canonical Full Lab source and adds the back-to-dashboard button.
+          wrapper_path.write_text('''"""Full version of the YouTube Trading Strategy Lab."""\n\nfrom pathlib import Path\n\nimport streamlit as st\n\nROOT = Path(__file__).resolve().parents[1]\ncore_path = ROOT / "youtube_strategy_app_core.py"\nsource = core_path.read_text(encoding="utf-8")\ncode = compile(source, str(core_path), "exec")\nexec(code, globals(), globals())\n\nwith st.sidebar:\n    st.divider()\n    if st.button("← Trading Dashboard", key="full_lab_back_dashboard", use_container_width=True):\n        st.switch_page("youtube_strategy_app.py")\n''', encoding="utf-8")
+
+      - name: Verify Python syntax and direct UI changes
+        run: |
+          python -m py_compile youtube_strategy_app_core.py pages/Full_Trading_Lab.py
+          grep -F '"Historical window"' youtube_strategy_app_core.py
+          grep -F 'Fixed dates — reproducible' youtube_strategy_app_core.py
+          grep -F 'Actual settings this backtest will use' youtube_strategy_app_core.py
+          grep -F 'Backtest run history — reproduce an earlier test' youtube_strategy_app_core.py
+          grep -F 'The backtest completed and the results below are valid for this run' youtube_strategy_app_core.py
+      - name: Commit direct fix
+        run: |
+          if git diff --quiet -- youtube_strategy_app_core.py pages/Full_Trading_Lab.py; then
+            echo "No changes needed"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add youtube_strategy_app_core.py pages/Full_Trading_Lab.py
+          git commit -m "Fix reproducible backtests and nonfatal run history"
+          git push
