@@ -1564,10 +1564,25 @@ class GitHubCloudBackup:
         record = self._request(self._contents_url(), missing_ok=True)
         if record is None:
             return None
-        if record.get("type") not in {None, "file"} or record.get("encoding") != "base64":
+        if record.get("type") not in {None, "file"}:
             raise AppError("The GitHub cloud-backup path must point to a normal JSON file.")
         try:
-            content = "".join(str(record.get("content") or "").split())
+            if record.get("encoding") == "base64":
+                content = "".join(str(record.get("content") or "").split())
+            else:
+                # GitHub's Contents API stops embedding file content once a file
+                # grows beyond roughly 1 MB. The path is still a valid file; fetch
+                # the same Git blob by SHA so large strategy libraries continue to
+                # restore/save normally instead of being mistaken for a bad path.
+                record_sha = str(record.get("sha") or "")
+                if not re.fullmatch(r"[a-fA-F0-9]{40,64}", record_sha):
+                    raise AppError("GitHub did not return a readable version of the cloud backup.")
+                blob = self._request(
+                    f"{self._repository_url}/git/blobs/{quote(record_sha, safe='')}"
+                )
+                if blob.get("encoding") != "base64":
+                    raise AppError("GitHub returned the cloud backup in an unsupported encoding.")
+                content = "".join(str(blob.get("content") or "").split())
             raw = base64.b64decode(content, validate=True)
             library = json.loads(raw.decode("utf-8"))
         except (binascii.Error, UnicodeDecodeError, ValueError) as exc:
