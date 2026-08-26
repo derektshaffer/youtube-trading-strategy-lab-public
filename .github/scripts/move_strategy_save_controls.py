@@ -47,8 +47,10 @@ top_position = text.find('save_controls = st.columns([3.0, 1.35])')
 first_rule_position = text.find('updated["min_price"]', top_position)
 if top_position < 0 or first_rule_position < 0 or top_position > first_rule_position:
     raise SystemExit("Save controls were not positioned above the measurable rule fields.")
-if text.count('"Save strategy rules"') != 2:
-    raise SystemExit("Unexpected number of Save strategy rules references after patch.")
+if bottom_controls in text:
+    raise SystemExit("Old bottom approval/save controls still remain after patch.")
+if text.count('save_strategy = st.form_submit_button(') != 1:
+    raise SystemExit("Expected exactly one strategy save submit button after patch.")
 
 path.write_text(text, encoding="utf-8")
 print("Moved strategy approval and save controls above measurable rules.")
