@@ -1,0 +1,62 @@
+name: Add automatic execution costs
+
+on:
+  push:
+    paths:
+      - '.github/workflows/add-automatic-execution-costs.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m pip install -r requirements.txt
+      - name: Apply patch
+        run: python .github/scripts/add_automatic_execution_costs.py
+      - name: Verify
+        run: |
+          python -m py_compile youtube_strategy_engine.py youtube_strategy_app.py
+          python - <<'PY'
+          from datetime import datetime, timedelta, timezone
+          import pandas as pd
+          from youtube_strategy_engine import BacktestSettings, OptimizationSettings, estimate_slippage_bps
+
+          start = datetime(2026, 8, 24, 13, 30, tzinfo=timezone.utc)
+          rows = []
+          for i in range(120):
+              price = 10.0 + i * 0.002
+              rows.append({
+                  'timestamp': start + timedelta(minutes=i),
+                  'open': price,
+                  'high': price * 1.006,
+                  'low': price * 0.994,
+                  'close': price,
+                  'volume': 2500,
+              })
+          frame = pd.DataFrame(rows)
+          small = BacktestSettings(starting_cash=2000, risk_per_trade_pct=10, max_position_pct=10, default_stop_pct=2, slippage_bps=8)
+          large = BacktestSettings(starting_cash=2000, risk_per_trade_pct=10, max_position_pct=100, default_stop_pct=2, slippage_bps=8)
+          small_bps, small_info = estimate_slippage_bps(frame, small, {'stop_loss_pct': 2})
+          large_bps, large_info = estimate_slippage_bps(frame, large, {'stop_loss_pct': 2})
+          assert small_bps >= 8
+          assert large_bps >= small_bps
+          assert large_info['order_notional'] > small_info['order_notional']
+          assert OptimizationSettings(automatic_slippage=True).automatic_slippage is True
+          print('automatic slippage test:', small_bps, large_bps)
+          PY
+          grep -q 'Automatic — quoted spread + estimated slippage' youtube_strategy_app.py
+          grep -q 'Automatic execution-cost estimate for the winning setup' youtube_strategy_app.py
+      - name: Commit
+        run: |
+          if git diff --quiet; then
+            echo 'No changes to commit'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add youtube_strategy_engine.py youtube_strategy_app.py
+          git commit -m 'Add automatic spread and slippage estimation'
+          git push
