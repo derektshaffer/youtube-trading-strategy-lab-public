@@ -1,0 +1,39 @@
+name: Refine optimizer controls UI
+
+on:
+  push:
+    paths:
+      - '.github/workflows/refine-optimizer-controls-ui.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply UI patch
+        run: python .github/scripts/refine_optimizer_controls_ui.py
+      - name: Verify
+        run: |
+          python -m py_compile youtube_strategy_app.py
+          grep -q '8-trade sample safeguard' youtube_strategy_app.py
+          grep -q 'optimizer_eight_trade_filter' youtube_strategy_app.py
+          grep -q 'Risk per trade (%) · CEILING' youtube_strategy_app.py
+          grep -q 'optimizer-badge auto' youtube_strategy_app.py
+          if grep -q '🟢 AUTO-SEARCH' youtube_strategy_app.py; then
+            echo 'Old colored-dot optimizer labels still present'
+            exit 1
+          fi
+      - name: Commit
+        run: |
+          if git diff --quiet; then
+            echo 'No changes to commit'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add youtube_strategy_app.py
+          git commit -m 'Refine optimizer labels and 8-trade safeguard UI'
+          git push
