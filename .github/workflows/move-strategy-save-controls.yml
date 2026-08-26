@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/move-strategy-save-controls.yml"
+      - ".github/scripts/move_strategy_save_controls.py"
 
 permissions:
   contents: write
