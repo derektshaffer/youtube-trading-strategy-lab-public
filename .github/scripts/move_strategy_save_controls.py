@@ -1,0 +1,54 @@
+from pathlib import Path
+
+path = Path("youtube_strategy_app_core.py")
+text = path.read_text(encoding="utf-8")
+
+if 'save_controls = st.columns([3.0, 1.35])' in text:
+    print("Strategy save controls are already at the top.")
+    raise SystemExit(0)
+
+form_marker = '        with st.form(f"edit_strategy_{selected[\'id\']}"):\n'
+if form_marker not in text:
+    raise SystemExit("Could not find strategy-edit form; refusing to patch.")
+
+controls = '''            save_controls = st.columns([3.0, 1.35])
+            with save_controls[0]:
+                approved = st.checkbox(
+                    "Approve this strategy for matching in the live scanner",
+                    value=bool(selected.get("approved")),
+                    help="Approval enables research alerts only. This app never sends brokerage orders.",
+                )
+            with save_controls[1]:
+                save_strategy = st.form_submit_button(
+                    "Save strategy rules",
+                    type="primary",
+                    use_container_width=True,
+                )
+            st.caption("Edit the measurable rules below, then use the Save strategy rules button above.")
+            st.divider()
+
+'''
+
+insert_at = text.index(form_marker) + len(form_marker)
+text = text[:insert_at] + controls + text[insert_at:]
+
+bottom_controls = '''            approved = st.checkbox(
+                "Approve this strategy for matching in the live scanner",
+                value=bool(selected.get("approved")),
+                help="Approval enables research alerts only. This app never sends brokerage orders.",
+            )
+            save_strategy = st.form_submit_button("Save strategy rules", use_container_width=True)
+'''
+if bottom_controls not in text:
+    raise SystemExit("Could not find old bottom approval/save controls; refusing to write a partial patch.")
+text = text.replace(bottom_controls, "", 1)
+
+top_position = text.find('save_controls = st.columns([3.0, 1.35])')
+first_rule_position = text.find('updated["min_price"]', top_position)
+if top_position < 0 or first_rule_position < 0 or top_position > first_rule_position:
+    raise SystemExit("Save controls were not positioned above the measurable rule fields.")
+if text.count('"Save strategy rules"') != 2:
+    raise SystemExit("Unexpected number of Save strategy rules references after patch.")
+
+path.write_text(text, encoding="utf-8")
+print("Moved strategy approval and save controls above measurable rules.")
