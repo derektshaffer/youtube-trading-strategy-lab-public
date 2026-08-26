@@ -6,7 +6,6 @@ This module cannot submit live brokerage orders.
 
 from __future__ import annotations
 
-from datetime import datetime
 import json
 import math
 from typing import Any
@@ -124,6 +123,14 @@ class AlpacaPaperTrader:
         )
         return result if isinstance(result, list) else []
 
+    @staticmethod
+    def _stock_price(value: float) -> tuple[float, str]:
+        """Use common U.S. equity price precision: cents at $1+, four decimals below $1."""
+        raw = float(value)
+        decimals = 2 if raw >= 1.0 else 4
+        rounded = round(raw, decimals)
+        return rounded, f"{rounded:.{decimals}f}"
+
     def submit_bracket_market_order(
         self,
         *,
@@ -135,8 +142,8 @@ class AlpacaPaperTrader:
     ) -> dict[str, Any]:
         clean_symbol = str(symbol or "").strip().upper()
         clean_qty = int(qty)
-        stop = round(float(stop_price), 4)
-        target = round(float(target_price), 4)
+        stop, stop_text = self._stock_price(stop_price)
+        target, target_text = self._stock_price(target_price)
         if not clean_symbol:
             raise PaperTradeError("A ticker is required.")
         if clean_qty < 1:
@@ -150,8 +157,8 @@ class AlpacaPaperTrader:
             "type": "market",
             "time_in_force": "day",
             "order_class": "bracket",
-            "take_profit": {"limit_price": f"{target:.4f}"},
-            "stop_loss": {"stop_price": f"{stop:.4f}"},
+            "take_profit": {"limit_price": target_text},
+            "stop_loss": {"stop_price": stop_text},
             "client_order_id": str(client_order_id)[:128],
         }
         result = self._request("/v2/orders", method="POST", payload=payload)
