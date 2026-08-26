@@ -109,7 +109,7 @@ with st.sidebar:
         if st.button("Full Trading Lab", use_container_width=True):
             st.switch_page("pages/Advanced_Trading_Lab.py")
         if st.button("Machine Learning Lab", use_container_width=True):
-            st.switch_page("pages/Machine_Learning_Lab.py")
+            st.switch_page("pages/Advanced_Machine_Learning.py")
         if st.button("Detailed Live Runner", use_container_width=True):
             st.switch_page("pages/Live_Strategy_Runner.py")
     st.divider()
