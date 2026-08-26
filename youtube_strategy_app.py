@@ -1562,7 +1562,7 @@ with optimizer_tab:
                 "🟣 FALLBACK FLOOR · Spread (bps)" if automatic_execution_costs else "🔒 FIXED · Spread (bps)",
                 min_value=0.0,
                 max_value=500.0,
-                value=float(manual_optimizer_defaults.get("spread_bps", 12.0)),
+                value=(12.0 if automatic_execution_costs else float(manual_optimizer_defaults.get("spread_bps", 12.0))),
                 step=1.0,
                 disabled=automatic_execution_costs,
                 help=(
@@ -1575,7 +1575,7 @@ with optimizer_tab:
                 "🟣 FALLBACK FLOOR · Slippage per fill (bps)" if automatic_execution_costs else "🔒 FIXED · Slippage per fill (bps)",
                 min_value=0.0,
                 max_value=500.0,
-                value=float(manual_optimizer_defaults.get("slippage_bps", 8.0)),
+                value=(8.0 if automatic_execution_costs else float(manual_optimizer_defaults.get("slippage_bps", 8.0))),
                 step=1.0,
                 disabled=automatic_execution_costs,
                 help=(
