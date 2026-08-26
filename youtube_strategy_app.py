@@ -187,17 +187,16 @@ div[data-testid="stDataFrame"] {border:1px solid var(--line); border-radius:11px
 .optimizer-badge.floor {color:#dfd1ff; background:rgba(169,139,255,.09); border-color:rgba(169,139,255,.27)}
 .optimizer-badge.threshold {color:#fff0a8; background:rgba(231,205,91,.08); border-color:rgba(231,205,91,.25)}
 .optimizer-badge.search {color:#c8e8ff; background:rgba(86,185,255,.08); border-color:rgba(86,185,255,.25)}
-/* Make the historical sample safeguard visually distinct without making every checkbox huge. */
-.st-key-eight_trade_safeguard {border:2px solid rgba(255,186,99,.48) !important;
- background:linear-gradient(115deg,rgba(255,186,99,.075),rgba(16,26,43,.82)) !important;
- border-radius:14px !important; padding:13px 15px 10px !important; margin:9px 0 15px !important}
-.st-key-eight_trade_safeguard [data-testid="stMarkdownContainer"] h4 {font-size:18px !important;
- margin:0 0 2px !important; color:#ffe0ad !important}
+/* Compact historical sample safeguard: noticeable, but it should not split the form in half. */
+.st-key-eight_trade_safeguard {border:1px solid rgba(255,186,99,.38) !important;
+ background:rgba(255,186,99,.045) !important; border-radius:11px !important;
+ padding:7px 11px 5px !important; margin:8px 0 10px !important}
+.st-key-eight_trade_safeguard [data-testid="stMarkdownContainer"] p {margin-bottom:2px !important}
 .st-key-optimizer_eight_trade_filter label,
 .st-key-optimizer_eight_trade_filter label p,
-.st-key-optimizer_eight_trade_filter [data-testid="stWidgetLabel"] p {font-size:17px !important; font-weight:850 !important}
-.st-key-optimizer_eight_trade_filter input[type="checkbox"] {transform:scale(1.35); transform-origin:left center}
-.st-key-optimizer_eight_trade_filter [role="checkbox"] {transform:scale(1.18); transform-origin:left center}
+.st-key-optimizer_eight_trade_filter [data-testid="stWidgetLabel"] p {font-size:15px !important; font-weight:800 !important}
+.st-key-optimizer_eight_trade_filter input[type="checkbox"] {transform:scale(1.12); transform-origin:left center}
+.st-key-optimizer_eight_trade_filter [role="checkbox"] {transform:scale(1.08); transform-origin:left center}
 div[data-baseweb="tab-list"] {gap:14px}
 @media (max-width:760px) {.hero-title {font-size:27px}.metric-value {font-size:25px}}
 </style>
@@ -1439,25 +1438,25 @@ with optimizer_tab:
                 help="Enter one ticker. Every eligible saved strategy will be tested against this stock.",
             )
             optimizer_history_days = first_row[1].slider(
-                "Historical calendar days · FIXED",
+                "Historical calendar days · :gray-background[FIXED]",
                 min_value=7,
                 max_value=180,
                 value=max(7, min(180, int(st.session_state.get("last_manual_history_days", 90)))),
             )
             optimizer_timeframe = first_row[2].selectbox(
-                "Candle intervals to test · SEARCH",
+                "Candle intervals to test · :blue-background[SEARCH]",
                 ["Automatically compare 1, 5, and 15 minutes", "1Min only", "5Min only", "15Min only"],
                 index=0,
                 help="Automatic comparison first screens all saved strategies, keeps the strongest two, compares 1-, 5-, and 15-minute candles, then runs the full adaptive optimizer only on the best interval. This prevents long scans from exhausting Streamlit Cloud.",
             )
             optimizer_scope = first_row[3].selectbox(
-                "Strategies to compare · SEARCH",
+                "Strategies to compare · :blue-background[SEARCH]",
                 ["All saved long strategies", "Approved strategies only"],
                 index=0,
             )
 
             optimizer_goal = st.selectbox(
-                "Optimization goal · SEARCH",
+                "Optimization goal · :blue-background[SEARCH]",
                 [
                     "Maximum historical P/L — search the full selected window",
                     "Validated edge — keep training, validation, and holdout separate",
@@ -1472,39 +1471,15 @@ with optimizer_tab:
             historical_pnl_mode = optimizer_goal.startswith("Maximum historical")
             if historical_pnl_mode:
                 st.caption("Historical-P/L mode searches the whole window and can overfit. Use Validated edge afterward as a robustness check. Automatic candle comparison screens all intervals first, then deeply optimizes only the strongest one.")
-            with st.container(border=True, key="eight_trade_safeguard"):
-                st.markdown("#### 8-trade sample safeguard")
-                st.caption(
-                    "This controls whether very small-sample results are allowed to win Maximum historical P/L optimization."
-                )
-                require_eight_historical_trades = st.checkbox(
-                    "Require at least 8 completed trades before a historical result can win",
-                    value=True,
-                    disabled=not historical_pnl_mode,
-                    key="optimizer_eight_trade_filter",
-                    help=(
-                        "ON: configurations with fewer than 8 completed trades cannot beat configurations that meet the minimum. "
-                        "OFF: Maximum historical P/L can select a result based on only a few trades, which can make overfitting much easier. "
-                        "This setting applies only to Maximum historical P/L mode."
-                    ),
-                )
-                if historical_pnl_mode:
-                    if require_eight_historical_trades:
-                        st.success("✓ ON — results need at least 8 completed trades to qualify ahead of tiny samples.")
-                    else:
-                        st.warning("OFF — results with fewer than 8 trades are allowed to rank first for this run.")
-                else:
-                    st.caption("Not used in Validated edge mode; that mode has separate training and validation trade thresholds.")
-
             second_row = st.columns(4)
             optimizer_depth = second_row[0].selectbox(
-                "Search depth · SEARCH",
+                "Search depth · :blue-background[SEARCH]",
                 ["Quick — 48 combinations", "Balanced — 120 combinations", "Comprehensive — 240 combinations", "Exhaustive — 320 combinations"],
                 index=2,
                 help="This is the broad-search budget per saved strategy. The optimizer then automatically zooms in around the strongest candidates with finer parameter steps.",
             )
             minimum_training = second_row[1].number_input(
-                "Minimum training trades · THRESHOLD",
+                "Minimum training trades · :yellow-background[THRESHOLD]",
                 min_value=1,
                 max_value=100,
                 value=5,
@@ -1512,7 +1487,7 @@ with optimizer_tab:
                 help="THRESHOLD used by Validated edge mode: training results with too few completed trades are treated as insufficient data.",
             )
             minimum_validation = second_row[2].number_input(
-                "Minimum validation trades · THRESHOLD",
+                "Minimum validation trades · :yellow-background[THRESHOLD]",
                 min_value=1,
                 max_value=30,
                 value=2,
@@ -1520,7 +1495,7 @@ with optimizer_tab:
                 help="THRESHOLD used by Validated edge mode: validation results need at least this many completed trades to count as an adequate sample.",
             )
             optimizer_cash = second_row[3].number_input(
-                "Starting cash ($) · FIXED",
+                "Starting cash ($) · :gray-background[FIXED]",
                 min_value=100.0,
                 value=float(manual_optimizer_defaults.get("starting_cash", 2_000.0)),
                 step=100.0,
@@ -1529,7 +1504,7 @@ with optimizer_tab:
 
             third_row = st.columns(4)
             optimizer_risk = third_row[0].number_input(
-                "Risk per trade (%) · CEILING",
+                "Risk per trade (%) · :orange-background[CEILING]",
                 min_value=0.05,
                 max_value=10.0,
                 value=float(manual_optimizer_defaults.get("risk_per_trade_pct", 10.0)),
@@ -1540,7 +1515,7 @@ with optimizer_tab:
                 ),
             )
             optimizer_position = third_row[1].number_input(
-                "Position size (% of account) · CEILING",
+                "Position size (% of account) · :orange-background[CEILING]",
                 min_value=1.0,
                 max_value=100.0,
                 value=float(manual_optimizer_defaults.get("max_position_pct", 100.0)),
@@ -1551,7 +1526,7 @@ with optimizer_tab:
                 ),
             )
             optimizer_stop = third_row[2].number_input(
-                "Stop loss (fallback seed %) · AUTO",
+                "Stop loss (fallback seed %) · :green-background[AUTO]",
                 min_value=0.1,
                 max_value=30.0,
                 value=float(manual_optimizer_defaults.get("default_stop_pct", 2.0)),
@@ -1562,7 +1537,7 @@ with optimizer_tab:
                 ),
             )
             optimizer_reward = third_row[3].number_input(
-                "Reward/risk (fallback seed) · AUTO",
+                "Reward/risk (fallback seed) · :green-background[AUTO]",
                 min_value=0.2,
                 max_value=10.0,
                 value=float(manual_optimizer_defaults.get("default_reward_risk", 2.0)),
@@ -1593,7 +1568,7 @@ with optimizer_tab:
                 )
             cost_row = st.columns(3)
             optimizer_spread = cost_row[0].number_input(
-                "Spread (bps) · FLOOR" if automatic_execution_costs else "Spread (bps) · FIXED",
+                "Spread (bps) · :violet-background[FLOOR]" if automatic_execution_costs else "Spread (bps) · :gray-background[FIXED]",
                 min_value=0.0,
                 max_value=500.0,
                 value=(12.0 if automatic_execution_costs else float(manual_optimizer_defaults.get("spread_bps", 12.0))),
@@ -1606,7 +1581,7 @@ with optimizer_tab:
                 ),
             )
             optimizer_slippage = cost_row[1].number_input(
-                "Slippage per fill (bps) · FLOOR" if automatic_execution_costs else "Slippage per fill (bps) · FIXED",
+                "Slippage per fill (bps) · :violet-background[FLOOR]" if automatic_execution_costs else "Slippage per fill (bps) · :gray-background[FIXED]",
                 min_value=0.0,
                 max_value=500.0,
                 value=(8.0 if automatic_execution_costs else float(manual_optimizer_defaults.get("slippage_bps", 8.0))),
@@ -1619,7 +1594,7 @@ with optimizer_tab:
                 ),
             )
             optimizer_fee = cost_row[2].number_input(
-                "Fee per order ($) · FIXED",
+                "Fee per order ($) · :gray-background[FIXED]",
                 min_value=0.0,
                 max_value=50.0,
                 value=float(manual_optimizer_defaults.get("fee_per_order", 0.0)),
@@ -1628,7 +1603,7 @@ with optimizer_tab:
             )
             protection_row = st.columns(2)
             optimizer_drawdown = protection_row[0].number_input(
-                "Maximum acceptable drawdown (%) · THRESHOLD",
+                "Maximum acceptable drawdown (%) · :yellow-background[THRESHOLD]",
                 min_value=0.5,
                 max_value=50.0,
                 value=15.0,
@@ -1636,10 +1611,33 @@ with optimizer_tab:
                 help="Settings that exceed this historical loss limit receive a strong ranking penalty.",
             )
             sizing_depth = protection_row[1].selectbox(
-                "Position-size search depth · SEARCH",
+                "Position-size search depth · :blue-background[SEARCH]",
                 ["Quick — 8 sizing combinations", "Balanced — 24 sizing combinations", "Comprehensive — 48 sizing combinations", "Exhaustive — 64 sizing combinations"],
                 index=2,
             )
+
+            with st.container(border=True, key="eight_trade_safeguard"):
+                st.markdown("**8-trade sample safeguard** · Maximum historical P/L only")
+                require_eight_historical_trades = st.checkbox(
+                    "Require at least 8 completed trades before a historical result can win",
+                    value=True,
+                    disabled=not historical_pnl_mode,
+                    key="optimizer_eight_trade_filter",
+                    help=(
+                        "ON: configurations with fewer than 8 completed trades cannot beat configurations that meet the minimum. "
+                        "OFF: Maximum historical P/L can select a result based on only a few trades, which can make overfitting much easier. "
+                        "This setting applies only to Maximum historical P/L mode."
+                    ),
+                )
+                if historical_pnl_mode:
+                    st.caption(
+                        ":green-background[ON] At least 8 completed trades required to qualify ahead of tiny samples."
+                        if require_eight_historical_trades
+                        else ":orange-background[OFF] Tiny-sample results are allowed to rank first for this run."
+                    )
+                else:
+                    st.caption(":gray-background[NOT USED] Validated edge uses its separate training and validation thresholds.")
+
             optimization_requested = st.form_submit_button(
                 "Find the best strategy and settings for this stock",
                 use_container_width=True,
