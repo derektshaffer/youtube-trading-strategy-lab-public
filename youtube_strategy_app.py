@@ -16,14 +16,6 @@ source = source.replace(
     'st.switch_page("pages/Machine_Learning_Lab.py")',
 )
 
-# Streamlit number_input format strings accept printf-style numeric formats only;
-# put the currency symbol in the plain-English label instead of in `format`.
-source = source.replace(
-    '"Max loss per trade",\n            min_value=1.0,',
-    '"Max loss per trade ($)",\n            min_value=1.0,',
-)
-source = source.replace('format="$%.0f",', 'format="%.0f",')
-
 # Put the useful strategy identifier first so similar names are easier to distinguish.
 source = source.replace(
 '''def strategy_label(strategy: dict[str, Any]) -> str:
@@ -133,6 +125,14 @@ if strategy is not None:
     st.caption(f"Selected: **{strategy_label(strategy)}**")
 '''
 source = source.replace(old_controls, new_controls)
+
+# Streamlit number_input format strings accept printf-style numeric formats only;
+# put the currency symbol in the plain-English label instead of in `format`.
+source = source.replace(
+    '"Max loss per trade",\n            min_value=1.0,',
+    '"Max loss per trade ($)",\n            min_value=1.0,',
+)
+source = source.replace('format="$%.0f",', 'format="%.0f",')
 
 code = compile(source, str(source_path), "exec")
 exec(code, globals(), globals())
