@@ -2523,6 +2523,7 @@ class OptimizationSettings:
     validation_fraction: float = 0.20
     stress_cost_multiplier: float = 1.5
     optimize_position_sizing: bool = True
+    automatic_slippage: bool = False
     max_execution_variants_per_finalist: int = 7
     maximum_drawdown_pct: float = 15.0
     selection_mode: str = "validated"
@@ -3171,6 +3172,98 @@ def generate_execution_variants(
             )
     return candidates
 
+def estimate_slippage_bps(
+    rows_or_frame: list[dict[str, Any]] | pd.DataFrame,
+    settings: BacktestSettings,
+    rules: dict[str, Any] | None = None,
+) -> tuple[float, dict[str, float]]:
+    """Estimate per-fill slippage from recent liquidity, volatility, and order size.
+
+    This is deliberately a conservative execution-cost heuristic, not an optimizer
+    target. The user-entered slippage is treated as a floor so automatic mode cannot
+    improve a backtest merely by assuming unrealistically perfect fills.
+    """
+    settings.validate()
+    fallback = max(0.0, float(settings.slippage_bps))
+    frame = rows_or_frame.copy() if isinstance(rows_or_frame, pd.DataFrame) else bars_to_frame(rows_or_frame)
+    if frame.empty or not {"close", "high", "low", "volume"}.issubset(frame.columns):
+        return fallback, {
+            "estimated_slippage_bps": fallback,
+            "order_notional": 0.0,
+            "minute_dollar_volume": 0.0,
+            "range_bps": 0.0,
+            "participation_ratio": 0.0,
+        }
+
+    sample = frame.tail(5000).copy()
+    for field_name in ("close", "high", "low", "volume"):
+        sample[field_name] = pd.to_numeric(sample[field_name], errors="coerce")
+    sample = sample.dropna(subset=["close", "high", "low", "volume"])
+    sample = sample[(sample["close"] > 0) & (sample["volume"] > 0)]
+    if sample.empty:
+        return fallback, {
+            "estimated_slippage_bps": fallback,
+            "order_notional": 0.0,
+            "minute_dollar_volume": 0.0,
+            "range_bps": 0.0,
+            "participation_ratio": 0.0,
+        }
+
+    interval_minutes = 1.0
+    if "timestamp" in sample.columns:
+        timestamps = pd.to_datetime(sample["timestamp"], errors="coerce", utc=True).dropna().sort_values()
+        if len(timestamps) > 1:
+            differences = timestamps.diff().dt.total_seconds().div(60.0)
+            differences = differences[(differences >= 0.5) & (differences <= 30.0)]
+            if not differences.empty:
+                interval_minutes = max(1.0, float(differences.median()))
+
+    minute_dollar_volume_series = (sample["close"] * sample["volume"]) / interval_minutes
+    minute_dollar_volume_series = minute_dollar_volume_series[minute_dollar_volume_series > 0]
+    minute_dollar_volume = (
+        float(minute_dollar_volume_series.median()) if not minute_dollar_volume_series.empty else 0.0
+    )
+    range_series = ((sample["high"] - sample["low"]).clip(lower=0) / sample["close"]) * 10_000.0
+    # Normalize multi-minute bars toward an approximate one-minute volatility scale.
+    range_series = range_series / math.sqrt(interval_minutes)
+    range_series = range_series[range_series >= 0]
+    typical_range_bps = float(range_series.median()) if not range_series.empty else 0.0
+
+    normalized_rules = normalize_machine_rules(rules or {})
+    stop_pct = safe_float(normalized_rules.get("stop_loss_pct"), settings.default_stop_pct) or settings.default_stop_pct
+    stop_pct = max(0.1, float(stop_pct))
+    risk_budget = settings.starting_cash * settings.risk_per_trade_pct / 100.0
+    risk_limited_notional = risk_budget / (stop_pct / 100.0)
+    position_cap_notional = settings.starting_cash * settings.max_position_pct / 100.0
+    order_notional = max(0.0, min(position_cap_notional, risk_limited_notional))
+
+    participation_ratio = order_notional / minute_dollar_volume if minute_dollar_volume > 0 else 1.0
+    participation_for_model = min(25.0, max(0.0, participation_ratio))
+    liquidity_component = 18.0 * math.sqrt(participation_for_model)
+    volatility_component = min(100.0, typical_range_bps * 0.06)
+    modeled = 2.0 + liquidity_component + volatility_component
+    estimate = round(min(200.0, max(fallback, modeled)), 2)
+    return estimate, {
+        "estimated_slippage_bps": estimate,
+        "order_notional": round(order_notional, 2),
+        "minute_dollar_volume": round(minute_dollar_volume, 2),
+        "range_bps": round(typical_range_bps, 2),
+        "participation_ratio": round(participation_ratio, 6),
+    }
+
+
+def _automatic_slippage_settings(
+    frame: pd.DataFrame,
+    rules: dict[str, Any],
+    settings: BacktestSettings,
+    enabled: bool,
+) -> BacktestSettings:
+    if not enabled:
+        return settings
+    estimated_bps, _ = estimate_slippage_bps(frame, settings, rules)
+    return replace(settings, slippage_bps=estimated_bps)
+
+
 def conservative_stock_costs(
     settings: BacktestSettings,
     snapshot: dict[str, Any] | None,
@@ -3376,6 +3469,9 @@ def _optimize_stock_strategies_historical(
         original = normalize_machine_rules(source_strategy.get("machine_rules"))
         indicator_cache: dict[tuple[int, int], pd.DataFrame] = {}
 
+        def effective_settings(candidate_rules: dict[str, Any], chosen_settings: BacktestSettings) -> BacktestSettings:
+            return _automatic_slippage_settings(frame, candidate_rules, chosen_settings, optimizer.automatic_slippage)
+
         def evaluate(candidate_rules: dict[str, Any], chosen_settings: BacktestSettings) -> dict[str, Any]:
             candidate_strategy = {**source_strategy, "machine_rules": candidate_rules}
             key = (
@@ -3396,6 +3492,7 @@ def _optimize_stock_strategies_historical(
                 default_stop_pct=float(rules.get("stop_loss_pct") or settings.default_stop_pct),
                 default_reward_risk=float(rules.get("reward_risk") or settings.default_reward_risk),
             )
+            candidate_settings = effective_settings(rules, candidate_settings)
             result = evaluate(rules, candidate_settings)
             metrics = result["metrics"]
             rule_candidates.append({
@@ -3432,6 +3529,7 @@ def _optimize_stock_strategies_historical(
                     default_stop_pct=float(refined_rules.get("stop_loss_pct") or settings.default_stop_pct),
                     default_reward_risk=float(refined_rules.get("reward_risk") or settings.default_reward_risk),
                 )
+                candidate_settings = effective_settings(refined_rules, candidate_settings)
                 metrics = evaluate(refined_rules, candidate_settings)["metrics"]
                 adaptive_rule_tests += 1
                 rule_candidates.append({
@@ -3461,6 +3559,7 @@ def _optimize_stock_strategies_historical(
                     default_stop_pct=float(finalist["rules"].get("stop_loss_pct") or execution.default_stop_pct),
                     default_reward_risk=float(finalist["rules"].get("reward_risk") or execution.default_reward_risk),
                 )
+                candidate_settings = effective_settings(finalist["rules"], candidate_settings)
                 result = evaluate(finalist["rules"], candidate_settings)
                 sized_candidates.append({
                     **finalist,
@@ -3499,6 +3598,7 @@ def _optimize_stock_strategies_historical(
                 default_stop_pct=float(refined_rules.get("stop_loss_pct") or local_seed["settings"].default_stop_pct),
                 default_reward_risk=float(refined_rules.get("reward_risk") or local_seed["settings"].default_reward_risk),
             )
+            candidate_settings = effective_settings(refined_rules, candidate_settings)
             metrics = evaluate(refined_rules, candidate_settings)["metrics"]
             adaptive_final_rule_tests += 1
             sized_candidates.append({
@@ -3524,6 +3624,7 @@ def _optimize_stock_strategies_historical(
                 default_stop_pct=float(local_seed["rules"].get("stop_loss_pct") or execution.default_stop_pct),
                 default_reward_risk=float(local_seed["rules"].get("reward_risk") or execution.default_reward_risk),
             )
+            candidate_settings = effective_settings(local_seed["rules"], candidate_settings)
             metrics = evaluate(local_seed["rules"], candidate_settings)["metrics"]
             adaptive_final_execution_tests += 1
             sized_candidates.append({
@@ -3586,6 +3687,8 @@ def _optimize_stock_strategies_historical(
             "optimized_rules": best["rules"],
             "changed_rules": changed_rules,
             "optimized_backtest_settings": asdict(chosen_settings),
+            "automatic_slippage_enabled": bool(optimizer.automatic_slippage),
+            "estimated_slippage_bps": chosen_settings.slippage_bps if optimizer.automatic_slippage else None,
             "changed_backtest_settings": changed_backtest_settings,
             "variants_tested": settings_tested,
             "rule_variants_tested": len(variants) + adaptive_rule_tests + adaptive_final_rule_tests,
@@ -3630,6 +3733,7 @@ def _optimize_stock_strategies_historical(
         "symbol": target_symbol,
         "generated_at": isoformat_utc(utc_now()),
         "selection_mode": "historical_pnl",
+        "automatic_slippage_enabled": bool(optimizer.automatic_slippage),
         "session_count": len(sessions),
         "historical_minimum_trades_enabled": bool(optimizer.enforce_historical_minimum_trades),
         "minimum_historical_trades": minimum_historical_trades,
@@ -3659,6 +3763,7 @@ def _screen_historical_strategies(
     settings: BacktestSettings,
     maximum_drawdown_pct: float,
     minimum_historical_trades: int | None = None,
+    automatic_slippage: bool = False,
 ) -> list[dict[str, Any]]:
     """Cheaply rank saved strategies before expensive adaptive optimization.
 
@@ -3703,6 +3808,9 @@ def _screen_historical_strategies(
                     settings,
                     default_stop_pct=float(stop),
                     default_reward_risk=float(reward),
+                )
+                candidate_settings = _automatic_slippage_settings(
+                    frame, rules, candidate_settings, automatic_slippage
                 )
                 result = run_backtest(
                     [], candidate_strategy, symbol, candidate_settings,
@@ -3765,6 +3873,7 @@ def _optimize_stock_timeframes_historical(
             if optimization_settings.enforce_historical_minimum_trades
             else None
         ),
+        bool(optimization_settings.automatic_slippage),
     )
     if not strategy_screen:
         raise AppError("No saved long strategy produced a screenable historical result for this stock.")
@@ -3962,6 +4071,11 @@ def optimize_stock_strategies(
     completed_steps = 0
     indicator_cache: dict[tuple[str, int, int], pd.DataFrame] = {}
 
+    def effective_settings(rules: dict[str, Any], chosen_settings: BacktestSettings) -> BacktestSettings:
+        return _automatic_slippage_settings(
+            frames["training"], rules, chosen_settings, optimizer.automatic_slippage
+        )
+
     def evaluate(candidate_strategy: dict[str, Any], period: str, chosen_settings: BacktestSettings) -> dict[str, Any]:
         rules = normalize_machine_rules(candidate_strategy.get("machine_rules"))
         key = (
@@ -3986,13 +4100,14 @@ def optimize_stock_strategies(
         trained: list[dict[str, Any]] = []
         for index, candidate_rules in enumerate(variants):
             candidate_strategy = {**source_strategy, "machine_rules": candidate_rules}
-            result = evaluate(candidate_strategy, "training", settings)
-            metrics = result["metrics"]
             candidate_settings = replace(
                 settings,
                 default_stop_pct=float(candidate_rules.get("stop_loss_pct") or settings.default_stop_pct),
                 default_reward_risk=float(candidate_rules.get("reward_risk") or settings.default_reward_risk),
             )
+            candidate_settings = effective_settings(candidate_rules, candidate_settings)
+            result = evaluate(candidate_strategy, "training", candidate_settings)
+            metrics = result["metrics"]
             trained.append(
                 {
                     "variant_index": index,
@@ -4031,6 +4146,7 @@ def optimize_stock_strategies(
                     default_stop_pct=float(refined_rules.get("stop_loss_pct") or settings.default_stop_pct),
                     default_reward_risk=float(refined_rules.get("reward_risk") or settings.default_reward_risk),
                 )
+                candidate_settings = effective_settings(refined_rules, candidate_settings)
                 candidate_strategy = {**source_strategy, "machine_rules": refined_rules}
                 metrics = evaluate(candidate_strategy, "training", candidate_settings)["metrics"]
                 adaptive_rule_tests += 1
@@ -4064,6 +4180,7 @@ def optimize_stock_strategies(
                     default_stop_pct=float(candidate["rules"].get("stop_loss_pct") or sizing.default_stop_pct),
                     default_reward_risk=float(candidate["rules"].get("reward_risk") or sizing.default_reward_risk),
                 )
+                candidate_settings = effective_settings(candidate["rules"], candidate_settings)
                 candidate_strategy = {**source_strategy, "machine_rules": candidate["rules"]}
                 result = evaluate(candidate_strategy, "training", candidate_settings)
                 metrics = result["metrics"]
@@ -4110,6 +4227,7 @@ def optimize_stock_strategies(
                 default_stop_pct=float(refined_rules.get("stop_loss_pct") or local_seed["settings"].default_stop_pct),
                 default_reward_risk=float(refined_rules.get("reward_risk") or local_seed["settings"].default_reward_risk),
             )
+            candidate_settings = effective_settings(refined_rules, candidate_settings)
             candidate_strategy = {**source_strategy, "machine_rules": refined_rules}
             metrics = evaluate(candidate_strategy, "training", candidate_settings)["metrics"]
             adaptive_final_rule_tests += 1
@@ -4142,6 +4260,7 @@ def optimize_stock_strategies(
                 default_stop_pct=float(local_seed["rules"].get("stop_loss_pct") or execution.default_stop_pct),
                 default_reward_risk=float(local_seed["rules"].get("reward_risk") or execution.default_reward_risk),
             )
+            candidate_settings = effective_settings(local_seed["rules"], candidate_settings)
             candidate_strategy = {**source_strategy, "machine_rules": local_seed["rules"]}
             metrics = evaluate(candidate_strategy, "training", candidate_settings)["metrics"]
             adaptive_final_execution_tests += 1
@@ -4241,6 +4360,8 @@ def optimize_stock_strategies(
                 "optimized_rules": best["rules"],
                 "changed_rules": changed_rules,
                 "optimized_backtest_settings": asdict(chosen_settings),
+                "automatic_slippage_enabled": bool(optimizer.automatic_slippage),
+                "estimated_slippage_bps": chosen_settings.slippage_bps if optimizer.automatic_slippage else None,
                 "changed_backtest_settings": changed_backtest_settings,
                 "variants_tested": settings_tested,
                 "rule_variants_tested": len(variants) + adaptive_rule_tests + adaptive_final_rule_tests,
@@ -4280,6 +4401,7 @@ def optimize_stock_strategies(
     report = {
         "symbol": target_symbol,
         "generated_at": isoformat_utc(utc_now()),
+        "automatic_slippage_enabled": bool(optimizer.automatic_slippage),
         "session_count": len(sessions),
         "strategies_tested": len(eligible),
         "variants_tested": sum(item["variants_tested"] for item in ranked),

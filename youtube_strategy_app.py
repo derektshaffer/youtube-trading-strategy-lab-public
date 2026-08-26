@@ -293,6 +293,8 @@ def analyzed_youtube_video_index(data: dict[str, Any]) -> dict[str, dict[str, An
 
 
 HELP_GLOSSARY: list[dict[str, str]] = [
+    {"term": "Automatic execution costs", "category": "Execution", "meaning": "Optimizer mode that uses a current quoted-spread floor and estimates slippage from recent liquidity, volatility, risk, stop distance, and simulated order size instead of asking you to choose a single slippage number."},
+    {"term": "FALLBACK FLOOR optimizer input", "category": "Optimizer", "meaning": "A conservative minimum used by an automatic estimate. The automatic model may use a higher value when market conditions imply greater trading costs, but it will not assume a lower cost than the floor."},
     {"term": "AUTO-SEARCH optimizer input", "category": "Optimizer", "meaning": "An input where the displayed value is a seed or search control rather than the final answer. The optimizer tests multiple supported values and adaptively refines promising ones; it does not literally test every possible decimal value."},
     {"term": "CEILING optimizer input", "category": "Optimizer", "meaning": "A user-set maximum. The optimizer may test and recommend values below it but is not allowed to test or recommend values above it."},
     {"term": "FIXED optimizer input", "category": "Optimizer", "meaning": "A value the optimizer holds constant for every candidate in that run, such as starting cash or a trading-cost assumption."},
@@ -1393,6 +1395,7 @@ with optimizer_tab:
             "🟢 **AUTO-SEARCH** = tests multiple supported values and refines promising ones · "
             "🟠 **CEILING** = auto-searches below the number you enter, but never above it · "
             "🔒 **FIXED** = uses exactly the value you enter · "
+            "🟣 **FALLBACK FLOOR** = automatic mode estimates the value, but never assumes less than this floor · "
             "🟡 **THRESHOLD** = qualification/ranking rule, not a value being optimized · "
             "🔵 **SEARCH CONTROL** = controls how much or what the optimizer searches."
         )
@@ -1536,25 +1539,50 @@ with optimizer_tab:
                 ),
             )
 
+            execution_cost_mode = st.selectbox(
+                "Execution-cost model",
+                [
+                    "Automatic — quoted spread + estimated slippage (recommended)",
+                    "Manual — use fixed spread and slippage",
+                ],
+                index=0,
+                help=(
+                    "Automatic mode uses the wider of the current quoted spread or the fallback floor, then estimates slippage "
+                    "for each candidate from recent liquidity, intraday volatility, risk, stop distance, and simulated position size. "
+                    "Manual mode uses exactly the spread and slippage values you enter."
+                ),
+            )
+            automatic_execution_costs = execution_cost_mode.startswith("Automatic")
+            if automatic_execution_costs:
+                st.caption(
+                    "Automatic execution costs are ON. The values below are conservative fallback floors, not values you need to optimize yourself."
+                )
             cost_row = st.columns(3)
             optimizer_spread = cost_row[0].number_input(
-                "🔒 FIXED · Spread estimate (bps)",
+                "🟣 FALLBACK FLOOR · Spread (bps)" if automatic_execution_costs else "🔒 FIXED · Spread (bps)",
                 min_value=0.0,
                 max_value=500.0,
                 value=float(manual_optimizer_defaults.get("spread_bps", 12.0)),
                 step=1.0,
+                disabled=automatic_execution_costs,
                 help=(
-                    "FIXED trading-cost assumption: the optimizer does not search for a better spread. "
-                    "If the actual-quoted-spread option is enabled, the app may replace this with a wider live quoted spread."
+                    "AUTOMATIC: the app checks the current quote and uses whichever is wider: this floor or the quoted spread."
+                    if automatic_execution_costs else
+                    "MANUAL: every optimizer candidate uses exactly this spread assumption."
                 ),
             )
             optimizer_slippage = cost_row[1].number_input(
-                "🔒 FIXED · Slippage per fill (bps)",
+                "🟣 FALLBACK FLOOR · Slippage per fill (bps)" if automatic_execution_costs else "🔒 FIXED · Slippage per fill (bps)",
                 min_value=0.0,
                 max_value=500.0,
                 value=float(manual_optimizer_defaults.get("slippage_bps", 8.0)),
                 step=1.0,
-                help="FIXED trading-cost assumption: every candidate uses this slippage per simulated fill.",
+                disabled=automatic_execution_costs,
+                help=(
+                    "AUTOMATIC: this is the minimum slippage assumption. The engine can raise it for candidates with larger orders, lower liquidity, or higher volatility."
+                    if automatic_execution_costs else
+                    "MANUAL: every optimizer candidate uses exactly this slippage per simulated fill."
+                ),
             )
             optimizer_fee = cost_row[2].number_input(
                 "🔒 FIXED · Fee per order ($)",
@@ -1562,9 +1590,9 @@ with optimizer_tab:
                 max_value=50.0,
                 value=float(manual_optimizer_defaults.get("fee_per_order", 0.0)),
                 step=0.1,
-                help="FIXED trading-cost assumption: every candidate uses this fee per simulated order.",
+                help="FIXED: every candidate uses this fee per simulated order.",
             )
-            protection_row = st.columns(3)
+            protection_row = st.columns(2)
             optimizer_drawdown = protection_row[0].number_input(
                 "🟡 THRESHOLD · Maximum acceptable drawdown (%)",
                 min_value=0.5,
@@ -1577,11 +1605,6 @@ with optimizer_tab:
                 "🔵 SEARCH CONTROL · Position-size search depth",
                 ["Quick — 8 sizing combinations", "Balanced — 24 sizing combinations", "Comprehensive — 48 sizing combinations", "Exhaustive — 64 sizing combinations"],
                 index=2,
-            )
-            use_live_spread = protection_row[2].checkbox(
-                "🔒 FIXED/OVERRIDE · Use the stock's actual quoted spread",
-                value=False,
-                help="Leave this off when you want an apples-to-apples comparison with the manual backtest. Turn it on for a more conservative live-spread assumption.",
             )
             optimization_requested = st.form_submit_button(
                 "Find the best strategy and settings for this stock",
@@ -1624,6 +1647,7 @@ with optimizer_tab:
                         minimum_validation_trades=int(minimum_validation),
                         enforce_historical_minimum_trades=bool(historical_pnl_mode and require_eight_historical_trades),
                         minimum_historical_trades=8,
+                        automatic_slippage=bool(automatic_execution_costs),
                         max_execution_variants_per_finalist=sizing_limit,
                         maximum_drawdown_pct=float(optimizer_drawdown),
                         selection_mode=("historical_pnl" if historical_pnl_mode else "validated"),
@@ -1632,20 +1656,29 @@ with optimizer_tab:
                         market = client()
                         observed_spread: float | None = None
                         quote_warning = ""
-                        if use_live_spread:
+                        if automatic_execution_costs:
                             try:
                                 current_snapshot = market.snapshots([ticker]).get(ticker, {})
                                 engine_settings, observed_spread = conservative_stock_costs(engine_settings, current_snapshot)
-                                if observed_spread is not None and observed_spread > float(optimizer_spread):
+                                if observed_spread is None:
                                     quote_warning = (
-                                        f"{ticker}'s current quoted spread is {observed_spread:.1f} bps, "
-                                        f"wider than your {float(optimizer_spread):.1f} bps estimate. "
-                                        "The wider stock-specific spread was used for every test."
+                                        f"A current spread quote was unavailable for {ticker}; the {float(optimizer_spread):.1f} bps "
+                                        "fallback spread floor was used."
+                                    )
+                                elif observed_spread > float(optimizer_spread):
+                                    quote_warning = (
+                                        f"Automatic spread: {ticker}'s current quote is {observed_spread:.1f} bps, wider than the "
+                                        f"{float(optimizer_spread):.1f} bps fallback floor, so the quoted spread was used."
+                                    )
+                                else:
+                                    quote_warning = (
+                                        f"Automatic spread: {ticker}'s current quote is {observed_spread:.1f} bps. The more conservative "
+                                        f"{float(optimizer_spread):.1f} bps fallback floor was retained."
                                     )
                             except AppError as quote_error:
                                 quote_warning = (
-                                    f"A current spread quote was unavailable for {ticker}; your entered spread estimate "
-                                    f"was used instead. {quote_error}"
+                                    f"A current spread quote was unavailable for {ticker}; the {float(optimizer_spread):.1f} bps "
+                                    f"fallback spread floor was used instead. {quote_error}"
                                 )
                         delay = 16 if market.historical_feed == "sip" and market.live_feed != "sip" else 1
                         end = utc_now() - timedelta(minutes=delay)
@@ -1699,6 +1732,7 @@ with optimizer_tab:
                                 "The mismatched result was discarded."
                             )
                         report["history_days"] = int(optimizer_history_days)
+                        report["execution_cost_mode"] = "automatic" if automatic_execution_costs else "manual"
                         report["observed_spread_bps"] = observed_spread
                         if quote_warning:
                             report["warnings"] = list(dict.fromkeys([quote_warning, *(report.get("warnings") or [])]))
@@ -1847,6 +1881,16 @@ with optimizer_tab:
 
             winning_profile = winning.get("optimized_backtest_settings") or optimization_report.get("backtest_settings") or {}
             winning_rules = normalize_machine_rules(winning.get("optimized_rules"))
+            if optimization_report.get("execution_cost_mode") == "automatic":
+                quoted_spread = safe_float(optimization_report.get("observed_spread_bps"))
+                spread_used = safe_float(winning_profile.get("spread_bps"), 0.0) or 0.0
+                slippage_used = safe_float(winning_profile.get("slippage_bps"), 0.0) or 0.0
+                quote_text = f" Current quote: {quoted_spread:.1f} bps." if quoted_spread is not None else " Current quote unavailable."
+                st.info(
+                    f"Automatic execution-cost estimate for the winning setup: spread used {spread_used:.1f} bps; "
+                    f"estimated slippage {slippage_used:.1f} bps per fill.{quote_text} "
+                    "Slippage is estimated from recent liquidity/volatility and the simulated order size, with your fallback floor as a minimum."
+                )
             section(
                 f"Recommended trading settings for {optimized_symbol}",
                 ("These settings maximize simulated performance over the selected historical window; validate them on other dates before relying on them."
@@ -2035,6 +2079,7 @@ with optimizer_tab:
                         "full_metrics": inspected.get("full_metrics") if is_winner else {},
                         "optimized_backtest_settings": inspected.get("optimized_backtest_settings") or {},
                         "observed_spread_bps": optimization_report.get("observed_spread_bps"),
+                        "execution_cost_mode": optimization_report.get("execution_cost_mode") or "manual",
                         "timeframes_tested": optimization_report.get("timeframes_tested") or [],
                     }
                     store.save_optimized_strategy(
