@@ -176,6 +176,28 @@ div[data-testid="stDataFrame"] {border:1px solid var(--line); border-radius:11px
  background:linear-gradient(115deg,rgba(19,114,79,.95),rgba(29,142,101,.92));
  color:#f4fff9; font-weight:850; text-align:center; margin-top:8px; margin-bottom:8px;
 }
+.optimizer-legend {display:flex; flex-wrap:wrap; gap:7px 14px; align-items:center;
+ margin:8px 0 7px; color:var(--muted); font-size:12px; line-height:1.5}
+.optimizer-legend-item {display:inline-flex; align-items:center; gap:6px}
+.optimizer-badge {display:inline-flex; align-items:center; border-radius:999px; padding:2px 7px;
+ font-size:9px; letter-spacing:.055em; font-weight:900; line-height:1.45; border:1px solid var(--line)}
+.optimizer-badge.auto {color:#b9f6db; background:rgba(53,213,151,.09); border-color:rgba(53,213,151,.27)}
+.optimizer-badge.ceiling {color:#ffdda7; background:rgba(255,186,99,.09); border-color:rgba(255,186,99,.27)}
+.optimizer-badge.fixed {color:#d3deed; background:rgba(169,185,207,.09); border-color:rgba(169,185,207,.25)}
+.optimizer-badge.floor {color:#dfd1ff; background:rgba(169,139,255,.09); border-color:rgba(169,139,255,.27)}
+.optimizer-badge.threshold {color:#fff0a8; background:rgba(231,205,91,.08); border-color:rgba(231,205,91,.25)}
+.optimizer-badge.search {color:#c8e8ff; background:rgba(86,185,255,.08); border-color:rgba(86,185,255,.25)}
+/* Make the historical sample safeguard visually distinct without making every checkbox huge. */
+.st-key-eight_trade_safeguard {border:2px solid rgba(255,186,99,.48) !important;
+ background:linear-gradient(115deg,rgba(255,186,99,.075),rgba(16,26,43,.82)) !important;
+ border-radius:14px !important; padding:13px 15px 10px !important; margin:9px 0 15px !important}
+.st-key-eight_trade_safeguard [data-testid="stMarkdownContainer"] h4 {font-size:18px !important;
+ margin:0 0 2px !important; color:#ffe0ad !important}
+.st-key-optimizer_eight_trade_filter label,
+.st-key-optimizer_eight_trade_filter label p,
+.st-key-optimizer_eight_trade_filter [data-testid="stWidgetLabel"] p {font-size:17px !important; font-weight:850 !important}
+.st-key-optimizer_eight_trade_filter input[type="checkbox"] {transform:scale(1.35); transform-origin:left center}
+.st-key-optimizer_eight_trade_filter [role="checkbox"] {transform:scale(1.18); transform-origin:left center}
 div[data-baseweb="tab-list"] {gap:14px}
 @media (max-width:760px) {.hero-title {font-size:27px}.metric-value {font-size:25px}}
 </style>
@@ -1391,13 +1413,18 @@ with optimizer_tab:
         )
         manual_optimizer_defaults = st.session_state.get("last_manual_backtest_settings") or {}
         st.markdown(
-            "**How optimizer inputs work**  "
-            "🟢 **AUTO-SEARCH** = tests multiple supported values and refines promising ones · "
-            "🟠 **CEILING** = auto-searches below the number you enter, but never above it · "
-            "🔒 **FIXED** = uses exactly the value you enter · "
-            "🟣 **FALLBACK FLOOR** = automatic mode estimates the value, but never assumes less than this floor · "
-            "🟡 **THRESHOLD** = qualification/ranking rule, not a value being optimized · "
-            "🔵 **SEARCH CONTROL** = controls how much or what the optimizer searches."
+            """
+            <div><strong>How optimizer inputs work</strong></div>
+            <div class="optimizer-legend">
+              <span class="optimizer-legend-item"><span class="optimizer-badge auto">AUTO</span> optimizer searches values</span>
+              <span class="optimizer-legend-item"><span class="optimizer-badge ceiling">CEILING</span> you set the maximum</span>
+              <span class="optimizer-legend-item"><span class="optimizer-badge fixed">FIXED</span> uses exactly your value</span>
+              <span class="optimizer-legend-item"><span class="optimizer-badge floor">FLOOR</span> automatic estimate cannot go lower</span>
+              <span class="optimizer-legend-item"><span class="optimizer-badge threshold">THRESHOLD</span> qualification rule</span>
+              <span class="optimizer-legend-item"><span class="optimizer-badge search">SEARCH</span> controls optimizer scope</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
         st.caption(
             "AUTO-SEARCH does not mean every possible decimal value. The optimizer uses broad grids and adaptive refinement. "
@@ -1412,25 +1439,25 @@ with optimizer_tab:
                 help="Enter one ticker. Every eligible saved strategy will be tested against this stock.",
             )
             optimizer_history_days = first_row[1].slider(
-                "🔒 FIXED · Historical calendar days",
+                "Historical calendar days · FIXED",
                 min_value=7,
                 max_value=180,
                 value=max(7, min(180, int(st.session_state.get("last_manual_history_days", 90)))),
             )
             optimizer_timeframe = first_row[2].selectbox(
-                "🔵 SEARCH CONTROL · Candle intervals to test",
+                "Candle intervals to test · SEARCH",
                 ["Automatically compare 1, 5, and 15 minutes", "1Min only", "5Min only", "15Min only"],
                 index=0,
                 help="Automatic comparison first screens all saved strategies, keeps the strongest two, compares 1-, 5-, and 15-minute candles, then runs the full adaptive optimizer only on the best interval. This prevents long scans from exhausting Streamlit Cloud.",
             )
             optimizer_scope = first_row[3].selectbox(
-                "🔵 SEARCH CONTROL · Strategies to compare",
+                "Strategies to compare · SEARCH",
                 ["All saved long strategies", "Approved strategies only"],
                 index=0,
             )
 
             optimizer_goal = st.selectbox(
-                "🔵 SEARCH CONTROL · Optimization goal",
+                "Optimization goal · SEARCH",
                 [
                     "Maximum historical P/L — search the full selected window",
                     "Validated edge — keep training, validation, and holdout separate",
@@ -1445,32 +1472,39 @@ with optimizer_tab:
             historical_pnl_mode = optimizer_goal.startswith("Maximum historical")
             if historical_pnl_mode:
                 st.caption("Historical-P/L mode searches the whole window and can overfit. Use Validated edge afterward as a robustness check. Automatic candle comparison screens all intervals first, then deeply optimizes only the strongest one.")
-            require_eight_historical_trades = st.checkbox(
-                "🟡 THRESHOLD · Require at least 8 trades before a historical result can win",
-                value=True,
-                disabled=not historical_pnl_mode,
-                help=(
-                    "ON: configurations with fewer than 8 completed trades cannot beat configurations that meet the minimum. "
-                    "OFF: Maximum historical P/L can select a result based on only a few trades, which can make overfitting much easier. "
-                    "This setting applies only to Maximum historical P/L mode."
-                ),
-            )
-            if historical_pnl_mode:
+            with st.container(border=True, key="eight_trade_safeguard"):
+                st.markdown("#### 8-trade sample safeguard")
                 st.caption(
-                    "8-trade sample filter is ON for this run."
-                    if require_eight_historical_trades
-                    else "Minimum-trade filter is OFF for this run; tiny-sample results are allowed to rank first."
+                    "This controls whether very small-sample results are allowed to win Maximum historical P/L optimization."
                 )
+                require_eight_historical_trades = st.checkbox(
+                    "Require at least 8 completed trades before a historical result can win",
+                    value=True,
+                    disabled=not historical_pnl_mode,
+                    key="optimizer_eight_trade_filter",
+                    help=(
+                        "ON: configurations with fewer than 8 completed trades cannot beat configurations that meet the minimum. "
+                        "OFF: Maximum historical P/L can select a result based on only a few trades, which can make overfitting much easier. "
+                        "This setting applies only to Maximum historical P/L mode."
+                    ),
+                )
+                if historical_pnl_mode:
+                    if require_eight_historical_trades:
+                        st.success("✓ ON — results need at least 8 completed trades to qualify ahead of tiny samples.")
+                    else:
+                        st.warning("OFF — results with fewer than 8 trades are allowed to rank first for this run.")
+                else:
+                    st.caption("Not used in Validated edge mode; that mode has separate training and validation trade thresholds.")
 
             second_row = st.columns(4)
             optimizer_depth = second_row[0].selectbox(
-                "🔵 SEARCH CONTROL · Search depth",
+                "Search depth · SEARCH",
                 ["Quick — 48 combinations", "Balanced — 120 combinations", "Comprehensive — 240 combinations", "Exhaustive — 320 combinations"],
                 index=2,
                 help="This is the broad-search budget per saved strategy. The optimizer then automatically zooms in around the strongest candidates with finer parameter steps.",
             )
             minimum_training = second_row[1].number_input(
-                "🟡 THRESHOLD · Minimum training trades",
+                "Minimum training trades · THRESHOLD",
                 min_value=1,
                 max_value=100,
                 value=5,
@@ -1478,7 +1512,7 @@ with optimizer_tab:
                 help="THRESHOLD used by Validated edge mode: training results with too few completed trades are treated as insufficient data.",
             )
             minimum_validation = second_row[2].number_input(
-                "🟡 THRESHOLD · Minimum validation trades",
+                "Minimum validation trades · THRESHOLD",
                 min_value=1,
                 max_value=30,
                 value=2,
@@ -1486,7 +1520,7 @@ with optimizer_tab:
                 help="THRESHOLD used by Validated edge mode: validation results need at least this many completed trades to count as an adequate sample.",
             )
             optimizer_cash = second_row[3].number_input(
-                "🔒 FIXED · Starting cash ($)",
+                "Starting cash ($) · FIXED",
                 min_value=100.0,
                 value=float(manual_optimizer_defaults.get("starting_cash", 2_000.0)),
                 step=100.0,
@@ -1495,7 +1529,7 @@ with optimizer_tab:
 
             third_row = st.columns(4)
             optimizer_risk = third_row[0].number_input(
-                "🟠 CEILING · Risk per trade (%)",
+                "Risk per trade (%) · CEILING",
                 min_value=0.05,
                 max_value=10.0,
                 value=float(manual_optimizer_defaults.get("risk_per_trade_pct", 10.0)),
@@ -1506,7 +1540,7 @@ with optimizer_tab:
                 ),
             )
             optimizer_position = third_row[1].number_input(
-                "🟠 CEILING · Position size (% of account)",
+                "Position size (% of account) · CEILING",
                 min_value=1.0,
                 max_value=100.0,
                 value=float(manual_optimizer_defaults.get("max_position_pct", 100.0)),
@@ -1517,7 +1551,7 @@ with optimizer_tab:
                 ),
             )
             optimizer_stop = third_row[2].number_input(
-                "🟢 AUTO-SEARCH · Stop loss (fallback seed %)",
+                "Stop loss (fallback seed %) · AUTO",
                 min_value=0.1,
                 max_value=30.0,
                 value=float(manual_optimizer_defaults.get("default_stop_pct", 2.0)),
@@ -1528,7 +1562,7 @@ with optimizer_tab:
                 ),
             )
             optimizer_reward = third_row[3].number_input(
-                "🟢 AUTO-SEARCH · Reward/risk (fallback seed)",
+                "Reward/risk (fallback seed) · AUTO",
                 min_value=0.2,
                 max_value=10.0,
                 value=float(manual_optimizer_defaults.get("default_reward_risk", 2.0)),
@@ -1559,7 +1593,7 @@ with optimizer_tab:
                 )
             cost_row = st.columns(3)
             optimizer_spread = cost_row[0].number_input(
-                "🟣 FALLBACK FLOOR · Spread (bps)" if automatic_execution_costs else "🔒 FIXED · Spread (bps)",
+                "Spread (bps) · FLOOR" if automatic_execution_costs else "Spread (bps) · FIXED",
                 min_value=0.0,
                 max_value=500.0,
                 value=(12.0 if automatic_execution_costs else float(manual_optimizer_defaults.get("spread_bps", 12.0))),
@@ -1572,7 +1606,7 @@ with optimizer_tab:
                 ),
             )
             optimizer_slippage = cost_row[1].number_input(
-                "🟣 FALLBACK FLOOR · Slippage per fill (bps)" if automatic_execution_costs else "🔒 FIXED · Slippage per fill (bps)",
+                "Slippage per fill (bps) · FLOOR" if automatic_execution_costs else "Slippage per fill (bps) · FIXED",
                 min_value=0.0,
                 max_value=500.0,
                 value=(8.0 if automatic_execution_costs else float(manual_optimizer_defaults.get("slippage_bps", 8.0))),
@@ -1585,7 +1619,7 @@ with optimizer_tab:
                 ),
             )
             optimizer_fee = cost_row[2].number_input(
-                "🔒 FIXED · Fee per order ($)",
+                "Fee per order ($) · FIXED",
                 min_value=0.0,
                 max_value=50.0,
                 value=float(manual_optimizer_defaults.get("fee_per_order", 0.0)),
@@ -1594,7 +1628,7 @@ with optimizer_tab:
             )
             protection_row = st.columns(2)
             optimizer_drawdown = protection_row[0].number_input(
-                "🟡 THRESHOLD · Maximum acceptable drawdown (%)",
+                "Maximum acceptable drawdown (%) · THRESHOLD",
                 min_value=0.5,
                 max_value=50.0,
                 value=15.0,
@@ -1602,7 +1636,7 @@ with optimizer_tab:
                 help="Settings that exceed this historical loss limit receive a strong ranking penalty.",
             )
             sizing_depth = protection_row[1].selectbox(
-                "🔵 SEARCH CONTROL · Position-size search depth",
+                "Position-size search depth · SEARCH",
                 ["Quick — 8 sizing combinations", "Balanced — 24 sizing combinations", "Comprehensive — 48 sizing combinations", "Exhaustive — 64 sizing combinations"],
                 index=2,
             )
