@@ -1113,6 +1113,22 @@ with strategies_tab:
             return st.text_input(label, value="" if existing is None else str(existing), key=f"edit_{selected['id']}_{name}", help=help_text)
 
         with st.form(f"edit_strategy_{selected['id']}"):
+            save_controls = st.columns([3.0, 1.35])
+            with save_controls[0]:
+                approved = st.checkbox(
+                    "Approve this strategy for matching in the live scanner",
+                    value=bool(selected.get("approved")),
+                    help="Approval enables research alerts only. This app never sends brokerage orders.",
+                )
+            with save_controls[1]:
+                save_strategy = st.form_submit_button(
+                    "Save strategy rules",
+                    type="primary",
+                    use_container_width=True,
+                )
+            st.caption("Edit the measurable rules below, then use the Save strategy rules button above.")
+            st.divider()
+
             column_one, column_two, column_three = st.columns(3)
             updated: dict[str, Any] = {}
             with column_one:
@@ -1140,12 +1156,6 @@ with strategies_tab:
                 updated["session_end"] = text_rule("Latest entry, Eastern (HH:MM)", "session_end")
                 updated["vwap_reclaim"] = st.checkbox("Require a VWAP reclaim", value=bool(rules.get("vwap_reclaim")))
                 updated["catalyst_required"] = st.checkbox("Require recent news", value=bool(rules.get("catalyst_required")))
-            approved = st.checkbox(
-                "Approve this strategy for matching in the live scanner",
-                value=bool(selected.get("approved")),
-                help="Approval enables research alerts only. This app never sends brokerage orders.",
-            )
-            save_strategy = st.form_submit_button("Save strategy rules", use_container_width=True)
         if save_strategy:
             store.update_strategy(selected["id"], {"machine_rules": updated, "approved": approved})
             st.success("Strategy saved.")
