@@ -1,2 +1,23 @@
 [client]
 showSidebarNavigation = true
+
+[theme]
+base = "dark"
+primaryColor = "#2F8FD8"
+backgroundColor = "#090F1A"
+secondaryBackgroundColor = "#142239"
+textColor = "#F2F6FC"
+baseFontSize = 17
+baseFontWeight = 500
+showSidebarBorder = true
+
+[theme.sidebar]
+primaryColor = "#2F8FD8"
+backgroundColor = "#0C1422"
+secondaryBackgroundColor = "#1A2C46"
+textColor = "#FFFFFF"
+linkColor = "#FFFFFF"
+borderColor = "#46617F"
+baseRadius = "medium"
+buttonRadius = "medium"
+showWidgetBorder = true
