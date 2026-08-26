@@ -1,0 +1,58 @@
+name: Fix large GitHub strategy backup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/fix-large-github-backup.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply large-backup fix
+        run: python .github/scripts/fix_large_github_backup.py
+      - name: Syntax check
+        run: python -m py_compile youtube_strategy_engine.py
+      - name: Verify large-file blob fallback
+        run: |
+          python - <<'PY'
+          import base64
+          import json
+          from youtube_strategy_engine import GitHubCloudBackup
+
+          library = {"strategies": [], "videos": [], "paper_positions": [], "recovery_items": [], "strategy_versions": []}
+          encoded = base64.b64encode(json.dumps(library).encode("utf-8")).decode("ascii")
+          sha = "a" * 40
+          backup = GitHubCloudBackup("owner/private-repo", "test-token", branch="main")
+          backup._verify_private_repository = lambda: None
+
+          def fake_request(url, *args, **kwargs):
+              if "/git/blobs/" in url:
+                  return {"encoding": "base64", "content": encoded}
+              return {"type": "file", "encoding": "none", "sha": sha, "content": ""}
+
+          backup._request = fake_request
+          loaded = backup.read_library()
+          assert loaded["library"]["strategies"] == []
+          assert loaded["sha"] == sha
+          print("Large-file GitHub blob fallback passed.")
+          PY
+      - name: Existing unit tests
+        run: python -m unittest -q test_youtube_strategy_engine.py
+      - name: Commit fix
+        run: |
+          if git diff --quiet; then
+            echo "No changes needed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add youtube_strategy_engine.py
+          git commit -m "Fix GitHub backup files over 1 MB"
+          git push
