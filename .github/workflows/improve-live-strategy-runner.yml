@@ -1,0 +1,48 @@
+name: Improve Live Strategy Runner clarity
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/improve-live-strategy-runner.yml"
+      - ".github/scripts/improve_live_strategy_runner.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply Live Strategy Runner improvements
+        run: python .github/scripts/improve_live_strategy_runner.py
+      - name: Syntax check
+        run: |
+          python -m py_compile youtube_strategy_engine.py
+          python -m py_compile live_strategy_runner_page.py
+      - name: Verify expected behavior is present
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          engine = Path("youtube_strategy_engine.py").read_text(encoding="utf-8")
+          runner = Path("live_strategy_runner_page.py").read_text(encoding="utf-8")
+          assert '"label": "Entry time window"' in engine
+          assert 'catalyst_status = "unknown"' in engine
+          assert 'recent_news = market.news([ticker], hours=24)' in runner
+          assert '#### Entry-condition checklist' in runner
+          assert 'Stop/target are reference levels only' in runner
+          print("Live runner verification passed.")
+          PY
+      - name: Commit tested Live Strategy Runner changes
+        run: |
+          if git diff --quiet; then
+            echo "No changes needed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add youtube_strategy_engine.py live_strategy_runner_page.py
+          git commit -m "Clarify live strategy decisions and enforce entry window"
+          git push
