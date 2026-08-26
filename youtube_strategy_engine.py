@@ -4644,7 +4644,41 @@ def match_strategy(metrics: dict[str, Any], strategy: dict[str, Any]) -> dict[st
         status = "unknown" if actual is None else ("pass" if actual is required else "fail")
         checks.append({"label": "Price above VWAP", "actual": actual, "required": required, "status": status})
     if rules.get("catalyst_required"):
-        checks.append({"label": "Recent news catalyst", "actual": bool(metrics.get("has_catalyst")), "required": True, "status": "pass" if metrics.get("has_catalyst") else "fail"})
+        catalyst_value = metrics.get("has_catalyst")
+        catalyst_status = "unknown" if catalyst_value is None else ("pass" if bool(catalyst_value) else "fail")
+        checks.append(
+            {
+                "label": "Recent news catalyst",
+                "actual": catalyst_value,
+                "required": True,
+                "status": catalyst_status,
+            }
+        )
+
+    # The historical backtest already enforces session_start/session_end. The live
+    # matcher must enforce the same saved entry window so an afternoon snapshot
+    # cannot be presented as eligible for a morning-only strategy.
+    session_start = parse_clock_minutes(rules.get("session_start"))
+    session_end = parse_clock_minutes(rules.get("session_end"))
+    if session_start is not None or session_end is not None:
+        now_et = utc_now().astimezone(ET)
+        clock_minute = now_et.hour * 60 + now_et.minute
+        earliest = session_start if session_start is not None else 0
+        latest = session_end if session_end is not None else 23 * 60 + 59
+        if session_start is not None and session_end is not None:
+            required_window = f"{session_start // 60:02d}:{session_start % 60:02d}–{session_end // 60:02d}:{session_end % 60:02d} ET"
+        elif session_start is not None:
+            required_window = f"at/after {session_start // 60:02d}:{session_start % 60:02d} ET"
+        else:
+            required_window = f"at/before {session_end // 60:02d}:{session_end % 60:02d} ET"
+        checks.append(
+            {
+                "label": "Entry time window",
+                "actual": now_et.strftime("%H:%M ET"),
+                "required": required_window,
+                "status": "pass" if earliest <= clock_minute <= latest else "fail",
+            }
+        )
 
     # These triggers require actual recent bars; do not pretend a snapshot proves them.
     chart_checks = metrics.get("chart_checks") if isinstance(metrics.get("chart_checks"), dict) else {}

@@ -163,6 +163,15 @@ def current_signal(symbol: str, strategy: dict[str, Any]) -> tuple[dict[str, Any
         raise AppError(f"Alpaca returned an incomplete snapshot for {ticker}.")
 
     enriched = dict(metrics)
+    rules = normalize_machine_rules(strategy.get("machine_rules"))
+    if rules.get("catalyst_required"):
+        try:
+            recent_news = market.news([ticker], hours=24)
+            enriched["has_catalyst"] = bool(recent_news.get(ticker))
+        except AppError as error:
+            enriched["has_catalyst"] = None
+            warnings.append(f"Recent-news check unavailable; catalyst rule needs verification: {error}")
+
     if needs_chart_candles(strategy):
         now_et = utc_now().astimezone(ET)
         session_day = now_et.date()
@@ -474,17 +483,53 @@ def render() -> None:
         status = str(signal.get("status") or "UNKNOWN")
         icon = {"MATCH": "🟢", "VERIFY": "🔵", "WATCH": "🟠", "NO MATCH": "🔴"}.get(status, "⚪")
 
+        raw_checks = list(signal.get("checks") or [])
+        passed_count = sum(str(item.get("status") or "").lower() == "pass" for item in raw_checks)
+        failed_count = sum(str(item.get("status") or "").lower() == "fail" for item in raw_checks)
+        unknown_count = sum(str(item.get("status") or "").lower() == "unknown" for item in raw_checks)
+        total_count = len(raw_checks)
+
+        if status == "MATCH":
+            decision_label = "🟢 ENTRY MATCH"
+        elif status == "VERIFY":
+            decision_label = "🔵 WAIT / VERIFY"
+        elif status == "WATCH":
+            decision_label = "🟠 WATCH"
+        else:
+            decision_label = "🔴 NO ENTRY"
+
         st.markdown("### Current live decision")
+        if status == "MATCH":
+            st.success(f"ENTRY CONDITIONS MATCH — {passed_count} of {total_count} conditions passed.")
+        elif failed_count > 0:
+            extra = f" · {unknown_count} need verification" if unknown_count else ""
+            st.error(
+                f"NO ENTRY — {failed_count} of {total_count} conditions failed · "
+                f"{passed_count} passed{extra}."
+            )
+        elif unknown_count > 0:
+            st.info(
+                f"WAIT / VERIFY — {passed_count} of {total_count} conditions passed · "
+                f"{unknown_count} still need verification."
+            )
+        else:
+            st.warning("NO ENTRY — this strategy has no currently measurable entry conditions to confirm.")
+
+        st.caption(
+            "A strong backtest means the strategy performed well when its entry setup occurred historically. "
+            "This live decision only answers whether that setup is present right now."
+        )
+
         cards = st.columns(5)
-        cards[0].metric("Signal", f"{icon} {status}")
-        cards[1].metric("Rule match", f'{safe_float(signal.get("score"), 0.0):.0f}%')
+        cards[0].metric("Live decision", decision_label)
+        cards[1].metric("Conditions passed", f"{passed_count} / {total_count}")
         cards[2].metric("Current price", money(metrics.get("price"), 4))
         cards[3].metric("Strategy stop", money(signal.get("suggested_stop"), 4))
         cards[4].metric("Strategy target", money(signal.get("suggested_target"), 4))
         st.caption(
             f'Checked {local_timestamp(snapshot.get("checked_at"))} · '
-            f'{int(safe_float(signal.get("passed"), 0) or 0)} rules passed · '
-            f'{int(safe_float(signal.get("unknown"), 0) or 0)} need verification'
+            f'Rule score {safe_float(signal.get("score"), 0.0):.0f}% · '
+            "Stop/target are reference levels only; they are not an entry recommendation unless the strategy reaches a full MATCH."
         )
 
         details = st.columns(4)
@@ -497,18 +542,34 @@ def render() -> None:
         for warning in snapshot.get("warnings") or []:
             st.warning(str(warning))
 
-        checks = [
-            {
-                "Rule": item.get("label"),
-                "Actual": item.get("actual"),
-                "Required": item.get("required"),
-                "Result": str(item.get("status") or "").upper(),
-            }
-            for item in signal.get("checks") or []
-        ]
-        if checks:
-            with st.expander("See every strategy rule", expanded=status in {"VERIFY", "NO MATCH"}):
-                st.dataframe(pd.DataFrame(checks), hide_index=True, width="stretch")
+        st.markdown("#### Entry-condition checklist")
+        if raw_checks:
+            for item in raw_checks:
+                check_status = str(item.get("status") or "").lower()
+                check_icon = {"pass": "✅", "fail": "❌", "unknown": "❓"}.get(check_status, "•")
+                label = str(item.get("label") or "Strategy condition")
+                actual = item.get("actual")
+                required = item.get("required")
+                actual_text = "Unavailable" if actual is None else str(actual)
+                required_text = "—" if required is None else str(required)
+                st.markdown(
+                    f"{check_icon} **{label}** — Current: `{actual_text}` · Required: `{required_text}`"
+                )
+
+            checks_table = [
+                {
+                    "Rule": item.get("label"),
+                    "Current": item.get("actual"),
+                    "Required": item.get("required"),
+                    "Result": str(item.get("status") or "").upper(),
+                }
+                for item in raw_checks
+            ]
+            with st.expander("Technical rule table", expanded=False):
+                st.dataframe(pd.DataFrame(checks_table), hide_index=True, width="stretch")
+        else:
+            st.caption("No measurable entry rules are currently saved for this strategy.")
+
 
     execution = st.session_state.get("runner_execution_v2") or {}
     if execution:
