@@ -1800,18 +1800,30 @@ elif module == "AI Research Autopilot":
                         f"{failed.get('error') or 'Research step could not be completed.'}"
                     )
 
-        result_rows = []
-        for result in current_auto.get("results") or []:
-            strength = result.get("strength") or {}
+        def current_result_scores(result: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], float]:
             general = result.get("generalization") or {}
             summary = general.get("summary") or {}
+            strength = validation_strength(
+                result.get("optimization_report") or {},
+                result.get("walk_forward") or None,
+            )
+            global_score = round(
+                (safe_float(strength.get("score"), 0.0) or 0.0) * 0.65
+                + (safe_float(summary.get("score"), 0.0) or 0.0) * 0.35,
+                1,
+            )
+            return strength, summary, global_score
+
+        result_rows = []
+        for result in current_auto.get("results") or []:
+            strength, summary, display_global_score = current_result_scores(result)
             winner = (result.get("optimization_report") or {}).get("winner") or {}
             holdout = winner.get("holdout_metrics") or {}
             result_rows.append(
                 {
                     "Strategy": result.get("strategy_name"),
                     "Status": str(result.get("validation_status") or "research_only").replace("_", " ").title(),
-                    "Global score": safe_float(result.get("global_score"), 0.0) or 0.0,
+                    "Global score": display_global_score,
                     "Robustness": safe_float(strength.get("score"), 0.0) or 0.0,
                     "Cross-stock": safe_float(summary.get("score"), 0.0) or 0.0,
                     "Anchor": result.get("anchor_symbol"),
@@ -1831,16 +1843,28 @@ elif module == "AI Research Autopilot":
             )
 
         for result in current_auto.get("results") or []:
+            display_strength, _, display_global_score = current_result_scores(result)
             with st.expander(
                 f"{result.get('strategy_name') or 'Strategy'} · "
                 f"{str(result.get('validation_status') or 'research_only').replace('_', ' ').title()} · "
-                f"{safe_float(result.get('global_score'), 0.0):.1f}/100",
+                f"{display_global_score:.1f}/100",
                 expanded=False,
             ):
                 st.write(
                     f"Historical opportunity anchor: **{result.get('anchor_symbol') or '—'}** · "
                     f"cross-stock candidates: {', '.join(result.get('candidate_symbols') or []) or '—'}"
                 )
+                stored_strength = safe_float((result.get("strength") or {}).get("score"))
+                current_strength = safe_float(display_strength.get("score"), 0.0) or 0.0
+                if stored_strength is not None and abs(stored_strength - current_strength) >= 0.1:
+                    st.info(
+                        f"Robustness recalibrated from the saved {stored_strength:.1f}/100 to "
+                        f"{current_strength:.1f}/100 using the current conservative stability rules."
+                    )
+                if display_strength.get("reasons"):
+                    st.markdown("**Robustness cautions:**")
+                    for reason in display_strength.get("reasons") or []:
+                        st.write("• " + str(reason))
                 opportunities = result.get("opportunities") or []
                 if opportunities:
                     st.dataframe(
