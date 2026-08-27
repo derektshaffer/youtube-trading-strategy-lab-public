@@ -15,8 +15,64 @@ from trading_intelligence_core import (
     effective_strategy_for_research,
     prepare_strategies_with_ai,
     research_readiness,
+    upgrade_native_strategy_rules,
 )
 from youtube_strategy_engine import AppError
+
+
+class NativeRuleUpgradeTests(unittest.TestCase):
+    def test_existing_continuation_breakout_is_upgraded_without_inventing_author_number(self):
+        strategy = {
+            "id": "follow-through",
+            "source_type": "book_or_document",
+            "name": "Follow Through / Continuation Breakout",
+            "summary": (
+                "Trades momentum continuation on stocks that were extremely active in the "
+                "previous trading session, entering when price makes a fresh breakout over "
+                "the previous day's high."
+            ),
+            "entry_conditions": [
+                "Enter on a fresh breakout over the previous day's high."
+            ],
+            "machine_rules": {},
+            "evidence": [
+                {"location": "p. 10", "description": "setup", "source_excerpt": "short"}
+            ],
+            "validation_status": "unvalidated",
+        }
+        upgraded = upgrade_native_strategy_rules(strategy)
+        self.assertTrue(upgraded["machine_rules"]["previous_day_high_breakout"])
+        self.assertIsNone(upgraded["machine_rules"]["min_previous_day_volume_ratio"])
+        self.assertEqual(
+            upgraded["research_rule_overrides"]["min_previous_day_volume_ratio"],
+            2.0,
+        )
+        assumption = next(
+            item
+            for item in upgraded["compiler_assumptions"]
+            if item.get("target_rule") == "min_previous_day_volume_ratio"
+        )
+        self.assertTrue(assumption["is_research_assumption"])
+        self.assertIn("not an author-stated threshold", assumption["rationale"])
+        readiness = research_readiness(upgraded)
+        self.assertEqual(readiness["label"], "ready_for_backtest")
+        self.assertGreater(readiness["score"], 16)
+
+    def test_prior_day_upgrade_does_not_override_explicit_author_threshold(self):
+        strategy = {
+            "summary": (
+                "Trade stocks extremely active in the previous session and break the prior day's high."
+            ),
+            "machine_rules": {
+                "previous_day_high_breakout": True,
+                "min_previous_day_volume_ratio": 3.0,
+            },
+        }
+        upgraded = upgrade_native_strategy_rules(strategy)
+        self.assertEqual(upgraded["machine_rules"]["min_previous_day_volume_ratio"], 3.0)
+        self.assertFalse(
+            upgraded.get("research_rule_overrides", {}).get("min_previous_day_volume_ratio")
+        )
 
 
 class EffectiveStrategyTests(unittest.TestCase):
