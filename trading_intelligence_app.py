@@ -266,12 +266,13 @@ elif module == "Knowledge Sources":
             analyzer = GeminiBookAnalyzer(
                 setting("GEMINI_API_KEY"),
                 setting("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
+                fallback_api_key=setting("GEMINI_PAID_API_KEY", ""),
             )
             progress = st.progress(0.0, text="Preparing source…")
-            def on_progress(index: int, total: int) -> None:
+            def on_progress(index: int, total: int, message: str | None = None) -> None:
                 progress.progress(
-                    min(1.0, max(0.0, (index - 1) / max(1, total))),
-                    text=f"Analyzing source section {index} of {total}…",
+                    min(0.98, max(0.0, (index - 1) / max(1, total))),
+                    text=message or f"Analyzing source section {index} of {total}…",
                 )
 
             analysis = analyzer.analyze(
@@ -281,7 +282,12 @@ elif module == "Knowledge Sources":
                 focus=focus,
                 progress_callback=on_progress,
             )
-            progress.progress(1.0, text="Strategy extraction complete")
+            completion_text = "Strategy extraction complete"
+            if analysis.get("model_fallback_used"):
+                completion_text += f" · backup model used: {analysis.get('model')}"
+            if analysis.get("paid_fallback_used"):
+                completion_text += " · backup API key used"
+            progress.progress(1.0, text=completion_text)
 
             if autopilot_prepare and analysis.get("strategies"):
                 prep_status = st.status(
