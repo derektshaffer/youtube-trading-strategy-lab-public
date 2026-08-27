@@ -6,6 +6,8 @@ on:
     paths:
       - "trading_intelligence_app.py"
       - "trading_intelligence_core.py"
+      - "trading_progress_ui.py"
+      - "trading_progress_ui.py"
       - "trading_strategy_dna.py"
       - "trading_auto_research.py"
       - "trading_validation_core.py"
@@ -21,6 +23,7 @@ on:
       - "test_trading_strategy_dna.py"
       - "test_trading_auto_research.py"
       - "test_trading_universe_research.py"
+      - "test_trading_progress_ui.py"
       - ".github/workflows/validate-trading-intelligence.yml"
   pull_request:
     paths:
@@ -50,6 +53,7 @@ jobs:
         run: |
           python -m py_compile trading_intelligence_app.py
           python -m py_compile trading_intelligence_core.py
+          python -m py_compile trading_progress_ui.py
           python -m py_compile trading_strategy_dna.py
           python -m py_compile trading_auto_research.py
           python -m py_compile trading_validation_core.py
@@ -58,4 +62,4 @@ jobs:
           python -m py_compile trading_universe_research.py
           python -m py_compile youtube_strategy_engine.py
       - name: Run Trading Intelligence tests
-        run: python -m unittest test_youtube_strategy_engine.py test_trading_validation_core.py test_trading_catalyst_core.py test_trading_intelligence_core.py test_trading_strategy_dna.py test_trading_universe_research.py test_trading_auto_research.py -q
+        run: python -m unittest test_youtube_strategy_engine.py test_trading_validation_core.py test_trading_catalyst_core.py test_trading_intelligence_core.py test_trading_strategy_dna.py test_trading_universe_research.py test_trading_auto_research.py test_trading_progress_ui.py -q
