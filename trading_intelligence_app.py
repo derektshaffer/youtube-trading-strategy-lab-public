@@ -17,6 +17,10 @@ from trading_catalyst_core import (
     historical_news,
 )
 from trading_market_discovery import analyze_stock_strategies, scan_strategy_universe
+from trading_auto_research import (
+    merge_autonomous_research_into_library,
+    run_autonomous_research,
+)
 from trading_intelligence_core import (
     GeminiBookAnalyzer,
     GeminiRuleCompiler,
@@ -143,6 +147,7 @@ with st.sidebar:
             "Knowledge Sources",
             "Strategy Library",
             "Rule Compiler",
+            "AI Research Autopilot",
             "Strategy Lab",
             "Universe Research",
             "Validation",
@@ -250,6 +255,21 @@ elif module == "Knowledge Sources":
             "Autopilot only prepares research hypotheses. It does not label anything profitable or validated; "
             "historical testing and unseen-data validation still make that determination."
         )
+    autopilot_research = st.checkbox(
+        "Continue automatically into historical opportunity discovery + validation",
+        value=True,
+        disabled=not autopilot_prepare,
+        help=(
+            "After extraction, the Lab builds its own stock universe, finds historical opportunities, "
+            "selects research finalists, optimizes them, runs holdout/walk-forward checks, tests frozen "
+            "rules across multiple stocks, and saves the results automatically."
+        ),
+    )
+    if autopilot_research and autopilot_prepare:
+        st.caption(
+            "No ticker or optimizer setup is required. The broad scan is cheap; deeper intraday testing "
+            "is automatically limited to the strongest research finalists."
+        )
 
     can_analyze = uploaded is not None
     analyze = st.button(
@@ -350,6 +370,73 @@ elif module == "Knowledge Sources":
                 }
 
             data = load_library()
+            data["strategies"] = merge_strategies(
+                list(data.get("strategies") or []),
+                list(analysis.get("strategies") or []),
+            )
+
+            autonomous_report = None
+            autonomous_error = ""
+            if autopilot_research and autopilot_prepare and analysis.get("strategies"):
+                ready_for_deep = [
+                    item
+                    for item in analysis.get("strategies") or []
+                    if (item.get("research_readiness") or {}).get("label") == "ready_for_backtest"
+                ]
+                if ready_for_deep:
+                    auto_status = st.status(
+                        "Historical Research Autopilot is building its own stock universe…",
+                        expanded=True,
+                    )
+                    try:
+                        autonomous_report = run_autonomous_research(
+                            market_client(),
+                            ready_for_deep,
+                            progress=lambda message: auto_status.write(message),
+                        )
+                        data = merge_autonomous_research_into_library(data, autonomous_report)
+                        validated_count = sum(
+                            1
+                            for item in autonomous_report.get("results") or []
+                            if item.get("validation_status") == "validated"
+                        )
+                        analysis["autonomous_research_summary"] = {
+                            "completed": True,
+                            "generated_at": autonomous_report.get("generated_at"),
+                            "deep_strategies_tested": autonomous_report.get("deep_strategies_tested"),
+                            "validated": validated_count,
+                            "universe_source": (autonomous_report.get("universe") or {}).get("source"),
+                        }
+                        auto_status.update(
+                            label=(
+                                f"Historical Research Autopilot complete · "
+                                f"{int(autonomous_report.get('deep_strategies_tested') or 0)} finalists tested · "
+                                f"{validated_count} passed the full gate"
+                            ),
+                            state="complete",
+                            expanded=False,
+                        )
+                        st.session_state["til_auto_research_result"] = autonomous_report
+                    except AppError as exc:
+                        autonomous_error = str(exc)
+                        analysis["autonomous_research_summary"] = {
+                            "completed": False,
+                            "error": autonomous_error,
+                        }
+                        auto_status.update(
+                            label="Strategy extraction saved; historical Autopilot could not complete",
+                            state="error",
+                            expanded=False,
+                        )
+                else:
+                    autonomous_error = (
+                        "No extracted strategy had enough machine-testable entry/filter rules for deep historical research."
+                    )
+                    analysis["autonomous_research_summary"] = {
+                        "completed": False,
+                        "error": autonomous_error,
+                    }
+
             source_record = {k: v for k, v in analysis.items() if k != "strategies"}
             source_record["filename"] = uploaded.name
             source_record["extraction_metadata"] = metadata
@@ -358,10 +445,6 @@ elif module == "Knowledge Sources":
                 if item.get("id") != source_record["id"]
             ]
             data["knowledge_sources"].insert(0, source_record)
-            data["strategies"] = merge_strategies(
-                list(data.get("strategies") or []),
-                list(analysis.get("strategies") or []),
-            )
             intelligence_store().save(data)
             st.session_state["til_last_analysis"] = analysis
             source_name = analysis.get("title") or title.strip() or uploaded.name
@@ -376,7 +459,20 @@ elif module == "Knowledge Sources":
                     f"clearly labeled research assumptions and marked "
                     f"{int(autopilot_summary.get('ready_for_backtest') or 0)} strategies ready for backtesting."
                 )
+            if autonomous_report:
+                validated_count = sum(
+                    1
+                    for item in autonomous_report.get("results") or []
+                    if item.get("validation_status") == "validated"
+                )
+                message += (
+                    f" Historical Autopilot deep-tested "
+                    f"{int(autonomous_report.get('deep_strategies_tested') or 0)} finalists and "
+                    f"{validated_count} passed the full autonomous validation gate."
+                )
             st.success(message)
+            if autonomous_error:
+                st.warning("Historical Autopilot note: " + autonomous_error)
             st.rerun()
         except AppError as exc:
             st.error(str(exc))
@@ -715,6 +811,186 @@ elif module == "Rule Compiler":
             intelligence_store().save(data)
             st.success("Research assumptions removed; source-extracted rules were left unchanged.")
             st.rerun()
+
+
+elif module == "AI Research Autopilot":
+    st.markdown("## AI Research Autopilot")
+    st.caption(
+        "No ticker selection is required. The Lab builds a broad stock universe, finds historical "
+        "opportunity candidates from information available at the time, deep-tests the best strategy/stock "
+        "families, runs untouched holdout and walk-forward checks, freezes finalist rules, tests them across "
+        "multiple stocks, and saves the outcome automatically."
+    )
+
+    ready_strategies = [
+        item
+        for item in strategies
+        if (item.get("research_readiness") or research_readiness(item)).get("label") == "ready_for_backtest"
+    ]
+    auto_metrics = st.columns(4)
+    auto_metrics[0].metric("Strategies ready", len(ready_strategies))
+    auto_metrics[1].metric(
+        "Already validated",
+        sum(1 for item in strategies if str(item.get("validation_status") or "") == "validated"),
+    )
+    auto_metrics[2].metric(
+        "Autopilot runs",
+        sum(1 for item in library.get("research_runs") or [] if item.get("kind") == "autonomous_research"),
+    )
+    auto_metrics[3].metric(
+        "Manual ticker setup",
+        "None",
+    )
+
+    st.info(
+        "The first stage samples broadly from Alpaca's active U.S. equities and always includes current "
+        "movers/most-active stocks. It uses daily history only to find opportunity-rich candidates; "
+        "future P/L is not used to choose those stocks. Delisted stocks are still missing, so survivorship "
+        "bias is disclosed in every run."
+    )
+
+    run_auto = st.button(
+        "🤖 Run full autonomous research now",
+        type="primary",
+        use_container_width=True,
+        disabled=not ready_strategies,
+    )
+    if run_auto:
+        status = st.status("Starting autonomous research funnel…", expanded=True)
+        try:
+            report = run_autonomous_research(
+                market_client(),
+                ready_strategies,
+                progress=lambda message: status.write(message),
+            )
+            data = merge_autonomous_research_into_library(load_library(), report)
+            intelligence_store().save(data)
+            st.session_state["til_auto_research_result"] = report
+            validated_count = sum(
+                1
+                for item in report.get("results") or []
+                if item.get("validation_status") == "validated"
+            )
+            status.update(
+                label=(
+                    f"Autonomous research complete · "
+                    f"{int(report.get('deep_strategies_tested') or 0)} deep finalists · "
+                    f"{validated_count} validated"
+                ),
+                state="complete",
+                expanded=False,
+            )
+            st.rerun()
+        except AppError as exc:
+            status.update(label="Autonomous research stopped safely", state="error", expanded=True)
+            st.error(str(exc))
+        except Exception as exc:
+            status.update(label="Autonomous research failed", state="error", expanded=True)
+            st.error(f"Autonomous research failed: {exc}")
+
+    current_auto = st.session_state.get("til_auto_research_result")
+    if not current_auto:
+        current_auto = next(
+            (
+                item
+                for item in library.get("research_runs") or []
+                if item.get("kind") == "autonomous_research"
+            ),
+            None,
+        )
+
+    if current_auto:
+        st.divider()
+        st.markdown("### Latest autonomous leaderboard")
+        universe = current_auto.get("universe") or {}
+        st.caption(
+            f"Universe: {universe.get('source') or '—'} · "
+            f"sampled stocks: {len(universe.get('symbols') or []) if universe.get('symbols') else universe.get('population_size', '—')} · "
+            f"generated: {current_auto.get('generated_at') or '—'}"
+        )
+        result_rows = []
+        for result in current_auto.get("results") or []:
+            strength = result.get("strength") or {}
+            general = result.get("generalization") or {}
+            summary = general.get("summary") or {}
+            winner = (result.get("optimization_report") or {}).get("winner") or {}
+            holdout = winner.get("holdout_metrics") or {}
+            result_rows.append(
+                {
+                    "Strategy": result.get("strategy_name"),
+                    "Status": str(result.get("validation_status") or "research_only").replace("_", " ").title(),
+                    "Global score": safe_float(result.get("global_score"), 0.0) or 0.0,
+                    "Robustness": safe_float(strength.get("score"), 0.0) or 0.0,
+                    "Cross-stock": safe_float(summary.get("score"), 0.0) or 0.0,
+                    "Anchor": result.get("anchor_symbol"),
+                    "Stocks tested": int(summary.get("active_symbols") or 0),
+                    "Cross-stock trades": int(summary.get("total_trades") or 0),
+                    "Holdout P/L": safe_float(holdout.get("net_pnl"), 0.0) or 0.0,
+                }
+            )
+        if result_rows:
+            st.dataframe(
+                pd.DataFrame(result_rows).sort_values(
+                    ["Status", "Global score"],
+                    ascending=[True, False],
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        for result in current_auto.get("results") or []:
+            with st.expander(
+                f"{result.get('strategy_name') or 'Strategy'} · "
+                f"{str(result.get('validation_status') or 'research_only').replace('_', ' ').title()} · "
+                f"{safe_float(result.get('global_score'), 0.0):.1f}/100",
+                expanded=False,
+            ):
+                st.write(
+                    f"Historical opportunity anchor: **{result.get('anchor_symbol') or '—'}** · "
+                    f"cross-stock candidates: {', '.join(result.get('candidate_symbols') or []) or '—'}"
+                )
+                opportunities = result.get("opportunities") or []
+                if opportunities:
+                    st.dataframe(
+                        pd.DataFrame(
+                            [
+                                {
+                                    "Stock": item.get("symbol"),
+                                    "Opportunity days": item.get("event_count"),
+                                    "Discovery score": item.get("score"),
+                                    "Peak move %": item.get("peak_directional_move_pct"),
+                                    "Peak RVOL": item.get("peak_relative_volume"),
+                                    "Selection": item.get("candidate_selection_mode"),
+                                }
+                                for item in opportunities
+                            ]
+                        ),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                if result.get("gate_reasons"):
+                    st.markdown("**Why it did not pass every autonomous gate:**")
+                    for reason in result.get("gate_reasons") or []:
+                        st.write("• " + str(reason))
+                else:
+                    st.success(
+                        "Passed anchor validation, untouched holdout, stress, cross-stock breadth, "
+                        "trade-count, and available walk-forward gates."
+                    )
+
+        for limitation in current_auto.get("limitations") or []:
+            if limitation:
+                st.warning(str(limitation))
+    elif ready_strategies:
+        st.info(
+            "No autonomous run has been saved yet. New book uploads can run this automatically, "
+            "or the single button above can research the current library."
+        )
+    else:
+        st.info(
+            "No strategy is machine-testable enough for deep autonomous research yet. Book ingestion "
+            "Autopilot will keep trying to translate qualitative rules into testable research assumptions."
+        )
 
 
 elif module == "Strategy Lab":
