@@ -6,6 +6,8 @@ import unittest
 from unittest.mock import patch
 
 from trading_intelligence_core import (
+    DEFAULT_GEMINI_BOOK_MODEL,
+    DEFAULT_GEMINI_BOOK_SPECIALIST_MODEL,
     GeminiBookAnalyzer,
     apply_compiler_suggestions,
     effective_strategy_for_live,
@@ -123,6 +125,85 @@ class EffectiveStrategyTests(unittest.TestCase):
         self.assertEqual(ready["label"], "ready_for_backtest")
 
 
+
+
+class BookModelRoutingTests(unittest.TestCase):
+    def test_book_defaults_to_36_with_37_as_specialist(self):
+        analyzer = GeminiBookAnalyzer("key")
+        self.assertEqual(analyzer.primary_model, DEFAULT_GEMINI_BOOK_MODEL)
+        self.assertEqual(analyzer.primary_model, "gemini-3.6-flash")
+        self.assertEqual(analyzer.specialist_model, DEFAULT_GEMINI_BOOK_SPECIALIST_MODEL)
+        self.assertEqual(analyzer.specialist_model, "gemini-3.7-flash")
+        self.assertNotIn("gemini-3.7-flash", analyzer.fallback_models)
+
+    def test_clear_high_confidence_section_does_not_escalate(self):
+        analysis = {
+            "source_summary": "Clear setup",
+            "detected_title": "",
+            "detected_author": "",
+            "strategies": [
+                {
+                    "name": "Breakout",
+                    "confidence": 92,
+                    "entry_conditions": ["Break a defined high"],
+                    "exit_conditions": ["Exit at target"],
+                    "risk_rules": ["Stop below setup"],
+                    "unresolved_rules": [],
+                    "machine_rules": {"min_relative_volume": 2.0},
+                    "evidence": [{"location": "p. 10", "description": "Rule", "source_excerpt": "short"}],
+                }
+            ],
+        }
+        needs, reasons = GeminiBookAnalyzer._analysis_needs_specialist(analysis)
+        self.assertFalse(needs)
+        self.assertEqual(reasons, [])
+
+    def test_ambiguous_low_confidence_section_escalates_to_37(self):
+        analyzer = GeminiBookAnalyzer("key")
+        primary = {
+            "source_summary": "Ambiguous setup",
+            "detected_title": "",
+            "detected_author": "",
+            "strategies": [
+                {
+                    "name": "Pullback",
+                    "category": "momentum",
+                    "confidence": 58,
+                    "entry_conditions": ["Buy when it looks strong"],
+                    "exit_conditions": ["Sell when momentum fades"],
+                    "risk_rules": [],
+                    "unresolved_rules": ["Entry timing is unclear"],
+                    "machine_rules": {},
+                    "evidence": [{"location": "p. 20", "description": "Setup", "source_excerpt": "short"}],
+                }
+            ],
+        }
+        specialist = {
+            "source_summary": "Clarified setup",
+            "detected_title": "",
+            "detected_author": "",
+            "strategies": [],
+        }
+        progress = []
+        with patch.object(analyzer, "_analyze_chunk", return_value=specialist) as call:
+            result = analyzer._specialist_review_chunk(
+                "source text",
+                primary_analysis=primary,
+                title="Book",
+                author="Author",
+                chunk_number=2,
+                chunk_count=5,
+                focus="",
+                progress_callback=lambda i, total, message: progress.append(message),
+            )
+
+        self.assertEqual(call.call_count, 1)
+        self.assertTrue(analyzer.specialist_used)
+        self.assertEqual(analyzer.specialist_sections, [2])
+        self.assertEqual(analyzer.model, analyzer.primary_model)
+        self.assertIn("Ambiguous setup", result["source_summary"])
+        self.assertIn("Clarified setup", result["source_summary"])
+        self.assertTrue(any("gemini-3.7-flash" in message for message in progress))
 
 
 class BookAnalyzerResilienceTests(unittest.TestCase):
