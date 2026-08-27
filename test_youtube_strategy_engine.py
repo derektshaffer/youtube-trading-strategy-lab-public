@@ -873,6 +873,13 @@ class CloudBackupFirstWriteTests(unittest.TestCase):
                 )
 
 
+class ResearchEquitySymbolTests(unittest.TestCase):
+    def test_identifier_like_inactive_asset_is_not_a_research_ticker(self):
+        self.assertFalse(engine.is_research_equity_symbol("D012219"))
+        self.assertTrue(engine.is_research_equity_symbol("AAPL"))
+        self.assertTrue(engine.is_research_equity_symbol("BRK.B"))
+
+
 class ProviderTests(unittest.TestCase):
     def test_interaction_parser_uses_current_steps_schema(self):
         response = {"steps": [{"type": "thought"}, {"type": "model_output", "content": [{"type": "text", "text": '{"ok":true}'}]}]}
