@@ -5607,6 +5607,7 @@ def snapshot_metrics(
 def match_strategy(metrics: dict[str, Any], strategy: dict[str, Any]) -> dict[str, Any]:
     rules = normalize_machine_rules(strategy.get("machine_rules"))
     checks: list[dict[str, Any]] = []
+    chart_checks = metrics.get("chart_checks") if isinstance(metrics.get("chart_checks"), dict) else {}
 
     def check(label: str, actual: Any, required: Any, compare: Callable[[float, float], bool]) -> None:
         if required is None:
@@ -5623,6 +5624,18 @@ def match_strategy(metrics: dict[str, Any], strategy: dict[str, Any]) -> dict[st
     check("Day change %", metrics.get("day_change_pct"), rules.get("min_day_change_pct"), lambda actual, expected: actual >= expected)
     check("Relative volume", metrics.get("relative_volume"), rules.get("min_relative_volume"), lambda actual, expected: actual >= expected)
     check("Dollar volume", metrics.get("dollar_volume"), rules.get("min_dollar_volume"), lambda actual, expected: actual >= expected)
+    check(
+        "Previous-day volume ratio",
+        metrics.get("previous_day_volume_ratio", chart_checks.get("previous_day_volume_ratio")),
+        rules.get("min_previous_day_volume_ratio"),
+        lambda actual, expected: actual >= expected,
+    )
+    check(
+        "Previous-day move %",
+        metrics.get("previous_day_change_pct", chart_checks.get("previous_day_change_pct")),
+        rules.get("min_previous_day_change_pct"),
+        lambda actual, expected: actual >= expected,
+    )
     check("Maximum spread %", metrics.get("spread_pct"), rules.get("max_spread_pct"), lambda actual, expected: actual <= expected)
     check("Maximum VWAP extension %", metrics.get("vwap_distance_pct"), rules.get("max_vwap_distance_pct"), lambda actual, expected: actual <= expected)
     if rules.get("above_vwap") is not None:
@@ -5668,9 +5681,9 @@ def match_strategy(metrics: dict[str, Any], strategy: dict[str, Any]) -> dict[st
         )
 
     # These triggers require actual recent bars; do not pretend a snapshot proves them.
-    chart_checks = metrics.get("chart_checks") if isinstance(metrics.get("chart_checks"), dict) else {}
     for field_name, label in (
         ("vwap_reclaim", "Confirmed VWAP reclaim"),
+        ("previous_day_high_breakout", "Confirmed previous-day-high breakout"),
         ("breakout_lookback_bars", "Confirmed resistance breakout"),
         ("opening_range_minutes", "Confirmed opening-range breakout"),
         ("volume_surge_ratio", "Current candle volume surge"),
@@ -5723,13 +5736,14 @@ def match_strategy(metrics: dict[str, Any], strategy: dict[str, Any]) -> dict[st
     }
 
 
-def chart_trigger_checks(rows: list[dict[str, Any]], strategy: dict[str, Any]) -> dict[str, bool | None]:
-    """Confirm chart-derived rules only from candles available at scan time."""
+def chart_trigger_checks(rows: list[dict[str, Any]], strategy: dict[str, Any]) -> dict[str, Any]:
+    """Confirm chart-derived rules and prior-session metrics only from candles available at scan time."""
     fields = (
-        "vwap_reclaim", "breakout_lookback_bars", "opening_range_minutes",
-        "volume_surge_ratio", "minimum_green_bars",
+        "vwap_reclaim", "previous_day_high_breakout", "breakout_lookback_bars",
+        "opening_range_minutes", "volume_surge_ratio", "minimum_green_bars",
+        "previous_day_volume_ratio", "previous_day_change_pct",
     )
-    outcome: dict[str, bool | None] = {name: None for name in fields}
+    outcome: dict[str, Any] = {name: None for name in fields}
     frame = bars_to_frame(rows)
     if frame.empty:
         return outcome
@@ -5737,12 +5751,25 @@ def chart_trigger_checks(rows: list[dict[str, Any]], strategy: dict[str, Any]) -
     last = enriched.iloc[-1]
     rules = normalize_machine_rules(strategy.get("machine_rules"))
 
+    if pd.notna(last.get("previous_day_volume_ratio")):
+        outcome["previous_day_volume_ratio"] = float(last["previous_day_volume_ratio"])
+    if pd.notna(last.get("previous_day_change_pct")):
+        outcome["previous_day_change_pct"] = float(last["previous_day_change_pct"])
+
     if rules.get("vwap_reclaim"):
         recent = enriched.tail(3)
         eligible = recent.dropna(subset=["previous_close", "previous_vwap", "vwap"])
         if not eligible.empty:
             crosses = (eligible["previous_close"] <= eligible["previous_vwap"]) & (eligible["close"] > eligible["vwap"])
             outcome["vwap_reclaim"] = bool(crosses.any())
+
+    if rules.get("previous_day_high_breakout"):
+        if pd.notna(last.get("previous_bar_close")) and pd.notna(last.get("previous_daily_high")):
+            prior_high = float(last["previous_daily_high"])
+            outcome["previous_day_high_breakout"] = bool(
+                float(last["previous_bar_close"]) <= prior_high
+                and float(last["close"]) > prior_high
+            )
 
     if rules.get("breakout_lookback_bars") and pd.notna(last.get("prior_breakout_high")):
         outcome["breakout_lookback_bars"] = bool(float(last["close"]) > float(last["prior_breakout_high"]))
