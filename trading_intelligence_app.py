@@ -368,26 +368,47 @@ elif module == "Knowledge Sources":
             text, metadata = extract_source_text(uploaded.name, payload)
             ingest_id = hashlib.sha256(payload).hexdigest()[:24]
 
-            pending_analysis = {
-                "id": f"pending-{ingest_id}",
-                "source_type": "book_or_document",
-                "title": title.strip() or uploaded.name,
-                "author": author.strip(),
-                "summary": "Analysis started. Completed sections will be saved automatically.",
-                "analyzed_at": utc_now().isoformat(),
-                "chunk_count": 0,
-                "completed_sections": 0,
-                "analysis_incomplete": True,
-                "failed_sections": [],
-                "strategies": [],
-            }
-            save_ingestion_checkpoint(
-                pending_analysis,
-                filename=uploaded.name,
-                extraction_metadata=metadata,
-                ingest_id=ingest_id,
-                stage="reading",
+            current_library = intelligence_store().load_latest()
+            existing_source = next(
+                (
+                    item
+                    for item in current_library.get("knowledge_sources") or []
+                    if str(item.get("ingest_id") or "") == ingest_id
+                ),
+                None,
             )
+            resume_state = None
+            if existing_source:
+                resume_state = dict(existing_source)
+                source_id = str(existing_source.get("id") or "")
+                resume_state["strategies"] = [
+                    item
+                    for item in current_library.get("strategies") or []
+                    if str(item.get("source_id") or "") == source_id
+                ]
+            else:
+                pending_analysis = {
+                    "id": f"pending-{ingest_id}",
+                    "source_type": "book_or_document",
+                    "title": title.strip() or uploaded.name,
+                    "author": author.strip(),
+                    "summary": "Analysis started. Completed sections will be saved automatically.",
+                    "analyzed_at": utc_now().isoformat(),
+                    "chunk_count": 0,
+                    "checkpoint_version": 0,
+                    "completed_section_indices": [],
+                    "completed_sections": 0,
+                    "analysis_incomplete": True,
+                    "failed_sections": [],
+                    "strategies": [],
+                }
+                save_ingestion_checkpoint(
+                    pending_analysis,
+                    filename=uploaded.name,
+                    extraction_metadata=metadata,
+                    ingest_id=ingest_id,
+                    stage="reading",
+                )
 
             analyzer = GeminiBookAnalyzer(
                 setting("GEMINI_API_KEY"),
@@ -422,6 +443,7 @@ elif module == "Knowledge Sources":
                 focus=focus,
                 progress_callback=on_progress,
                 checkpoint_callback=on_checkpoint,
+                resume_state=resume_state,
             )
 
             # Extraction itself is valuable work. Save it before the Rule Compiler or market research starts.
@@ -674,11 +696,25 @@ elif module == "Knowledge Sources":
                 + (f" — {src.get('author')}" if src.get("author") else "")
             ):
                 st.write(src.get("summary") or "No source-level summary saved.")
+                stage = str(src.get("analysis_stage") or "complete").replace("_", " ").title()
+                completed = int(src.get("completed_sections") or 0)
+                total = int(src.get("chunk_count") or 0)
+                progress_label = (
+                    f"{completed}/{total} sections"
+                    if total
+                    else "waiting for first section"
+                )
                 st.caption(
                     f"Type: {src.get('source_type', 'document')} · "
-                    f"AI sections: {src.get('chunk_count', '—')} · "
+                    f"Status: {stage} · "
+                    f"Progress: {progress_label} · "
                     f"Analyzed: {src.get('analyzed_at', '—')}"
                 )
+                if src.get("analysis_in_progress"):
+                    st.info(
+                        "This source has a saved checkpoint. Re-uploading the same file and pressing Analyze "
+                        "will resume from the durable completed sections instead of starting over."
+                    )
                 auto = src.get("autopilot_summary") or {}
                 if auto.get("enabled"):
                     st.caption(
