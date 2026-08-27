@@ -22,6 +22,15 @@ from trading_auto_research import (
     merge_autonomous_research_into_library,
     run_autonomous_research,
 )
+from trading_strategy_dna import (
+    DNA_DIMENSIONS,
+    DNA_LABELS,
+    build_candidate_blueprints,
+    build_concept_graph,
+    build_strategy_families,
+    infer_strategy_dna,
+    source_identity,
+)
 from trading_intelligence_core import (
     DEFAULT_GEMINI_BOOK_MODEL,
     DEFAULT_GEMINI_BOOK_SPECIALIST_MODEL,
@@ -249,6 +258,7 @@ with st.sidebar:
             "Overview",
             "Knowledge Sources",
             "Strategy Library",
+            "Strategy DNA",
             "Rule Compiler",
             "AI Research Autopilot",
             "Strategy Lab",
@@ -306,9 +316,9 @@ if module == "Overview":
 
     st.markdown("### What is usable now")
     st.success(
-        "Book/PDF ingestion, AI strategy extraction, automatic AI rule preparation, the historical "
-        "Strategy Lab, validation, catalyst intelligence, universe research, market discovery, and "
-        "the unified strategy library are all connected."
+        "Book/PDF ingestion, AI strategy extraction, Strategy DNA + cross-book synthesis, automatic "
+        "AI rule preparation, the historical Strategy Lab, validation, catalyst intelligence, universe "
+        "research, market discovery, and the unified strategy library are all connected."
     )
     st.info(
         "The normal workflow is now AI-first: upload a source once, let the AI extract and prepare "
@@ -893,6 +903,241 @@ elif module == "Strategy Library":
                 st.markdown("#### Requires interpretation / unavailable data")
                 for item in selected.get("unresolved_rules") or []:
                     st.write("• " + str(item))
+
+
+elif module == "Strategy DNA":
+    st.markdown("## Strategy DNA & Cross-Book Synthesis")
+    st.caption(
+        "Break every extracted strategy into reusable components, measure where independent sources "
+        "agree, cluster related setups, and generate research-only cross-source candidates. "
+        "Source agreement and historical validation are deliberately shown as separate kinds of evidence."
+    )
+
+    if not strategies:
+        st.info("Add book, document, or YouTube strategies before building the Strategy DNA map.")
+    else:
+        dna_strategies = []
+        for item in strategies:
+            enriched = dict(item)
+            enriched["strategy_dna"] = infer_strategy_dna(enriched)
+            dna_strategies.append(enriched)
+
+        concept_graph = build_concept_graph(dna_strategies)
+        strategy_families = build_strategy_families(dna_strategies)
+        minimum_sources = int(
+            st.slider(
+                "Minimum independent sources for a synthesized candidate",
+                min_value=2,
+                max_value=max(2, min(8, len({source_identity(item) for item in dna_strategies}))),
+                value=2,
+                step=1,
+                help=(
+                    "A source can contain several strategies, but it only counts once toward independent-source support."
+                ),
+            )
+        )
+        candidate_blueprints = build_candidate_blueprints(
+            strategy_families,
+            min_sources=minimum_sources,
+        )
+        independent_sources = len({source_identity(item) for item in dna_strategies})
+        corroborated = [
+            item for item in concept_graph
+            if int(item.get("independent_source_count") or 0) >= 2
+        ]
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Independent sources", independent_sources)
+        m2.metric("DNA concepts", len(concept_graph))
+        m3.metric("Cross-source concepts", len(corroborated))
+        m4.metric("Research candidates", len(candidate_blueprints))
+
+        st.info(
+            "A concept appearing in several books means several sources teach something similar. "
+            "It does NOT mean the concept works. Validated-source counts only rise after strategies "
+            "survive the app's historical validation process."
+        )
+
+        tab_dna, tab_concepts, tab_families, tab_candidates = st.tabs(
+            ["Strategy fingerprints", "Cross-source concepts", "Strategy families", "Candidate blueprints"]
+        )
+
+        with tab_dna:
+            rows = []
+            for item in dna_strategies:
+                dna = item.get("strategy_dna") or {}
+                row = {
+                    "Strategy": item.get("name"),
+                    "Source": item.get("source_title") or item.get("source_type"),
+                    "Direction": item.get("direction"),
+                    "Validation": item.get("validation_status") or "unvalidated",
+                }
+                for dimension in DNA_DIMENSIONS:
+                    row[DNA_LABELS[dimension]] = ", ".join(dna.get(dimension) or [])
+                rows.append(row)
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+            fingerprint_labels = {
+                f"{item.get('name')} · {item.get('source_title') or 'Unknown source'}": item
+                for item in dna_strategies
+            }
+            inspected = fingerprint_labels[
+                st.selectbox("Inspect DNA fingerprint", list(fingerprint_labels), key="til_dna_strategy")
+            ]
+            dna = inspected.get("strategy_dna") or {}
+            for dimension in DNA_DIMENSIONS:
+                concepts = list(dna.get(dimension) or [])
+                if concepts:
+                    st.markdown(f"**{DNA_LABELS[dimension]}:** " + " · ".join(concepts))
+
+        with tab_concepts:
+            only_cross_source = st.checkbox(
+                "Show only concepts found in at least two independent sources",
+                value=True,
+                key="til_dna_cross_source_only",
+            )
+            visible_concepts = [
+                item for item in concept_graph
+                if not only_cross_source or int(item.get("independent_source_count") or 0) >= 2
+            ]
+            if not visible_concepts:
+                st.info(
+                    "No cross-source concepts yet. Add more books/documents and the map will automatically "
+                    "start measuring agreement across them."
+                )
+            else:
+                concept_rows = [
+                    {
+                        "Dimension": item.get("dimension_label"),
+                        "Concept": item.get("concept"),
+                        "Independent sources": item.get("independent_source_count"),
+                        "Strategies": item.get("strategy_count"),
+                        "Validated sources": item.get("validated_source_count"),
+                        "Mean validated score": item.get("mean_validated_score"),
+                        "Source support": item.get("support_label"),
+                    }
+                    for item in visible_concepts
+                ]
+                st.dataframe(pd.DataFrame(concept_rows), use_container_width=True, hide_index=True)
+
+                concept_labels = {
+                    (
+                        f"{item.get('dimension_label')} · {item.get('concept')} · "
+                        f"{int(item.get('independent_source_count') or 0)} source(s)"
+                    ): item
+                    for item in visible_concepts
+                }
+                concept = concept_labels[
+                    st.selectbox("Inspect concept evidence", list(concept_labels), key="til_dna_concept")
+                ]
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Independent source support", int(concept.get("independent_source_count") or 0))
+                c2.metric("Validated sources", int(concept.get("validated_source_count") or 0))
+                score = safe_float(concept.get("mean_validated_score"))
+                c3.metric("Mean validated score", f"{score:.1f}/100" if score is not None else "Not validated")
+                st.markdown("**Sources teaching this concept**")
+                for source in concept.get("source_titles") or []:
+                    st.write("• " + str(source))
+                if concept.get("strategy_names"):
+                    with st.expander("Contributing strategies"):
+                        for name in concept.get("strategy_names") or []:
+                            st.write("• " + str(name))
+
+        with tab_families:
+            family_rows = [
+                {
+                    "Family": family.get("name"),
+                    "Direction": family.get("direction"),
+                    "Strategies": family.get("strategy_count"),
+                    "Independent sources": family.get("independent_source_count"),
+                    "Validated sources": family.get("validated_source_count"),
+                    "Shared DNA concepts": len(family.get("common_concepts") or []),
+                    "Explicit rule conflicts": sum(
+                        1
+                        for rule in (family.get("rule_consensus") or {}).values()
+                        if rule.get("conflict")
+                    ),
+                }
+                for family in strategy_families
+            ]
+            st.dataframe(pd.DataFrame(family_rows), use_container_width=True, hide_index=True)
+            family_labels = {
+                f"{family.get('name')} · {int(family.get('independent_source_count') or 0)} source(s)": family
+                for family in strategy_families
+            }
+            family = family_labels[
+                st.selectbox("Inspect strategy family", list(family_labels), key="til_dna_family")
+            ]
+            shared = family.get("common_concepts") or []
+            if shared:
+                st.markdown("**Shared DNA across independent sources**")
+                for item in shared:
+                    st.write(
+                        f"• {item.get('dimension_label')}: **{item.get('concept')}** "
+                        f"({int(item.get('source_count') or 0)} sources)"
+                    )
+            else:
+                st.caption("This family currently has only single-source concepts.")
+            with st.expander("Explicit machine-rule agreement / conflicts"):
+                st.json(family.get("rule_consensus") or {"status": "No explicit measurable rules available."})
+
+        with tab_candidates:
+            st.caption(
+                "These candidates are synthesis hypotheses, not live strategies. The priority score ranks "
+                "research usefulness from source support and already-validated contributors; it is not a win-rate "
+                "or profit forecast."
+            )
+            if not candidate_blueprints:
+                st.info(
+                    f"No strategy family currently has enough shared DNA across {minimum_sources} independent sources."
+                )
+            else:
+                candidate_rows = [
+                    {
+                        "Candidate": item.get("name"),
+                        "Research priority": item.get("research_priority_score"),
+                        "Sources": item.get("supporting_source_count"),
+                        "Strategies": item.get("supporting_strategy_count"),
+                        "Validated sources": item.get("validated_source_count"),
+                        "Consistent explicit rules": len(item.get("consistent_explicit_rules") or {}),
+                        "Rule conflicts": len(item.get("conflicting_explicit_rules") or []),
+                    }
+                    for item in candidate_blueprints
+                ]
+                st.dataframe(pd.DataFrame(candidate_rows), use_container_width=True, hide_index=True)
+                candidate_labels = {
+                    f"{item.get('name')} · priority {safe_float(item.get('research_priority_score'), 0.0):.0f}": item
+                    for item in candidate_blueprints
+                }
+                candidate = candidate_labels[
+                    st.selectbox("Inspect synthesized candidate", list(candidate_labels), key="til_dna_candidate")
+                ]
+                st.markdown(f"### {candidate.get('name')}")
+                st.warning(str(candidate.get("note") or "Research hypothesis only."))
+                st.markdown("**Supporting independent sources**")
+                for source in candidate.get("supporting_sources") or []:
+                    st.write("• " + str(source))
+                st.markdown("**Core Strategy DNA**")
+                core_dna = candidate.get("core_dna") or {}
+                for dimension in DNA_DIMENSIONS:
+                    concepts = list(core_dna.get(dimension) or [])
+                    if concepts:
+                        st.write(f"**{DNA_LABELS[dimension]}:** " + " · ".join(concepts))
+                st.markdown("**Explicit rules the contributing sources currently agree on**")
+                st.json(
+                    candidate.get("consistent_explicit_rules")
+                    or {"status": "No identical explicit thresholds across the contributing sources yet."}
+                )
+                conflicts = list(candidate.get("conflicting_explicit_rules") or [])
+                if conflicts:
+                    st.markdown("**Conflicting explicit rules — keep separate until tested**")
+                    for rule in conflicts:
+                        details = (candidate.get("rule_consensus") or {}).get(rule) or {}
+                        st.write(f"• **{rule}**: {details.get('distinct_values')}")
+                st.caption(
+                    "Next step for this candidate is deterministic rule compilation plus historical optimization, "
+                    "walk-forward testing, untouched holdout validation, and cross-stock generalization."
+                )
 
 
 elif module == "Rule Compiler":
