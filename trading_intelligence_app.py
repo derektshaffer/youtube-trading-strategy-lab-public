@@ -3,26 +3,33 @@
 from __future__ import annotations
 
 import os
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 import streamlit as st
 
-from live_strategy_runner_page import setting
+from live_strategy_runner_page import market_client, setting
 from trading_intelligence_core import (
     GeminiBookAnalyzer,
     canonicalize_existing_strategy,
     extract_source_text,
     merge_strategies,
 )
+from trading_validation_core import validation_strength, walk_forward_validate
 from youtube_strategy_engine import (
     DEFAULT_GEMINI_MODEL,
     DEFAULT_GITHUB_BACKUP_PATH,
     AppError,
+    BacktestSettings,
     GitHubCloudBackup,
+    OptimizationSettings,
     StrategyStore,
     normalize_machine_rules,
+    optimize_stock_strategies,
+    safe_float,
+    utc_now,
 )
 
 st.set_page_config(
@@ -365,28 +372,378 @@ elif module == "Strategy Library":
 
 elif module == "Strategy Lab":
     st.markdown("## Strategy Lab")
-    st.info(
-        "This module will reuse and expand the existing YouTube backtester/optimizer. "
-        "The new canonical strategy records are already structured so they can feed that engine."
+    st.caption(
+        "Choose a strategy from any source, download historical Alpaca candles, optimize only on "
+        "earlier sessions, then evaluate separate validation and untouched holdout periods."
     )
-    st.markdown(
-        """
-        **Next build target:** multi-strategy testing, ticker/universe testing, parameter search,
-        historical-analog groups, catalyst/regime filters, and stability scoring rather than
-        ranking only by maximum historical profit.
-        """
-    )
-    if st.button("Open existing Full Trading Lab", use_container_width=True):
-        st.switch_page("pages/Full_Trading_Lab.py")
+
+    if not strategies:
+        st.info("Add or import at least one strategy before running the Strategy Lab.")
+    else:
+        strategy_labels: dict[str, dict[str, Any]] = {}
+        for item in strategies:
+            label = f"{item.get('name') or 'Unnamed strategy'} · {source_label(item)}"
+            if label in strategy_labels:
+                label += f" · {str(item.get('id') or '')[:7]}"
+            strategy_labels[label] = item
+
+        selected_label = st.selectbox("Strategy to research", list(strategy_labels))
+        selected_strategy = strategy_labels[selected_label]
+        compare_all = st.checkbox(
+            "Compare all compatible strategies and let validation choose the winner",
+            value=False,
+            help=(
+                "Useful for discovery, but it increases selection pressure because more strategy "
+                "families are competing for the same historical periods."
+            ),
+        )
+        candidates = strategies if compare_all else [selected_strategy]
+
+        active_rules = {
+            key: value
+            for key, value in normalize_machine_rules(selected_strategy.get("machine_rules")).items()
+            if value is not None
+        }
+        entry_rule_count = sum(
+            1
+            for key, value in active_rules.items()
+            if key not in {"stop_loss_pct", "reward_risk", "max_hold_minutes"} and value is not None
+        )
+        if entry_rule_count == 0 and not compare_all:
+            st.warning(
+                "This strategy currently has no objective entry/filter rule that the backtester can "
+                "enforce. The AI may have extracted only qualitative conditions. It should be translated "
+                "into measurable rules before treating a backtest as meaningful."
+            )
+
+        top = st.columns(4)
+        ticker = top[0].text_input("Stock ticker", value="SDOT", max_chars=10).strip().upper()
+        history_days = top[1].slider("Historical calendar days", 7, 180, 30, 1)
+        timeframe = top[2].selectbox("Candle size", ["1Min", "5Min", "15Min"], index=1)
+        search_depth = top[3].selectbox(
+            "Optimization depth",
+            [12, 36, 96, 160],
+            index=1,
+            format_func=lambda value: {
+                12: "Quick · 12 base variants",
+                36: "Balanced · 36 base variants",
+                96: "Deep · 96 base variants",
+                160: "Very deep · 160 base variants",
+            }[value],
+        )
+
+        risk_cols = st.columns(4)
+        starting_cash = float(
+            risk_cols[0].number_input("Starting simulation cash ($)", 1000.0, 1000000.0, 10000.0, 1000.0)
+        )
+        risk_per_trade = float(risk_cols[1].number_input("Risk budget per trade (%)", 0.1, 10.0, 0.5, 0.1))
+        max_position = float(risk_cols[2].number_input("Maximum total position (%)", 1.0, 100.0, 20.0, 1.0))
+        max_drawdown = float(risk_cols[3].number_input("Validation drawdown ceiling (%)", 1.0, 75.0, 15.0, 1.0))
+
+        with st.expander("Advanced validation settings", expanded=False):
+            v1, v2, v3, v4 = st.columns(4)
+            training_fraction = v1.slider("Training share", 0.40, 0.75, 0.60, 0.05)
+            validation_fraction = v2.slider("Validation share", 0.10, 0.35, 0.20, 0.05)
+            minimum_training_trades = v3.number_input("Minimum training trades", 1, 50, 5, 1)
+            minimum_validation_trades = v4.number_input("Minimum validation/holdout trades", 1, 25, 2, 1)
+            run_walk_forward = st.checkbox(
+                "Also run rolling walk-forward re-optimization",
+                value=False,
+                help=(
+                    "Much more computationally expensive. Each fold re-optimizes using only earlier "
+                    "sessions, freezes the winner, and tests it on the next unseen block."
+                ),
+            )
+            if run_walk_forward:
+                w1, w2, w3 = st.columns(3)
+                wf_history_sessions = int(w1.number_input("Minimum prior sessions per fold", 5, 60, 8, 1))
+                wf_test_sessions = int(w2.number_input("Unseen sessions per fold", 1, 10, 2, 1))
+                wf_folds = int(w3.number_input("Walk-forward folds", 1, 6, 3, 1))
+            else:
+                wf_history_sessions, wf_test_sessions, wf_folds = 8, 2, 3
+
+        split_ok = training_fraction + validation_fraction <= 0.90
+        if not split_ok:
+            st.error("Training + validation must leave at least 10% of sessions untouched for final holdout.")
+
+        run_lab = st.button(
+            "🧪 Optimize + validate strategy",
+            type="primary",
+            use_container_width=True,
+            disabled=not ticker or not split_ok or (entry_rule_count == 0 and not compare_all),
+        )
+
+        if run_lab:
+            try:
+                market = market_client()
+                end_time = utc_now()
+                if market.historical_feed == "sip" and market.live_feed != "sip":
+                    end_time -= timedelta(minutes=16)
+                start_time = end_time - timedelta(days=int(history_days))
+
+                data_progress = st.progress(0.0, text=f"Downloading {ticker} historical candles…")
+                rows_by_symbol = market.bars(
+                    [ticker],
+                    start=start_time,
+                    end=end_time,
+                    timeframe=timeframe,
+                    max_pages=30,
+                    progress=lambda page: data_progress.progress(
+                        min(0.95, page / 30.0),
+                        text=f"Downloading {ticker} historical candles · page {page}",
+                    ),
+                )
+                rows = list(rows_by_symbol.get(ticker) or [])
+                data_progress.progress(1.0, text=f"Downloaded {len(rows):,} candles")
+                if not rows:
+                    raise AppError(f"No historical {timeframe} candles were returned for {ticker}.")
+
+                backtest_settings = BacktestSettings(
+                    starting_cash=starting_cash,
+                    risk_per_trade_pct=risk_per_trade,
+                    max_position_pct=max_position,
+                    train_fraction=0.70,
+                )
+                optimization_settings = OptimizationSettings(
+                    max_variants_per_strategy=int(search_depth),
+                    finalists_per_strategy=min(6, int(search_depth)),
+                    minimum_training_trades=int(minimum_training_trades),
+                    minimum_validation_trades=int(minimum_validation_trades),
+                    training_fraction=float(training_fraction),
+                    validation_fraction=float(validation_fraction),
+                    maximum_drawdown_pct=max_drawdown,
+                    selection_mode="validated",
+                )
+
+                opt_progress = st.progress(0.0, text="Starting validated optimization…")
+                def optimizer_progress(done: int, total: int, message: str) -> None:
+                    opt_progress.progress(min(1.0, done / max(1, total)), text=message)
+
+                report = optimize_stock_strategies(
+                    rows,
+                    candidates,
+                    ticker,
+                    backtest_settings,
+                    optimization_settings,
+                    progress=optimizer_progress,
+                    finalize_holdout=True,
+                )
+                opt_progress.progress(1.0, text="Training, validation, and final holdout complete.")
+
+                walk_report = None
+                if run_walk_forward:
+                    wf_progress_bar = st.progress(0.0, text="Starting walk-forward validation…")
+                    def walk_progress(done: int, total: int, message: str) -> None:
+                        wf_progress_bar.progress(min(1.0, done / max(1, total)), text=message)
+
+                    walk_report = walk_forward_validate(
+                        rows,
+                        candidates,
+                        ticker,
+                        backtest_settings,
+                        optimization_settings,
+                        minimum_history_sessions=wf_history_sessions,
+                        test_sessions_per_fold=wf_test_sessions,
+                        max_folds=wf_folds,
+                        progress=walk_progress,
+                    )
+                    wf_progress_bar.progress(1.0, text="Walk-forward validation complete.")
+
+                strength = validation_strength(report, walk_report)
+                st.session_state["til_strategy_lab_result"] = {
+                    "ticker": ticker,
+                    "timeframe": timeframe,
+                    "history_days": history_days,
+                    "report": report,
+                    "walk_forward": walk_report,
+                    "strength": strength,
+                    "compared_all": compare_all,
+                }
+                st.rerun()
+            except AppError as exc:
+                st.error(str(exc))
+            except Exception as exc:
+                st.error(f"Strategy Lab run failed: {exc}")
+
+        lab_result = st.session_state.get("til_strategy_lab_result") or {}
+        if lab_result:
+            report = lab_result.get("report") or {}
+            winner = report.get("winner") or {}
+            strength = lab_result.get("strength") or validation_strength(report)
+            walk_report = lab_result.get("walk_forward")
+            training = winner.get("training_metrics") or {}
+            validation = winner.get("validation_metrics") or {}
+            holdout = winner.get("holdout_metrics") or {}
+            stress = winner.get("stress_metrics") or {}
+
+            st.divider()
+            st.markdown(f"## Result · {lab_result.get('ticker')}")
+            headline = st.columns(5)
+            headline[0].metric("Robustness score", f"{safe_float(strength.get('score'), 0.0):.1f}/100")
+            headline[1].metric("Grade", strength.get("label") or "—")
+            headline[2].metric("Selected strategy", winner.get("strategy_name") or "—")
+            headline[3].metric("Optimizer status", winner.get("status") or "—")
+            headline[4].metric("Variants tested", f"{int(report.get('variants_tested') or 0):,}")
+            st.caption(strength.get("note") or "")
+
+            period_rows = []
+            for name, metrics in (
+                ("Training", training),
+                ("Validation", validation),
+                ("Untouched holdout", holdout),
+                ("Higher-cost stress", stress),
+            ):
+                period_rows.append(
+                    {
+                        "Period": name,
+                        "Trades": int(safe_float(metrics.get("trade_count"), 0) or 0),
+                        "Net P/L": safe_float(metrics.get("net_pnl"), 0.0) or 0.0,
+                        "Return %": safe_float(metrics.get("return_pct"), 0.0) or 0.0,
+                        "Win rate %": safe_float(metrics.get("win_rate_pct"), 0.0) or 0.0,
+                        "Profit factor": metrics.get("profit_factor"),
+                        "Max drawdown %": safe_float(metrics.get("max_drawdown_pct"), 0.0) or 0.0,
+                    }
+                )
+            st.dataframe(pd.DataFrame(period_rows), use_container_width=True, hide_index=True)
+
+            if strength.get("reasons"):
+                with st.expander("Why the robustness score was reduced", expanded=False):
+                    for reason in strength.get("reasons") or []:
+                        st.write("• " + str(reason))
+
+            if walk_report:
+                summary = walk_report.get("summary") or {}
+                st.markdown("### Rolling walk-forward")
+                wf_cols = st.columns(5)
+                wf_cols[0].metric("Walk-forward score", f"{safe_float(summary.get('score'), 0.0):.1f}/100")
+                wf_cols[1].metric("Profitable folds", f"{safe_float(summary.get('profitable_fold_pct'), 0.0):.0f}%")
+                wf_cols[2].metric("External trades", int(summary.get("external_trade_count") or 0))
+                wf_cols[3].metric("External net P/L", f"\${safe_float(summary.get('external_net_pnl'), 0.0):,.2f}")
+                pf = summary.get("external_profit_factor")
+                wf_cols[4].metric("External profit factor", f"{safe_float(pf, 0.0):.2f}" if pf is not None else "—")
+
+                fold_rows = []
+                for fold in walk_report.get("folds") or []:
+                    metrics = fold.get("external_metrics") or {}
+                    fold_rows.append(
+                        {
+                            "Fold": fold.get("fold"),
+                            "Optimized through": fold.get("history_end"),
+                            "Unseen test": f"{fold.get('external_test_start')} → {fold.get('external_test_end')}",
+                            "Strategy": fold.get("selected_strategy_name"),
+                            "Trades": int(safe_float(metrics.get("trade_count"), 0) or 0),
+                            "Net P/L": safe_float(metrics.get("net_pnl"), 0.0) or 0.0,
+                            "Return %": safe_float(metrics.get("return_pct"), 0.0) or 0.0,
+                            "Profit factor": metrics.get("profit_factor"),
+                        }
+                    )
+                if fold_rows:
+                    st.dataframe(pd.DataFrame(fold_rows), use_container_width=True, hide_index=True)
+                for warning in walk_report.get("warnings") or []:
+                    st.warning(str(warning))
+
+            for warning in report.get("warnings") or []:
+                st.warning(str(warning))
+
+            winner_id = str(winner.get("source_strategy_id") or "")
+            can_mark_validated = (
+                winner.get("status") == "VALIDATED"
+                and bool(strength.get("independently_positive"))
+                and safe_float(strength.get("score"), 0.0) >= 65.0
+            )
+            save_validation = st.button(
+                "💾 Save this validation result to the strategy library",
+                use_container_width=True,
+            )
+            if save_validation:
+                data = load_library()
+                validation_status = "validated" if can_mark_validated else "research_only"
+                for item in data.get("strategies") or []:
+                    if str(item.get("id") or "") == winner_id:
+                        item["validation_status"] = validation_status
+                        item["last_validation"] = {
+                            "symbol": report.get("symbol"),
+                            "generated_at": report.get("generated_at"),
+                            "robustness_score": strength.get("score"),
+                            "robustness_label": strength.get("label"),
+                            "optimizer_status": winner.get("status"),
+                            "training_metrics": training,
+                            "validation_metrics": validation,
+                            "holdout_metrics": holdout,
+                            "stress_metrics": stress,
+                            "walk_forward_summary": (walk_report or {}).get("summary"),
+                        }
+                        break
+
+                run_id = f"{winner_id}:{report.get('symbol')}:{report.get('generated_at')}"
+                record = {
+                    "id": run_id,
+                    "strategy_id": winner_id,
+                    "strategy_name": winner.get("strategy_name"),
+                    "symbol": report.get("symbol"),
+                    "generated_at": report.get("generated_at"),
+                    "timeframe": lab_result.get("timeframe"),
+                    "history_days": lab_result.get("history_days"),
+                    "robustness": strength,
+                    "optimizer_status": winner.get("status"),
+                    "validation_status": validation_status,
+                    "training_metrics": training,
+                    "validation_metrics": validation,
+                    "holdout_metrics": holdout,
+                    "stress_metrics": stress,
+                    "walk_forward_summary": (walk_report or {}).get("summary"),
+                    "optimized_rules": winner.get("optimized_rules") or {},
+                    "optimized_backtest_settings": winner.get("optimized_backtest_settings") or {},
+                }
+                existing_runs = [
+                    item for item in data.get("validation_runs") or []
+                    if item.get("id") != run_id
+                ]
+                data["validation_runs"] = [record, *existing_runs][:200]
+                intelligence_store().save(data)
+                st.success(
+                    "Validation saved. "
+                    + (
+                        "This candidate met the current validation gate."
+                        if validation_status == "validated"
+                        else "It remains research-only because one or more validation gates were not met."
+                    )
+                )
 
 
 elif module == "Validation":
-    st.markdown("## Validation")
-    st.info(
-        "Planned validation gate: training → validation → untouched holdout → walk-forward windows. "
-        "Strategies will need minimum trade counts, acceptable drawdown, stability across windows, "
-        "and positive unseen-data performance before receiving a validated label."
+    st.markdown("## Validation History")
+    st.caption(
+        "Saved research runs are kept separate from strategy approval. A validated label requires "
+        "positive validation and untouched holdout behavior plus the robustness gate; it never auto-enables trading."
     )
+    runs = list(library.get("validation_runs") or [])
+    if not runs:
+        st.info("No validation runs have been saved yet. Run a strategy in Strategy Lab first.")
+    else:
+        rows = []
+        for run in runs:
+            robustness = run.get("robustness") or {}
+            holdout = run.get("holdout_metrics") or {}
+            walk = run.get("walk_forward_summary") or {}
+            rows.append(
+                {
+                    "Date": run.get("generated_at"),
+                    "Stock": run.get("symbol"),
+                    "Strategy": run.get("strategy_name"),
+                    "Status": run.get("validation_status"),
+                    "Robustness": robustness.get("score"),
+                    "Grade": robustness.get("label"),
+                    "Holdout trades": int(safe_float(holdout.get("trade_count"), 0) or 0),
+                    "Holdout P/L": safe_float(holdout.get("net_pnl"), 0.0) or 0.0,
+                    "Walk-forward profitable folds %": walk.get("profitable_fold_pct"),
+                }
+            )
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.caption(
+            "Validation history is evidence tracking, not a leaderboard. Large historical P/L with weak "
+            "holdout or walk-forward behavior should rank below a smaller but more stable result."
+        )
 
 
 elif module == "Market Discovery":
