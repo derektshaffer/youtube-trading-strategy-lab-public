@@ -438,18 +438,6 @@ def _family_summary(strategies: list[dict[str, Any]], family_id: int) -> dict[st
                 concept_sources[key].add(source_id)
                 concept_labels[key] = concept
 
-    common = []
-    for (dimension, _), sources in concept_sources.items():
-        if len(sources) < 2:
-            continue
-        common.append(
-            {
-                "dimension": dimension,
-                "dimension_label": DNA_LABELS[dimension],
-                "concept": concept_labels[(dimension, next(k[1] for k in concept_sources if k[0] == dimension and concept_labels[k] == concept_labels[(dimension, _) ]))] if False else "",
-            }
-        )
-    # Rebuild without clever key access: keep the source-key tuple directly.
     common = [
         {
             "dimension": key[0],
