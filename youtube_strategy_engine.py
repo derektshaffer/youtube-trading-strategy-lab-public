@@ -53,6 +53,10 @@ MAX_RECOVERY_ITEMS = 150
 MAX_STRATEGY_VERSIONS = 300
 YOUTUBE_VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 TICKER_PATTERN = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
+# Alpaca's asset master can contain inactive identifier-like symbols (for example D012219)
+# that match the generic ticker parser but are rejected by the historical stock-bars API.
+# Keep research-universe symbols stricter: normal U.S. equity ticker characters, no digits.
+RESEARCH_EQUITY_SYMBOL_PATTERN = re.compile(r"^[A-Z][A-Z.\-]{0,9}$")
 
 
 class AppError(RuntimeError):
@@ -121,6 +125,11 @@ def safe_bool(value: Any) -> bool | None:
         if value.strip().lower() in {"false", "no", "0"}:
             return False
     return None
+
+
+def is_research_equity_symbol(raw: Any) -> bool:
+    symbol = str(raw or "").strip().upper()
+    return bool(symbol and RESEARCH_EQUITY_SYMBOL_PATTERN.fullmatch(symbol))
 
 
 def parse_symbols(raw: str | list[str]) -> list[str]:
@@ -2628,6 +2637,10 @@ class AlpacaMarketData:
             exchange = str(raw.get("exchange") or "").strip().upper()
             asset_status = str(raw.get("status") or "").strip().lower()
             if not symbol or symbol in seen:
+                continue
+            if not is_research_equity_symbol(symbol):
+                # Some inactive Alpaca asset records use identifier-like codes rather than
+                # symbols accepted by /v2/stocks/bars. They are not usable for price research.
                 continue
             if exchange and exchange not in supported_exchanges:
                 # OTC market data is not available through the normal stock feed.
