@@ -2239,14 +2239,28 @@ elif module == "Strategy Lab":
         if not split_ok:
             st.error("Training + validation must leave at least 10% of sessions untouched for final holdout.")
 
-        run_lab = st.button(
+        strategy_lab_slot = st.empty()
+        run_lab = strategy_lab_slot.button(
             "🧪 Optimize + validate strategy",
             type="primary",
             use_container_width=True,
             disabled=not ticker or not split_ok or (entry_rule_count == 0 and not compare_all),
+            key="til_optimize_validate_strategy",
         )
 
         if run_lab:
+            strategy_lab_slot.button(
+                "🧪 Optimizing…",
+                type="primary",
+                use_container_width=True,
+                disabled=True,
+                key="til_optimize_validate_strategy_busy",
+            )
+            lab_monitor = long_task_monitor("strategy_lab_optimize_validate")
+            task_bar = st.progress(
+                0.02,
+                text=lab_monitor.text(0.02, f"Preparing {ticker} historical research…"),
+            )
             try:
                 market = market_client()
                 end_time = utc_now()
@@ -2254,20 +2268,22 @@ elif module == "Strategy Lab":
                     end_time -= timedelta(minutes=16)
                 start_time = end_time - timedelta(days=int(history_days))
 
-                data_progress = st.progress(0.0, text=f"Downloading {ticker} historical candles…")
+                update_task_bar(task_bar, lab_monitor, 0.05, f"Downloading {ticker} historical candles")
                 rows_by_symbol = market.bars(
                     [ticker],
                     start=start_time,
                     end=end_time,
                     timeframe=timeframe,
                     max_pages=30,
-                    progress=lambda page: data_progress.progress(
-                        min(0.95, page / 30.0),
-                        text=f"Downloading {ticker} historical candles · page {page}",
+                    progress=lambda page: update_task_bar(
+                        task_bar,
+                        lab_monitor,
+                        0.05 + 0.20 * min(1.0, page / 30.0),
+                        f"Downloading {ticker} historical candles · page {page}",
                     ),
                 )
                 rows = list(rows_by_symbol.get(ticker) or [])
-                data_progress.progress(1.0, text=f"Downloaded {len(rows):,} candles")
+                update_task_bar(task_bar, lab_monitor, 0.25, f"Downloaded {len(rows):,} candles")
                 if not rows:
                     raise AppError(f"No historical {timeframe} candles were returned for {ticker}.")
 
@@ -2277,19 +2293,18 @@ elif module == "Strategy Lab":
                     for item in candidates
                 )
                 if needs_historical_catalysts:
-                    catalyst_progress = st.progress(
-                        0.0,
-                        text="Downloading point-in-time historical catalyst news…",
-                    )
+                    update_task_bar(task_bar, lab_monitor, 0.27, "Downloading point-in-time historical catalyst news")
                     articles = historical_news(
                         market,
                         [ticker],
                         start=start_time - timedelta(hours=24),
                         end=end_time,
                         max_pages=60,
-                        progress=lambda page: catalyst_progress.progress(
-                            min(0.95, page / 60.0),
-                            text=f"Downloading historical catalyst news · page {page}",
+                        progress=lambda page: update_task_bar(
+                            task_bar,
+                            lab_monitor,
+                            0.27 + 0.08 * min(1.0, page / 60.0),
+                            f"Downloading historical catalyst news · page {page}",
                         ),
                     )
                     rows, catalyst_summary = enrich_bars_with_point_in_time_catalysts(
@@ -2297,13 +2312,14 @@ elif module == "Strategy Lab":
                         articles,
                         lookback_hours=24.0,
                     )
-                    catalyst_progress.progress(
-                        1.0,
-                        text=(
-                            f"Catalyst history ready · {catalyst_summary.get('specific_catalysts', 0)} "
-                            "classified events"
-                        ),
+                    update_task_bar(
+                        task_bar,
+                        lab_monitor,
+                        0.35,
+                        f"Catalyst history ready · {catalyst_summary.get('specific_catalysts', 0)} classified events",
                     )
+                else:
+                    update_task_bar(task_bar, lab_monitor, 0.35, "Historical data ready · no catalyst history required")
 
                 backtest_settings = BacktestSettings(
                     starting_cash=starting_cash,
@@ -2322,9 +2338,14 @@ elif module == "Strategy Lab":
                     selection_mode="validated",
                 )
 
-                opt_progress = st.progress(0.0, text="Starting validated optimization…")
+                update_task_bar(task_bar, lab_monitor, 0.38, "Starting validated optimization")
                 def optimizer_progress(done: int, total: int, message: str) -> None:
-                    opt_progress.progress(min(1.0, done / max(1, total)), text=message)
+                    update_task_bar(
+                        task_bar,
+                        lab_monitor,
+                        0.38 + 0.40 * min(1.0, done / max(1, total)),
+                        message,
+                    )
 
                 report = optimize_stock_strategies(
                     rows,
@@ -2335,13 +2356,18 @@ elif module == "Strategy Lab":
                     progress=optimizer_progress,
                     finalize_holdout=True,
                 )
-                opt_progress.progress(1.0, text="Training, validation, and final holdout complete.")
+                update_task_bar(task_bar, lab_monitor, 0.78, "Training, validation, and final holdout complete")
 
                 walk_report = None
                 if run_walk_forward:
-                    wf_progress_bar = st.progress(0.0, text="Starting walk-forward validation…")
+                    update_task_bar(task_bar, lab_monitor, 0.80, "Starting walk-forward validation")
                     def walk_progress(done: int, total: int, message: str) -> None:
-                        wf_progress_bar.progress(min(1.0, done / max(1, total)), text=message)
+                        update_task_bar(
+                            task_bar,
+                            lab_monitor,
+                            0.80 + 0.16 * min(1.0, done / max(1, total)),
+                            message,
+                        )
 
                     walk_report = walk_forward_validate(
                         rows,
@@ -2354,7 +2380,9 @@ elif module == "Strategy Lab":
                         max_folds=wf_folds,
                         progress=walk_progress,
                     )
-                    wf_progress_bar.progress(1.0, text="Walk-forward validation complete.")
+                    update_task_bar(task_bar, lab_monitor, 0.96, "Walk-forward validation complete")
+                else:
+                    update_task_bar(task_bar, lab_monitor, 0.96, "Optimization and holdout validation complete")
 
                 strength = validation_strength(report, walk_report)
                 st.session_state["til_strategy_lab_result"] = {
@@ -2367,6 +2395,7 @@ elif module == "Strategy Lab":
                     "compared_all": compare_all,
                     "catalyst_summary": catalyst_summary,
                 }
+                complete_task_bar(task_bar, lab_monitor, "Optimization + validation complete")
                 st.rerun()
             except AppError as exc:
                 st.error(str(exc))
