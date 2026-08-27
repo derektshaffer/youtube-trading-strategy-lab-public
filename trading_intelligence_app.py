@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import time
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from trading_catalyst_core import (
     historical_news,
 )
 from trading_market_discovery import analyze_stock_strategies, scan_strategy_universe
+from trading_progress_ui import AutonomousResearchProgressEstimator, format_elapsed
 from trading_auto_research import (
     merge_autonomous_research_into_library,
     run_autonomous_research,
@@ -1610,20 +1612,75 @@ elif module == "AI Research Autopilot":
         "testing then downloads bounded intraday windows around the actual historical opportunity dates."
     )
 
-    run_auto = st.button(
+    auto_button_slot = st.empty()
+    run_auto = auto_button_slot.button(
         "🤖 Run full autonomous research now",
         type="primary",
         use_container_width=True,
         disabled=not ready_strategies,
+        key="til_run_full_autonomous_research",
     )
     if run_auto:
-        status = st.status("Starting autonomous research funnel…", expanded=True)
+        auto_button_slot.button(
+            "🤖 Researching…",
+            type="primary",
+            use_container_width=True,
+            disabled=True,
+            key="til_run_full_autonomous_research_busy",
+        )
+
+        started_at = time.monotonic()
+        estimator = AutonomousResearchProgressEstimator()
+        activity_log: list[str] = []
+        auto_progress = st.progress(
+            0.01,
+            text="Estimated progress: 1% · starting autonomous research…",
+        )
+        st.caption(
+            "Progress is estimated because API downloads, optimization, and walk-forward stages "
+            "do not all take the same amount of time."
+        )
+
+        st.markdown("**Latest activity**")
+        with st.container(height=180, border=True):
+            latest_activity = st.empty()
+
+        with st.expander("View full research activity", expanded=False):
+            full_activity = st.empty()
+
+        def update_auto_activity(message: str) -> None:
+            text = str(message or "").strip()
+            if not text:
+                return
+            activity_log.append(text)
+            if len(activity_log) > 250:
+                del activity_log[:-250]
+
+            fraction = estimator.update(text)
+            elapsed = format_elapsed(time.monotonic() - started_at)
+            auto_progress.progress(
+                max(0.01, fraction),
+                text=f"Estimated progress: {estimator.percent}% · elapsed {elapsed}",
+            )
+
+            # Keep the compact panel focused on the newest work so the user never has to scroll it.
+            recent = activity_log[-4:]
+            latest_activity.markdown(
+                "\n\n".join(f"• {item}" for item in recent)
+            )
+            full_activity.markdown(
+                "\n\n".join(f"• {item}" for item in activity_log)
+            )
+
+        update_auto_activity("Starting autonomous research funnel…")
+
         try:
             report = run_autonomous_research(
                 market_client(),
                 ready_strategies,
-                progress=lambda message: status.write(message),
+                progress=update_auto_activity,
             )
+            update_auto_activity("Saving autonomous research results…")
             data = merge_autonomous_research_into_library(load_library(), report)
             intelligence_store().save(data)
             st.session_state["til_auto_research_result"] = report
@@ -1632,21 +1689,32 @@ elif module == "AI Research Autopilot":
                 for item in report.get("results") or []
                 if item.get("validation_status") == "validated"
             )
-            status.update(
-                label=(
-                    f"Autonomous research complete · "
-                    f"{int(report.get('deep_strategies_tested') or 0)} deep finalists · "
-                    f"{validated_count} validated"
-                ),
-                state="complete",
-                expanded=False,
+            elapsed = format_elapsed(time.monotonic() - started_at)
+            auto_progress.progress(
+                1.0,
+                text=f"Research complete · 100% · elapsed {elapsed}",
+            )
+            latest_activity.success(
+                f"Autonomous research complete · "
+                f"{int(report.get('deep_strategies_tested') or 0)} deep finalists · "
+                f"{validated_count} validated"
             )
             st.rerun()
         except AppError as exc:
-            status.update(label="Autonomous research stopped safely", state="error", expanded=True)
+            elapsed = format_elapsed(time.monotonic() - started_at)
+            auto_progress.progress(
+                max(0.01, estimator.fraction),
+                text=f"Research stopped · estimated {estimator.percent}% · elapsed {elapsed}",
+            )
+            latest_activity.error("Autonomous research stopped safely.")
             st.error(str(exc))
         except Exception as exc:
-            status.update(label="Autonomous research failed", state="error", expanded=True)
+            elapsed = format_elapsed(time.monotonic() - started_at)
+            auto_progress.progress(
+                max(0.01, estimator.fraction),
+                text=f"Research failed · estimated {estimator.percent}% · elapsed {elapsed}",
+            )
+            latest_activity.error("Autonomous research failed.")
             st.error(f"Autonomous research failed: {exc}")
 
     current_auto = st.session_state.get("til_auto_research_result")
