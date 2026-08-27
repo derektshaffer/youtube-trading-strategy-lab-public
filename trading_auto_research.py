@@ -189,14 +189,20 @@ def score_historical_opportunities(
     rules = normalize_machine_rules(effective_strategy_for_research(strategy).get("machine_rules"))
     direction = str(strategy.get("direction") or "long").lower()
 
-    supported_rule_names = (
-        "min_price",
-        "max_price",
+    price_rule_names = ("min_price", "max_price")
+    opportunity_rule_names = (
         "min_day_change_pct",
         "min_relative_volume",
         "min_dollar_volume",
     )
-    explicit_daily_rules = [name for name in supported_rule_names if rules.get(name) is not None]
+    explicit_daily_rules = [
+        name
+        for name in (*price_rule_names, *opportunity_rule_names)
+        if rules.get(name) is not None
+    ]
+    explicit_opportunity_rules = [
+        name for name in opportunity_rule_names if rules.get(name) is not None
+    ]
 
     events: list[dict[str, Any]] = []
     all_moves: list[float] = []
@@ -235,12 +241,24 @@ def score_historical_opportunities(
         if rules.get("min_dollar_volume") is not None:
             checks.append(dollar_volume >= float(rules["min_dollar_volume"]))
 
-        if explicit_daily_rules:
+        if explicit_opportunity_rules:
             qualifies = all(checks) if checks else False
         else:
-            # Generic discovery heuristic for intraday patterns whose defining rule cannot be seen in daily bars.
+            # Price bounds alone are not an "opportunity." For intraday patterns whose defining
+            # trigger cannot be seen in daily bars, require a generic momentum/participation event
+            # while still honoring any source-derived price bounds.
             directional_move = abs(change) if direction == "both" else (-change if direction == "short" else change)
-            qualifies = directional_move >= 3.0 and rvol >= 1.5 and dollar_volume >= 1_000_000
+            price_checks = []
+            if rules.get("min_price") is not None:
+                price_checks.append(close >= float(rules["min_price"]))
+            if rules.get("max_price") is not None:
+                price_checks.append(close <= float(rules["max_price"]))
+            qualifies = (
+                all(price_checks)
+                and directional_move >= 3.0
+                and rvol >= 1.5
+                and dollar_volume >= 1_000_000
+            )
 
         if qualifies:
             events.append(
@@ -270,7 +288,12 @@ def score_historical_opportunities(
         "score": round(score, 2),
         "event_count": len(events),
         "explicit_daily_rule_count": len(explicit_daily_rules),
-        "candidate_selection_mode": "strategy_daily_rules" if explicit_daily_rules else "generic_momentum_proxy",
+        "explicit_opportunity_rule_count": len(explicit_opportunity_rules),
+        "candidate_selection_mode": (
+            "strategy_daily_rules"
+            if explicit_opportunity_rules
+            else "generic_momentum_proxy_with_price_filters"
+        ),
         "peak_directional_move_pct": round(peak_move, 2),
         "peak_relative_volume": round(peak_rvol, 2),
         "median_dollar_volume": round(median_dollar_volume, 2),
