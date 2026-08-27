@@ -3403,19 +3403,34 @@ def _automatic_slippage_settings(
     return replace(settings, slippage_bps=estimated_bps)
 
 
-def conservative_stock_costs(
-    settings: BacktestSettings,
-    snapshot: dict[str, Any] | None,
-) -> tuple[BacktestSettings, float | None]:
-    """Never use a spread narrower than the stock's latest valid quoted spread."""
-    settings.validate()
+def quoted_spread_bps(snapshot: dict[str, Any] | None) -> float | None:
+    """Return the latest valid quoted bid/ask spread in basis points."""
     quote_data = (snapshot or {}).get("latestQuote") or (snapshot or {}).get("latest_quote") or {}
     bid = safe_float(quote_data.get("bp", quote_data.get("bid_price")))
     ask = safe_float(quote_data.get("ap", quote_data.get("ask_price")))
     if bid is None or ask is None or bid <= 0 or ask < bid:
-        return settings, None
+        return None
     midpoint = (bid + ask) / 2.0
-    observed_bps = round((ask - bid) / midpoint * 10_000.0, 2)
+    if midpoint <= 0:
+        return None
+    return round((ask - bid) / midpoint * 10_000.0, 2)
+
+
+def conservative_stock_costs(
+    settings: BacktestSettings,
+    snapshot: dict[str, Any] | None,
+) -> tuple[BacktestSettings, float | None]:
+    """Never use a spread narrower than the stock's latest valid quoted spread.
+
+    This helper is appropriate when a caller explicitly wants a *current live-quote*
+    floor. Historical optimizers should not apply one point-in-time quote across an
+    entire multi-day backtest because an after-hours or single-exchange quote can be
+    dramatically wider than the stock's typical historical spread.
+    """
+    settings.validate()
+    observed_bps = quoted_spread_bps(snapshot)
+    if observed_bps is None:
+        return settings, None
     return replace(settings, spread_bps=max(settings.spread_bps, observed_bps)), observed_bps
 
 
