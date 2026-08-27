@@ -17,7 +17,7 @@ import re
 from time import sleep
 from typing import Any
 
-from youtube_strategy_engine import (
+from trading_strategy_dna import infer_strategy_dna\n\nfrom youtube_strategy_engine import (
     AppError,
     DEFAULT_GEMINI_ADDITIONAL_FALLBACK_MODELS,
     DEFAULT_GEMINI_FALLBACK_MODEL,
@@ -32,7 +32,7 @@ from youtube_strategy_engine import (
     safe_float,
 )
 
-CANONICAL_STRATEGY_VERSION = 1
+CANONICAL_STRATEGY_VERSION = 2
 BOOK_ANALYSIS_CACHE_VERSION = 4
 DEFAULT_GEMINI_BOOK_MODEL = "gemini-3.6-flash"
 DEFAULT_GEMINI_BOOK_SPECIALIST_MODEL = "gemini-3.7-flash"
@@ -305,6 +305,10 @@ def canonicalize_strategy(
     ):
         value = item.get(field)
         result[field] = list(value) if isinstance(value, list) else []
+    # Strategy DNA is a reusable research fingerprint, not a claim of profitability.
+    # It is deterministically inferred from source-extracted fields and explicit rules so
+    # older strategies gain the same structure without needing to re-read the source.
+    result["strategy_dna"] = infer_strategy_dna(result)
     return result
 
 
