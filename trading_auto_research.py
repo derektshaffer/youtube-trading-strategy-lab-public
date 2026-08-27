@@ -45,6 +45,85 @@ def _notify(callback: Callable[[str], None] | None, message: str) -> None:
         callback(message)
 
 
+AUTONOMOUS_STOCK_SPECIFIC_FIELDS = {
+    "optimized_for_symbol",
+    "parent_strategy_id",
+    "parent_is_master_strategy",
+    "optimized_at",
+    "optimization_summary",
+    "optimized_backtest_settings",
+    "preferred_timeframe",
+    "preferred_history_days",
+    "last_backtest",
+}
+
+
+def autonomous_research_baselines(
+    strategies: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return one unlocked root hypothesis per strategy family for cross-stock research.
+
+    Stock-specific optimized copies are useful for deployment on their target symbol, but
+    they are biased starting points for broad research. When the parent/root is available,
+    Autopilot deliberately returns to that root strategy. Orphaned optimized copies are
+    defensively unlocked so a stale symbol lock can never abort autonomous research.
+    """
+    by_id = {
+        str(item.get("id")): item
+        for item in strategies or []
+        if isinstance(item, dict) and item.get("id")
+    }
+    baselines: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+
+    for original in strategies or []:
+        if not isinstance(original, dict) or not original.get("id"):
+            continue
+
+        current = original
+        visited: set[str] = set()
+        lineage: list[str] = []
+        while True:
+            current_id = str(current.get("id") or "")
+            if not current_id or current_id in visited:
+                break
+            visited.add(current_id)
+            lineage.append(current_id)
+            parent_id = str(current.get("parent_strategy_id") or "").strip()
+            parent = by_id.get(parent_id) if parent_id else None
+            if not isinstance(parent, dict):
+                break
+            current = parent
+
+        baseline = dict(current)
+        baseline_id = str(baseline.get("id") or original.get("id") or "")
+        if not baseline_id or baseline_id in seen_ids:
+            continue
+
+        had_stock_specific_state = any(
+            field in original or field in baseline
+            for field in AUTONOMOUS_STOCK_SPECIFIC_FIELDS
+        )
+        for field in AUTONOMOUS_STOCK_SPECIFIC_FIELDS:
+            baseline.pop(field, None)
+
+        # Research must re-prove the strategy from the unlocked hypothesis. A prior
+        # symbol-specific validation must not grant the cross-stock run any status.
+        baseline["validation_status"] = "unvalidated"
+        baseline["optimization_status"] = "not_run"
+        baseline.pop("validated_rules", None)
+        baseline.pop("validated_backtest_settings", None)
+        baseline.pop("validated_at", None)
+        baseline["autonomous_research_root_id"] = baseline_id
+        baseline["autonomous_research_lineage"] = lineage
+        baseline["autonomous_research_unlocked"] = had_stock_specific_state
+
+        seen_ids.add(baseline_id)
+        baselines.append(baseline)
+
+    return baselines
+
+
 def deterministic_symbol_sample(
     symbols: list[str],
     *,
@@ -786,9 +865,19 @@ def run_autonomous_research(
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Run the full no-manual-ticker historical research funnel."""
+    baselines = autonomous_research_baselines(strategies)
+    collapsed_count = max(0, len([item for item in strategies if isinstance(item, dict)]) - len(baselines))
+    if collapsed_count:
+        _notify(
+            progress,
+            f"Autonomous research collapsed {collapsed_count} stock-specific/duplicate optimized "
+            "copies back to their unlocked root strategy hypotheses…",
+        )
+
     eligible = []
-    for strategy in strategies:
-        readiness = strategy.get("research_readiness") or research_readiness(strategy)
+    for strategy in baselines:
+        # Always recalculate after unlocking; saved readiness can describe a stock-specific copy.
+        readiness = research_readiness(strategy)
         if readiness.get("label") == "ready_for_backtest":
             eligible.append((strategy, readiness))
     if not eligible:
@@ -956,6 +1045,10 @@ def run_autonomous_research(
         anchor = candidate_symbols[0]
         rows = list(intraday_rows.get(anchor) or [])
         effective = effective_strategy_for_research(strategy)
+        # Defensive guarantee: no stock-specific deployment metadata reaches the optimizer,
+        # walk-forward engine, or cross-stock validation path.
+        for field in AUTONOMOUS_STOCK_SPECIFIC_FIELDS:
+            effective.pop(field, None)
         settings = _automatic_backtest_settings(effective)
         optimizer = _automatic_optimization_settings()
 
