@@ -297,6 +297,7 @@ elif module == "Knowledge Sources":
                 compiler = GeminiRuleCompiler(
                     setting("GEMINI_API_KEY"),
                     setting("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
+                    fallback_api_key=setting("GEMINI_PAID_API_KEY", ""),
                 )
 
                 def on_prepare(index: int, total: int, strategy_name: str) -> None:
@@ -594,6 +595,7 @@ elif module == "Rule Compiler":
                     compiler = GeminiRuleCompiler(
                         setting("GEMINI_API_KEY"),
                         setting("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
+                        fallback_api_key=setting("GEMINI_PAID_API_KEY", ""),
                     )
                     compiled = compiler.compile(compiler_strategy)
                     st.session_state["til_rule_compiler_result"] = {
