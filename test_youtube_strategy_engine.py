@@ -565,6 +565,45 @@ class CloudReconciliationTests(unittest.TestCase):
             self.assertIn("permanent cloud backup failed", status["last_error"])
 
 
+class CloudWriteVerificationTests(unittest.TestCase):
+    def test_successful_store_save_marks_write_verified_and_healthy(self):
+        class FakeCloud:
+            repository = "owner/private-backups"
+            path = "trading-intelligence-lab/intelligence_library.json"
+
+            def __init__(self):
+                self.library = {
+                    "version": 2,
+                    "strategies": [],
+                    "updated_at": "2026-08-27T17:00:00Z",
+                }
+
+            def read_library(self):
+                return {
+                    "library": json.loads(json.dumps(self.library)),
+                    "sha": "a" * 40,
+                }
+
+            def save_library(self, data, *, previous_updated_at=None):
+                self.library = json.loads(json.dumps(data))
+                return {"library": self.library, "sha": "b" * 40}
+
+        with tempfile.TemporaryDirectory() as directory:
+            cloud = FakeCloud()
+            store = engine.StrategyStore(directory, cloud_backup=cloud)
+            store._write_local(cloud.library, make_backup=False)
+            store._record_cloud_success(cloud.library)
+            before = store.persistence_status(verify=True)
+            self.assertFalse(before["write_verified"])
+            self.assertFalse(before["healthy"])
+
+            store.save(store.load_latest())
+            after = store.persistence_status(verify=True)
+            self.assertTrue(after["write_verified"])
+            self.assertTrue(after["healthy"])
+            self.assertIsNotNone(after["last_write_at"])
+
+
 class CloudBackupFirstWriteTests(unittest.TestCase):
     def test_first_write_to_initialized_blank_cloud_library_is_allowed(self):
         cloud = engine.GitHubCloudBackup(
