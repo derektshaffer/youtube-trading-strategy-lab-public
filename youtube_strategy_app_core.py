@@ -277,26 +277,40 @@ def compact(value: Any) -> str:
     return f"{number:,.0f}"
 
 
+def safe_utc_timestamp(value: Any) -> pd.Timestamp | None:
+    """Best-effort UTC timestamp conversion for mixed Streamlit/session-state values."""
+    try:
+        if value is None:
+            return None
+        if isinstance(value, float) and pd.isna(value):
+            return None
+        if isinstance(value, pd.Timestamp):
+            timestamp = value
+        elif isinstance(value, datetime):
+            timestamp = pd.Timestamp(value)
+        else:
+            text = str(value).strip()
+            if not text or text.lower() in {"nat", "nan", "none"}:
+                return None
+            timestamp = pd.Timestamp(text)
+        if pd.isna(timestamp):
+            return None
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.tz_localize("UTC")
+        else:
+            timestamp = timestamp.tz_convert("UTC")
+        return timestamp
+    except Exception:
+        return None
+
+
 def safe_utc_timestamp_series(values: pd.Series) -> pd.Series:
-    """Parse mixed timestamp values without letting one malformed value crash Streamlit."""
-    parsed: list[Any] = []
-    for value in values.tolist():
-        try:
-            if value is None or (isinstance(value, float) and pd.isna(value)):
-                parsed.append(pd.NaT)
-                continue
-            timestamp = value if isinstance(value, pd.Timestamp) else pd.Timestamp(value)
-            if pd.isna(timestamp):
-                parsed.append(pd.NaT)
-                continue
-            if timestamp.tzinfo is None:
-                timestamp = timestamp.tz_localize("UTC")
-            else:
-                timestamp = timestamp.tz_convert("UTC")
-            parsed.append(timestamp)
-        except (TypeError, ValueError, OverflowError):
-            parsed.append(pd.NaT)
-    return pd.Series(parsed, index=values.index, dtype="datetime64[ns, UTC]")
+    """Parse mixed timestamp values without ever crashing the results page."""
+    return pd.Series(
+        [safe_utc_timestamp(value) for value in values.tolist()],
+        index=values.index,
+        dtype="object",
+    )
 
 
 def local_timestamp(raw: str | None) -> str:
@@ -350,7 +364,7 @@ def _backtest_chart_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
     required = {"timestamp", "open", "high", "low", "close"}
     if not required.issubset(frame.columns):
         return pd.DataFrame()
-    frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce", utc=True)
+    frame["timestamp"] = safe_utc_timestamp_series(frame["timestamp"])
     for name in ("open", "high", "low", "close", "volume"):
         if name in frame.columns:
             frame[name] = pd.to_numeric(frame[name], errors="coerce")
@@ -470,8 +484,8 @@ def render_backtest_trade_chart(
     loser_connector_y: list[Any] = []
 
     for trade in visible_trades:
-        entry_time = pd.to_datetime(trade.get("entry_time"), errors="coerce", utc=True)
-        exit_time = pd.to_datetime(trade.get("exit_time"), errors="coerce", utc=True)
+        entry_time = safe_utc_timestamp(trade.get("entry_time"))
+        exit_time = safe_utc_timestamp(trade.get("exit_time"))
         entry_price = safe_float(trade.get("entry_price"))
         exit_price = safe_float(trade.get("exit_price"))
         pnl = safe_float(trade.get("pnl"), 0.0) or 0.0
@@ -479,7 +493,7 @@ def render_backtest_trade_chart(
         reason = str(trade.get("reason") or "Unknown")
         sample_name = "Holdout" if str(trade.get("sample") or "") == "out_of_sample" else "In-sample"
 
-        if pd.isna(entry_time) or pd.isna(exit_time) or entry_price is None or exit_price is None:
+        if entry_time is None or exit_time is None or entry_price is None or exit_price is None:
             continue
 
         hover = (
@@ -2086,15 +2100,48 @@ with backtest_tab:
             metric_card(stat_columns[2], "Maximum drawdown", percent(all_metrics["max_drawdown_pct"]), "Peak-to-trough simulated loss")
             factor = all_metrics["profit_factor"]
             metric_card(stat_columns[3], "Profit factor", f"{factor:.2f}x" if factor is not None else "—", "Gross gains divided by gross losses")
-            curve = pd.DataFrame(detail["equity_curve"])
-            if len(curve) > 1 and "timestamp" in curve.columns and "equity" in curve.columns:
-                curve["timestamp"] = safe_utc_timestamp_series(curve["timestamp"])
-                curve["equity"] = pd.to_numeric(curve["equity"], errors="coerce")
-                clean_curve = curve.dropna(subset=["timestamp", "equity"]).sort_values("timestamp")
-                if len(clean_curve) > 1:
-                    st.line_chart(clean_curve.set_index("timestamp")["equity"], height=280)
-                elif not clean_curve.empty:
-                    st.caption(f"Equity after the completed backtest: {money(clean_curve.iloc[-1]['equity'])}")
+            equity_points: list[tuple[str, float]] = []
+            for point in detail.get("equity_curve") or []:
+                if not isinstance(point, dict):
+                    continue
+                timestamp = safe_utc_timestamp(point.get("timestamp"))
+                equity_value = safe_float(point.get("equity"))
+                if timestamp is None or equity_value is None:
+                    continue
+                equity_points.append((timestamp.isoformat(), float(equity_value)))
+            equity_points.sort(key=lambda item: item[0])
+            if len(equity_points) > 1:
+                equity_figure = go.Figure(
+                    go.Scatter(
+                        x=[item[0] for item in equity_points],
+                        y=[item[1] for item in equity_points],
+                        mode="lines",
+                        name="Equity",
+                        line=dict(width=2, color="#3d8bfd"),
+                        fill="tozeroy",
+                        fillcolor="rgba(61,139,253,0.10)",
+                        hovertemplate="%{x}<br>Equity: $%{y:,.2f}<extra></extra>",
+                    )
+                )
+                equity_figure.update_layout(
+                    height=280,
+                    margin=dict(l=8, r=8, t=20, b=8),
+                    paper_bgcolor="#090f1a",
+                    plot_bgcolor="#0c1422",
+                    font=dict(color="#eaf2ff"),
+                    showlegend=False,
+                    hovermode="x unified",
+                )
+                equity_figure.update_xaxes(gridcolor="rgba(105,135,170,0.13)")
+                equity_figure.update_yaxes(gridcolor="rgba(105,135,170,0.13)", tickprefix="$")
+                st.plotly_chart(
+                    equity_figure,
+                    use_container_width=True,
+                    config={"displaylogo": False, "scrollZoom": True},
+                    key=f"backtest_equity_curve_{detail_symbol}",
+                )
+            elif equity_points:
+                st.caption(f"Equity after the completed backtest: {money(equity_points[-1][1])}")
 
             chart_bars = (st.session_state.get("backtest_price_bars") or {}).get(detail_symbol, [])
             chart_timeframe = str(st.session_state.get("backtest_timeframe") or preferred_timeframe)
