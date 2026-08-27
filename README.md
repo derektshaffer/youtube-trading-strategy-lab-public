@@ -122,10 +122,16 @@ Normal book workflow:
 
 1. Upload a PDF/TXT/Markdown source in **Knowledge Sources**.
 2. Leave title, author, and research focus blank unless you want to override or narrow the AI.
-3. Keep **AI Autopilot** enabled.
+3. Keep **AI Autopilot** and **Continue automatically into historical opportunity discovery + validation** enabled.
 4. Click **Analyze source and extract strategies** once.
-5. The AI extracts strategies, preserves source evidence, creates research assumptions where needed, and marks machine-testable strategies as ready for backtesting.
-6. Deterministic historical testing and unseen-data validation—not the language model—decide whether a strategy earns a validated status.
+5. The AI extracts strategies, preserves source evidence, and creates clearly labeled research assumptions where needed.
+6. The Historical Research Autopilot builds a broad Alpaca stock universe automatically. It samples active U.S. equities and always includes current movers/most-active names.
+7. Daily history is used only to identify stocks that previously exhibited strategy-relevant conditions. Future trade P/L is not used for candidate selection.
+8. The strongest research finalists receive intraday optimization, untouched holdout testing, cost stress testing, rolling walk-forward checks, and frozen-rule cross-stock testing.
+9. Results are saved automatically into the strategy and validation libraries. Strategies that miss any autonomous validation gate remain research-only; qualifying strategies receive a frozen validated rule set.
+10. Open **AI Research Autopilot** any time to inspect the automatic leaderboard or rerun the current library without choosing tickers or optimizer settings.
+
+Important research limitation: the broad universe is sampled from equities active today. This is much broader than testing only current movers, but delisted historical securities are absent, so survivorship bias is still disclosed in every autonomous run.
 
 To try it as a separate Streamlit app, deploy the same repository again and set the main file path to
 `trading_intelligence_app.py`. It reuses the existing `GEMINI_API_KEY` and GitHub backup secrets.
