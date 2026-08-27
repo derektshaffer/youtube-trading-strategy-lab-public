@@ -10,6 +10,7 @@ on:
       - "trading_market_discovery.py"
       - "youtube_strategy_engine.py"
       - "requirements.txt"
+      - "test_youtube_strategy_engine.py"
       - ".github/workflows/validate-trading-intelligence.yml"
   pull_request:
     paths:
