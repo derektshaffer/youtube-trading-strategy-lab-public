@@ -3500,6 +3500,36 @@ def generate_strategy_variants(
 
     add({})
 
+    # Cross-source synthesized strategies can carry exact threshold values taken from
+    # disagreeing source authors. Test those observed values before generic neighborhood
+    # exploration so source disagreements become explicit hypotheses instead of being averaged away.
+    source_seed_updates: list[dict[str, Any]] = []
+    raw_source_options = strategy.get("candidate_rule_options")
+    if isinstance(raw_source_options, dict):
+        for field_name, raw_values in raw_source_options.items():
+            if field_name not in baseline or not isinstance(raw_values, list):
+                continue
+            for raw_value in raw_values:
+                parsed = normalize_machine_rules({field_name: raw_value}).get(field_name)
+                if parsed is None or parsed == baseline.get(field_name):
+                    continue
+                update = {field_name: parsed}
+                if update not in source_seed_updates:
+                    source_seed_updates.append(update)
+                    add(update)
+
+        # Also test pairwise combinations of exact source-supported alternatives early.
+        # This preserves the provenance of each threshold while still allowing interactions.
+        source_seed_budget = min(limit, max(4, int(limit * 0.40)))
+        for left_index, left in enumerate(source_seed_updates):
+            if len(variants) >= source_seed_budget:
+                break
+            for right in source_seed_updates[left_index + 1:]:
+                if len(variants) >= source_seed_budget:
+                    break
+                if set(left).isdisjoint(right):
+                    add({**left, **right})
+
     if limit <= 64:
         stop_values = [0.75, 1.5, 2.5, 4.0, 5.0, 7.5, 10.0, 15.0]
         reward_values = [1.0, 1.5, 2.0, 3.0, 5.0]
