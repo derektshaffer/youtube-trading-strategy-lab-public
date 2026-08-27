@@ -105,14 +105,28 @@ A second Streamlit entrypoint now lives in this repository:
 trading_intelligence_app.py
 ```
 
-It is intentionally separate from the current YouTube Trading Lab home screen. The first milestone adds:
+It is intentionally separate from the current YouTube Trading Lab home screen. The current build includes:
 
 - PDF/TXT/Markdown knowledge-source ingestion
-- chunked Gemini extraction for books and research documents
+- resilient chunked Gemini extraction for books and research documents, with retry/fallback/resume support
+- automatic title/author detection when the source clearly identifies them
+- AI Autopilot that converts qualitative lessons into clearly labeled research assumptions
+- source-rule protection so AI assumptions never overwrite thresholds explicitly stated by the author
+- research-readiness scoring before a strategy enters deterministic backtesting
 - one canonical strategy representation across books and YouTube sources
+- historical Strategy Lab optimization, untouched holdout testing, walk-forward validation, catalyst intelligence, universe research, market discovery, stock analysis, and Live/Paper integration
 - a separate intelligence-library backup at `trading-intelligence-lab/intelligence_library.json`
 - read/import access to strategies already saved by the YouTube Trading Lab
-- top-level modules for Strategy Lab, Validation, Market Discovery, Stock Analyzer, and Live/Paper integration
+
+Normal book workflow:
+
+1. Upload a PDF/TXT/Markdown source in **Knowledge Sources**.
+2. Leave title, author, and research focus blank unless you want to override or narrow the AI.
+3. Keep **AI Autopilot** enabled.
+4. Click **Analyze source and extract strategies** once.
+5. The AI extracts strategies, preserves source evidence, creates research assumptions where needed, and marks machine-testable strategies as ready for backtesting.
+6. Deterministic historical testing and unseen-data validation—not the language model—decide whether a strategy earns a validated status.
 
 To try it as a separate Streamlit app, deploy the same repository again and set the main file path to
 `trading_intelligence_app.py`. It reuses the existing `GEMINI_API_KEY` and GitHub backup secrets.
+An optional `GEMINI_PAID_API_KEY` may point to a different Google project for quota fallback; never reuse the same key in both fields.
