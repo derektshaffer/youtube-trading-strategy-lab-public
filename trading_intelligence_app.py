@@ -46,6 +46,7 @@ from trading_intelligence_core import (
     merge_strategies,
     prepare_strategies_with_ai,
     research_readiness,
+    upgrade_native_strategy_rules,
 )
 from trading_universe_research import cross_stock_generalization
 from trading_validation_core import validation_strength, walk_forward_validate
@@ -171,6 +172,15 @@ def load_library() -> dict[str, Any]:
     data.setdefault("strategies", [])
     data.setdefault("research_runs", [])
     data.setdefault("validation_runs", [])
+
+    upgraded_strategies: list[dict[str, Any]] = []
+    for raw in data.get("strategies") or []:
+        if not isinstance(raw, dict):
+            continue
+        upgraded = upgrade_native_strategy_rules(raw)
+        upgraded["research_readiness"] = research_readiness(upgraded)
+        upgraded_strategies.append(upgraded)
+    data["strategies"] = upgraded_strategies
     return data
 
 
