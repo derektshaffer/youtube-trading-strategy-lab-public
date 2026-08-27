@@ -1,0 +1,349 @@
+"""Validation and walk-forward research for Trading Intelligence Lab."""
+
+from __future__ import annotations
+
+from collections import Counter
+from dataclasses import asdict, replace
+from statistics import mean, median, pstdev
+from typing import Any, Callable
+
+import pandas as pd
+
+from youtube_strategy_engine import (
+    AppError,
+    BacktestSettings,
+    OptimizationSettings,
+    bars_to_frame,
+    normalize_machine_rules,
+    optimize_stock_strategies,
+    run_backtest,
+    safe_float,
+    summarize_trades,
+)
+
+
+def _frame_to_rows(frame: pd.DataFrame) -> list[dict[str, Any]]:
+    if frame.empty:
+        return []
+    keep = ["open", "high", "low", "close", "volume", "timestamp"]
+    return frame[keep].to_dict("records")
+
+
+def _profit_factor(metrics: dict[str, Any]) -> float:
+    value = safe_float(metrics.get("profit_factor"))
+    if value is None:
+        return 2.0 if int(safe_float(metrics.get("trade_count"), 0) or 0) > 0 else 0.0
+    return max(0.0, value)
+
+
+def validation_strength(
+    optimization_report: dict[str, Any],
+    walk_forward_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Transparent 0-100 robustness score; it is not a forecast of future returns."""
+    winner = optimization_report.get("winner") or {}
+    training = winner.get("training_metrics") or {}
+    validation = winner.get("validation_metrics") or {}
+    holdout = winner.get("holdout_metrics") or {}
+    stress = winner.get("stress_metrics") or {}
+    settings = optimization_report.get("optimization_settings") or {}
+    minimum_validation = max(1, int(safe_float(settings.get("minimum_validation_trades"), 2) or 2))
+    maximum_drawdown = max(0.5, safe_float(settings.get("maximum_drawdown_pct"), 15.0) or 15.0)
+
+    score = 0.0
+    reasons: list[str] = []
+
+    validation_trades = int(safe_float(validation.get("trade_count"), 0) or 0)
+    holdout_trades = int(safe_float(holdout.get("trade_count"), 0) or 0)
+    validation_pnl = safe_float(validation.get("net_pnl"), 0.0) or 0.0
+    holdout_pnl = safe_float(holdout.get("net_pnl"), 0.0) or 0.0
+    stress_pnl = safe_float(stress.get("net_pnl"), 0.0) or 0.0
+
+    if validation_trades >= minimum_validation:
+        score += 10
+    else:
+        reasons.append("Validation sample is small.")
+    if validation_pnl > 0:
+        score += 15
+    else:
+        reasons.append("Validation P/L is not positive.")
+
+    if holdout_trades >= minimum_validation:
+        score += 10
+    else:
+        reasons.append("Final holdout sample is small.")
+    if holdout_pnl > 0:
+        score += 20
+    else:
+        reasons.append("Final untouched holdout P/L is not positive.")
+
+    if stress_pnl > 0:
+        score += 10
+    else:
+        reasons.append("The setup is sensitive to higher assumed trading costs.")
+
+    holdout_pf = _profit_factor(holdout)
+    score += min(10.0, max(0.0, holdout_pf / 1.5 * 10.0))
+
+    worst_drawdown = max(
+        safe_float(training.get("max_drawdown_pct"), 0.0) or 0.0,
+        safe_float(validation.get("max_drawdown_pct"), 0.0) or 0.0,
+        safe_float(holdout.get("max_drawdown_pct"), 0.0) or 0.0,
+    )
+    score += 15.0 * max(0.0, min(1.0, 1.0 - worst_drawdown / maximum_drawdown))
+
+    positive_periods = sum(
+        1
+        for metrics in (training, validation, holdout)
+        if int(safe_float(metrics.get("trade_count"), 0) or 0) > 0
+        and (safe_float(metrics.get("net_pnl"), 0.0) or 0.0) > 0
+    )
+    score += positive_periods / 3.0 * 10.0
+
+    base_score = max(0.0, min(100.0, score))
+    final_score = base_score
+    walk_score = None
+    if walk_forward_report:
+        walk_score = safe_float((walk_forward_report.get("summary") or {}).get("score"))
+        if walk_score is not None:
+            final_score = base_score * 0.60 + walk_score * 0.40
+
+    final_score = round(max(0.0, min(100.0, final_score)), 1)
+    if final_score >= 80:
+        label = "STRONG"
+    elif final_score >= 65:
+        label = "PROMISING"
+    elif final_score >= 50:
+        label = "MIXED"
+    else:
+        label = "WEAK"
+
+    independently_positive = validation_pnl > 0 and holdout_pnl > 0
+    if walk_forward_report:
+        wf_summary = walk_forward_report.get("summary") or {}
+        independently_positive = independently_positive and (
+            safe_float(wf_summary.get("profitable_fold_pct"), 0.0) or 0.0
+        ) >= 50.0
+
+    return {
+        "score": final_score,
+        "base_score": round(base_score, 1),
+        "walk_forward_score": round(walk_score, 1) if walk_score is not None else None,
+        "label": label,
+        "independently_positive": bool(independently_positive),
+        "reasons": reasons,
+        "note": "Robustness score summarizes historical validation behavior; it is not a probability of profit.",
+    }
+
+
+def walk_forward_validate(
+    rows: list[dict[str, Any]],
+    strategies: list[dict[str, Any]],
+    symbol: str,
+    backtest_settings: BacktestSettings | None = None,
+    optimization_settings: OptimizationSettings | None = None,
+    *,
+    minimum_history_sessions: int = 8,
+    test_sessions_per_fold: int = 2,
+    max_folds: int = 3,
+    progress: Callable[[int, int, str], None] | None = None,
+) -> dict[str, Any]:
+    """Nested expanding-window walk-forward research.
+
+    Each fold optimizes only on sessions before the fold's external test block.
+    The optimizer still keeps its own training/validation/holdout separation inside
+    that historical window. The selected rules are then frozen and run on the next
+    unseen sessions.
+    """
+    settings = backtest_settings or BacktestSettings()
+    settings.validate()
+    optimizer = optimization_settings or OptimizationSettings(selection_mode="validated")
+    optimizer = replace(optimizer, selection_mode="validated")
+    optimizer.validate()
+
+    frame = bars_to_frame(rows, include_extended_hours=True)
+    sessions = list(dict.fromkeys(frame.get("session", pd.Series(dtype=str)).tolist()))
+    minimum_history_sessions = max(5, int(minimum_history_sessions))
+    test_sessions_per_fold = max(1, int(test_sessions_per_fold))
+    max_folds = max(1, min(8, int(max_folds)))
+
+    if len(sessions) < minimum_history_sessions + test_sessions_per_fold:
+        raise AppError(
+            "Walk-forward testing needs more trading sessions. Increase the historical window "
+            f"to provide at least {minimum_history_sessions + test_sessions_per_fold} sessions."
+        )
+
+    possible: list[tuple[int, list[str], list[str]]] = []
+    train_end = minimum_history_sessions
+    while train_end + test_sessions_per_fold <= len(sessions):
+        history_sessions = sessions[:train_end]
+        external_test = sessions[train_end : train_end + test_sessions_per_fold]
+        possible.append((train_end, history_sessions, external_test))
+        train_end += test_sessions_per_fold
+
+    folds_to_run = possible[-max_folds:]
+    folds: list[dict[str, Any]] = []
+    all_external_trades: list[dict[str, Any]] = []
+    total_steps = len(folds_to_run)
+
+    for fold_number, (_, history_sessions, external_test_sessions) in enumerate(folds_to_run, start=1):
+        if progress:
+            progress(
+                fold_number - 1,
+                total_steps,
+                f"Walk-forward fold {fold_number}/{total_steps}: optimizing prior sessions…",
+            )
+
+        history_frame = frame[frame["session"].isin(history_sessions)].copy().reset_index(drop=True)
+        external_frame = frame[frame["session"].isin(external_test_sessions)].copy().reset_index(drop=True)
+        history_rows = _frame_to_rows(history_frame)
+        external_rows = _frame_to_rows(external_frame)
+
+        fold_report = optimize_stock_strategies(
+            history_rows,
+            strategies,
+            symbol,
+            settings,
+            optimizer,
+            finalize_holdout=True,
+        )
+        winner = fold_report.get("winner") or {}
+        source_id = str(winner.get("source_strategy_id") or "")
+        source = next((item for item in strategies if str(item.get("id")) == source_id), None)
+        if source is None:
+            raise AppError("A walk-forward fold selected a strategy that is no longer available.")
+
+        selected_settings = BacktestSettings(
+            **(winner.get("optimized_backtest_settings") or fold_report.get("backtest_settings") or {})
+        )
+        selected_strategy = {
+            **source,
+            "machine_rules": normalize_machine_rules(winner.get("optimized_rules") or source.get("machine_rules")),
+        }
+        external_result = run_backtest(
+            external_rows,
+            selected_strategy,
+            symbol,
+            selected_settings,
+        )
+        external_metrics = external_result.get("metrics") or {}
+        external_trades = list(external_result.get("trades") or [])
+        all_external_trades.extend(external_trades)
+
+        folds.append(
+            {
+                "fold": fold_number,
+                "history_start": history_sessions[0],
+                "history_end": history_sessions[-1],
+                "external_test_start": external_test_sessions[0],
+                "external_test_end": external_test_sessions[-1],
+                "history_session_count": len(history_sessions),
+                "test_session_count": len(external_test_sessions),
+                "selected_strategy_id": source_id,
+                "selected_strategy_name": winner.get("strategy_name") or source.get("name"),
+                "optimizer_status": winner.get("status"),
+                "internal_holdout_metrics": winner.get("holdout_metrics") or {},
+                "external_metrics": external_metrics,
+                "optimized_rules": winner.get("optimized_rules") or {},
+                "optimized_backtest_settings": asdict(selected_settings),
+            }
+        )
+
+        if progress:
+            progress(
+                fold_number,
+                total_steps,
+                f"Walk-forward fold {fold_number}/{total_steps}: external test complete.",
+            )
+
+    active_folds = [
+        fold for fold in folds
+        if int(safe_float((fold.get("external_metrics") or {}).get("trade_count"), 0) or 0) > 0
+    ]
+    profitable_folds = [
+        fold for fold in active_folds
+        if (safe_float((fold.get("external_metrics") or {}).get("net_pnl"), 0.0) or 0.0) > 0
+    ]
+    returns = [
+        safe_float((fold.get("external_metrics") or {}).get("return_pct"), 0.0) or 0.0
+        for fold in active_folds
+    ]
+    combined = summarize_trades(all_external_trades, settings.starting_cash)
+    combined_pf = _profit_factor(combined)
+    max_drawdown = max(
+        [safe_float((fold.get("external_metrics") or {}).get("max_drawdown_pct"), 0.0) or 0.0 for fold in active_folds]
+        or [0.0]
+    )
+    profitable_pct = len(profitable_folds) / len(active_folds) * 100.0 if active_folds else 0.0
+    coverage = min(
+        1.0,
+        int(safe_float(combined.get("trade_count"), 0) or 0) / max(6.0, len(folds) * 2.0),
+    )
+    profitability_score = profitable_pct / 100.0
+    pf_score = min(1.0, combined_pf / 1.5)
+    drawdown_score = max(
+        0.0,
+        min(1.0, 1.0 - max_drawdown / max(0.5, optimizer.maximum_drawdown_pct)),
+    )
+    consistency_score = 0.0
+    if returns and mean(returns) > 0:
+        dispersion = pstdev(returns) if len(returns) > 1 else 0.0
+        consistency_score = max(0.0, min(1.0, 1.0 - dispersion / max(abs(mean(returns)), 1.0)))
+
+    score = round(
+        40.0 * profitability_score
+        + 20.0 * coverage
+        + 20.0 * pf_score
+        + 10.0 * drawdown_score
+        + 10.0 * consistency_score,
+        1,
+    )
+    if score >= 80:
+        label = "STRONG"
+    elif score >= 65:
+        label = "PROMISING"
+    elif score >= 50:
+        label = "MIXED"
+    else:
+        label = "WEAK"
+
+    strategy_counts = Counter(str(fold.get("selected_strategy_name") or "Unnamed") for fold in folds)
+    warnings: list[str] = []
+    no_trade_folds = len(folds) - len(active_folds)
+    if no_trade_folds:
+        warnings.append(
+            f"{no_trade_folds} walk-forward fold(s) produced no trades in the external test block."
+        )
+    if len(strategy_counts) > 1:
+        warnings.append(
+            "Different strategy families won different folds. That can be useful regime evidence, "
+            "but it also means there is no single consistently dominant setup."
+        )
+    if profitable_pct < 50.0:
+        warnings.append("Fewer than half of the active walk-forward folds were profitable.")
+
+    return {
+        "symbol": symbol,
+        "folds": folds,
+        "summary": {
+            "score": score,
+            "label": label,
+            "fold_count": len(folds),
+            "active_fold_count": len(active_folds),
+            "profitable_fold_count": len(profitable_folds),
+            "profitable_fold_pct": round(profitable_pct, 1),
+            "external_trade_count": int(safe_float(combined.get("trade_count"), 0) or 0),
+            "external_net_pnl": safe_float(combined.get("net_pnl"), 0.0) or 0.0,
+            "external_return_pct": safe_float(combined.get("return_pct"), 0.0) or 0.0,
+            "external_profit_factor": combined.get("profit_factor"),
+            "max_fold_drawdown_pct": round(max_drawdown, 2),
+            "median_fold_return_pct": round(median(returns), 3) if returns else 0.0,
+            "average_fold_return_pct": round(mean(returns), 3) if returns else 0.0,
+            "selected_strategy_counts": dict(strategy_counts),
+        },
+        "warnings": warnings,
+        "note": (
+            "Each external fold is unseen by that fold's optimizer. Results remain historical simulations "
+            "and do not establish future profitability."
+        ),
+    }
