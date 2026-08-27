@@ -10,6 +10,7 @@ from typing import Any
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from youtube_strategy_engine import (
     ALPACA_DATA_URL,
@@ -199,6 +200,36 @@ div[data-testid="stDataFrame"] {border:1px solid var(--line); border-radius:11px
 .st-key-optimizer_eight_trade_filter input[type="checkbox"] {transform:scale(1.12); transform-origin:left center}
 .st-key-optimizer_eight_trade_filter [role="checkbox"] {transform:scale(1.08); transform-origin:left center}
 div[data-baseweb="tab-list"] {gap:14px}
+
+/* Technical-term hover definitions, matching the Stock Scanner behavior. */
+[data-tech-tooltip] {
+  text-decoration-line:underline;
+  text-decoration-style:dotted;
+  text-decoration-thickness:1px;
+  text-underline-offset:3px;
+  cursor:help !important;
+}
+#youtube-tech-tooltip {
+  position:fixed;
+  display:none;
+  z-index:2147483000;
+  width:max-content;
+  max-width:min(390px, calc(100vw - 28px));
+  box-sizing:border-box;
+  padding:10px 12px;
+  border-radius:10px;
+  border:1px solid #355071;
+  background:#101b2d;
+  color:#eef5ff;
+  font-size:13px;
+  line-height:1.42;
+  font-weight:600;
+  letter-spacing:0;
+  text-transform:none;
+  box-shadow:0 10px 30px rgba(0,0,0,.35);
+  pointer-events:none;
+  white-space:normal;
+}
 @media (max-width:760px) {.hero-title {font-size:27px}.metric-value {font-size:25px}}
 </style>
 """,
@@ -378,6 +409,179 @@ HELP_GLOSSARY: list[dict[str, str]] = [
     {"term": "VWAP reclaim", "category": "Trading", "meaning": "Price moves back above VWAP after trading below it, sometimes used as a momentum or trend-recovery signal."},
     {"term": "Win rate", "category": "Performance", "meaning": "The percentage of completed trades that were profitable. Win rate alone does not show how large wins and losses were."},
 ]
+
+
+TECHNICAL_TOOLTIP_ALIASES: dict[str, str] = {
+    "Optimization goal": "What the optimizer is trying to find. Maximum historical P/L searches for the most profitable historical fit; Validated edge prioritizes settings that also hold up on separate validation and holdout data.",
+    "Search depth": "How many parameter combinations the optimizer explores. Deeper searches take longer but examine more possible settings before refining the strongest candidates.",
+    "Minimum training trades": "The fewest completed simulated trades required in the training period before a result has enough observations to qualify.",
+    "Minimum validation trades": "The fewest completed simulated trades required in the separate validation period before the app treats that validation result as usable.",
+    "Starting cash": "The simulated account balance at the beginning of the backtest. It affects dollar P/L and position sizing but does not change the historical price data.",
+    "Execution-cost model": "How the backtest estimates real-world trading friction. Automatic mode uses quoted spread plus estimated slippage; Manual mode uses the fixed values you enter.",
+    "Spread (bps)": "The fallback bid/ask spread assumption expressed in basis points. 100 bps equals 1%. In Automatic mode this is a floor, so the model may use a wider current spread.",
+    "Slippage per fill (bps)": "Estimated price movement between the expected execution price and the simulated fill, expressed in basis points. In Automatic mode this is a conservative floor.",
+    "Fee per order": "A fixed simulated commission or order fee applied to each order in the backtest.",
+    "Maximum acceptable drawdown": "The largest peak-to-trough account decline you are willing to accept in the historical test. Candidates beyond this limit receive a strong ranking penalty.",
+    "Position-size search depth": "How many different position-sizing possibilities the optimizer tests. A deeper search explores more sizing combinations and takes longer.",
+    "8-trade sample safeguard": "When enabled, a Maximum historical P/L result needs at least 8 completed trades to outrank tiny-sample results that may look impressive by chance.",
+    "SEARCH": "A control that changes how broadly or deeply the optimizer searches. It is not itself a trading rule.",
+    "THRESHOLD": "A qualification rule the optimizer must respect, such as a minimum trade count or maximum drawdown.",
+    "CEILING": "A maximum the optimizer may not exceed. It can test smaller values, but never larger ones.",
+    "AUTO": "The displayed value is a starting or fallback value while the app automatically evaluates better supported values.",
+    "FLOOR": "A conservative minimum assumption. The automatic model can use a higher value when conditions warrant it, but not a lower one.",
+    "FIXED": "A value held constant for every candidate during that optimization run.",
+}
+
+
+def _technical_tooltip_map() -> dict[str, str]:
+    tips = {item["term"]: item["meaning"] for item in HELP_GLOSSARY}
+    tips.update(TECHNICAL_TOOLTIP_ALIASES)
+    return tips
+
+
+def install_technical_tooltips() -> None:
+    """Add dotted-underlined hover definitions to technical labels throughout the app."""
+    tooltip_json = json.dumps(_technical_tooltip_map())
+    components.html(
+        f"""
+        <script>
+        (() => {{
+          const p = window.parent;
+          const d = p.document;
+          const tips = {tooltip_json};
+          const selector = [
+            '[data-testid="stWidgetLabel"]',
+            '[data-testid="stMetricLabel"]',
+            '.metric-label',
+            'th'
+          ].join(',');
+
+          const simplify = (text) => String(text || '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .toUpperCase()
+            .replace(/[^A-Z0-9%/]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+          const entries = Object.entries(tips)
+            .map(([term, explanation]) => [simplify(term), explanation])
+            .filter(([term]) => term)
+            .sort((a, b) => b[0].length - a[0].length);
+
+          function explanationFor(rawText) {{
+            const label = simplify(rawText);
+            if (!label) return null;
+            for (const [term, explanation] of entries) {{
+              if (
+                label === term ||
+                label.startsWith(term + ' ') ||
+                label.endsWith(' ' + term) ||
+                label.includes(' ' + term + ' ')
+              ) {{
+                return explanation;
+              }}
+            }}
+            return null;
+          }}
+
+          function applyTips() {{
+            d.querySelectorAll(selector).forEach((el) => {{
+              const explanation = explanationFor(el.textContent);
+              if (explanation) {{
+                el.setAttribute('data-tech-tooltip', explanation);
+                el.setAttribute('tabindex', '0');
+                el.setAttribute('aria-label', el.textContent.trim() + '. ' + explanation);
+              }} else {{
+                el.removeAttribute('data-tech-tooltip');
+              }}
+            }});
+          }}
+
+          let box = d.getElementById('youtube-tech-tooltip');
+          if (!box) {{
+            box = d.createElement('div');
+            box.id = 'youtube-tech-tooltip';
+            box.setAttribute('role', 'tooltip');
+            d.body.appendChild(box);
+          }}
+
+          function show(el) {{
+            const text = el && el.getAttribute('data-tech-tooltip');
+            if (!text) return;
+            box.textContent = text;
+            box.style.display = 'block';
+
+            const r = el.getBoundingClientRect();
+            const pad = 10;
+            const width = box.offsetWidth;
+            const height = box.offsetHeight;
+            let left = r.left;
+            let top = r.bottom + 8;
+
+            if (left + width > p.innerWidth - pad) left = p.innerWidth - width - pad;
+            if (left < pad) left = pad;
+            if (top + height > p.innerHeight - pad) top = r.top - height - 8;
+            if (top < pad) top = pad;
+
+            box.style.left = Math.round(left) + 'px';
+            box.style.top = Math.round(top) + 'px';
+          }}
+
+          function hide() {{
+            box.style.display = 'none';
+          }}
+
+          const old = p.__youtubeTechnicalTooltips;
+          if (old) {{
+            try {{ old.observer.disconnect(); }} catch (_) {{}}
+            try {{ d.removeEventListener('mouseover', old.over); }} catch (_) {{}}
+            try {{ d.removeEventListener('mouseout', old.out); }} catch (_) {{}}
+            try {{ d.removeEventListener('focusin', old.focusin); }} catch (_) {{}}
+            try {{ d.removeEventListener('focusout', old.focusout); }} catch (_) {{}}
+          }}
+
+          const over = (event) => {{
+            const el = event.target.closest && event.target.closest('[data-tech-tooltip]');
+            if (el) show(el);
+          }};
+          const out = (event) => {{
+            const el = event.target.closest && event.target.closest('[data-tech-tooltip]');
+            if (el && (!event.relatedTarget || !el.contains(event.relatedTarget))) hide();
+          }};
+          const focusin = (event) => {{
+            const el = event.target.closest && event.target.closest('[data-tech-tooltip]');
+            if (el) show(el);
+          }};
+          const focusout = (event) => {{
+            const el = event.target.closest && event.target.closest('[data-tech-tooltip]');
+            if (el) hide();
+          }};
+
+          d.addEventListener('mouseover', over);
+          d.addEventListener('mouseout', out);
+          d.addEventListener('focusin', focusin);
+          d.addEventListener('focusout', focusout);
+
+          let queued = false;
+          const observer = new MutationObserver(() => {{
+            if (queued) return;
+            queued = true;
+            p.requestAnimationFrame(() => {{
+              queued = false;
+              applyTips();
+            }});
+          }});
+          if (d.body) observer.observe(d.body, {{childList: true, subtree: true}});
+
+          p.__youtubeTechnicalTooltips = {{observer, over, out, focusin, focusout}};
+          applyTips();
+        }})();
+        </script>
+        """,
+        height=0,
+        scrolling=False,
+    )
 
 
 def glossary_context_text() -> str:
@@ -586,6 +790,9 @@ with st.sidebar:
         "This app is research and paper tracking only. It never places live or paper brokerage orders. "
         "YouTube strategies are hypotheses, not evidence of future profits."
     )
+
+
+install_technical_tooltips()
 
 
 overview_tab, videos_tab, master_tab, strategies_tab, backtest_tab, optimizer_tab, scanner_tab, paper_tab, help_tab, settings_tab = st.tabs(
