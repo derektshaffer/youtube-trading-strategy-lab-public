@@ -527,3 +527,20 @@ def merge_strategies(
         else:
             by_id[str(item["id"])] = dict(item)
     return list(by_id.values())
+
+
+
+def effective_strategy_for_live(strategy: dict[str, Any]) -> dict[str, Any]:
+    """Use the frozen validated rule set downstream without overwriting source-extracted rules."""
+    item = dict(strategy or {})
+    validated = item.get("validated_rules")
+    if (
+        str(item.get("validation_status") or "").lower() == "validated"
+        and isinstance(validated, dict)
+    ):
+        item["machine_rules"] = normalize_machine_rules(validated)
+        item["using_validated_rules"] = True
+    else:
+        item["machine_rules"] = normalize_machine_rules(item.get("machine_rules"))
+        item["using_validated_rules"] = False
+    return item
