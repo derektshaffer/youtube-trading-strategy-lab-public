@@ -2715,6 +2715,13 @@ def evaluate_signal(
     if require_pullback_breakout and not bool(row.get("pullback_breakout")):
         return False
 
+    # Preserve legacy behavior when historical catalyst data was not supplied.
+    # When point-in-time news enrichment is present, a catalyst-required strategy
+    # can only trigger after a qualifying article was actually published.
+    if rules.get("catalyst_required") and bool(row.get("catalyst_data_available")):
+        if not bool(row.get("has_catalyst")):
+            return False
+
     clock_minute = int(row.get("clock_minute", 9 * 60 + 30 + int(row.get("session_minute", 0))))
     session_start = parse_clock_minutes(rules.get("session_start"))
     session_end = parse_clock_minutes(rules.get("session_end"))
@@ -2883,6 +2890,17 @@ def run_backtest(
         data = add_indicators(base, strategy)
 
     rules = normalize_machine_rules(strategy.get("machine_rules"))
+    point_in_time_catalysts = (
+        rules.get("catalyst_required")
+        and "catalyst_data_available" in data.columns
+        and bool(data["catalyst_data_available"].fillna(False).any())
+    )
+    result["historical_catalyst_filter_applied"] = bool(point_in_time_catalysts)
+    if point_in_time_catalysts:
+        result["limitations"] = [
+            item for item in result.get("limitations") or []
+            if item != "Historical, point-in-time news catalysts are not included in this backtest."
+        ]
     stop_pct = rules.get("stop_loss_pct") or settings.default_stop_pct
     reward_risk = rules.get("reward_risk") or settings.default_reward_risk
     max_hold = rules.get("max_hold_minutes")
