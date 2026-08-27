@@ -515,6 +515,46 @@ class CloudReconciliationTests(unittest.TestCase):
                 "2026-08-27T17:00:00Z",
             )
 
+    def test_local_only_book_data_can_migrate_into_empty_initialized_cloud(self):
+        class FakeCloud:
+            repository = "owner/private-backups"
+            path = "trading-intelligence-lab/intelligence_library.json"
+
+            def read_library(self):
+                return {
+                    "library": {
+                        "version": 2,
+                        "strategies": [],
+                        "knowledge_sources": [],
+                        "research_runs": [],
+                        "validation_runs": [],
+                        "updated_at": "2026-08-27T17:15:00Z",
+                    },
+                    "sha": "a" * 40,
+                }
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = engine.StrategyStore(directory, cloud_backup=FakeCloud())
+            store._write_local(
+                {
+                    "version": 2,
+                    "strategies": [],
+                    "knowledge_sources": [{"id": "book1", "title": "Recovered local book"}],
+                    "updated_at": "2026-08-27T17:20:00Z",
+                },
+                make_backup=False,
+            )
+            loaded = store.load_latest()
+            self.assertEqual(
+                loaded["knowledge_sources"][0]["title"],
+                "Recovered local book",
+            )
+            self.assertEqual(
+                store.cloud_status()["synced_updated_at"],
+                "2026-08-27T17:15:00Z",
+            )
+
+
     def test_both_sides_changed_since_shared_version_raises_conflict(self):
         class FakeCloud:
             repository = "owner/private-backups"
