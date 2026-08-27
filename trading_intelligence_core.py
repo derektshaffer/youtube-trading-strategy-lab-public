@@ -33,7 +33,12 @@ from youtube_strategy_engine import (
 )
 
 CANONICAL_STRATEGY_VERSION = 1
-BOOK_ANALYSIS_CACHE_VERSION = 3
+BOOK_ANALYSIS_CACHE_VERSION = 4
+DEFAULT_GEMINI_BOOK_MODEL = "gemini-3.6-flash"
+DEFAULT_GEMINI_BOOK_SPECIALIST_MODEL = "gemini-3.7-flash"
+DEFAULT_GEMINI_BOOK_FALLBACK_MODELS = ("gemini-3.5-flash", "gemini-2.5-flash")
+BOOK_SPECIALIST_CONFIDENCE_THRESHOLD = 70.0
+BOOK_SPECIALIST_UNRESOLVED_THRESHOLD = 4
 BOOK_TRANSIENT_RETRIES_PER_MODEL = 1
 BOOK_TRANSIENT_MAX_WAIT_SECONDS = 10
 BOOK_QUOTA_RETRIES = 2
@@ -416,10 +421,11 @@ class GeminiRuleCompiler:
     def __init__(
         self,
         api_key: str,
-        model: str = DEFAULT_GEMINI_MODEL,
+        model: str = DEFAULT_GEMINI_BOOK_MODEL,
         *,
         fallback_api_key: str = "",
-        fallback_model: str = DEFAULT_GEMINI_FALLBACK_MODEL,
+        fallback_model: str = "gemini-3.5-flash",
+        specialist_model: str = DEFAULT_GEMINI_BOOK_SPECIALIST_MODEL,
     ):
         key = str(api_key or "").strip()
         if not key:
@@ -430,11 +436,15 @@ class GeminiRuleCompiler:
             raise AppError(
                 "GEMINI_PAID_API_KEY must be a different key from a separate Google project."
             )
-        self.model = str(model or DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
+        self.model = str(model or DEFAULT_GEMINI_BOOK_MODEL).strip() or DEFAULT_GEMINI_BOOK_MODEL
         self.primary_model = self.model
+        self.specialist_model = (
+            str(specialist_model or DEFAULT_GEMINI_BOOK_SPECIALIST_MODEL).strip()
+            or DEFAULT_GEMINI_BOOK_SPECIALIST_MODEL
+        )
         fallback_candidates = [
             str(fallback_model or "").strip(),
-            *DEFAULT_GEMINI_ADDITIONAL_FALLBACK_MODELS,
+            *DEFAULT_GEMINI_BOOK_FALLBACK_MODELS,
         ]
         self.fallback_models: list[str] = []
         for candidate in fallback_candidates:
@@ -443,6 +453,8 @@ class GeminiRuleCompiler:
                 self.fallback_models.append(candidate)
         self._fallback_model_index = 0
         self.model_fallback_used = False
+        self.specialist_used = False
+        self.specialist_sections: list[int] = []
         self.paid_fallback_used = False
 
     @property
@@ -961,6 +973,104 @@ class GeminiBookAnalyzer:
             raise AppError("Gemini returned an unexpected document-analysis format.")
         return parsed
 
+    @staticmethod
+    def _analysis_needs_specialist(analysis: dict[str, Any]) -> tuple[bool, list[str]]:
+        reasons: list[str] = []
+        strategies = [
+            item for item in analysis.get("strategies") or []
+            if isinstance(item, dict)
+        ]
+        if not strategies:
+            return False, reasons
+
+        low_confidence = [
+            item for item in strategies
+            if (safe_float(item.get("confidence"), 100.0) or 0.0)
+            < BOOK_SPECIALIST_CONFIDENCE_THRESHOLD
+        ]
+        unresolved_count = sum(
+            len([value for value in item.get("unresolved_rules") or [] if str(value).strip()])
+            for item in strategies
+        )
+        weakly_quantified = [
+            item
+            for item in strategies
+            if (item.get("entry_conditions") or item.get("risk_rules"))
+            and not any(
+                value is not None
+                for value in normalize_machine_rules(item.get("machine_rules")).values()
+            )
+        ]
+        evidence_gaps = [
+            item for item in strategies
+            if (item.get("entry_conditions") or item.get("exit_conditions"))
+            and not [e for e in item.get("evidence") or [] if isinstance(e, dict)]
+        ]
+
+        if low_confidence:
+            reasons.append(f"{len(low_confidence)} low-confidence strategy extraction(s)")
+        if unresolved_count >= BOOK_SPECIALIST_UNRESOLVED_THRESHOLD:
+            reasons.append(f"{unresolved_count} unresolved source requirements")
+        if weakly_quantified:
+            reasons.append(f"{len(weakly_quantified)} strategy extraction(s) with no measurable source rules")
+        if evidence_gaps:
+            reasons.append(f"{len(evidence_gaps)} strategy extraction(s) missing retained evidence")
+
+        return bool(reasons), reasons
+
+    def _specialist_review_chunk(
+        self,
+        chunk: str,
+        *,
+        primary_analysis: dict[str, Any],
+        title: str,
+        author: str,
+        chunk_number: int,
+        chunk_count: int,
+        focus: str,
+        progress_callback,
+    ) -> dict[str, Any]:
+        needs_specialist, reasons = self._analysis_needs_specialist(primary_analysis)
+        if not needs_specialist or self.specialist_model == self.primary_model:
+            return primary_analysis
+
+        previous_model = self.model
+        previous_fallback_index = self._fallback_model_index
+        self.model = self.specialist_model
+        self._fallback_model_index = len(self.fallback_models)
+        self._emit_progress(
+            progress_callback,
+            chunk_number,
+            chunk_count,
+            f"Section {chunk_number} needs deeper interpretation ({'; '.join(reasons)}). "
+            f"Escalating just this section to {self.specialist_model}…",
+        )
+        try:
+            specialist = self._analyze_chunk(
+                chunk,
+                title=title,
+                author=author,
+                chunk_number=chunk_number,
+                chunk_count=chunk_count,
+                focus=focus,
+            )
+            self.specialist_used = True
+            if chunk_number not in self.specialist_sections:
+                self.specialist_sections.append(chunk_number)
+            return self._merge_chunk_analyses([primary_analysis, specialist])
+        except AppError as exc:
+            self._emit_progress(
+                progress_callback,
+                chunk_number,
+                chunk_count,
+                f"{self.specialist_model} could not complete the specialist review. "
+                f"Keeping the successful {self.primary_model} extraction for section {chunk_number}.",
+            )
+            return primary_analysis
+        finally:
+            self.model = previous_model
+            self._fallback_model_index = previous_fallback_index
+
     def _analyze_chunk_resilient(
         self,
         chunk: str,
@@ -1135,8 +1245,18 @@ class GeminiBookAnalyzer:
         split_depth: int = 0,
     ) -> dict[str, Any]:
         try:
-            return self._analyze_chunk_resilient(
+            primary_analysis = self._analyze_chunk_resilient(
                 chunk,
+                title=title,
+                author=author,
+                chunk_number=chunk_number,
+                chunk_count=chunk_count,
+                focus=focus,
+                progress_callback=progress_callback,
+            )
+            return self._specialist_review_chunk(
+                chunk,
+                primary_analysis=primary_analysis,
                 title=title,
                 author=author,
                 chunk_number=chunk_number,
@@ -1420,6 +1540,9 @@ class GeminiBookAnalyzer:
             "analyzed_at": _utc_iso(),
             "model": self.model,
             "primary_model": self.primary_model,
+            "specialist_model": self.specialist_model,
+            "specialist_used": self.specialist_used,
+            "specialist_sections": sorted(self.specialist_sections),
             "models_used": models_used or [self.model],
             "model_fallback_used": self.model_fallback_used,
             "paid_fallback_used": self.paid_fallback_used,
