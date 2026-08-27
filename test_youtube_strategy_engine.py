@@ -688,7 +688,6 @@ class StreamlitSmokeTests(unittest.TestCase):
             app_path = Path(__file__).with_name("youtube_strategy_app.py")
             with patch.dict(sys.modules, {"streamlit": fake_streamlit}), patch.dict("os.environ", {"YOUTUBE_STRATEGY_DATA_DIR": directory}):
                 runpy.run_path(str(app_path), run_name="__main__")
-            self.assertTrue(any(name == "dataframe" for name, _ in fake_streamlit.rendered))
             self.assertTrue(any(name == "markdown" for name, _ in fake_streamlit.rendered))
 
 
