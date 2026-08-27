@@ -2,8 +2,12 @@
 
 import unittest
 
+from youtube_strategy_engine import AppError
+
 from trading_auto_research import (
+    _batched_bars,
     _global_validation_gate,
+    _invalid_symbol_from_error,
     deterministic_catalog_sample,
     deterministic_symbol_sample,
     infer_symbol_lifecycle,
@@ -33,6 +37,62 @@ def daily_bars(days=30, start=10.0, event_every=5):
             }
         )
     return rows
+
+
+class InvalidHistoricalSymbolTests(unittest.TestCase):
+    def test_invalid_symbol_is_parsed_from_alpaca_error(self):
+        self.assertEqual(
+            _invalid_symbol_from_error("Provider request failed (400): invalid symbol: D012219"),
+            "D012219",
+        )
+
+    def test_bad_symbol_is_skipped_and_remaining_batch_continues(self):
+        class FakeMarket:
+            def __init__(self):
+                self.calls = []
+
+            def bars(self, symbols, **kwargs):
+                self.calls.append(list(symbols))
+                if "D012219" in symbols:
+                    raise AppError("Provider request failed (400): invalid symbol: D012219")
+                return {
+                    symbol: [{"t": "2026-01-01T00:00:00Z", "c": 10, "v": 1000}]
+                    for symbol in symbols
+                }
+
+        market = FakeMarket()
+        skipped = []
+        messages = []
+        rows = _batched_bars(
+            market,
+            ["AAPL", "D012219", "MSFT"],
+            start=None,
+            end=None,
+            timeframe="1Day",
+            batch_size=100,
+            skipped_symbols=skipped,
+            progress=messages.append,
+        )
+
+        self.assertEqual(set(rows), {"AAPL", "MSFT"})
+        self.assertEqual(skipped, ["D012219"])
+        self.assertTrue(any("D012219" in message for message in messages))
+        self.assertEqual(market.calls[0], ["AAPL", "D012219", "MSFT"])
+        self.assertEqual(market.calls[1], ["AAPL", "MSFT"])
+
+    def test_non_symbol_provider_error_is_not_silently_swallowed(self):
+        class FakeMarket:
+            def bars(self, symbols, **kwargs):
+                raise AppError("The provider's usage or rate limit was reached.")
+
+        with self.assertRaises(AppError):
+            _batched_bars(
+                FakeMarket(),
+                ["AAPL", "MSFT"],
+                start=None,
+                end=None,
+                timeframe="1Day",
+            )
 
 
 class AutonomousResearchTests(unittest.TestCase):
