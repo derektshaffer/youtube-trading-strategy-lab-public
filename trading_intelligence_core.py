@@ -538,14 +538,18 @@ class GeminiRuleCompiler:
                         continue
 
                 if provider_quota_reached(exc):
+                    if self._activate_paid_fallback(exc):
+                        transient_attempts = 0
+                        quota_attempts = 0
+                        continue
+                    if self._activate_quota_model_fallback(exc):
+                        transient_attempts = 0
+                        quota_attempts = 0
+                        continue
                     retry_delay = GeminiBookAnalyzer._quota_retry_delay(message)
                     if retry_delay is not None and quota_attempts < BOOK_QUOTA_RETRIES:
                         quota_attempts += 1
                         sleep(retry_delay)
-                        continue
-                    if self._activate_paid_fallback(exc):
-                        transient_attempts = 0
-                        quota_attempts = 0
                         continue
                 raise
 
@@ -899,6 +903,20 @@ class GeminiBookAnalyzer:
         self.api_key = self.fallback_api_key
         self.paid_fallback_used = True
         return True
+
+    def _activate_quota_model_fallback(self, error: Exception | str) -> bool:
+        """Try another model immediately when the current model's request quota is exhausted."""
+        if not provider_quota_reached(error):
+            return False
+        while self._fallback_model_index < len(self.fallback_models):
+            candidate = self.fallback_models[self._fallback_model_index]
+            self._fallback_model_index += 1
+            if candidate == self.model:
+                continue
+            self.model = candidate
+            self.model_fallback_used = True
+            return True
+        return False
 
     @staticmethod
     def _quota_retry_delay(message: str) -> int | None:
