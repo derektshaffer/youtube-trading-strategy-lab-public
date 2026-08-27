@@ -1888,7 +1888,13 @@ class StrategyStore:
         status["verified"] = verified
         status["library_exists"] = library_exists if verify else None
         status["durable"] = bool(configured and verified)
-        status["healthy"] = bool(configured and verified and not status.get("last_error"))
+        status["write_verified"] = bool(status.get("last_write_at"))
+        status["healthy"] = bool(
+            configured
+            and verified
+            and status.get("write_verified")
+            and not status.get("last_error")
+        )
         status["verification_error"] = verification_error
         status["local_path"] = str(self.path)
         status["local_exists"] = self.path.exists()
@@ -1901,6 +1907,7 @@ class StrategyStore:
             "path": self.cloud_backup.path if self.cloud_backup else "",
             "last_synced_at": None,
             "synced_updated_at": None,
+            "last_write_at": None,
             "last_error": None,
         }
         if self.cloud_status_path.exists():
@@ -1909,14 +1916,17 @@ class StrategyStore:
             except (OSError, ValueError):
                 recorded = {}
             if isinstance(recorded, dict):
-                for key in ("last_synced_at", "synced_updated_at", "last_error"):
+                for key in ("last_synced_at", "synced_updated_at", "last_write_at", "last_error"):
                     status[key] = recorded.get(key)
         return status
 
     def _record_cloud_status(self, **values: Any) -> None:
         status = self.cloud_status()
         status.update(values)
-        public_status = {key: status.get(key) for key in ("last_synced_at", "synced_updated_at", "last_error")}
+        public_status = {
+            key: status.get(key)
+            for key in ("last_synced_at", "synced_updated_at", "last_write_at", "last_error")
+        }
         try:
             self.cloud_status_path.write_text(json.dumps(public_status, indent=2), encoding="utf-8")
         except OSError:
@@ -1928,6 +1938,11 @@ class StrategyStore:
             synced_updated_at=data.get("updated_at"),
             last_error=None,
         )
+
+
+    def _record_cloud_write_success(self, data: dict[str, Any]) -> None:
+        self._record_cloud_success(data)
+        self._record_cloud_status(last_write_at=isoformat_utc(utc_now()))
 
     def _write_local(self, value: dict[str, Any], *, make_backup: bool = True) -> None:
         descriptor, temporary_name = tempfile.mkstemp(prefix="strategy_", suffix=".json", dir=self.directory)
@@ -1956,7 +1971,7 @@ class StrategyStore:
         except AppError as exc:
             self._record_cloud_status(last_error=str(exc))
             raise
-        self._record_cloud_success(data)
+        self._record_cloud_write_success(data)
         return data
 
     def restore_cloud_backup(self) -> dict[str, Any]:
@@ -2046,7 +2061,7 @@ class StrategyStore:
             except AppError as exc:
                 self._record_cloud_status(last_error=str(exc))
                 raise AppError(f"Saved locally, but permanent cloud backup failed: {exc}") from exc
-            self._record_cloud_success(value)
+            self._record_cloud_write_success(value)
         return value
 
     def add_video_analysis(self, analysis: dict[str, Any]) -> dict[str, Any]:
