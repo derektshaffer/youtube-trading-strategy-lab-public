@@ -8,7 +8,7 @@ expects, then intraday backtests/validation decide whether the strategy had edge
 from __future__ import annotations
 
 from dataclasses import fields
-from datetime import timedelta
+from datetime import date, datetime, time, timedelta, timezone
 import math
 from statistics import median
 from typing import Any, Callable
@@ -29,11 +29,13 @@ from youtube_strategy_engine import (
 )
 
 
-AUTO_UNIVERSE_SAMPLE_SIZE = 450
+AUTO_UNIVERSE_SAMPLE_SIZE = 500
+AUTO_INACTIVE_SAMPLE_SHARE = 0.30
 AUTO_MAX_DEEP_STRATEGIES = 3
 AUTO_SYMBOLS_PER_STRATEGY = 6
-AUTO_DAILY_LOOKBACK_DAYS = 90
-AUTO_INTRADAY_LOOKBACK_DAYS = 60
+AUTO_DAILY_LOOKBACK_DAYS = 1095
+AUTO_EVENT_WINDOW_DAYS = 120
+AUTO_EVENT_WINDOW_BUFFER_DAYS = 30
 AUTO_TIMEFRAME = "5Min"
 
 
@@ -108,14 +110,94 @@ def _batched_bars(
     return output
 
 
+def deterministic_catalog_sample(
+    catalog: list[dict[str, Any]],
+    *,
+    maximum: int,
+    priority: list[str] | None = None,
+    inactive_share: float = AUTO_INACTIVE_SAMPLE_SHARE,
+) -> tuple[list[str], dict[str, Any]]:
+    """Sample active and inactive exchange-listed equities reproducibly.
+
+    Priority symbols are retained first. The remaining budget explicitly reserves space for
+    inactive/delisted names so today's survivors cannot dominate the historical research set.
+    """
+    maximum = max(1, int(maximum))
+    priority_clean = [
+        value
+        for value in dict.fromkeys(
+            str(symbol or "").strip().upper() for symbol in (priority or [])
+        )
+        if value
+    ]
+    by_symbol = {
+        str(item.get("symbol") or "").strip().upper(): item
+        for item in catalog
+        if isinstance(item, dict) and str(item.get("symbol") or "").strip()
+    }
+    active = sorted(
+        symbol for symbol, item in by_symbol.items()
+        if str(item.get("status") or "").lower() == "active"
+    )
+    inactive = sorted(
+        symbol for symbol, item in by_symbol.items()
+        if str(item.get("status") or "").lower() == "inactive"
+    )
+
+    result = [symbol for symbol in priority_clean if symbol in by_symbol][:maximum]
+    remaining = maximum - len(result)
+    inactive_target = min(
+        len([symbol for symbol in inactive if symbol not in result]),
+        max(0, int(round(maximum * max(0.0, min(0.8, float(inactive_share)))))),
+    )
+    inactive_pick = deterministic_symbol_sample(
+        [symbol for symbol in inactive if symbol not in result],
+        maximum=max(1, inactive_target) if inactive_target else 1,
+    ) if inactive_target else []
+    inactive_pick = inactive_pick[:inactive_target]
+    result.extend(symbol for symbol in inactive_pick if symbol not in result)
+
+    remaining = maximum - len(result)
+    active_pick = deterministic_symbol_sample(
+        [symbol for symbol in active if symbol not in result],
+        maximum=max(1, remaining) if remaining else 1,
+    ) if remaining else []
+    result.extend(symbol for symbol in active_pick if symbol not in result)
+
+    if len(result) < maximum:
+        residual = [
+            symbol for symbol in sorted(by_symbol)
+            if symbol not in result
+        ]
+        result.extend(residual[: maximum - len(result)])
+
+    sampled_status = {
+        "active": sum(
+            1 for symbol in result
+            if str((by_symbol.get(symbol) or {}).get("status") or "").lower() == "active"
+        ),
+        "inactive": sum(
+            1 for symbol in result
+            if str((by_symbol.get(symbol) or {}).get("status") or "").lower() == "inactive"
+        ),
+    }
+    return result[:maximum], {
+        "population_size": len(by_symbol),
+        "active_population": len(active),
+        "inactive_population": len(inactive),
+        "active_sampled": sampled_status["active"],
+        "inactive_sampled": sampled_status["inactive"],
+    }
+
+
 def build_research_universe(
     market: AlpacaMarketData,
     *,
     maximum: int = AUTO_UNIVERSE_SAMPLE_SIZE,
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """Build a broad automatic universe, falling back safely if asset listing is unavailable."""
-    _notify(progress, "Loading current movers and most-active stocks…")
+    """Build a point-in-time-capable universe using active and inactive Alpaca assets."""
+    _notify(progress, "Loading current movers and most-active stocks for priority coverage…")
     priority: list[str] = []
     try:
         priority.extend(market.movers(top=50))
@@ -128,35 +210,159 @@ def build_research_universe(
     priority = list(dict.fromkeys(priority))
 
     try:
-        _notify(progress, "Loading Alpaca active U.S. equities for broad universe sampling…")
-        active = market.active_equities()
+        _notify(progress, "Loading Alpaca active + inactive U.S. equity master catalog…")
+        catalog = market.equity_catalog()
     except AppError as exc:
         if not priority:
             raise
         return {
             "symbols": priority[:maximum],
             "source": "current_screener_fallback",
-            "active_equities_available": False,
+            "point_in_time_capable": False,
+            "catalog_available": False,
             "population_size": len(priority),
+            "priority_symbols": len(priority),
             "selection_bias_warning": (
-                "The broad active-equity list was unavailable, so this run used current movers/most-active "
-                "stocks. Results are research-only because current-universe selection bias is material. "
-                f"Alpaca detail: {exc}"
+                "The active/inactive equity master catalog was unavailable, so this run used current "
+                "movers/most-active stocks only. Full validation is disabled because historical selection "
+                f"bias is material. Alpaca detail: {exc}"
             ),
         }
 
-    sampled = deterministic_symbol_sample(active, maximum=maximum, priority=priority)
+    sampled, sample_stats = deterministic_catalog_sample(
+        catalog,
+        maximum=maximum,
+        priority=priority,
+        inactive_share=AUTO_INACTIVE_SAMPLE_SHARE,
+    )
+    metadata = {
+        str(item.get("symbol") or "").upper(): {
+            "status": item.get("status"),
+            "exchange": item.get("exchange"),
+            "name": item.get("name"),
+            "tradable": item.get("tradable"),
+        }
+        for item in catalog
+        if str(item.get("symbol") or "").strip()
+    }
     return {
         "symbols": sampled,
-        "source": "active_equities_sample",
-        "active_equities_available": True,
-        "population_size": len(active),
+        "source": "point_in_time_asset_catalog_sample",
+        "point_in_time_capable": True,
+        "catalog_available": True,
         "priority_symbols": len(priority),
+        "asset_metadata": {symbol: metadata.get(symbol, {}) for symbol in sampled},
+        **sample_stats,
         "selection_bias_warning": (
-            "The universe is sampled from equities active today, so delisted historical stocks are absent. "
-            "This reduces current-mover bias but does not eliminate survivorship bias."
+            "Historical membership is inferred from dated market bars for a sample drawn from Alpaca's "
+            "active + inactive exchange-listed equity catalog. This materially reduces survivorship bias. "
+            "Very old symbols missing from Alpaca's retained asset master or market-data history can still be absent."
         ),
     }
+
+
+def infer_symbol_lifecycle(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Infer a symbol's observed historical trading life from dated daily bars."""
+    series = _daily_rows(rows)
+    dates = [str(item.get("timestamp") or "")[:10] for item in series if str(item.get("timestamp") or "")]
+    return {
+        "first_observed_date": dates[0] if dates else None,
+        "last_observed_date": dates[-1] if dates else None,
+        "observed_sessions": len(dates),
+    }
+
+
+def select_event_research_window(
+    opportunities: list[dict[str, Any]],
+    *,
+    window_days: int = AUTO_EVENT_WINDOW_DAYS,
+    buffer_days: int = AUTO_EVENT_WINDOW_BUFFER_DAYS,
+) -> dict[str, Any] | None:
+    """Pick a bounded historical window containing the densest/highest-quality opportunity cluster."""
+    dated: list[tuple[date, dict[str, Any]]] = []
+    for item in opportunities or []:
+        try:
+            event_date = date.fromisoformat(str(item.get("date") or "")[:10])
+        except ValueError:
+            continue
+        dated.append((event_date, item))
+    if not dated:
+        return None
+    dated.sort(key=lambda pair: pair[0])
+
+    best: tuple[float, date, date, list[dict[str, Any]]] | None = None
+    for anchor_date, _ in dated:
+        start_date = anchor_date - timedelta(days=max(1, int(buffer_days)))
+        end_date = start_date + timedelta(days=max(30, int(window_days)))
+        included = [item for event_date, item in dated if start_date <= event_date <= end_date]
+        quality = sum(
+            1.0
+            + min(8.0, max(0.0, safe_float(item.get("relative_volume"), 0.0) or 0.0))
+            + min(15.0, abs(safe_float(item.get("day_change_pct"), 0.0) or 0.0) / 2.0)
+            for item in included
+        )
+        candidate = (quality, start_date, end_date, included)
+        if best is None or candidate[0] > best[0]:
+            best = candidate
+
+    if best is None:
+        return None
+    quality, start_date, end_date, included = best
+    return {
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "event_count": len(included),
+        "event_dates": [str(item.get("date") or "") for item in included],
+        "window_quality": round(quality, 2),
+    }
+
+
+def _window_datetimes(window: dict[str, Any]) -> tuple[datetime, datetime]:
+    try:
+        start_date = date.fromisoformat(str(window.get("start_date") or ""))
+        end_date = date.fromisoformat(str(window.get("end_date") or ""))
+    except ValueError as exc:
+        raise AppError("Historical event window contains an invalid date.") from exc
+    start = datetime.combine(start_date, time.min, tzinfo=timezone.utc)
+    end = datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=timezone.utc)
+    return start, end
+
+
+def load_point_in_time_intraday(
+    market: AlpacaMarketData,
+    opportunities_by_symbol: dict[str, list[dict[str, Any]]],
+    *,
+    timeframe: str = AUTO_TIMEFRAME,
+    progress: Callable[[str], None] | None = None,
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
+    """Download only bounded historical windows around actual opportunity clusters."""
+    rows_by_symbol: dict[str, list[dict[str, Any]]] = {}
+    windows: dict[str, dict[str, Any]] = {}
+    items = list(opportunities_by_symbol.items())
+    for index, (symbol, opportunities) in enumerate(items, start=1):
+        window = select_event_research_window(opportunities)
+        if not window:
+            continue
+        start, end = _window_datetimes(window)
+        _notify(
+            progress,
+            f"Point-in-time intraday window {index}/{len(items)}: {symbol} "
+            f"{window['start_date']} → {window['end_date']}…",
+        )
+        try:
+            bars = market.bars(
+                [symbol],
+                start=start,
+                end=end,
+                timeframe=timeframe,
+                max_pages=24,
+            ).get(symbol, [])
+        except AppError:
+            continue
+        if bars:
+            rows_by_symbol[symbol] = list(bars)
+            windows[symbol] = window
+    return rows_by_symbol, windows
 
 
 def _daily_rows(rows: list[dict[str, Any]]) -> list[dict[str, float | str]]:
