@@ -504,12 +504,51 @@ class CloudReconciliationTests(unittest.TestCase):
                 },
                 make_backup=False,
             )
+            store._record_cloud_status(
+                synced_updated_at="2026-08-27T17:00:00Z",
+                last_synced_at="2026-08-27T17:00:00Z",
+            )
             loaded = store.load_latest()
             self.assertEqual(loaded["knowledge_sources"][0]["title"], "Local")
             self.assertEqual(
                 store.cloud_status()["synced_updated_at"],
                 "2026-08-27T17:00:00Z",
             )
+
+    def test_both_sides_changed_since_shared_version_raises_conflict(self):
+        class FakeCloud:
+            repository = "owner/private-backups"
+            path = "trading-intelligence-lab/intelligence_library.json"
+
+            def read_library(self):
+                return {
+                    "library": {
+                        "version": 2,
+                        "strategies": [],
+                        "knowledge_sources": [{"id": "remote-new"}],
+                        "updated_at": "2026-08-27T17:20:00Z",
+                    },
+                    "sha": "a" * 40,
+                }
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = engine.StrategyStore(directory, cloud_backup=FakeCloud())
+            store._write_local(
+                {
+                    "version": 2,
+                    "strategies": [],
+                    "knowledge_sources": [{"id": "local-new"}],
+                    "updated_at": "2026-08-27T17:10:00Z",
+                },
+                make_backup=False,
+            )
+            store._record_cloud_status(
+                synced_updated_at="2026-08-27T17:00:00Z",
+                last_synced_at="2026-08-27T17:00:00Z",
+            )
+            with self.assertRaises(engine.AppError):
+                store.load_latest()
+
 
     def test_same_timestamp_different_data_is_not_silently_overwritten(self):
         class FakeCloud:
