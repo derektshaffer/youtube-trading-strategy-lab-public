@@ -341,6 +341,14 @@ class AutonomousResearchTests(unittest.TestCase):
                     "error": "Synthetic research failure",
                 }
             ],
+            "timing_profile": {
+                "version": 1,
+                "total_seconds": 420.0,
+                "samples": [
+                    {"fraction": 0.1, "elapsed_seconds": 30.0},
+                    {"fraction": 1.0, "elapsed_seconds": 420.0},
+                ],
+            },
             "results": [
                 {
                     "strategy_id": "s1",
@@ -379,6 +387,8 @@ class AutonomousResearchTests(unittest.TestCase):
         self.assertEqual(saved_run["deep_strategies_tested"], 1)
         self.assertEqual(saved_run["deep_strategies_failed"], 1)
         self.assertEqual(saved_run["failed_finalists"][0]["strategy_name"], "Skipped")
+        self.assertEqual(saved_run["timing_profile"]["total_seconds"], 420.0)
+        self.assertEqual(saved_run["timing_profile"]["samples"][-1]["fraction"], 1.0)
 
 
 if __name__ == "__main__":
