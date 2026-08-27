@@ -309,7 +309,7 @@ elif module == "Knowledge Sources":
     )
 
     storage = persistence_summary()
-    if storage.get("durable"):
+    if storage.get("healthy"):
         st.success(
             "Permanent library storage verified: "
             f"{storage.get('repository')} · {storage.get('path')}. "
@@ -317,7 +317,7 @@ elif module == "Knowledge Sources":
         )
     elif storage.get("configured"):
         st.error(
-            "Permanent GitHub storage is configured but NOT verified. "
+            "Permanent GitHub storage is not healthy yet. "
             + str(
                 storage.get("verification_error")
                 or storage.get("last_error")
