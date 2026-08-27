@@ -115,6 +115,9 @@ It is intentionally separate from the current YouTube Trading Lab home screen. T
 - source-rule protection so AI assumptions never overwrite thresholds explicitly stated by the author
 - research-readiness scoring before a strategy enters deterministic backtesting
 - one canonical strategy representation across books and YouTube sources
+- Strategy DNA fingerprints that decompose setups into universe, catalyst, momentum, structure, context, risk, exit, execution, and market-regime components
+- cross-book concept mapping that counts independent-source agreement separately from historical validation
+- automatic strategy-family clustering and research-only cross-source candidate blueprints, with explicit rule conflicts surfaced instead of silently averaged
 - historical Strategy Lab optimization, untouched holdout testing, walk-forward validation, catalyst intelligence, universe research, market discovery, stock analysis, and Live/Paper integration
 - a separate intelligence-library backup at `trading-intelligence-lab/intelligence_library.json`
 - read/import access to strategies already saved by the YouTube Trading Lab
@@ -127,6 +130,8 @@ Normal book workflow:
 4. Click **Analyze source and extract strategies** once.
 5. Gemini 3.6 Flash performs the normal bulk book extraction. Only sections with low confidence, conflicting/ambiguous requirements, evidence gaps, or unusually difficult formalization are escalated to Gemini 3.7 Flash for a specialist second pass. If 3.7 is unavailable, the successful 3.6 extraction is kept rather than discarded.
 6. The AI extracts strategies, preserves source evidence, and creates clearly labeled research assumptions where needed.
+7. The Strategy DNA layer converts each strategy into reusable components and compares those concepts across independent books/documents without treating author agreement as proof of an edge.
+8. Cross-source strategy families and candidate blueprints are generated as research hypotheses; conflicting explicit thresholds remain visible until historical testing decides what survives.
 7. The Historical Research Autopilot builds a point-in-time-capable Alpaca universe automatically from the exchange-listed U.S. equity master catalog, including both active and inactive/delisted symbols. A fixed share of each broad sample is reserved for inactive names while current movers/most-active stocks are retained for present-day coverage.
 8. About five years of daily history is used only to identify stocks and dates that previously exhibited strategy-relevant conditions. Actual dated bar availability is used to infer when each symbol existed. Future trade P/L is not used for candidate selection.
 9. Instead of forcing every strategy into the latest 60 days, the Lab selects bounded historical research windows around the strongest actual opportunity clusters for each finalist stock. Those windows can be years in the past and can belong to symbols that are inactive today.
