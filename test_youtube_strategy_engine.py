@@ -604,6 +604,42 @@ class CloudWriteVerificationTests(unittest.TestCase):
             self.assertIsNotNone(after["last_write_at"])
 
 
+class CloudDestinationBindingTests(unittest.TestCase):
+    def test_old_write_verification_is_ignored_after_backup_destination_changes(self):
+        class FakeCloud:
+            repository = "owner/new-private-backups"
+            path = "trading-intelligence-lab/intelligence_library.json"
+
+            def read_library(self):
+                return {
+                    "library": {
+                        "version": 2,
+                        "strategies": [],
+                        "updated_at": "2026-08-27T17:00:00Z",
+                    },
+                    "sha": "a" * 40,
+                }
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = engine.StrategyStore(directory, cloud_backup=FakeCloud())
+            store.cloud_status_path.write_text(
+                json.dumps(
+                    {
+                        "repository": "owner/old-private-backups",
+                        "path": "old/path.json",
+                        "last_write_at": "2026-08-27T16:00:00Z",
+                        "last_synced_at": "2026-08-27T16:00:00Z",
+                        "synced_updated_at": "2026-08-27T16:00:00Z",
+                        "last_error": None,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            status = store.persistence_status(verify=True)
+            self.assertFalse(status["write_verified"])
+            self.assertFalse(status["healthy"])
+
+
 class CloudBackupFirstWriteTests(unittest.TestCase):
     def test_first_write_to_initialized_blank_cloud_library_is_allowed(self):
         cloud = engine.GitHubCloudBackup(
