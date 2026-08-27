@@ -20,9 +20,11 @@ from trading_market_discovery import analyze_stock_strategies, scan_strategy_uni
 from trading_intelligence_core import (
     GeminiBookAnalyzer,
     canonicalize_existing_strategy,
+    effective_strategy_for_live,
     extract_source_text,
     merge_strategies,
 )
+from trading_universe_research import cross_stock_generalization
 from trading_validation_core import validation_strength, walk_forward_validate
 from youtube_strategy_engine import (
     DEFAULT_GEMINI_MODEL,
@@ -137,6 +139,7 @@ with st.sidebar:
             "Knowledge Sources",
             "Strategy Library",
             "Strategy Lab",
+            "Universe Research",
             "Validation",
             "Catalyst Intelligence",
             "Market Discovery",
@@ -780,6 +783,163 @@ elif module == "Strategy Lab":
                         else "It remains research-only because one or more validation gates were not met."
                     )
                 )
+
+
+elif module == "Universe Research":
+    st.markdown("## Universe Research")
+    st.caption(
+        "Run one frozen strategy unchanged across several stocks. This is designed to expose ticker-specific "
+        "overfitting: a strategy that only works on one symbol should look narrow here."
+    )
+
+    if not strategies:
+        st.info("Add or import a strategy before running cross-stock research.")
+    else:
+        universe_choices = {}
+        for item in sorted(
+            strategies,
+            key=lambda value: (
+                str(value.get("validation_status") or "").lower() != "validated",
+                str(value.get("name") or ""),
+            ),
+        ):
+            status = str(item.get("validation_status") or "unvalidated").replace("_", " ").title()
+            label = f"{item.get('name') or 'Unnamed strategy'} · {status}"
+            if label in universe_choices:
+                label += f" · {str(item.get('id') or '')[:7]}"
+            universe_choices[label] = item
+        universe_strategy = universe_choices[
+            st.selectbox("Strategy to generalize", list(universe_choices), key="til_universe_strategy")
+        ]
+        effective_universe_strategy = effective_strategy_for_live(universe_strategy)
+        if not effective_universe_strategy.get("using_validated_rules"):
+            st.warning(
+                "This strategy has no frozen validated rule set yet. The test will use its current research rules."
+            )
+
+        u1, u2, u3 = st.columns([2.3, 1.0, 1.0])
+        raw_universe = u1.text_input(
+            "Stocks to compare",
+            value="AAPL NVDA TSLA AMD META",
+            help="Use spaces or commas. Five or more different stocks gives a more useful portability check.",
+        )
+        universe_days = int(u2.slider("Calendar days", 14, 180, 45, 1, key="til_universe_days"))
+        universe_timeframe = u3.selectbox(
+            "Candle size",
+            ["1Min", "5Min", "15Min"],
+            index=1,
+            key="til_universe_timeframe",
+        )
+        universe_symbols = []
+        for token in raw_universe.replace(",", " ").split():
+            symbol = token.strip().upper()
+            if symbol and symbol not in universe_symbols:
+                universe_symbols.append(symbol)
+        universe_symbols = universe_symbols[:12]
+
+        run_universe = st.button(
+            "🧬 Test strategy across stocks",
+            type="primary",
+            use_container_width=True,
+            disabled=len(universe_symbols) < 2,
+        )
+        if run_universe:
+            try:
+                market = market_client()
+                end_time = utc_now()
+                if market.historical_feed == "sip" and market.live_feed != "sip":
+                    end_time -= timedelta(minutes=16)
+                start_time = end_time - timedelta(days=universe_days)
+                status_box = st.status(
+                    f"Downloading history for {len(universe_symbols)} stocks…",
+                    expanded=True,
+                )
+                rows_by_symbol = market.bars(
+                    universe_symbols,
+                    start=start_time,
+                    end=end_time,
+                    timeframe=universe_timeframe,
+                    max_pages=40,
+                    progress=lambda page: status_box.write(f"Historical candle page {page}…"),
+                )
+
+                rules = normalize_machine_rules(effective_universe_strategy.get("machine_rules"))
+                catalyst_summary_by_symbol = {}
+                if rules.get("catalyst_required"):
+                    status_box.write("Downloading point-in-time historical catalyst news…")
+                    articles = historical_news(
+                        market,
+                        universe_symbols,
+                        start=start_time - timedelta(hours=24),
+                        end=end_time,
+                        max_pages=80,
+                    )
+                    for symbol in universe_symbols:
+                        symbol_articles = [
+                            article
+                            for article in articles
+                            if symbol in [str(x).upper() for x in article.get("symbols") or []]
+                        ]
+                        enriched, cat_summary = enrich_bars_with_point_in_time_catalysts(
+                            list(rows_by_symbol.get(symbol) or []),
+                            symbol_articles,
+                            lookback_hours=24.0,
+                        )
+                        rows_by_symbol[symbol] = enriched
+                        catalyst_summary_by_symbol[symbol] = cat_summary
+
+                report = cross_stock_generalization(
+                    {symbol: list(rows_by_symbol.get(symbol) or []) for symbol in universe_symbols},
+                    universe_strategy,
+                    BacktestSettings(),
+                )
+                report["timeframe"] = universe_timeframe
+                report["history_days"] = universe_days
+                report["catalyst_summary_by_symbol"] = catalyst_summary_by_symbol
+                st.session_state["til_universe_result"] = report
+                status_box.update(
+                    label=f"Cross-stock test complete · {report.get('symbols_tested')} stocks",
+                    state="complete",
+                    expanded=False,
+                )
+                st.rerun()
+            except AppError as exc:
+                st.error(str(exc))
+            except Exception as exc:
+                st.error(f"Universe research failed: {exc}")
+
+        universe_result = st.session_state.get("til_universe_result") or {}
+        if universe_result:
+            summary = universe_result.get("summary") or {}
+            st.divider()
+            st.markdown(f"### {universe_result.get('strategy_name') or 'Strategy'} · cross-stock result")
+            cols = st.columns(5)
+            cols[0].metric("Generalization score", f"{safe_float(summary.get('score'), 0.0):.1f}/100")
+            cols[1].metric("Breadth", summary.get("label") or "—")
+            cols[2].metric("Profitable stocks", f"{safe_float(summary.get('profitable_symbol_pct'), 0.0):.0f}%")
+            cols[3].metric("Stocks with trades", f"{safe_float(summary.get('coverage_pct'), 0.0):.0f}%")
+            cols[4].metric("Total trades", int(summary.get("total_trades") or 0))
+            st.caption(universe_result.get("note") or "")
+
+            table_rows = []
+            for item in universe_result.get("results") or []:
+                metrics = item.get("metrics") or {}
+                table_rows.append(
+                    {
+                        "Symbol": item.get("symbol"),
+                        "Trades": int(safe_float(metrics.get("trade_count"), 0) or 0),
+                        "Net P/L": safe_float(metrics.get("net_pnl"), 0.0) or 0.0,
+                        "Return %": safe_float(metrics.get("return_pct"), 0.0) or 0.0,
+                        "Win rate %": safe_float(metrics.get("win_rate_pct"), 0.0) or 0.0,
+                        "Profit factor": metrics.get("profit_factor"),
+                        "Max drawdown %": safe_float(metrics.get("max_drawdown_pct"), 0.0) or 0.0,
+                        "Catalyst filter": bool(item.get("historical_catalyst_filter_applied")),
+                    }
+                )
+            if table_rows:
+                st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+            for warning in universe_result.get("warnings") or []:
+                st.warning(str(warning))
 
 
 elif module == "Validation":
