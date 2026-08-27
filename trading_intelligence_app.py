@@ -11,7 +11,7 @@ import pandas as pd
 import streamlit as st
 
 from live_strategy_runner_page import market_client, setting
-from trading_market_discovery import scan_strategy_universe
+from trading_market_discovery import analyze_stock_strategies, scan_strategy_universe
 from trading_intelligence_core import (
     GeminiBookAnalyzer,
     canonicalize_existing_strategy,
@@ -879,7 +879,7 @@ elif module == "Market Discovery":
             metrics = inspected.get("metrics") or {}
             signal = inspected.get("signal") or {}
             detail_cols = st.columns(4)
-            detail_cols[0].metric("Price", f"\${safe_float(metrics.get('price'), 0.0):,.4f}")
+            detail_cols[0].metric("Price", f"${safe_float(metrics.get('price'), 0.0):,.4f}")
             detail_cols[1].metric("Day move", f"{safe_float(metrics.get('day_change_pct'), 0.0):+.2f}%")
             rvol = safe_float(metrics.get("relative_volume"))
             detail_cols[2].metric("Relative volume", f"{rvol:.2f}×" if rvol is not None else "—")
@@ -899,11 +899,121 @@ elif module == "Market Discovery":
 
 elif module == "Stock Analyzer":
     st.markdown("## Stock Analyzer")
-    st.info(
-        "This module will absorb the strongest parts of the single-stock analyzer: current price/volume "
-        "context, VWAP, catalysts, historical analogs, support/resistance, ML setup scoring, and "
-        "strategy-fit comparison."
+    st.caption(
+        "Compare one stock against the strategy library using shared live market data, then inspect "
+        "which validated setup currently fits best."
     )
+
+    if not strategies:
+        st.info("No strategies are available yet.")
+    else:
+        analyzer_cols = st.columns([1.2, 1.0, 2.0])
+        analyzer_ticker = analyzer_cols[0].text_input(
+            "Ticker to analyze",
+            value=str(st.session_state.get("til_analyzer_ticker") or "SDOT"),
+            max_chars=10,
+        ).strip().upper()
+        validated_only = analyzer_cols[1].checkbox(
+            "Validated only",
+            value=True,
+            help="Turn this off to compare research-only strategies too.",
+        )
+        analyzer_cols[2].caption(
+            "The analyzer ranks setup fit separately from historical robustness. "
+            "A 100% rule match is not the same thing as a 100% chance of profit."
+        )
+
+        analyzer_strategies = [
+            item for item in strategies
+            if not validated_only
+            or str(item.get("validation_status") or "").lower() == "validated"
+        ]
+        if validated_only and not analyzer_strategies:
+            st.info("No validated strategies are available yet. Turn off Validated only to explore research strategies.")
+
+        analyze_stock = st.button(
+            "🧭 Analyze stock against strategies",
+            type="primary",
+            use_container_width=True,
+            disabled=not analyzer_ticker or not analyzer_strategies,
+        )
+        if analyze_stock:
+            try:
+                st.session_state["til_analyzer_ticker"] = analyzer_ticker
+                status_box = st.status(f"Analyzing {analyzer_ticker}…", expanded=True)
+                analysis = analyze_stock_strategies(
+                    market_client(),
+                    analyzer_ticker,
+                    analyzer_strategies,
+                    progress=lambda message: status_box.write(message),
+                )
+                st.session_state["til_stock_analysis"] = analysis
+                status_box.update(label=f"{analyzer_ticker} analysis complete", state="complete", expanded=False)
+                st.rerun()
+            except AppError as exc:
+                st.error(str(exc))
+            except Exception as exc:
+                st.error(f"Stock analysis failed: {exc}")
+
+        stock_result = st.session_state.get("til_stock_analysis") or {}
+        if stock_result and stock_result.get("symbol") == analyzer_ticker:
+            metrics = stock_result.get("metrics") or {}
+            comparisons = list(stock_result.get("comparisons") or [])
+            st.divider()
+            st.markdown(f"### {analyzer_ticker} strategy-fit report")
+
+            market_cols = st.columns(5)
+            market_cols[0].metric("Price", f"${safe_float(metrics.get('price'), 0.0):,.4f}")
+            market_cols[1].metric("Day move", f"{safe_float(metrics.get('day_change_pct'), 0.0):+.2f}%")
+            rvol = safe_float(metrics.get("relative_volume"))
+            market_cols[2].metric("RVOL", f"{rvol:.2f}×" if rvol is not None else "—")
+            market_cols[3].metric("Spread", f"{safe_float(metrics.get('spread_pct'), 0.0):.2f}%")
+            market_cols[4].metric("Recent catalyst items", int(stock_result.get("news_count") or 0))
+
+            if comparisons:
+                best = comparisons[0]
+                best_validation = str(best.get("validation_status") or "unvalidated").replace("_", " ").title()
+                st.markdown(
+                    f"**Best current strategy fit:** {best.get('strategy_name')} · "
+                    f"{best.get('status')} · {safe_float(best.get('score'), 0.0):.0f}% rule match · "
+                    f"{best_validation}"
+                )
+
+                comparison_rows = []
+                for item in comparisons:
+                    comparison_rows.append(
+                        {
+                            "Strategy": item.get("strategy_name"),
+                            "Validation": item.get("validation_status"),
+                            "Robustness": item.get("robustness_score"),
+                            "Current setup": item.get("status"),
+                            "Rule match %": safe_float(item.get("score"), 0.0) or 0.0,
+                            "Needs verification": int(safe_float(item.get("unknown"), 0) or 0),
+                            "Source": item.get("source_title") or item.get("source_type"),
+                        }
+                    )
+                st.dataframe(pd.DataFrame(comparison_rows), use_container_width=True, hide_index=True)
+
+                inspect_options = {
+                    f"{item.get('strategy_name')} · {item.get('status')} · {safe_float(item.get('score'), 0.0):.0f}%": item
+                    for item in comparisons
+                }
+                chosen = inspect_options[st.selectbox("Inspect strategy fit", list(inspect_options))]
+                signal = chosen.get("signal") or {}
+                if chosen.get("robustness_score") is not None:
+                    st.caption(
+                        f"Historical robustness score: {safe_float(chosen.get('robustness_score'), 0.0):.1f}/100. "
+                        "This is a historical validation score, not a probability forecast."
+                    )
+                checks = signal.get("checks") or []
+                if checks:
+                    for check in checks:
+                        state = str(check.get("status") or "").upper()
+                        icon = "✅" if state == "PASS" else "❓" if state == "UNKNOWN" else "❌"
+                        st.write(
+                            f"{icon} **{check.get('label') or 'Rule'}** — "
+                            f"current: {check.get('actual')} · required: {check.get('required')}"
+                        )
 
 
 elif module == "Live / Paper":
