@@ -983,15 +983,34 @@ class GeminiBookAnalyzer:
         if not strategies:
             return False, reasons
 
-        low_confidence = [
-            item for item in strategies
-            if (safe_float(item.get("confidence"), 100.0) or 0.0)
-            < BOOK_SPECIALIST_CONFIDENCE_THRESHOLD
-        ]
-        unresolved_count = sum(
-            len([value for value in item.get("unresolved_rules") or [] if str(value).strip()])
+        confidences = [
+            safe_float(item.get("confidence"), 100.0) or 0.0
             for item in strategies
+        ]
+        low_confidence = [
+            item for item, confidence in zip(strategies, confidences)
+            if confidence < BOOK_SPECIALIST_CONFIDENCE_THRESHOLD
+        ]
+        unresolved_values = [
+            str(value).strip()
+            for item in strategies
+            for value in item.get("unresolved_rules") or []
+            if str(value).strip()
+        ]
+        unresolved_count = len(unresolved_values)
+        conflict_markers = (
+            "conflict",
+            "contradict",
+            "different explicit",
+            "unclear",
+            "ambiguous",
+            "cannot determine",
         )
+        conflict_like = [
+            value
+            for value in unresolved_values
+            if any(marker in value.casefold() for marker in conflict_markers)
+        ]
         weakly_quantified = [
             item
             for item in strategies
@@ -1006,14 +1025,19 @@ class GeminiBookAnalyzer:
             if (item.get("entry_conditions") or item.get("exit_conditions"))
             and not [e for e in item.get("evidence") or [] if isinstance(e, dict)]
         ]
+        average_confidence = sum(confidences) / len(confidences) if confidences else 100.0
 
         if low_confidence:
             reasons.append(f"{len(low_confidence)} low-confidence strategy extraction(s)")
         if unresolved_count >= BOOK_SPECIALIST_UNRESOLVED_THRESHOLD:
             reasons.append(f"{unresolved_count} unresolved source requirements")
-        if weakly_quantified:
-            reasons.append(f"{len(weakly_quantified)} strategy extraction(s) with no measurable source rules")
-        if evidence_gaps:
+        if conflict_like:
+            reasons.append(f"{len(conflict_like)} conflicting or ambiguous source requirement(s)")
+        if weakly_quantified and (unresolved_count >= 2 or average_confidence < 80.0):
+            reasons.append(
+                f"{len(weakly_quantified)} difficult-to-formalize strategy extraction(s)"
+            )
+        if evidence_gaps and (low_confidence or unresolved_count >= 2):
             reasons.append(f"{len(evidence_gaps)} strategy extraction(s) missing retained evidence")
 
         return bool(reasons), reasons
