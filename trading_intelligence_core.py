@@ -1421,7 +1421,9 @@ class GeminiBookAnalyzer:
         chunks = chunk_source_text(text)
         if not chunks:
             raise AppError("There was no readable source text to analyze.")
-        cache_source_id = source_fingerprint(title, author, text)
+        # Source identity must survive title/author edits between resumed runs.
+        # Metadata can improve display labels, but the same content remains the same source.
+        cache_source_id = source_fingerprint("", "", text)
         cache_directory = self._cache_directory(cache_source_id, focus)
         strategies_by_key: dict[str, dict[str, Any]] = {}
         summaries: list[str] = []
