@@ -144,6 +144,22 @@ class CrossSourceGraphTests(unittest.TestCase):
         )
         self.assertEqual(family_one["id"], family_two["id"])
 
+    def test_family_id_stays_stable_when_new_source_joins(self):
+        first = self._strategy("a", "book-1", "Book One")
+        second = self._strategy("b", "book-2", "Book Two")
+        third = self._strategy("c", "book-3", "Book Three")
+        original = next(
+            family
+            for family in build_strategy_families([first, second])
+            if family["independent_source_count"] == 2
+        )
+        expanded = next(
+            family
+            for family in build_strategy_families([first, second, third])
+            if family["independent_source_count"] == 3
+        )
+        self.assertEqual(original["id"], expanded["id"])
+
     def test_optimizer_tests_exact_cross_source_values(self):
         strategy = {
             "id": "synth-test",
@@ -156,7 +172,7 @@ class CrossSourceGraphTests(unittest.TestCase):
                 "reward_risk": 2.0,
             },
             "candidate_rule_options": {
-                "min_relative_volume": [5.0, 8.0],
+                "min_relative_volume": [5.0, 7.3],
             },
         }
         variants = generate_strategy_variants(
@@ -165,7 +181,7 @@ class CrossSourceGraphTests(unittest.TestCase):
             maximum=12,
         )
         self.assertTrue(
-            any(item.get("min_relative_volume") == 8.0 for item in variants)
+            any(item.get("min_relative_volume") == 7.3 for item in variants)
         )
 
 
