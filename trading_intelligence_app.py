@@ -539,27 +539,18 @@ elif module == "Knowledge Sources":
                     stage="extracted",
                 )
 
-            data = intelligence_store().load()
-            data["strategies"] = merge_strategies(
-                list(data.get("strategies") or []),
-                list(analysis.get("strategies") or []),
-            )
-
-            # Persist the expensive source reading/preparation before deeper market research begins.
-            # If Alpaca or Streamlit interrupts the later research funnel, the extracted work remains saved.
-            preliminary_source = {k: v for k, v in analysis.items() if k != "strategies"}
-            preliminary_source["filename"] = uploaded.name
-            preliminary_source["extraction_metadata"] = metadata
-            preliminary_source["autonomous_research_summary"] = {
+            analysis["autonomous_research_summary"] = {
                 "completed": False,
                 "status": "pending" if autopilot_research and autopilot_prepare else "not_requested",
             }
-            data["knowledge_sources"] = [
-                item for item in data.get("knowledge_sources") or []
-                if item.get("id") != preliminary_source["id"]
-            ]
-            data["knowledge_sources"].insert(0, preliminary_source)
-            intelligence_store().save(data)
+            save_ingestion_checkpoint(
+                analysis,
+                filename=uploaded.name,
+                extraction_metadata=metadata,
+                ingest_id=ingest_id,
+                stage="prepared" if autopilot_prepare else "extracted",
+            )
+            data = intelligence_store().load()
 
             autonomous_report = None
             autonomous_error = ""
@@ -586,6 +577,7 @@ elif module == "Knowledge Sources":
                             progress=lambda message: auto_status.write(message),
                         )
                         data = merge_autonomous_research_into_library(data, autonomous_report)
+                        intelligence_store().save(data)
                         validated_count = sum(
                             1
                             for item in autonomous_report.get("results") or []
@@ -628,15 +620,13 @@ elif module == "Knowledge Sources":
                         "error": autonomous_error,
                     }
 
-            source_record = {k: v for k, v in analysis.items() if k != "strategies"}
-            source_record["filename"] = uploaded.name
-            source_record["extraction_metadata"] = metadata
-            data["knowledge_sources"] = [
-                item for item in data.get("knowledge_sources") or []
-                if item.get("id") != source_record["id"]
-            ]
-            data["knowledge_sources"].insert(0, source_record)
-            intelligence_store().save(data)
+            save_ingestion_checkpoint(
+                analysis,
+                filename=uploaded.name,
+                extraction_metadata=metadata,
+                ingest_id=ingest_id,
+                stage="partial" if analysis.get("analysis_incomplete") else "complete",
+            )
             st.session_state["til_last_analysis"] = analysis
             source_name = analysis.get("title") or title.strip() or uploaded.name
             autopilot_summary = analysis.get("autopilot_summary") or {}
