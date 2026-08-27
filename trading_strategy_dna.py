@@ -9,6 +9,7 @@ Historical backtesting and out-of-sample validation remain the authority on perf
 from __future__ import annotations
 
 from collections import defaultdict
+import hashlib
 from statistics import median
 import re
 from typing import Any
