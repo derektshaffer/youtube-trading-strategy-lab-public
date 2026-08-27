@@ -2614,13 +2614,27 @@ elif module == "Universe Research":
                 universe_symbols.append(symbol)
         universe_symbols = universe_symbols[:12]
 
-        run_universe = st.button(
+        universe_slot = st.empty()
+        run_universe = universe_slot.button(
             "🧬 Test strategy across stocks",
             type="primary",
             use_container_width=True,
             disabled=len(universe_symbols) < 2,
+            key="til_test_strategy_across_stocks",
         )
         if run_universe:
+            universe_slot.button(
+                "🧬 Testing…",
+                type="primary",
+                use_container_width=True,
+                disabled=True,
+                key="til_test_strategy_across_stocks_busy",
+            )
+            universe_monitor = long_task_monitor("universe_cross_stock_test")
+            universe_bar = st.progress(
+                0.02,
+                text=universe_monitor.text(0.02, "Preparing cross-stock research…"),
+            )
             try:
                 market = market_client()
                 end_time = utc_now()
@@ -2631,25 +2645,52 @@ elif module == "Universe Research":
                     f"Downloading history for {len(universe_symbols)} stocks…",
                     expanded=True,
                 )
+                update_task_bar(
+                    universe_bar,
+                    universe_monitor,
+                    0.05,
+                    f"Downloading history for {len(universe_symbols)} stocks",
+                )
+                def universe_history_progress(page: int) -> None:
+                    status_box.write(f"Historical candle page {page}…")
+                    update_task_bar(
+                        universe_bar,
+                        universe_monitor,
+                        0.05 + 0.45 * min(1.0, page / 40.0),
+                        f"Historical candle page {page}",
+                    )
                 rows_by_symbol = market.bars(
                     universe_symbols,
                     start=start_time,
                     end=end_time,
                     timeframe=universe_timeframe,
                     max_pages=40,
-                    progress=lambda page: status_box.write(f"Historical candle page {page}…"),
+                    progress=universe_history_progress,
                 )
+                update_task_bar(universe_bar, universe_monitor, 0.50, "Historical candles ready")
 
                 rules = normalize_machine_rules(effective_universe_strategy.get("machine_rules"))
                 catalyst_summary_by_symbol = {}
                 if rules.get("catalyst_required"):
                     status_box.write("Downloading point-in-time historical catalyst news…")
+                    update_task_bar(
+                        universe_bar,
+                        universe_monitor,
+                        0.52,
+                        "Downloading point-in-time historical catalyst news",
+                    )
                     articles = historical_news(
                         market,
                         universe_symbols,
                         start=start_time - timedelta(hours=24),
                         end=end_time,
                         max_pages=80,
+                        progress=lambda page: update_task_bar(
+                            universe_bar,
+                            universe_monitor,
+                            0.52 + 0.18 * min(1.0, page / 80.0),
+                            f"Historical catalyst page {page}",
+                        ),
                     )
                     for symbol in universe_symbols:
                         symbol_articles = [
@@ -2665,6 +2706,12 @@ elif module == "Universe Research":
                         rows_by_symbol[symbol] = enriched
                         catalyst_summary_by_symbol[symbol] = cat_summary
 
+                update_task_bar(
+                    universe_bar,
+                    universe_monitor,
+                    0.78,
+                    "Running frozen-rule cross-stock simulations",
+                )
                 report = cross_stock_generalization(
                     {symbol: list(rows_by_symbol.get(symbol) or []) for symbol in universe_symbols},
                     universe_strategy,
@@ -2678,6 +2725,11 @@ elif module == "Universe Research":
                     label=f"Cross-stock test complete · {report.get('symbols_tested')} stocks",
                     state="complete",
                     expanded=False,
+                )
+                complete_task_bar(
+                    universe_bar,
+                    universe_monitor,
+                    "Cross-stock test complete",
                 )
                 st.rerun()
             except AppError as exc:
@@ -2773,26 +2825,54 @@ elif module == "Catalyst Intelligence":
         "keywords; it does not claim the event caused the subsequent price move."
     )
 
-    load_catalysts = st.button(
+    catalyst_slot = st.empty()
+    load_catalysts = catalyst_slot.button(
         "📰 Load + classify historical catalysts",
         type="primary",
         use_container_width=True,
         disabled=not catalyst_ticker,
+        key="til_load_classify_catalysts",
     )
     if load_catalysts:
+        catalyst_slot.button(
+            "📰 Loading…",
+            type="primary",
+            use_container_width=True,
+            disabled=True,
+            key="til_load_classify_catalysts_busy",
+        )
+        catalyst_monitor = long_task_monitor("historical_catalyst_research")
+        catalyst_bar = st.progress(
+            0.03,
+            text=catalyst_monitor.text(0.03, f"Preparing {catalyst_ticker} catalyst history…"),
+        )
         try:
             st.session_state["til_catalyst_ticker"] = catalyst_ticker
             market = market_client()
             cat_end = utc_now()
             cat_start = cat_end - timedelta(days=catalyst_days)
             status_box = st.status(f"Loading {catalyst_ticker} historical news…", expanded=True)
+            def catalyst_page_progress(page: int) -> None:
+                status_box.write(f"Historical news page {page}…")
+                update_task_bar(
+                    catalyst_bar,
+                    catalyst_monitor,
+                    0.05 + 0.78 * min(1.0, page / 60.0),
+                    f"Historical news page {page}",
+                )
             raw_articles = historical_news(
                 market,
                 [catalyst_ticker],
                 start=cat_start,
                 end=cat_end,
                 max_pages=60,
-                progress=lambda page: status_box.write(f"Historical news page {page}…"),
+                progress=catalyst_page_progress,
+            )
+            update_task_bar(
+                catalyst_bar,
+                catalyst_monitor,
+                0.88,
+                f"Classifying {len(raw_articles)} historical news items",
             )
             classified = [classify_catalyst(item) for item in raw_articles]
             classified.sort(key=lambda item: str(item.get("published_at") or ""), reverse=True)
@@ -2805,6 +2885,11 @@ elif module == "Catalyst Intelligence":
                 label=f"{len(classified)} historical news items classified",
                 state="complete",
                 expanded=False,
+            )
+            complete_task_bar(
+                catalyst_bar,
+                catalyst_monitor,
+                "Catalyst history complete",
             )
             st.rerun()
         except AppError as exc:
@@ -2916,8 +3001,26 @@ elif module == "Market Discovery":
             disabled=universe_mode != "Custom watchlist",
         )
 
-        scan_now = st.button("🔎 Scan current market", type="primary", use_container_width=True)
+        scan_slot = st.empty()
+        scan_now = scan_slot.button(
+            "🔎 Scan current market",
+            type="primary",
+            use_container_width=True,
+            key="til_scan_current_market",
+        )
         if scan_now:
+            scan_slot.button(
+                "🔎 Scanning…",
+                type="primary",
+                use_container_width=True,
+                disabled=True,
+                key="til_scan_current_market_busy",
+            )
+            scan_monitor = long_task_monitor("market_discovery_scan")
+            scan_bar = st.progress(
+                0.03,
+                text=scan_monitor.text(0.03, "Building live candidate universe…"),
+            )
             try:
                 market = market_client()
                 status_box = st.status("Building live candidate universe…", expanded=True)
@@ -2934,12 +3037,31 @@ elif module == "Market Discovery":
                 if not symbols:
                     raise AppError("No valid symbols were available for this scan.")
 
+                update_task_bar(
+                    scan_bar,
+                    scan_monitor,
+                    0.18,
+                    f"Applying {selected_discovery_strategy.get('name')} to {len(symbols)} candidates",
+                )
                 status_box.write(f"Applying {selected_discovery_strategy.get('name')} to {len(symbols)} candidates…")
+
+                def market_scan_progress(message: str) -> None:
+                    status_box.write(message)
+                    lower = str(message).casefold()
+                    fraction = 0.25
+                    if "relative-volume" in lower:
+                        fraction = 0.45
+                    elif "catalyst" in lower:
+                        fraction = 0.62
+                    elif "intraday chart" in lower:
+                        fraction = 0.78
+                    update_task_bar(scan_bar, scan_monitor, fraction, message)
+
                 results = scan_strategy_universe(
                     market,
                     symbols,
                     selected_discovery_strategy,
-                    progress=lambda message: status_box.write(message),
+                    progress=market_scan_progress,
                 )
                 st.session_state["til_market_discovery_result"] = {
                     "strategy_id": selected_discovery_strategy.get("id"),
@@ -2949,6 +3071,7 @@ elif module == "Market Discovery":
                     "results": results,
                 }
                 status_box.update(label=f"Scan complete · {len(results)} stocks evaluated", state="complete", expanded=False)
+                complete_task_bar(scan_bar, scan_monitor, "Market scan complete")
                 st.rerun()
             except AppError as exc:
                 st.error(str(exc))
@@ -3056,24 +3179,51 @@ elif module == "Stock Analyzer":
         if validated_only and not analyzer_strategies:
             st.info("No validated strategies are available yet. Turn off Validated only to explore research strategies.")
 
-        analyze_stock = st.button(
+        analyzer_slot = st.empty()
+        analyze_stock = analyzer_slot.button(
             "🧭 Analyze stock against strategies",
             type="primary",
             use_container_width=True,
             disabled=not analyzer_ticker or not analyzer_strategies,
+            key="til_analyze_stock_strategies",
         )
         if analyze_stock:
+            analyzer_slot.button(
+                "🧭 Analyzing…",
+                type="primary",
+                use_container_width=True,
+                disabled=True,
+                key="til_analyze_stock_strategies_busy",
+            )
+            analyzer_monitor = long_task_monitor("stock_strategy_analysis")
+            analyzer_bar = st.progress(
+                0.03,
+                text=analyzer_monitor.text(0.03, f"Preparing {analyzer_ticker} analysis…"),
+            )
             try:
                 st.session_state["til_analyzer_ticker"] = analyzer_ticker
                 status_box = st.status(f"Analyzing {analyzer_ticker}…", expanded=True)
+                def stock_analysis_progress(message: str) -> None:
+                    status_box.write(message)
+                    lower = str(message).casefold()
+                    fraction = 0.20
+                    if "relative-volume" in lower:
+                        fraction = 0.42
+                    elif "catalyst" in lower:
+                        fraction = 0.60
+                    elif "intraday chart" in lower:
+                        fraction = 0.78
+                    update_task_bar(analyzer_bar, analyzer_monitor, fraction, message)
+
                 analysis = analyze_stock_strategies(
                     market_client(),
                     analyzer_ticker,
                     analyzer_strategies,
-                    progress=lambda message: status_box.write(message),
+                    progress=stock_analysis_progress,
                 )
                 st.session_state["til_stock_analysis"] = analysis
                 status_box.update(label=f"{analyzer_ticker} analysis complete", state="complete", expanded=False)
+                complete_task_bar(analyzer_bar, analyzer_monitor, f"{analyzer_ticker} analysis complete")
                 st.rerun()
             except AppError as exc:
                 st.error(str(exc))
