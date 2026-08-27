@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import time
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -19,7 +18,7 @@ from trading_catalyst_core import (
     historical_news,
 )
 from trading_market_discovery import analyze_stock_strategies, scan_strategy_universe
-from trading_progress_ui import AutonomousResearchProgressEstimator, format_elapsed
+from trading_progress_ui import AutonomousResearchProgressEstimator
 from trading_auto_research import (
     merge_autonomous_research_into_library,
     run_autonomous_research,
@@ -1669,7 +1668,6 @@ elif module == "AI Research Autopilot":
             key="til_run_full_autonomous_research_busy",
         )
 
-        started_at = time.monotonic()
         attempt_started_at = utc_now().isoformat()
         st.session_state["til_auto_research_last_attempt"] = {
             "status": "running",
@@ -1702,10 +1700,9 @@ elif module == "AI Research Autopilot":
                 del activity_log[:-250]
 
             fraction = estimator.update(text)
-            elapsed = format_elapsed(time.monotonic() - started_at)
             auto_progress.progress(
                 max(0.01, fraction),
-                text=f"Estimated progress: {estimator.percent}% · elapsed {elapsed}",
+                text=f"Estimated progress: {estimator.percent}%",
             )
 
             # Keep the compact panel focused on the newest work so the user never has to scroll it.
@@ -1741,10 +1738,9 @@ elif module == "AI Research Autopilot":
                 "completed_at": report.get("generated_at") or utc_now().isoformat(),
                 "failed_finalists": report.get("failed_finalists") or [],
             }
-            elapsed = format_elapsed(time.monotonic() - started_at)
             auto_progress.progress(
                 1.0,
-                text=f"Research complete · 100% · elapsed {elapsed}",
+                text="Research complete · 100%",
             )
             latest_activity.success(
                 f"Autonomous research complete · "
@@ -1759,10 +1755,9 @@ elif module == "AI Research Autopilot":
                 "stopped_at": utc_now().isoformat(),
                 "error": str(exc),
             }
-            elapsed = format_elapsed(time.monotonic() - started_at)
             auto_progress.progress(
                 max(0.01, estimator.fraction),
-                text=f"Research stopped · estimated {estimator.percent}% · elapsed {elapsed}",
+                text=f"Research stopped · estimated {estimator.percent}%",
             )
             latest_activity.error("Autonomous research stopped safely.")
             st.error(str(exc))
@@ -1773,10 +1768,9 @@ elif module == "AI Research Autopilot":
                 "stopped_at": utc_now().isoformat(),
                 "error": str(exc),
             }
-            elapsed = format_elapsed(time.monotonic() - started_at)
             auto_progress.progress(
                 max(0.01, estimator.fraction),
-                text=f"Research failed · estimated {estimator.percent}% · elapsed {elapsed}",
+                text=f"Research failed · estimated {estimator.percent}%",
             )
             latest_activity.error("Autonomous research failed.")
             st.error(f"Autonomous research failed: {exc}")
