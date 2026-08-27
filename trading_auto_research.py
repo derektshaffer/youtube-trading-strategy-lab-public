@@ -1,0 +1,654 @@
+"""Autonomous historical opportunity discovery and research orchestration.
+
+This module deliberately separates candidate discovery from outcome testing:
+daily history identifies stocks that exhibited the kind of conditions a strategy
+expects, then intraday backtests/validation decide whether the strategy had edge.
+"""
+
+from __future__ import annotations
+
+from dataclasses import fields
+from datetime import timedelta
+import math
+from statistics import median
+from typing import Any, Callable
+
+from trading_catalyst_core import enrich_bars_with_point_in_time_catalysts, historical_news
+from trading_intelligence_core import effective_strategy_for_research, research_readiness
+from trading_universe_research import cross_stock_generalization
+from trading_validation_core import validation_strength, walk_forward_validate
+from youtube_strategy_engine import (
+    AlpacaMarketData,
+    AppError,
+    BacktestSettings,
+    OptimizationSettings,
+    normalize_machine_rules,
+    optimize_stock_strategies,
+    safe_float,
+    utc_now,
+)
+
+
+AUTO_UNIVERSE_SAMPLE_SIZE = 450
+AUTO_MAX_DEEP_STRATEGIES = 3
+AUTO_SYMBOLS_PER_STRATEGY = 6
+AUTO_DAILY_LOOKBACK_DAYS = 90
+AUTO_INTRADAY_LOOKBACK_DAYS = 60
+AUTO_TIMEFRAME = "5Min"
+
+
+def _notify(callback: Callable[[str], None] | None, message: str) -> None:
+    if callback:
+        callback(message)
+
+
+def deterministic_symbol_sample(
+    symbols: list[str],
+    *,
+    maximum: int,
+    priority: list[str] | None = None,
+) -> list[str]:
+    """Select a reproducible broad sample while always retaining priority symbols."""
+    maximum = max(1, int(maximum))
+    clean = sorted({str(symbol or "").strip().upper() for symbol in symbols if str(symbol or "").strip()})
+    priority_clean: list[str] = []
+    for symbol in priority or []:
+        value = str(symbol or "").strip().upper()
+        if value and value not in priority_clean:
+            priority_clean.append(value)
+
+    result = priority_clean[:maximum]
+    remaining = maximum - len(result)
+    pool = [symbol for symbol in clean if symbol not in result]
+    if remaining <= 0 or not pool:
+        return result
+    if len(pool) <= remaining:
+        return result + pool
+
+    if remaining == 1:
+        sampled = [pool[len(pool) // 2]]
+    else:
+        sampled = []
+        for index in range(remaining):
+            position = round(index * (len(pool) - 1) / (remaining - 1))
+            symbol = pool[position]
+            if symbol not in sampled:
+                sampled.append(symbol)
+    for symbol in sampled:
+        if symbol not in result:
+            result.append(symbol)
+    return result[:maximum]
+
+
+def _batched_bars(
+    market: AlpacaMarketData,
+    symbols: list[str],
+    *,
+    start,
+    end,
+    timeframe: str,
+    batch_size: int = 125,
+    max_pages: int = 16,
+    progress: Callable[[str], None] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    output: dict[str, list[dict[str, Any]]] = {}
+    clean = [str(symbol).upper() for symbol in symbols if str(symbol).strip()]
+    batches = [clean[index : index + batch_size] for index in range(0, len(clean), batch_size)]
+    for batch_index, batch in enumerate(batches, start=1):
+        _notify(progress, f"Historical {timeframe} batch {batch_index} of {len(batches)}…")
+        chunk = market.bars(
+            batch,
+            start=start,
+            end=end,
+            timeframe=timeframe,
+            max_pages=max_pages,
+        )
+        for symbol, rows in chunk.items():
+            output[symbol] = list(rows or [])
+    return output
+
+
+def build_research_universe(
+    market: AlpacaMarketData,
+    *,
+    maximum: int = AUTO_UNIVERSE_SAMPLE_SIZE,
+    progress: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Build a broad automatic universe, falling back safely if asset listing is unavailable."""
+    _notify(progress, "Loading current movers and most-active stocks…")
+    priority: list[str] = []
+    try:
+        priority.extend(market.movers(top=50))
+    except AppError:
+        pass
+    try:
+        priority.extend(market.most_active(top=100))
+    except AppError:
+        pass
+    priority = list(dict.fromkeys(priority))
+
+    try:
+        _notify(progress, "Loading Alpaca active U.S. equities for broad universe sampling…")
+        active = market.active_equities()
+    except AppError as exc:
+        if not priority:
+            raise
+        return {
+            "symbols": priority[:maximum],
+            "source": "current_screener_fallback",
+            "active_equities_available": False,
+            "population_size": len(priority),
+            "selection_bias_warning": (
+                "The broad active-equity list was unavailable, so this run used current movers/most-active "
+                "stocks. Results are research-only because current-universe selection bias is material. "
+                f"Alpaca detail: {exc}"
+            ),
+        }
+
+    sampled = deterministic_symbol_sample(active, maximum=maximum, priority=priority)
+    return {
+        "symbols": sampled,
+        "source": "active_equities_sample",
+        "active_equities_available": True,
+        "population_size": len(active),
+        "priority_symbols": len(priority),
+        "selection_bias_warning": (
+            "The universe is sampled from equities active today, so delisted historical stocks are absent. "
+            "This reduces current-mover bias but does not eliminate survivorship bias."
+        ),
+    }
+
+
+def _daily_rows(rows: list[dict[str, Any]]) -> list[dict[str, float | str]]:
+    normalized: list[dict[str, float | str]] = []
+    for raw in rows:
+        close = safe_float(raw.get("c"))
+        volume = safe_float(raw.get("v"))
+        if close is None or close <= 0 or volume is None or volume < 0:
+            continue
+        normalized.append(
+            {
+                "timestamp": str(raw.get("t") or ""),
+                "close": close,
+                "volume": volume,
+            }
+        )
+    normalized.sort(key=lambda item: str(item["timestamp"]))
+    return normalized
+
+
+def score_historical_opportunities(
+    rows: list[dict[str, Any]],
+    strategy: dict[str, Any],
+) -> dict[str, Any]:
+    """Score how often daily history exhibits conditions relevant to one strategy.
+
+    This is a candidate-selection score only. It never uses future trade P/L.
+    """
+    series = _daily_rows(rows)
+    rules = normalize_machine_rules(effective_strategy_for_research(strategy).get("machine_rules"))
+    direction = str(strategy.get("direction") or "long").lower()
+
+    supported_rule_names = (
+        "min_price",
+        "max_price",
+        "min_day_change_pct",
+        "min_relative_volume",
+        "min_dollar_volume",
+    )
+    explicit_daily_rules = [name for name in supported_rule_names if rules.get(name) is not None]
+
+    events: list[dict[str, Any]] = []
+    all_moves: list[float] = []
+    all_rvol: list[float] = []
+    all_dollar_volume: list[float] = []
+
+    for index in range(1, len(series)):
+        row = series[index]
+        previous = series[index - 1]
+        close = float(row["close"])
+        previous_close = float(previous["close"])
+        if previous_close <= 0:
+            continue
+        change = (close / previous_close - 1.0) * 100.0
+        prior_volumes = [float(item["volume"]) for item in series[max(0, index - 20) : index]]
+        average_volume = sum(prior_volumes) / len(prior_volumes) if prior_volumes else 0.0
+        rvol = float(row["volume"]) / average_volume if average_volume > 0 else 0.0
+        dollar_volume = close * float(row["volume"])
+        all_moves.append(change)
+        all_rvol.append(rvol)
+        all_dollar_volume.append(dollar_volume)
+
+        checks: list[bool] = []
+        if rules.get("min_price") is not None:
+            checks.append(close >= float(rules["min_price"]))
+        if rules.get("max_price") is not None:
+            checks.append(close <= float(rules["max_price"]))
+        if rules.get("min_day_change_pct") is not None:
+            threshold = float(rules["min_day_change_pct"])
+            if direction == "short":
+                checks.append(change <= -abs(threshold))
+            else:
+                checks.append(change >= threshold)
+        if rules.get("min_relative_volume") is not None:
+            checks.append(rvol >= float(rules["min_relative_volume"]))
+        if rules.get("min_dollar_volume") is not None:
+            checks.append(dollar_volume >= float(rules["min_dollar_volume"]))
+
+        if explicit_daily_rules:
+            qualifies = all(checks) if checks else False
+        else:
+            # Generic discovery heuristic for intraday patterns whose defining rule cannot be seen in daily bars.
+            directional_move = abs(change) if direction == "both" else (-change if direction == "short" else change)
+            qualifies = directional_move >= 3.0 and rvol >= 1.5 and dollar_volume >= 1_000_000
+
+        if qualifies:
+            events.append(
+                {
+                    "date": str(row["timestamp"])[:10],
+                    "close": round(close, 4),
+                    "day_change_pct": round(change, 2),
+                    "relative_volume": round(rvol, 2),
+                    "dollar_volume": round(dollar_volume, 2),
+                }
+            )
+
+    peak_move = max(
+        [(-value if direction == "short" else abs(value) if direction == "both" else value) for value in all_moves]
+        or [0.0]
+    )
+    peak_rvol = max(all_rvol or [0.0])
+    median_dollar_volume = median(all_dollar_volume) if all_dollar_volume else 0.0
+    # Event count dominates. Other components only break ties among similarly eligible symbols.
+    score = (
+        len(events) * 20.0
+        + min(25.0, max(0.0, peak_move))
+        + min(20.0, max(0.0, peak_rvol) * 4.0)
+        + min(15.0, math.log10(max(1.0, median_dollar_volume)) * 2.0)
+    )
+    return {
+        "score": round(score, 2),
+        "event_count": len(events),
+        "explicit_daily_rule_count": len(explicit_daily_rules),
+        "candidate_selection_mode": "strategy_daily_rules" if explicit_daily_rules else "generic_momentum_proxy",
+        "peak_directional_move_pct": round(peak_move, 2),
+        "peak_relative_volume": round(peak_rvol, 2),
+        "median_dollar_volume": round(median_dollar_volume, 2),
+        "events": sorted(events, key=lambda item: (item["relative_volume"], item["day_change_pct"]), reverse=True)[:12],
+    }
+
+
+def rank_historical_opportunities(
+    rows_by_symbol: dict[str, list[dict[str, Any]]],
+    strategy: dict[str, Any],
+    *,
+    limit: int = AUTO_SYMBOLS_PER_STRATEGY,
+) -> list[dict[str, Any]]:
+    ranked: list[dict[str, Any]] = []
+    for symbol, rows in rows_by_symbol.items():
+        if len(rows or []) < 8:
+            continue
+        metrics = score_historical_opportunities(rows, strategy)
+        if metrics["event_count"] <= 0:
+            continue
+        ranked.append({"symbol": symbol, **metrics})
+    ranked.sort(
+        key=lambda item: (
+            int(item.get("event_count") or 0),
+            float(item.get("score") or 0),
+            float(item.get("peak_relative_volume") or 0),
+        ),
+        reverse=True,
+    )
+    return ranked[: max(1, int(limit))]
+
+
+def _backtest_settings_from_dict(raw: dict[str, Any]) -> BacktestSettings:
+    allowed = {field.name for field in fields(BacktestSettings)}
+    kwargs = {key: value for key, value in (raw or {}).items() if key in allowed}
+    settings = BacktestSettings(**kwargs)
+    settings.validate()
+    return settings
+
+
+def _automatic_backtest_settings(strategy: dict[str, Any]) -> BacktestSettings:
+    rules = normalize_machine_rules(effective_strategy_for_research(strategy).get("machine_rules"))
+    allow_extended = False
+    for field_name in ("session_start", "session_end"):
+        value = str(rules.get(field_name) or "")
+        if value:
+            try:
+                hour, minute = (int(part) for part in value.split(":", 1))
+                total = hour * 60 + minute
+                if total < 9 * 60 + 30 or total > 16 * 60:
+                    allow_extended = True
+            except Exception:
+                pass
+    return BacktestSettings(
+        starting_cash=10_000.0,
+        risk_per_trade_pct=0.5,
+        max_position_pct=20.0,
+        allow_extended_hours=allow_extended,
+    )
+
+
+def _automatic_optimization_settings() -> OptimizationSettings:
+    return OptimizationSettings(
+        max_variants_per_strategy=36,
+        finalists_per_strategy=6,
+        minimum_training_trades=5,
+        minimum_validation_trades=2,
+        training_fraction=0.60,
+        validation_fraction=0.20,
+        maximum_drawdown_pct=15.0,
+        selection_mode="validated",
+    )
+
+
+def _global_validation_gate(
+    *,
+    anchor_report: dict[str, Any],
+    strength: dict[str, Any],
+    generalization: dict[str, Any],
+    walk_forward: dict[str, Any] | None,
+    broad_universe: bool,
+) -> tuple[str, list[str]]:
+    winner = anchor_report.get("winner") or {}
+    summary = generalization.get("summary") or {}
+    reasons: list[str] = []
+
+    if winner.get("status") != "VALIDATED":
+        reasons.append("Anchor optimization did not pass its validation/stress gate.")
+    if not bool(strength.get("independently_positive")):
+        reasons.append("Validation and untouched holdout were not independently positive.")
+    if (safe_float(strength.get("score"), 0.0) or 0.0) < 70.0:
+        reasons.append("Robustness score is below the autonomous 70/100 gate.")
+    if (safe_float(summary.get("score"), 0.0) or 0.0) < 65.0:
+        reasons.append("Cross-stock generalization score is below 65/100.")
+    if int(summary.get("active_symbols") or 0) < 3:
+        reasons.append("Fewer than three different stocks produced trades with the frozen rules.")
+    if (safe_float(summary.get("profitable_symbol_pct"), 0.0) or 0.0) < 60.0:
+        reasons.append("The frozen strategy was profitable on fewer than 60% of active test stocks.")
+    if int(summary.get("total_trades") or 0) < 20:
+        reasons.append("Cross-stock evidence contains fewer than 20 trades.")
+    if not broad_universe:
+        reasons.append("Only a current-screener fallback universe was available, so selection bias is too high.")
+
+    if walk_forward:
+        wf = walk_forward.get("summary") or {}
+        if (safe_float(wf.get("profitable_fold_pct"), 0.0) or 0.0) < 50.0:
+            reasons.append("Fewer than half of rolling walk-forward folds were profitable.")
+        if int(wf.get("external_trade_count") or 0) < 4:
+            reasons.append("Walk-forward unseen periods contain fewer than four trades.")
+
+    return ("validated" if not reasons else "research_only"), reasons
+
+
+def run_autonomous_research(
+    market: AlpacaMarketData,
+    strategies: list[dict[str, Any]],
+    *,
+    universe_sample_size: int = AUTO_UNIVERSE_SAMPLE_SIZE,
+    deep_strategy_limit: int = AUTO_MAX_DEEP_STRATEGIES,
+    symbols_per_strategy: int = AUTO_SYMBOLS_PER_STRATEGY,
+    progress: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Run the full no-manual-ticker historical research funnel."""
+    eligible = []
+    for strategy in strategies:
+        readiness = strategy.get("research_readiness") or research_readiness(strategy)
+        if readiness.get("label") == "ready_for_backtest":
+            eligible.append((strategy, readiness))
+    if not eligible:
+        raise AppError("No extracted strategies are machine-testable enough for autonomous research yet.")
+
+    universe = build_research_universe(
+        market,
+        maximum=universe_sample_size,
+        progress=progress,
+    )
+    symbols = list(universe.get("symbols") or [])
+    if not symbols:
+        raise AppError("Automatic research could not build a stock universe.")
+
+    historical_end = utc_now()
+    if market.historical_feed == "sip" and market.live_feed != "sip":
+        historical_end -= timedelta(minutes=16)
+
+    _notify(progress, f"Screening {len(symbols)} stocks with daily history…")
+    daily_rows = _batched_bars(
+        market,
+        symbols,
+        start=historical_end - timedelta(days=AUTO_DAILY_LOOKBACK_DAYS),
+        end=historical_end,
+        timeframe="1Day",
+        batch_size=125,
+        max_pages=18,
+        progress=progress,
+    )
+
+    discovery: list[dict[str, Any]] = []
+    for strategy, readiness in eligible:
+        ranked = rank_historical_opportunities(
+            daily_rows,
+            strategy,
+            limit=symbols_per_strategy,
+        )
+        if not ranked:
+            continue
+        extraction_confidence = safe_float(strategy.get("confidence"), 0.0) or 0.0
+        priority_score = (
+            (safe_float(readiness.get("score"), 0.0) or 0.0) * 0.55
+            + min(30.0, sum(int(item.get("event_count") or 0) for item in ranked) * 1.5)
+            + extraction_confidence * 0.15
+        )
+        discovery.append(
+            {
+                "strategy": strategy,
+                "readiness": readiness,
+                "opportunities": ranked,
+                "priority_score": round(priority_score, 2),
+            }
+        )
+
+    if not discovery:
+        raise AppError(
+            "The broad historical scan did not find stocks with enough strategy-relevant opportunity events."
+        )
+
+    discovery.sort(key=lambda item: float(item.get("priority_score") or 0), reverse=True)
+    finalists = discovery[: max(1, int(deep_strategy_limit))]
+    intraday_symbols: list[str] = []
+    for finalist in finalists:
+        for item in finalist["opportunities"]:
+            symbol = str(item.get("symbol") or "")
+            if symbol and symbol not in intraday_symbols:
+                intraday_symbols.append(symbol)
+
+    _notify(
+        progress,
+        f"Downloading {AUTO_TIMEFRAME} intraday history for {len(intraday_symbols)} finalist stocks…",
+    )
+    intraday_rows = _batched_bars(
+        market,
+        intraday_symbols,
+        start=historical_end - timedelta(days=AUTO_INTRADAY_LOOKBACK_DAYS),
+        end=historical_end,
+        timeframe=AUTO_TIMEFRAME,
+        batch_size=12,
+        max_pages=24,
+        progress=progress,
+    )
+
+    needs_catalysts = any(
+        bool(
+            normalize_machine_rules(
+                effective_strategy_for_research(item["strategy"]).get("machine_rules")
+            ).get("catalyst_required")
+        )
+        for item in finalists
+    )
+    catalyst_summary_by_symbol: dict[str, Any] = {}
+    if needs_catalysts and intraday_symbols:
+        _notify(progress, "Loading point-in-time historical catalyst news for finalist stocks…")
+        articles = historical_news(
+            market,
+            intraday_symbols,
+            start=historical_end - timedelta(days=AUTO_INTRADAY_LOOKBACK_DAYS, hours=24),
+            end=historical_end,
+            max_pages=100,
+        )
+        for symbol in intraday_symbols:
+            symbol_articles = [
+                article
+                for article in articles
+                if symbol in [str(value).upper() for value in article.get("symbols") or []]
+            ]
+            enriched, summary = enrich_bars_with_point_in_time_catalysts(
+                list(intraday_rows.get(symbol) or []),
+                symbol_articles,
+                lookback_hours=24.0,
+            )
+            intraday_rows[symbol] = enriched
+            catalyst_summary_by_symbol[symbol] = summary
+
+    research_results: list[dict[str, Any]] = []
+    for finalist_number, finalist in enumerate(finalists, start=1):
+        strategy = finalist["strategy"]
+        opportunities = finalist["opportunities"]
+        candidate_symbols = [
+            str(item.get("symbol") or "")
+            for item in opportunities
+            if intraday_rows.get(str(item.get("symbol") or ""))
+        ]
+        if not candidate_symbols:
+            continue
+        anchor = candidate_symbols[0]
+        rows = list(intraday_rows.get(anchor) or [])
+        effective = effective_strategy_for_research(strategy)
+        settings = _automatic_backtest_settings(effective)
+        optimizer = _automatic_optimization_settings()
+
+        _notify(
+            progress,
+            f"Deep research {finalist_number}/{len(finalists)}: optimizing {strategy.get('name')} on {anchor}…",
+        )
+        report = optimize_stock_strategies(
+            rows,
+            [effective],
+            anchor,
+            settings,
+            optimizer,
+            finalize_holdout=True,
+        )
+        winner = report.get("winner") or {}
+        if not winner:
+            continue
+
+        walk_report = None
+        try:
+            _notify(progress, f"Running rolling walk-forward checks for {strategy.get('name')}…")
+            walk_report = walk_forward_validate(
+                rows,
+                [effective],
+                anchor,
+                settings,
+                optimizer,
+                minimum_history_sessions=8,
+                test_sessions_per_fold=2,
+                max_folds=2,
+            )
+        except AppError:
+            walk_report = None
+
+        strength = validation_strength(report, walk_report)
+        frozen = {
+            **strategy,
+            "validation_status": "validated",
+            "validated_rules": winner.get("optimized_rules") or {},
+        }
+        cross_settings = _backtest_settings_from_dict(
+            winner.get("optimized_backtest_settings") or {}
+        )
+        cross_rows = {
+            symbol: list(intraday_rows.get(symbol) or [])
+            for symbol in candidate_symbols
+            if intraday_rows.get(symbol)
+        }
+        _notify(progress, f"Testing frozen {strategy.get('name')} rules across {len(cross_rows)} stocks…")
+        generalization = cross_stock_generalization(
+            cross_rows,
+            frozen,
+            cross_settings,
+        )
+
+        validation_status, gate_reasons = _global_validation_gate(
+            anchor_report=report,
+            strength=strength,
+            generalization=generalization,
+            walk_forward=walk_report,
+            broad_universe=bool(universe.get("active_equities_available")),
+        )
+        global_score = round(
+            (safe_float(strength.get("score"), 0.0) or 0.0) * 0.65
+            + (safe_float((generalization.get("summary") or {}).get("score"), 0.0) or 0.0) * 0.35,
+            1,
+        )
+        research_results.append(
+            {
+                "strategy_id": strategy.get("id"),
+                "strategy_name": strategy.get("name"),
+                "source_title": strategy.get("source_title"),
+                "priority_score": finalist.get("priority_score"),
+                "opportunities": opportunities,
+                "anchor_symbol": anchor,
+                "candidate_symbols": candidate_symbols,
+                "optimization_report": report,
+                "walk_forward": walk_report,
+                "strength": strength,
+                "generalization": generalization,
+                "global_score": global_score,
+                "validation_status": validation_status,
+                "gate_reasons": gate_reasons,
+                "catalyst_summary_by_symbol": {
+                    symbol: catalyst_summary_by_symbol.get(symbol)
+                    for symbol in candidate_symbols
+                    if symbol in catalyst_summary_by_symbol
+                },
+            }
+        )
+
+    research_results.sort(
+        key=lambda item: (
+            item.get("validation_status") == "validated",
+            safe_float(item.get("global_score"), 0.0) or 0.0,
+        ),
+        reverse=True,
+    )
+
+    return {
+        "generated_at": utc_now().isoformat(),
+        "universe": universe,
+        "daily_lookback_days": AUTO_DAILY_LOOKBACK_DAYS,
+        "intraday_lookback_days": AUTO_INTRADAY_LOOKBACK_DAYS,
+        "timeframe": AUTO_TIMEFRAME,
+        "eligible_strategies": len(eligible),
+        "strategies_with_opportunities": len(discovery),
+        "deep_strategies_tested": len(research_results),
+        "discovery": [
+            {
+                "strategy_id": item["strategy"].get("id"),
+                "strategy_name": item["strategy"].get("name"),
+                "priority_score": item.get("priority_score"),
+                "opportunities": item.get("opportunities"),
+            }
+            for item in discovery
+        ],
+        "results": research_results,
+        "limitations": [
+            str(universe.get("selection_bias_warning") or ""),
+            "Historical opportunity ranking uses only information available in each daily bar and prior-volume history; it does not use future trade P/L.",
+            "The active-equity universe excludes delisted securities, so survivorship bias remains.",
+            "Autonomous validation is historical evidence, not a guarantee of future profitability.",
+        ],
+    }
