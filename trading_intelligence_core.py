@@ -1037,10 +1037,12 @@ class GeminiBookAnalyzer:
         chunks = chunk_source_text(text)
         if not chunks:
             raise AppError("There was no readable source text to analyze.")
-        source_id = source_fingerprint(title, author, text)
-        cache_directory = self._cache_directory(source_id, focus)
+        cache_source_id = source_fingerprint(title, author, text)
+        cache_directory = self._cache_directory(cache_source_id, focus)
         strategies_by_key: dict[str, dict[str, Any]] = {}
         summaries: list[str] = []
+        detected_titles: list[str] = []
+        detected_authors: list[str] = []
         completed_sections = 0
         models_used: list[str] = []
 
@@ -1098,6 +1100,12 @@ class GeminiBookAnalyzer:
             summary = str(analysis.get("source_summary") or "").strip()
             if summary and summary not in summaries:
                 summaries.append(summary)
+            detected_title = str(analysis.get("detected_title") or "").strip()
+            detected_author = str(analysis.get("detected_author") or "").strip()
+            if detected_title and detected_title not in detected_titles:
+                detected_titles.append(detected_title)
+            if detected_author and detected_author not in detected_authors:
+                detected_authors.append(detected_author)
 
             for raw in analysis.get("strategies") or []:
                 if not isinstance(raw, dict):
@@ -1112,21 +1120,30 @@ class GeminiBookAnalyzer:
                 else:
                     strategies_by_key[key] = dict(raw)
 
+        resolved_title = str(title or "").strip() or (
+            detected_titles[0] if detected_titles else "Uploaded source"
+        )
+        resolved_author = str(author or "").strip() or (
+            detected_authors[0] if detected_authors else ""
+        )
+        source_id = source_fingerprint(resolved_title, resolved_author, text)
         strategies = [
             canonicalize_strategy(
                 item,
                 source_id=source_id,
                 source_type="book_or_document",
-                source_title=title or "Uploaded source",
-                source_author=author,
+                source_title=resolved_title,
+                source_author=resolved_author,
             )
             for item in strategies_by_key.values()
         ]
         result = {
             "id": source_id,
             "source_type": "book_or_document",
-            "title": title or "Uploaded source",
-            "author": author,
+            "title": resolved_title,
+            "author": resolved_author,
+            "detected_title": detected_titles[0] if detected_titles else "",
+            "detected_author": detected_authors[0] if detected_authors else "",
             "summary": " ".join(summaries)[:12000],
             "analyzed_at": _utc_iso(),
             "model": self.model,
