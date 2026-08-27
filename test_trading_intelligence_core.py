@@ -10,6 +10,7 @@ from trading_intelligence_core import (
     DEFAULT_GEMINI_BOOK_SPECIALIST_MODEL,
     GeminiBookAnalyzer,
     apply_compiler_suggestions,
+    merge_ingestion_checkpoint_strategies,
     effective_strategy_for_live,
     effective_strategy_for_research,
     research_readiness,
@@ -125,6 +126,42 @@ class EffectiveStrategyTests(unittest.TestCase):
         self.assertEqual(ready["label"], "ready_for_backtest")
 
 
+
+
+class ProgressiveCheckpointMergeTests(unittest.TestCase):
+    def test_progressive_checkpoint_replaces_stale_same_source_strategy(self):
+        existing = [
+            {
+                "id": "s1",
+                "source_id": "book1",
+                "name": "Breakout",
+                "machine_rules": {"min_relative_volume": None},
+            },
+            {
+                "id": "other",
+                "source_id": "book2",
+                "name": "Other",
+                "machine_rules": {},
+            },
+        ]
+        additions = [
+            {
+                "id": "s1",
+                "source_id": "book1",
+                "name": "Breakout",
+                "machine_rules": {"min_relative_volume": 2.0},
+            }
+        ]
+        merged = merge_ingestion_checkpoint_strategies(
+            existing,
+            additions,
+            source_id="book1",
+            replace_source=True,
+        )
+        by_id = {item["id"]: item for item in merged}
+        self.assertEqual(by_id["s1"]["machine_rules"]["min_relative_volume"], 2.0)
+        self.assertIn("other", by_id)
+        self.assertNotIn("latest_extraction", by_id["s1"])
 
 
 class BookModelRoutingTests(unittest.TestCase):
