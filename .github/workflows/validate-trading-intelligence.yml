@@ -8,10 +8,12 @@ on:
       - "trading_intelligence_core.py"
       - "trading_validation_core.py"
       - "trading_market_discovery.py"
+      - "trading_catalyst_core.py"
       - "youtube_strategy_engine.py"
       - "requirements.txt"
       - "test_youtube_strategy_engine.py"
       - "test_trading_validation_core.py"
+      - "test_trading_catalyst_core.py"
       - ".github/workflows/validate-trading-intelligence.yml"
   pull_request:
     paths:
@@ -40,6 +42,7 @@ jobs:
           python -m py_compile trading_intelligence_core.py
           python -m py_compile trading_validation_core.py
           python -m py_compile trading_market_discovery.py
+          python -m py_compile trading_catalyst_core.py
           python -m py_compile youtube_strategy_engine.py
       - name: Run Trading Intelligence tests
-        run: python -m unittest test_youtube_strategy_engine.py test_trading_validation_core.py -q
+        run: python -m unittest test_youtube_strategy_engine.py test_trading_validation_core.py test_trading_catalyst_core.py -q
