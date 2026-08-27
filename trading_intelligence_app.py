@@ -618,7 +618,7 @@ elif module == "Strategy Lab":
                 wf_cols[0].metric("Walk-forward score", f"{safe_float(summary.get('score'), 0.0):.1f}/100")
                 wf_cols[1].metric("Profitable folds", f"{safe_float(summary.get('profitable_fold_pct'), 0.0):.0f}%")
                 wf_cols[2].metric("External trades", int(summary.get("external_trade_count") or 0))
-                wf_cols[3].metric("External net P/L", f"\${safe_float(summary.get('external_net_pnl'), 0.0):,.2f}")
+                wf_cols[3].metric("External net P/L", f"${safe_float(summary.get('external_net_pnl'), 0.0):,.2f}")
                 pf = summary.get("external_profit_factor")
                 wf_cols[4].metric("External profit factor", f"{safe_float(pf, 0.0):.2f}" if pf is not None else "—")
 
