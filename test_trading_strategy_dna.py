@@ -6,8 +6,10 @@ from trading_strategy_dna import (
     build_candidate_blueprints,
     build_concept_graph,
     build_strategy_families,
+    compile_candidate_blueprint,
     infer_strategy_dna,
 )
+from youtube_strategy_engine import BacktestSettings, generate_strategy_variants
 
 
 class StrategyDnaTests(unittest.TestCase):
@@ -84,6 +86,87 @@ class CrossSourceGraphTests(unittest.TestCase):
         self.assertIn("min_relative_volume", candidate["conflicting_explicit_rules"])
         self.assertNotIn("min_relative_volume", candidate["consistent_explicit_rules"])
         self.assertEqual(candidate["supporting_source_count"], 2)
+        self.assertTrue(candidate["backtest_supported"])
+
+    def test_blueprint_compiler_uses_exact_source_seed_and_keeps_all_options(self):
+        strategies = [
+            self._strategy("a", "book-1", "Book One", rvol=5.0),
+            self._strategy("b", "book-2", "Book Two", validated=True, rvol=8.0),
+        ]
+        family = next(
+            family
+            for family in build_strategy_families(strategies)
+            if family["independent_source_count"] == 2
+        )
+        blueprint = build_candidate_blueprints([family], min_sources=2)[0]
+        compiled = compile_candidate_blueprint(blueprint)
+        self.assertEqual(compiled["source_type"], "cross_source_synthesis")
+        self.assertIn(
+            compiled["research_rule_overrides"]["min_relative_volume"],
+            {5.0, 8.0},
+        )
+        self.assertEqual(
+            set(compiled["candidate_rule_options"]["min_relative_volume"]),
+            {5.0, 8.0},
+        )
+        self.assertFalse(compiled["approved"])
+        self.assertEqual(compiled["validation_status"], "unvalidated")
+
+    def test_synthetic_candidate_is_not_counted_as_independent_source(self):
+        base = [
+            self._strategy("a", "book-1", "Book One"),
+            self._strategy("b", "book-2", "Book Two"),
+        ]
+        family = next(
+            family
+            for family in build_strategy_families(base)
+            if family["independent_source_count"] == 2
+        )
+        synthetic = compile_candidate_blueprint(
+            build_candidate_blueprints([family], min_sources=2)[0]
+        )
+        graph = build_concept_graph([*base, synthetic])
+        breakout = next(item for item in graph if item["concept"] == "Breakout")
+        self.assertEqual(breakout["independent_source_count"], 2)
+
+    def test_family_id_is_stable_when_input_order_changes(self):
+        first = self._strategy("a", "book-1", "Book One")
+        second = self._strategy("b", "book-2", "Book Two")
+        family_one = next(
+            family
+            for family in build_strategy_families([first, second])
+            if family["independent_source_count"] == 2
+        )
+        family_two = next(
+            family
+            for family in build_strategy_families([second, first])
+            if family["independent_source_count"] == 2
+        )
+        self.assertEqual(family_one["id"], family_two["id"])
+
+    def test_optimizer_tests_exact_cross_source_values(self):
+        strategy = {
+            "id": "synth-test",
+            "name": "Synthesized breakout",
+            "direction": "long",
+            "machine_rules": {
+                "min_relative_volume": 5.0,
+                "above_vwap": True,
+                "stop_loss_pct": 2.0,
+                "reward_risk": 2.0,
+            },
+            "candidate_rule_options": {
+                "min_relative_volume": [5.0, 8.0],
+            },
+        }
+        variants = generate_strategy_variants(
+            strategy,
+            BacktestSettings(),
+            maximum=12,
+        )
+        self.assertTrue(
+            any(item.get("min_relative_volume") == 8.0 for item in variants)
+        )
 
 
 if __name__ == "__main__":
