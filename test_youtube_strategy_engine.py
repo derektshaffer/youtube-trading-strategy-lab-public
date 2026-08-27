@@ -1157,6 +1157,8 @@ class FakeStreamlit(types.ModuleType):
             return lambda *args, **kwargs: False
         if name == "file_uploader":
             return lambda *args, **kwargs: None
+        if name == "empty":
+            return lambda *args, **kwargs: FakePanel()
         if name == "tabs":
             return lambda labels: [FakePanel() for _ in labels]
         if name == "columns":
