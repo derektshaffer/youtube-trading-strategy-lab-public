@@ -476,6 +476,48 @@ class DurableStorageTests(unittest.TestCase):
             self.assertEqual(status["repository"], "owner/private-backups")
 
 
+class CloudBackupFirstWriteTests(unittest.TestCase):
+    def test_first_write_to_initialized_blank_cloud_library_is_allowed(self):
+        cloud = engine.GitHubCloudBackup(
+            "owner/private-backups",
+            "token",
+            branch="main",
+            path="trading-intelligence-lab/intelligence_library.json",
+        )
+        blank_remote = {
+            "library": {"strategies": [], "updated_at": None},
+            "sha": "a" * 40,
+        }
+        new_data = {"strategies": [], "updated_at": "2026-08-27T17:20:00Z"}
+        with patch.object(cloud, "read_library", return_value=blank_remote), patch.object(
+            cloud,
+            "_request",
+            return_value={"content": {"sha": "b" * 40}},
+        ) as request:
+            saved = cloud.save_library(new_data, previous_updated_at=None)
+
+        self.assertEqual(saved["library"], new_data)
+        self.assertEqual(request.call_args.kwargs["method"], "PUT")
+
+    def test_missing_sync_token_cannot_overwrite_dated_cloud_library(self):
+        cloud = engine.GitHubCloudBackup(
+            "owner/private-backups",
+            "token",
+            branch="main",
+            path="trading-intelligence-lab/intelligence_library.json",
+        )
+        remote = {
+            "library": {"strategies": [], "updated_at": "2026-08-27T17:00:00Z"},
+            "sha": "a" * 40,
+        }
+        with patch.object(cloud, "read_library", return_value=remote):
+            with self.assertRaises(engine.AppError):
+                cloud.save_library(
+                    {"strategies": [], "updated_at": "2026-08-27T17:20:00Z"},
+                    previous_updated_at=None,
+                )
+
+
 class ProviderTests(unittest.TestCase):
     def test_interaction_parser_uses_current_steps_schema(self):
         response = {"steps": [{"type": "thought"}, {"type": "model_output", "content": [{"type": "text", "text": '{"ok":true}'}]}]}
