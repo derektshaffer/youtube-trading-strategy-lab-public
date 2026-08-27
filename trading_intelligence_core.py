@@ -11,21 +11,33 @@ from datetime import datetime, timezone
 import hashlib
 import io
 import json
+import os
+from pathlib import Path
 import re
+from time import sleep
 from typing import Any
 
 from youtube_strategy_engine import (
     AppError,
+    DEFAULT_GEMINI_ADDITIONAL_FALLBACK_MODELS,
+    DEFAULT_GEMINI_FALLBACK_MODEL,
     DEFAULT_GEMINI_MODEL,
     GEMINI_GENERATE_CONTENT_URL,
     MACHINE_RULE_SCHEMA,
     _extract_generate_content_text,
     _json_request,
     normalize_machine_rules,
+    provider_quota_reached,
+    provider_temporarily_unavailable,
     safe_float,
 )
 
 CANONICAL_STRATEGY_VERSION = 1
+BOOK_ANALYSIS_CACHE_VERSION = 2
+BOOK_TRANSIENT_RETRIES_PER_MODEL = 3
+BOOK_TRANSIENT_MAX_WAIT_SECONDS = 30
+BOOK_QUOTA_RETRIES = 2
+BOOK_QUOTA_MAX_WAIT_SECONDS = 90
 MAX_SOURCE_BYTES = 20 * 1024 * 1024
 MAX_SOURCE_CHARACTERS = 2_000_000
 DEFAULT_CHUNK_CHARACTERS = 42_000
@@ -664,14 +676,39 @@ def prepare_strategies_with_ai(
 
 
 class GeminiBookAnalyzer:
-    """Chunked document strategy extractor using the same Gemini service as the YouTube lab."""
+    """Chunked document strategy extractor with retry, fallback, and section resume."""
 
-    def __init__(self, api_key: str, model: str = DEFAULT_GEMINI_MODEL):
+    def __init__(
+        self,
+        api_key: str,
+        model: str = DEFAULT_GEMINI_MODEL,
+        *,
+        fallback_api_key: str = "",
+        fallback_model: str = DEFAULT_GEMINI_FALLBACK_MODEL,
+    ):
         key = str(api_key or "").strip()
         if not key:
             raise AppError("Add GEMINI_API_KEY to Streamlit Secrets before analyzing a book or document.")
         self.api_key = key
+        self.fallback_api_key = str(fallback_api_key or "").strip()
+        if self.fallback_api_key and self.fallback_api_key == self.api_key:
+            raise AppError(
+                "GEMINI_PAID_API_KEY must be a different key from a separate Google project."
+            )
         self.model = str(model or DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
+        self.primary_model = self.model
+        fallback_candidates = [
+            str(fallback_model or "").strip(),
+            *DEFAULT_GEMINI_ADDITIONAL_FALLBACK_MODELS,
+        ]
+        self.fallback_models: list[str] = []
+        for candidate in fallback_candidates:
+            candidate = str(candidate or "").strip()
+            if candidate and candidate != self.primary_model and candidate not in self.fallback_models:
+                self.fallback_models.append(candidate)
+        self._fallback_model_index = 0
+        self.model_fallback_used = False
+        self.paid_fallback_used = False
 
     @property
     def headers(self) -> dict[str, str]:
@@ -680,6 +717,104 @@ class GeminiBookAnalyzer:
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+
+    @staticmethod
+    def _emit_progress(callback, index: int, total: int, message: str) -> None:
+        if callback is None:
+            return
+        try:
+            callback(index, total, message)
+        except TypeError:
+            callback(index, total)
+
+    def _activate_model_fallback(self, error: Exception | str) -> bool:
+        if not provider_temporarily_unavailable(error):
+            return False
+        while self._fallback_model_index < len(self.fallback_models):
+            candidate = self.fallback_models[self._fallback_model_index]
+            self._fallback_model_index += 1
+            if candidate == self.model:
+                continue
+            self.model = candidate
+            self.model_fallback_used = True
+            return True
+        return False
+
+    def _activate_paid_fallback(self, error: Exception | str) -> bool:
+        if (
+            self.paid_fallback_used
+            or not self.fallback_api_key
+            or not provider_quota_reached(error)
+        ):
+            return False
+        self.api_key = self.fallback_api_key
+        self.paid_fallback_used = True
+        return True
+
+    @staticmethod
+    def _quota_retry_delay(message: str) -> int | None:
+        lowered = message.lower()
+        if not any(marker in lowered for marker in ("rate limit", "quota", "resource_exhausted", "usage")):
+            return None
+        if any(marker in lowered for marker in ("per day", "per_day", "perday", "daily")):
+            return None
+        match = re.search(
+            r"retry\s+in\s+([0-9]+(?:\.[0-9]+)?)\s*s(?:ec(?:ond)?s?)?\b",
+            message,
+            re.IGNORECASE,
+        )
+        if match is None:
+            return 5
+        seconds = max(1, int(float(match.group(1)) + 0.999))
+        return seconds if seconds <= BOOK_QUOTA_MAX_WAIT_SECONDS else None
+
+    @staticmethod
+    def _cache_directory(source_id: str, focus: str) -> Path:
+        root = Path(os.environ.get("YOUTUBE_STRATEGY_DATA_DIR", ".youtube_strategy_data"))
+        focus_hash = hashlib.sha256(str(focus or "").encode("utf-8")).hexdigest()[:16]
+        return root / "trading-intelligence-book-cache" / (
+            f"v{BOOK_ANALYSIS_CACHE_VERSION}-{source_id}-{focus_hash}"
+        )
+
+    @staticmethod
+    def _read_cached_chunk(path: Path) -> dict[str, Any] | None:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError):
+            return None
+        analysis = payload.get("analysis")
+        return analysis if isinstance(analysis, dict) else None
+
+    @staticmethod
+    def _write_cached_chunk(
+        path: Path,
+        *,
+        analysis: dict[str, Any],
+        model: str,
+    ) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        payload = {
+            "analysis": analysis,
+            "model": model,
+            "saved_at": _utc_iso(),
+        }
+        temporary.write_text(json.dumps(payload, allow_nan=False), encoding="utf-8")
+        os.replace(temporary, path)
+
+    @staticmethod
+    def _clear_cache(directory: Path) -> None:
+        if not directory.exists():
+            return
+        for path in directory.glob("section-*.json"):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        try:
+            directory.rmdir()
+        except OSError:
+            pass
 
     def _analyze_chunk(
         self,
@@ -728,6 +863,95 @@ class GeminiBookAnalyzer:
         if not isinstance(parsed, dict):
             raise AppError("Gemini returned an unexpected document-analysis format.")
         return parsed
+
+    def _analyze_chunk_resilient(
+        self,
+        chunk: str,
+        *,
+        title: str,
+        author: str,
+        chunk_number: int,
+        chunk_count: int,
+        focus: str,
+        progress_callback,
+    ) -> dict[str, Any]:
+        transient_attempts = 0
+        quota_attempts = 0
+
+        while True:
+            try:
+                return self._analyze_chunk(
+                    chunk,
+                    title=title,
+                    author=author,
+                    chunk_number=chunk_number,
+                    chunk_count=chunk_count,
+                    focus=focus,
+                )
+            except AppError as exc:
+                message = str(exc)
+
+                if provider_temporarily_unavailable(exc):
+                    if transient_attempts < BOOK_TRANSIENT_RETRIES_PER_MODEL:
+                        retry_wait = min(
+                            5 * (2 ** transient_attempts),
+                            BOOK_TRANSIENT_MAX_WAIT_SECONDS,
+                        )
+                        transient_attempts += 1
+                        self._emit_progress(
+                            progress_callback,
+                            chunk_number,
+                            chunk_count,
+                            f"Gemini {self.model} is temporarily overloaded. Retrying section "
+                            f"{chunk_number} of {chunk_count} in {retry_wait}s "
+                            f"({transient_attempts}/{BOOK_TRANSIENT_RETRIES_PER_MODEL})…",
+                        )
+                        sleep(retry_wait)
+                        continue
+
+                    failed_model = self.model
+                    if self._activate_model_fallback(exc):
+                        transient_attempts = 0
+                        quota_attempts = 0
+                        self._emit_progress(
+                            progress_callback,
+                            chunk_number,
+                            chunk_count,
+                            f"{failed_model} is still overloaded. Switching section "
+                            f"{chunk_number} of {chunk_count} to backup model {self.model}…",
+                        )
+                        continue
+
+                retry_delay = self._quota_retry_delay(message)
+                if (
+                    provider_quota_reached(exc)
+                    and retry_delay is not None
+                    and quota_attempts < BOOK_QUOTA_RETRIES
+                ):
+                    quota_attempts += 1
+                    self._emit_progress(
+                        progress_callback,
+                        chunk_number,
+                        chunk_count,
+                        f"Gemini request limit reached. Retrying section {chunk_number} of "
+                        f"{chunk_count} in {retry_delay}s ({quota_attempts}/{BOOK_QUOTA_RETRIES})…",
+                    )
+                    sleep(retry_delay)
+                    continue
+
+                if self._activate_paid_fallback(exc):
+                    transient_attempts = 0
+                    quota_attempts = 0
+                    self._emit_progress(
+                        progress_callback,
+                        chunk_number,
+                        chunk_count,
+                        f"Free Gemini quota reached. Continuing section {chunk_number} of "
+                        f"{chunk_count} with the backup API key…",
+                    )
+                    continue
+
+                raise
 
     @staticmethod
     def _merge_string_lists(left: list[Any], right: list[Any], maximum: int = 120) -> list[str]:
@@ -813,31 +1037,67 @@ class GeminiBookAnalyzer:
         chunks = chunk_source_text(text)
         if not chunks:
             raise AppError("There was no readable source text to analyze.")
+        source_id = source_fingerprint(title, author, text)
+        cache_directory = self._cache_directory(source_id, focus)
         strategies_by_key: dict[str, dict[str, Any]] = {}
         summaries: list[str] = []
-        detected_titles: list[str] = []
-        detected_authors: list[str] = []
+        completed_sections = 0
+        models_used: list[str] = []
 
         for index, chunk in enumerate(chunks, start=1):
-            if progress_callback:
-                progress_callback(index, len(chunks))
-            analysis = self._analyze_chunk(
-                chunk,
-                title=title,
-                author=author,
-                chunk_number=index,
-                chunk_count=len(chunks),
-                focus=focus,
-            )
+            cache_path = cache_directory / f"section-{index:03d}.json"
+            cached = self._read_cached_chunk(cache_path)
+            if cached is not None:
+                analysis = cached
+                completed_sections += 1
+                self._emit_progress(
+                    progress_callback,
+                    index,
+                    len(chunks),
+                    f"Resuming saved section {index} of {len(chunks)}…",
+                )
+            else:
+                self._emit_progress(
+                    progress_callback,
+                    index,
+                    len(chunks),
+                    f"Analyzing source section {index} of {len(chunks)} with {self.model}…",
+                )
+                try:
+                    analysis = self._analyze_chunk_resilient(
+                        chunk,
+                        title=title,
+                        author=author,
+                        chunk_number=index,
+                        chunk_count=len(chunks),
+                        focus=focus,
+                        progress_callback=progress_callback,
+                    )
+                except AppError as exc:
+                    message = str(exc)
+                    saved = index - 1
+                    if saved:
+                        message += (
+                            f" {saved} completed section{'s' if saved != 1 else ''} "
+                            f"{'were' if saved != 1 else 'was'} saved. "
+                            "Press Analyze again with the same source/title/focus to resume."
+                        )
+                    raise AppError(
+                        f"Section {index} of {len(chunks)} could not be analyzed: {message}"
+                    ) from exc
+                self._write_cached_chunk(
+                    cache_path,
+                    analysis=analysis,
+                    model=self.model,
+                )
+                completed_sections += 1
+
+            if self.model not in models_used:
+                models_used.append(self.model)
+
             summary = str(analysis.get("source_summary") or "").strip()
             if summary and summary not in summaries:
                 summaries.append(summary)
-            detected_title = str(analysis.get("detected_title") or "").strip()
-            detected_author = str(analysis.get("detected_author") or "").strip()
-            if detected_title and detected_title not in detected_titles:
-                detected_titles.append(detected_title)
-            if detected_author and detected_author not in detected_authors:
-                detected_authors.append(detected_author)
 
             for raw in analysis.get("strategies") or []:
                 if not isinstance(raw, dict):
@@ -852,32 +1112,34 @@ class GeminiBookAnalyzer:
                 else:
                     strategies_by_key[key] = dict(raw)
 
-        resolved_title = str(title or "").strip() or (detected_titles[0] if detected_titles else "Uploaded source")
-        resolved_author = str(author or "").strip() or (detected_authors[0] if detected_authors else "")
-        source_id = source_fingerprint(resolved_title, resolved_author, text)
         strategies = [
             canonicalize_strategy(
                 item,
                 source_id=source_id,
                 source_type="book_or_document",
-                source_title=resolved_title,
-                source_author=resolved_author,
+                source_title=title or "Uploaded source",
+                source_author=author,
             )
             for item in strategies_by_key.values()
         ]
-        return {
+        result = {
             "id": source_id,
             "source_type": "book_or_document",
-            "title": resolved_title,
-            "author": resolved_author,
-            "detected_title": detected_titles[0] if detected_titles else "",
-            "detected_author": detected_authors[0] if detected_authors else "",
+            "title": title or "Uploaded source",
+            "author": author,
             "summary": " ".join(summaries)[:12000],
             "analyzed_at": _utc_iso(),
             "model": self.model,
+            "primary_model": self.primary_model,
+            "models_used": models_used or [self.model],
+            "model_fallback_used": self.model_fallback_used,
+            "paid_fallback_used": self.paid_fallback_used,
             "chunk_count": len(chunks),
+            "completed_sections": completed_sections,
             "strategies": strategies,
         }
+        self._clear_cache(cache_directory)
+        return result
 
 
 def merge_strategies(
