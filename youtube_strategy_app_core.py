@@ -30,7 +30,7 @@ from youtube_strategy_engine import (
     ask_chatgpt_help,
     backtest_limitations,
     chart_trigger_checks,
-    conservative_stock_costs,
+    quoted_spread_bps,
     demo_strategy,
     isoformat_utc,
     match_strategy,
@@ -346,7 +346,7 @@ def analyzed_youtube_video_index(data: dict[str, Any]) -> dict[str, dict[str, An
 
 
 HELP_GLOSSARY: list[dict[str, str]] = [
-    {"term": "Automatic execution costs", "category": "Execution", "meaning": "Optimizer mode that uses a current quoted-spread floor and estimates slippage from recent liquidity, volatility, risk, stop distance, and simulated order size instead of asking you to choose a single slippage number."},
+    {"term": "Automatic execution costs", "category": "Execution", "meaning": "Optimizer mode that keeps a conservative historical spread floor and estimates slippage from recent liquidity, volatility, risk, stop distance, and simulated order size. A current live quote may be shown for reference, but it is not applied as the spread for an entire multi-day historical test."},
     {"term": "FALLBACK FLOOR optimizer input", "category": "Optimizer", "meaning": "A conservative minimum used by an automatic estimate. The automatic model may use a higher value when market conditions imply greater trading costs, but it will not assume a lower cost than the floor."},
     {"term": "AUTO-SEARCH optimizer input", "category": "Optimizer", "meaning": "An input where the displayed value is a seed or search control rather than the final answer. The optimizer tests multiple supported values and adaptively refines promising ones; it does not literally test every possible decimal value."},
     {"term": "CEILING optimizer input", "category": "Optimizer", "meaning": "A user-set maximum. The optimizer may test and recommend values below it but is not allowed to test or recommend values above it."},
@@ -417,8 +417,8 @@ TECHNICAL_TOOLTIP_ALIASES: dict[str, str] = {
     "Minimum training trades": "The fewest completed simulated trades required in the training period before a result has enough observations to qualify.",
     "Minimum validation trades": "The fewest completed simulated trades required in the separate validation period before the app treats that validation result as usable.",
     "Starting cash": "The simulated account balance at the beginning of the backtest. It affects dollar P/L and position sizing but does not change the historical price data.",
-    "Execution-cost model": "How the backtest estimates real-world trading friction. Automatic mode uses quoted spread plus estimated slippage; Manual mode uses the fixed values you enter.",
-    "Spread (bps)": "The fallback bid/ask spread assumption expressed in basis points. 100 bps equals 1%. In Automatic mode this is a floor, so the model may use a wider current spread.",
+    "Execution-cost model": "How the backtest estimates real-world trading friction. Automatic mode uses a conservative historical spread floor plus estimated slippage; Manual mode uses the fixed values you enter. A single current quote is not imposed across the whole historical window.",
+    "Spread (bps)": "The historical bid/ask spread floor expressed in basis points. 100 bps equals 1%. In Automatic mode the optimizer keeps this as a conservative floor instead of applying one potentially stale or after-hours live quote to the entire backtest.",
     "Slippage per fill (bps)": "Estimated price movement between the expected execution price and the simulated fill, expressed in basis points. In Automatic mode this is a conservative floor.",
     "Fee per order": "A fixed simulated commission or order fee applied to each order in the backtest.",
     "Maximum acceptable drawdown": "The largest peak-to-trough account decline you are willing to accept in the historical test. Candidates beyond this limit receive a strong ranking penalty.",
@@ -1814,14 +1814,15 @@ with optimizer_tab:
             execution_cost_mode = st.selectbox(
                 "Execution-cost model",
                 [
-                    "Automatic — quoted spread + estimated slippage (recommended)",
+                    "Automatic — historical spread floor + estimated slippage (recommended)",
                     "Manual — use fixed spread and slippage",
                 ],
                 index=0,
                 help=(
-                    "Automatic mode uses the wider of the current quoted spread or the fallback floor, then estimates slippage "
-                    "for each candidate from recent liquidity, intraday volatility, risk, stop distance, and simulated position size. "
-                    "Manual mode uses exactly the spread and slippage values you enter."
+                    "Automatic mode keeps the historical spread floor below and estimates slippage for each candidate from "
+                    "recent liquidity, intraday volatility, risk, stop distance, and simulated position size. A current live quote is shown "
+                    "for reference only because one IEX quote can be stale or extremely wide after hours. Manual mode uses exactly the spread "
+                    "and slippage values you enter."
                 ),
             )
             automatic_execution_costs = execution_cost_mode.startswith("Automatic")
@@ -1838,7 +1839,7 @@ with optimizer_tab:
                 step=1.0,
                 disabled=automatic_execution_costs,
                 help=(
-                    "AUTOMATIC: the app checks the current quote and uses whichever is wider: this floor or the quoted spread."
+                    "AUTOMATIC: this is the historical spread floor used for the optimizer. A current quote may be shown for reference, but it is not imposed on the full historical window."
                     if automatic_execution_costs else
                     "MANUAL: every optimizer candidate uses exactly this spread assumption."
                 ),
@@ -1954,26 +1955,22 @@ with optimizer_tab:
                         if automatic_execution_costs:
                             try:
                                 current_snapshot = market.snapshots([ticker]).get(ticker, {})
-                                engine_settings, observed_spread = conservative_stock_costs(engine_settings, current_snapshot)
+                                observed_spread = quoted_spread_bps(current_snapshot)
                                 if observed_spread is None:
                                     quote_warning = (
-                                        f"A current spread quote was unavailable for {ticker}; the {float(optimizer_spread):.1f} bps "
-                                        "fallback spread floor was used."
-                                    )
-                                elif observed_spread > float(optimizer_spread):
-                                    quote_warning = (
-                                        f"Automatic spread: {ticker}'s current quote is {observed_spread:.1f} bps, wider than the "
-                                        f"{float(optimizer_spread):.1f} bps fallback floor, so the quoted spread was used."
+                                        f"A current spread quote was unavailable for {ticker}. The historical optimizer kept the "
+                                        f"{float(optimizer_spread):.1f} bps spread floor and estimated slippage from the downloaded candles."
                                     )
                                 else:
                                     quote_warning = (
-                                        f"Automatic spread: {ticker}'s current quote is {observed_spread:.1f} bps. The more conservative "
-                                        f"{float(optimizer_spread):.1f} bps fallback floor was retained."
+                                        f"Current {market.live_feed.upper()} quote spread: {observed_spread:.1f} bps (reference only). "
+                                        f"It was not applied across the historical window; the optimizer used the {float(optimizer_spread):.1f} bps "
+                                        "historical spread floor plus adaptive slippage. This avoids stale or after-hours quotes distorting the backtest."
                                     )
                             except AppError as quote_error:
                                 quote_warning = (
-                                    f"A current spread quote was unavailable for {ticker}; the {float(optimizer_spread):.1f} bps "
-                                    f"fallback spread floor was used instead. {quote_error}"
+                                    f"A current spread quote was unavailable for {ticker}. The historical optimizer kept the "
+                                    f"{float(optimizer_spread):.1f} bps spread floor and estimated slippage from historical candles. {quote_error}"
                                 )
                         delay = 16 if market.historical_feed == "sip" and market.live_feed != "sip" else 1
                         end = utc_now() - timedelta(minutes=delay)
@@ -2180,11 +2177,15 @@ with optimizer_tab:
                 quoted_spread = safe_float(optimization_report.get("observed_spread_bps"))
                 spread_used = safe_float(winning_profile.get("spread_bps"), 0.0) or 0.0
                 slippage_used = safe_float(winning_profile.get("slippage_bps"), 0.0) or 0.0
-                quote_text = f" Current quote: {quoted_spread:.1f} bps." if quoted_spread is not None else " Current quote unavailable."
+                quote_text = (
+                    f" Current live quote reference: {quoted_spread:.1f} bps (not applied to the historical window)."
+                    if quoted_spread is not None else
+                    " Current live quote unavailable."
+                )
                 st.info(
-                    f"Automatic execution-cost estimate for the winning setup: spread used {spread_used:.1f} bps; "
+                    f"Automatic execution-cost estimate for the winning setup: historical spread floor used {spread_used:.1f} bps; "
                     f"estimated slippage {slippage_used:.1f} bps per fill.{quote_text} "
-                    "Slippage is estimated from recent liquidity/volatility and the simulated order size, with your fallback floor as a minimum."
+                    "Slippage is estimated from historical liquidity/volatility and simulated order size."
                 )
             section(
                 f"Recommended trading settings for {optimized_symbol}",
