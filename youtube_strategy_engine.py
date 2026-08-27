@@ -80,6 +80,14 @@ def provider_temporarily_unavailable(error: Exception | str) -> bool:
             "temporarily overloaded",
             "overloaded",
             "try again later",
+            "timed out",
+            "timeout",
+            "read operation timed out",
+            "provider could not be reached",
+            "connection reset",
+            "connection aborted",
+            "remote end closed connection",
+            "temporary failure in name resolution",
         )
     )
 
