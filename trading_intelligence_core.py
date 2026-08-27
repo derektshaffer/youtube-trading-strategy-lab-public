@@ -1415,6 +1415,7 @@ class GeminiBookAnalyzer:
         author: str = "",
         focus: str = "",
         progress_callback=None,
+        checkpoint_callback=None,
     ) -> dict[str, Any]:
         chunks = chunk_source_text(text)
         if not chunks:
@@ -1428,6 +1429,58 @@ class GeminiBookAnalyzer:
         completed_sections = 0
         models_used: list[str] = []
         failed_sections: dict[int, str] = {}
+
+        def build_snapshot() -> dict[str, Any]:
+            resolved_title = str(title or "").strip() or (
+                detected_titles[0] if detected_titles else "Uploaded source"
+            )
+            resolved_author = str(author or "").strip() or (
+                detected_authors[0] if detected_authors else ""
+            )
+            source_id = source_fingerprint(resolved_title, resolved_author, text)
+            strategies = [
+                canonicalize_strategy(
+                    item,
+                    source_id=source_id,
+                    source_type="book_or_document",
+                    source_title=resolved_title,
+                    source_author=resolved_author,
+                )
+                for item in strategies_by_key.values()
+            ]
+            return {
+                "id": source_id,
+                "source_type": "book_or_document",
+                "title": resolved_title,
+                "author": resolved_author,
+                "detected_title": detected_titles[0] if detected_titles else "",
+                "detected_author": detected_authors[0] if detected_authors else "",
+                "summary": " ".join(summaries)[:12000],
+                "analyzed_at": _utc_iso(),
+                "model": self.model,
+                "primary_model": self.primary_model,
+                "specialist_model": self.specialist_model,
+                "specialist_used": self.specialist_used,
+                "specialist_sections": sorted(self.specialist_sections),
+                "models_used": models_used or [self.model],
+                "model_fallback_used": self.model_fallback_used,
+                "paid_fallback_used": self.paid_fallback_used,
+                "chunk_count": len(chunks),
+                "completed_sections": completed_sections,
+                "analysis_incomplete": (
+                    completed_sections < len(chunks) or bool(failed_sections)
+                ),
+                "failed_sections": [
+                    {"section": index, "error": message}
+                    for index, message in sorted(failed_sections.items())
+                ],
+                "strategies": strategies,
+            }
+
+        def emit_checkpoint() -> None:
+            if checkpoint_callback is None or completed_sections <= 0:
+                return
+            checkpoint_callback(build_snapshot())
 
         def consume_analysis(analysis: dict[str, Any]) -> None:
             if self.model not in models_used:
@@ -1471,6 +1524,7 @@ class GeminiBookAnalyzer:
                     )
                     consume_analysis(cached)
                     failed_sections.pop(index, None)
+                    emit_checkpoint()
                     return True
 
             if retry_pass:
@@ -1518,6 +1572,7 @@ class GeminiBookAnalyzer:
             completed_sections += 1
             failed_sections.pop(index, None)
             consume_analysis(analysis)
+            emit_checkpoint()
             return True
 
         for index, chunk in enumerate(chunks, start=1):
@@ -1541,49 +1596,8 @@ class GeminiBookAnalyzer:
                 f"retry, and a second pass. Latest provider error: {details}"
             )
 
-        resolved_title = str(title or "").strip() or (
-            detected_titles[0] if detected_titles else "Uploaded source"
-        )
-        resolved_author = str(author or "").strip() or (
-            detected_authors[0] if detected_authors else ""
-        )
-        source_id = source_fingerprint(resolved_title, resolved_author, text)
-        strategies = [
-            canonicalize_strategy(
-                item,
-                source_id=source_id,
-                source_type="book_or_document",
-                source_title=resolved_title,
-                source_author=resolved_author,
-            )
-            for item in strategies_by_key.values()
-        ]
-        result = {
-            "id": source_id,
-            "source_type": "book_or_document",
-            "title": resolved_title,
-            "author": resolved_author,
-            "detected_title": detected_titles[0] if detected_titles else "",
-            "detected_author": detected_authors[0] if detected_authors else "",
-            "summary": " ".join(summaries)[:12000],
-            "analyzed_at": _utc_iso(),
-            "model": self.model,
-            "primary_model": self.primary_model,
-            "specialist_model": self.specialist_model,
-            "specialist_used": self.specialist_used,
-            "specialist_sections": sorted(self.specialist_sections),
-            "models_used": models_used or [self.model],
-            "model_fallback_used": self.model_fallback_used,
-            "paid_fallback_used": self.paid_fallback_used,
-            "chunk_count": len(chunks),
-            "completed_sections": completed_sections,
-            "analysis_incomplete": bool(failed_sections),
-            "failed_sections": [
-                {"section": index, "error": message}
-                for index, message in sorted(failed_sections.items())
-            ],
-            "strategies": strategies,
-        }
+        result = build_snapshot()
+        result["analysis_incomplete"] = bool(failed_sections)
         if not failed_sections:
             self._clear_cache(cache_directory)
         return result
