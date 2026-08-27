@@ -31,6 +31,7 @@ from trading_intelligence_core import (
     effective_strategy_for_live,
     effective_strategy_for_research,
     extract_source_text,
+    merge_ingestion_checkpoint_strategies,
     merge_strategies,
     prepare_strategies_with_ai,
     research_readiness,
@@ -183,10 +184,24 @@ def save_ingestion_checkpoint(
     data.setdefault("validation_runs", [])
 
     strategies = list(analysis.get("strategies") or [])
+    existing_source = next(
+        (
+            item
+            for item in data.get("knowledge_sources") or []
+            if str(item.get("ingest_id") or "") == ingest_id
+        ),
+        None,
+    )
+    replace_progressive_source = not (
+        isinstance(existing_source, dict)
+        and str(existing_source.get("analysis_stage") or "") == "complete"
+    )
     if strategies:
-        data["strategies"] = merge_strategies(
+        data["strategies"] = merge_ingestion_checkpoint_strategies(
             list(data.get("strategies") or []),
             strategies,
+            source_id=str(analysis.get("id") or ""),
+            replace_source=replace_progressive_source,
         )
 
     source_record = {key: value for key, value in analysis.items() if key != "strategies"}
@@ -194,7 +209,7 @@ def save_ingestion_checkpoint(
     source_record["extraction_metadata"] = extraction_metadata
     source_record["ingest_id"] = ingest_id
     source_record["analysis_stage"] = stage
-    source_record["analysis_in_progress"] = stage not in {"complete", "partial"}
+    source_record["analysis_in_progress"] = stage != "complete"
     source_record["checkpointed_at"] = utc_now().isoformat()
 
     data["knowledge_sources"] = [
