@@ -11,6 +11,10 @@ import pandas as pd
 import streamlit as st
 
 from live_strategy_runner_page import market_client, setting
+from trading_catalyst_core import (
+    enrich_bars_with_point_in_time_catalysts,
+    historical_news,
+)
 from trading_market_discovery import analyze_stock_strategies, scan_strategy_universe
 from trading_intelligence_core import (
     GeminiBookAnalyzer,
@@ -499,6 +503,40 @@ elif module == "Strategy Lab":
                 if not rows:
                     raise AppError(f"No historical {timeframe} candles were returned for {ticker}.")
 
+                catalyst_summary = None
+                needs_historical_catalysts = any(
+                    bool(normalize_machine_rules(item.get("machine_rules")).get("catalyst_required"))
+                    for item in candidates
+                )
+                if needs_historical_catalysts:
+                    catalyst_progress = st.progress(
+                        0.0,
+                        text="Downloading point-in-time historical catalyst news…",
+                    )
+                    articles = historical_news(
+                        market,
+                        [ticker],
+                        start=start_time - timedelta(hours=24),
+                        end=end_time,
+                        max_pages=60,
+                        progress=lambda page: catalyst_progress.progress(
+                            min(0.95, page / 60.0),
+                            text=f"Downloading historical catalyst news · page {page}",
+                        ),
+                    )
+                    rows, catalyst_summary = enrich_bars_with_point_in_time_catalysts(
+                        rows,
+                        articles,
+                        lookback_hours=24.0,
+                    )
+                    catalyst_progress.progress(
+                        1.0,
+                        text=(
+                            f"Catalyst history ready · {catalyst_summary.get('specific_catalysts', 0)} "
+                            "classified events"
+                        ),
+                    )
+
                 backtest_settings = BacktestSettings(
                     starting_cash=starting_cash,
                     risk_per_trade_pct=risk_per_trade,
@@ -559,6 +597,7 @@ elif module == "Strategy Lab":
                     "walk_forward": walk_report,
                     "strength": strength,
                     "compared_all": compare_all,
+                    "catalyst_summary": catalyst_summary,
                 }
                 st.rerun()
             except AppError as exc:
@@ -586,6 +625,16 @@ elif module == "Strategy Lab":
             headline[3].metric("Optimizer status", winner.get("status") or "—")
             headline[4].metric("Variants tested", f"{int(report.get('variants_tested') or 0):,}")
             st.caption(strength.get("note") or "")
+
+            catalyst_summary = lab_result.get("catalyst_summary")
+            if catalyst_summary:
+                st.success(
+                    "Point-in-time catalyst filter applied: "
+                    f"{int(catalyst_summary.get('specific_catalysts') or 0)} classified catalyst events "
+                    f"({int(catalyst_summary.get('positive_catalysts') or 0)} positive, "
+                    f"{int(catalyst_summary.get('negative_catalysts') or 0)} negative). "
+                    "News published after a bar is not visible to that bar."
+                )
 
             period_rows = []
             for name, metrics in (
