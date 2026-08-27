@@ -2453,35 +2453,74 @@ class AlpacaMarketData:
         return output
 
 
-def bars_to_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
-    columns = ["open", "high", "low", "close", "volume", "timestamp", "session", "session_minute"]
+def bars_to_frame(
+    rows: list[dict[str, Any]],
+    *,
+    include_extended_hours: bool = False,
+) -> pd.DataFrame:
+    """Normalize intraday bars and optionally retain 04:00-20:00 ET trading.
+
+    Regular-session behavior remains the default for callers such as live chart checks.
+    Backtests and optimizers can opt into extended hours through BacktestSettings.
+    """
+    columns = [
+        "open", "high", "low", "close", "volume", "timestamp", "session",
+        "session_minute", "clock_minute", "is_regular_hours", "is_extended_hours",
+    ]
     if not rows:
         return pd.DataFrame(columns=columns)
-    frame = pd.DataFrame(rows).rename(columns={"o": "open", "h": "high", "l": "low", "c": "close", "v": "volume", "t": "timestamp"})
+    frame = pd.DataFrame(rows).rename(
+        columns={"o": "open", "h": "high", "l": "low", "c": "close", "v": "volume", "t": "timestamp"}
+    )
     required = {"open", "high", "low", "close", "volume", "timestamp"}
     if not required.issubset(frame.columns):
         return pd.DataFrame(columns=columns)
     frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce", utc=True)
     for name in ("open", "high", "low", "close", "volume"):
         frame[name] = pd.to_numeric(frame[name], errors="coerce")
-    frame = frame.dropna(subset=list(required)).sort_values("timestamp").drop_duplicates("timestamp").reset_index(drop=True)
-    frame = frame[(frame["open"] > 0) & (frame["high"] > 0) & (frame["low"] > 0) & (frame["close"] > 0) & (frame["volume"] >= 0)].copy()
+    frame = (
+        frame.dropna(subset=list(required))
+        .sort_values("timestamp")
+        .drop_duplicates("timestamp")
+        .reset_index(drop=True)
+    )
+    frame = frame[
+        (frame["open"] > 0)
+        & (frame["high"] > 0)
+        & (frame["low"] > 0)
+        & (frame["close"] > 0)
+        & (frame["volume"] >= 0)
+    ].copy()
     local = frame["timestamp"].dt.tz_convert(ET)
     minute = local.dt.hour * 60 + local.dt.minute
-    mask = (minute >= 9 * 60 + 30) & (minute < 16 * 60)
+    if include_extended_hours:
+        mask = (minute >= 4 * 60) & (minute < 20 * 60)
+    else:
+        mask = (minute >= 9 * 60 + 30) & (minute < 16 * 60)
     frame = frame.loc[mask].copy().reset_index(drop=True)
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
     local = frame["timestamp"].dt.tz_convert(ET)
+    clock_minute = local.dt.hour * 60 + local.dt.minute
     frame["session"] = local.dt.date.astype(str)
-    frame["session_minute"] = local.dt.hour * 60 + local.dt.minute - (9 * 60 + 30)
+    frame["clock_minute"] = clock_minute
+    frame["session_minute"] = clock_minute - (9 * 60 + 30)
+    frame["is_regular_hours"] = (clock_minute >= 9 * 60 + 30) & (clock_minute < 16 * 60)
+    frame["is_extended_hours"] = ~frame["is_regular_hours"]
     return frame
 
 
-def resample_intraday_bars(rows: list[dict[str, Any]], timeframe: str) -> list[dict[str, Any]]:
+def resample_intraday_bars(
+    rows: list[dict[str, Any]],
+    timeframe: str,
+    *,
+    include_extended_hours: bool = False,
+) -> list[dict[str, Any]]:
     """Derive session-safe 1-, 5-, or 15-minute candles from one-minute history."""
     interval = {"1Min": 1, "5Min": 5, "15Min": 15}.get(str(timeframe or ""))
     if interval is None:
         raise AppError("Choose a supported candle interval: 1Min, 5Min, or 15Min.")
-    frame = bars_to_frame(rows)
+    frame = bars_to_frame(rows, include_extended_hours=include_extended_hours)
     if frame.empty:
         return []
     grouped = frame.copy()
@@ -2510,7 +2549,6 @@ def resample_intraday_bars(rows: list[dict[str, Any]], timeframe: str) -> list[d
         for row in combined.itertuples(index=False)
     ]
 
-
 def add_indicators(frame: pd.DataFrame, strategy: dict[str, Any]) -> pd.DataFrame:
     if frame.empty:
         return frame.copy()
@@ -2523,30 +2561,68 @@ def add_indicators(frame: pd.DataFrame, strategy: dict[str, Any]) -> pd.DataFram
     data["vwap"] = data["cum_dollar_volume"].div(data["cum_volume"].replace(0, float("nan")))
     data["vwap_distance_pct"] = (data["close"].div(data["vwap"]) - 1.0) * 100.0
     data["previous_close"] = data.groupby("session", sort=False)["close"].shift(1)
+    data["previous_high"] = data.groupby("session", sort=False)["high"].shift(1)
     data["previous_vwap"] = data.groupby("session", sort=False)["vwap"].shift(1)
-    daily_close = data.groupby("session", sort=False)["close"].last()
+
+    # Day-change should stay anchored to the prior regular-session close even when
+    # the backtest includes premarket and after-hours candles.
+    all_session_close = data.groupby("session", sort=False)["close"].last()
+    if "is_regular_hours" in data.columns:
+        regular = data[data["is_regular_hours"].fillna(False)]
+        regular_close = regular.groupby("session", sort=False)["close"].last()
+        daily_close = regular_close.reindex(all_session_close.index).fillna(all_session_close)
+    else:
+        daily_close = all_session_close
     previous_daily_close = daily_close.shift(1).to_dict()
     data["previous_daily_close"] = data["session"].map(previous_daily_close)
     data["day_change_pct"] = (data["close"].div(data["previous_daily_close"]) - 1.0) * 100.0
-    historical_session_volume = data.groupby("session", sort=False)["volume"].sum().shift(1).rolling(20, min_periods=1).mean().to_dict()
+
+    historical_session_volume = (
+        data.groupby("session", sort=False)["volume"].sum().shift(1).rolling(20, min_periods=1).mean().to_dict()
+    )
     data["avg_daily_volume"] = data["session"].map(historical_session_volume)
-    session_fraction = ((data["session_minute"] + 1) / 390.0).clip(lower=1 / 390.0, upper=1.0)
+    if "clock_minute" in data.columns and bool(data.get("is_extended_hours", pd.Series(dtype=bool)).any()):
+        # When extended trading is retained, compare cumulative volume against the
+        # same 04:00-20:00 session shape rather than pretending premarket is 09:30.
+        session_fraction = ((data["clock_minute"] - 4 * 60 + 1) / (16 * 60.0)).clip(
+            lower=1 / (16 * 60.0), upper=1.0
+        )
+    else:
+        session_fraction = ((data["session_minute"] + 1) / 390.0).clip(lower=1 / 390.0, upper=1.0)
     data["relative_volume"] = data["cum_volume"].div(data["avg_daily_volume"] * session_fraction)
-    rolling_volume = data.groupby("session", sort=False)["volume"].transform(lambda series: series.shift(1).rolling(20, min_periods=3).mean())
+
+    rolling_volume = data.groupby("session", sort=False)["volume"].transform(
+        lambda series: series.shift(1).rolling(20, min_periods=3).mean()
+    )
     data["volume_surge"] = data["volume"].div(rolling_volume.replace(0, float("nan")))
     lookback = int(rules.get("breakout_lookback_bars") or 20)
     data["prior_breakout_high"] = data.groupby("session", sort=False)["high"].transform(
         lambda series: series.shift(1).rolling(lookback, min_periods=lookback).max()
     )
     opening_minutes = int(rules.get("opening_range_minutes") or 15)
-    opening_only = data["high"].where(data["session_minute"] < opening_minutes)
+    opening_only = data["high"].where((data["session_minute"] >= 0) & (data["session_minute"] < opening_minutes))
     opening_high = opening_only.groupby(data["session"], sort=False).transform("max")
     data["opening_range_high"] = opening_high.where(data["session_minute"] >= opening_minutes)
     green = (data["close"] > data["open"]).astype(int)
     run_lengths = green.groupby([data["session"], (green == 0).cumsum()]).cumsum()
     data["green_streak"] = run_lengths
-    return data
 
+    # Generic, look-ahead-safe pullback -> breakout confirmation used for strategies
+    # whose lesson/name explicitly calls for a micro pullback or bull flag.
+    lower_close = data["close"] < data["previous_close"]
+    recent_pullback = lower_close.groupby(data["session"], sort=False).transform(
+        lambda series: series.shift(1).rolling(3, min_periods=1).max()
+    ).fillna(0).astype(bool)
+    data["pullback_reference_high"] = data.groupby("session", sort=False)["high"].transform(
+        lambda series: series.shift(1).rolling(3, min_periods=2).max()
+    )
+    data["pullback_breakout"] = (
+        recent_pullback
+        & data["pullback_reference_high"].notna()
+        & (data["close"] > data["pullback_reference_high"])
+        & (data["close"] > data["open"])
+    )
+    return data
 
 def parse_clock_minutes(value: str | None) -> int | None:
     if not value:
@@ -2573,7 +2649,27 @@ def backtest_limitations(strategy: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(limitations))
 
 
-def evaluate_signal(row: pd.Series, rules: dict[str, Any]) -> bool:
+def strategy_uses_pullback_breakout(strategy: dict[str, Any]) -> bool:
+    """Identify strategies whose stated entry setup is a pullback/bull-flag continuation."""
+    text_parts = [
+        strategy.get("name"),
+        strategy.get("category"),
+        strategy.get("summary"),
+        *(strategy.get("entry_conditions") or []),
+    ]
+    text = " ".join(str(item or "") for item in text_parts).lower()
+    return any(phrase in text for phrase in ("micro pullback", "pullback", "bull flag"))
+
+
+def evaluate_signal(
+    row: pd.Series | dict[str, Any],
+    rules: dict[str, Any],
+    *,
+    ignore_session_end: bool = False,
+    allow_price_extension: bool = False,
+    price_extension_unlocked: bool = False,
+    require_pullback_breakout: bool = False,
+) -> bool:
     def has_number(name: str) -> bool:
         return pd.notna(row.get(name))
 
@@ -2582,7 +2678,6 @@ def evaluate_signal(row: pd.Series, rules: dict[str, Any]) -> bool:
         return False
     comparisons = [
         ("min_price", "close", lambda actual, target: actual >= target),
-        ("max_price", "close", lambda actual, target: actual <= target),
         ("min_day_change_pct", "day_change_pct", lambda actual, target: actual >= target),
         ("min_relative_volume", "relative_volume", lambda actual, target: actual >= target),
         ("min_dollar_volume", "cum_dollar_volume", lambda actual, target: actual >= target),
@@ -2595,6 +2690,11 @@ def evaluate_signal(row: pd.Series, rules: dict[str, Any]) -> bool:
         if threshold is None:
             continue
         if not has_number(field_name) or not comparator(float(row[field_name]), float(threshold)):
+            return False
+
+    max_price = safe_float(rules.get("max_price"))
+    if max_price is not None and close > max_price:
+        if not (allow_price_extension and price_extension_unlocked):
             return False
 
     if rules.get("above_vwap") is True and (not has_number("vwap") or close <= float(row["vwap"])):
@@ -2612,16 +2712,17 @@ def evaluate_signal(row: pd.Series, rules: dict[str, Any]) -> bool:
     if rules.get("opening_range_minutes") is not None:
         if not has_number("opening_range_high") or close <= float(row["opening_range_high"]):
             return False
+    if require_pullback_breakout and not bool(row.get("pullback_breakout")):
+        return False
 
-    clock_minute = 9 * 60 + 30 + int(row.get("session_minute", 0))
+    clock_minute = int(row.get("clock_minute", 9 * 60 + 30 + int(row.get("session_minute", 0))))
     session_start = parse_clock_minutes(rules.get("session_start"))
     session_end = parse_clock_minutes(rules.get("session_end"))
     if session_start is not None and clock_minute < session_start:
         return False
-    if session_end is not None and clock_minute > session_end:
+    if not ignore_session_end and session_end is not None and clock_minute > session_end:
         return False
     return True
-
 
 @dataclass
 class BacktestSettings:
@@ -2634,6 +2735,12 @@ class BacktestSettings:
     slippage_bps: float = 8.0
     fee_per_order: float = 0.0
     train_fraction: float = 0.7
+    max_concurrent_positions: int = 4
+    allow_extended_hours: bool = True
+    extended_hours_position_scale: float = 0.25
+    ignore_strategy_session_end: bool = True
+    allow_price_extension_after_qualification: bool = True
+    require_pullback_breakout_for_pullback_strategies: bool = True
 
     def validate(self) -> None:
         if self.starting_cash <= 0:
@@ -2648,6 +2755,10 @@ class BacktestSettings:
             raise AppError("Spread, slippage, and fees cannot be negative.")
         if not 0 < self.train_fraction < 1:
             raise AppError("The in-sample fraction must be between zero and one.")
+        if not 1 <= int(self.max_concurrent_positions) <= 20:
+            raise AppError("Maximum concurrent positions must be between 1 and 20.")
+        if not 0 < float(self.extended_hours_position_scale) <= 1:
+            raise AppError("Extended-hours position scale must be greater than 0 and no more than 1.")
 
 
 @dataclass
@@ -2764,12 +2875,13 @@ def run_backtest(
     if prepared_indicators is not None:
         if len(prepared_indicators) < 3:
             return result
-        data = prepared_indicators
+        data = prepared_indicators.copy()
     else:
-        base = bars_to_frame(rows)
+        base = bars_to_frame(rows, include_extended_hours=settings.allow_extended_hours)
         if len(base) < 3:
             return result
         data = add_indicators(base, strategy)
+
     rules = normalize_machine_rules(strategy.get("machine_rules"))
     stop_pct = rules.get("stop_loss_pct") or settings.default_stop_pct
     reward_risk = rules.get("reward_risk") or settings.default_reward_risk
@@ -2778,107 +2890,41 @@ def run_backtest(
     split_index = max(1, min(len(sessions) - 1, int(len(sessions) * settings.train_fraction))) if len(sessions) > 1 else 1
     holdout_sessions = set(sessions[split_index:]) if len(sessions) > 1 else set()
     cash = settings.starting_cash
-    position: dict[str, Any] | None = None
+    positions: list[dict[str, Any]] = []
     trades: list[dict[str, Any]] = []
     curve: list[dict[str, Any]] = [{"timestamp": str(data.iloc[0]["timestamp"]), "equity": round(cash, 2)}]
     execution_friction = (settings.spread_bps / 2.0 + settings.slippage_bps) / 10_000.0
     records = data.to_dict("records")
+    trade_sequence = 0
+    pullback_required = (
+        bool(settings.require_pullback_breakout_for_pullback_strategies)
+        and strategy_uses_pullback_breakout(strategy)
+    )
 
-    for index in range(1, len(records)):
-        current = records[index]
-        previous = records[index - 1]
-        if position is not None:
-            reason: str | None = None
-            raw_exit: float | None = None
-            if current["session"] != position["session"]:
-                raw_exit = float(previous["close"])
-                exit_time = previous["timestamp"]
-                reason = "End of session"
-            else:
-                exit_time = current["timestamp"]
-                low = float(current["low"])
-                high = float(current["high"])
-                bar_open = float(current["open"])
-                # Stops win ambiguous same-bar touches. Adverse opening gaps fill at the gap.
-                if low <= position["stop_price"]:
-                    raw_exit = min(bar_open, position["stop_price"])
-                    reason = "Stop loss"
-                elif high >= position["target_price"]:
-                    raw_exit = max(bar_open, position["target_price"])
-                    reason = "Profit target"
-                elif max_hold is not None:
-                    held_minutes = (current["timestamp"] - position["entry_time"]).total_seconds() / 60.0
-                    if held_minutes >= max_hold:
-                        raw_exit = float(current["close"])
-                        reason = "Time limit"
-                elif index == len(records) - 1:
-                    raw_exit = float(current["close"])
-                    reason = "End of available data"
+    max_price = safe_float(rules.get("max_price"))
+    min_price = safe_float(rules.get("min_price"))
+    price_extension_sessions: set[str] = set()
+    if settings.allow_price_extension_after_qualification and max_price is not None:
+        for session_name, session_frame in data.groupby("session", sort=False):
+            if session_frame.empty:
+                continue
+            first_close = safe_float(session_frame.iloc[0].get("close"))
+            if first_close is None:
+                continue
+            if first_close <= max_price and (min_price is None or first_close >= min_price):
+                price_extension_sessions.add(str(session_name))
 
-            if reason and raw_exit is not None:
-                fill_exit = raw_exit * (1.0 - execution_friction)
-                gross = (fill_exit - position["entry_price"]) * position["quantity"]
-                pnl = gross - settings.fee_per_order * 2.0
-                cash += pnl
-                trade = {
-                    "symbol": symbol,
-                    "entry_time": isoformat_utc(position["entry_time"].to_pydatetime()),
-                    "exit_time": isoformat_utc(exit_time.to_pydatetime()),
-                    "entry_price": round(position["entry_price"], 4),
-                    "exit_price": round(fill_exit, 4),
-                    "stop_price": round(position["stop_price"], 4),
-                    "target_price": round(position["target_price"], 4),
-                    "quantity": position["quantity"],
-                    "pnl": round(pnl, 2),
-                    "return_pct": round((fill_exit / position["entry_price"] - 1.0) * 100.0, 3),
-                    "reason": reason,
-                    "sample": "out_of_sample" if position["session"] in holdout_sessions else "in_sample",
-                }
-                trades.append(trade)
-                curve.append({"timestamp": trade["exit_time"], "equity": round(cash, 2)})
-                position = None
-                # If a previous-session position was closed, the current bar can still
-                # serve as the next open for yesterday's signal only when sessions match,
-                # so the normal guard below prevents an overnight entry.
-                if reason != "End of session":
-                    continue
-
-        if position is not None or previous["session"] != current["session"]:
-            continue
-        if not evaluate_signal(previous, rules):
-            continue
-        entry = float(current["open"]) * (1.0 + execution_friction)
-        if entry <= 0 or cash <= 0:
-            continue
-        stop_price = entry * (1.0 - stop_pct / 100.0)
-        risk_per_share = entry - stop_price
-        if risk_per_share <= 0:
-            continue
-        risk_budget = cash * settings.risk_per_trade_pct / 100.0
-        allocation_cap = cash * settings.max_position_pct / 100.0
-        quantity = int(min(risk_budget / risk_per_share, allocation_cap / entry))
-        if quantity < 1:
-            continue
-        position = {
-            "entry_time": current["timestamp"],
-            "entry_price": entry,
-            "quantity": quantity,
-            "stop_price": stop_price,
-            "target_price": entry + risk_per_share * reward_risk,
-            "session": current["session"],
-        }
-
-    # Close any remaining position using the final bar; never leave an invisible trade.
-    if position is not None:
-        final_row = records[-1]
-        raw_exit = float(final_row["close"])
-        fill_exit = raw_exit * (1.0 - execution_friction)
-        pnl = (fill_exit - position["entry_price"]) * position["quantity"] - settings.fee_per_order * 2.0
+    def close_position(position: dict[str, Any], raw_exit: float, exit_time: Any, reason: str) -> None:
+        nonlocal cash
+        fill_exit = float(raw_exit) * (1.0 - execution_friction)
+        gross = (fill_exit - position["entry_price"]) * position["quantity"]
+        pnl = gross - settings.fee_per_order * 2.0
         cash += pnl
         trade = {
+            "trade_id": position["trade_id"],
             "symbol": symbol,
             "entry_time": isoformat_utc(position["entry_time"].to_pydatetime()),
-            "exit_time": isoformat_utc(final_row["timestamp"].to_pydatetime()),
+            "exit_time": isoformat_utc(exit_time.to_pydatetime()),
             "entry_price": round(position["entry_price"], 4),
             "exit_price": round(fill_exit, 4),
             "stop_price": round(position["stop_price"], 4),
@@ -2886,11 +2932,123 @@ def run_backtest(
             "quantity": position["quantity"],
             "pnl": round(pnl, 2),
             "return_pct": round((fill_exit / position["entry_price"] - 1.0) * 100.0, 3),
-            "reason": "End of available data",
+            "reason": reason,
             "sample": "out_of_sample" if position["session"] in holdout_sessions else "in_sample",
+            "entry_session_type": "extended" if position.get("extended_hours") else "regular",
         }
         trades.append(trade)
         curve.append({"timestamp": trade["exit_time"], "equity": round(cash, 2)})
+
+    for index in range(1, len(records)):
+        current = records[index]
+        previous = records[index - 1]
+
+        # Overnight positions are never carried. The prior session's last available
+        # candle is the exit, so all slots are genuinely free before today's open.
+        if positions and current["session"] != previous["session"]:
+            for position in positions:
+                close_position(position, float(previous["close"]), previous["timestamp"], "End of session")
+            positions = []
+
+        positions_at_open = list(positions)
+        open_count_at_bar_open = len(positions_at_open)
+
+        # One new entry can be layered onto each candle while the portfolio has a free
+        # slot. Total risk and total notional remain capped, so four positions means
+        # several smaller entries rather than four full-size bets.
+        if (
+            previous["session"] == current["session"]
+            and open_count_at_bar_open < int(settings.max_concurrent_positions)
+            and evaluate_signal(
+                previous,
+                rules,
+                ignore_session_end=settings.ignore_strategy_session_end,
+                allow_price_extension=settings.allow_price_extension_after_qualification,
+                price_extension_unlocked=str(previous["session"]) in price_extension_sessions,
+                require_pullback_breakout=pullback_required,
+            )
+        ):
+            entry = float(current["open"]) * (1.0 + execution_friction)
+            if entry > 0 and cash > 0:
+                stop_price = entry * (1.0 - stop_pct / 100.0)
+                risk_per_share = entry - stop_price
+                if risk_per_share > 0:
+                    max_positions = max(1, int(settings.max_concurrent_positions))
+                    total_risk_cap = cash * settings.risk_per_trade_pct / 100.0
+                    used_risk = sum(float(item.get("risk_dollars") or 0.0) for item in positions_at_open)
+                    available_risk = max(0.0, total_risk_cap - used_risk)
+                    per_slot_risk = total_risk_cap / max_positions
+
+                    total_allocation_cap = cash * settings.max_position_pct / 100.0
+                    used_notional = sum(
+                        float(item["entry_price"]) * int(item["quantity"])
+                        for item in positions_at_open
+                    )
+                    available_allocation = max(0.0, total_allocation_cap - used_notional)
+                    per_slot_allocation = total_allocation_cap / max_positions
+
+                    is_extended = bool(current.get("is_extended_hours"))
+                    if is_extended:
+                        scale = float(settings.extended_hours_position_scale)
+                        per_slot_risk *= scale
+                        per_slot_allocation *= scale
+
+                    quantity = int(
+                        min(
+                            per_slot_risk / risk_per_share,
+                            available_risk / risk_per_share,
+                            per_slot_allocation / entry,
+                            available_allocation / entry,
+                        )
+                    )
+                    if quantity >= 1:
+                        trade_sequence += 1
+                        positions.append(
+                            {
+                                "trade_id": trade_sequence,
+                                "entry_time": current["timestamp"],
+                                "entry_price": entry,
+                                "quantity": quantity,
+                                "stop_price": stop_price,
+                                "target_price": entry + risk_per_share * reward_risk,
+                                "session": current["session"],
+                                "risk_dollars": risk_per_share * quantity,
+                                "extended_hours": is_extended,
+                            }
+                        )
+
+        # Evaluate this candle for every open layer, including a position entered at
+        # this candle's open. Stops win ambiguous same-bar touches.
+        survivors: list[dict[str, Any]] = []
+        low = float(current["low"])
+        high = float(current["high"])
+        bar_open = float(current["open"])
+        for position in positions:
+            raw_exit: float | None = None
+            reason: str | None = None
+            if low <= position["stop_price"]:
+                raw_exit = min(bar_open, position["stop_price"])
+                reason = "Stop loss"
+            elif high >= position["target_price"]:
+                raw_exit = max(bar_open, position["target_price"])
+                reason = "Profit target"
+            elif max_hold is not None:
+                held_minutes = (current["timestamp"] - position["entry_time"]).total_seconds() / 60.0
+                if held_minutes >= max_hold:
+                    raw_exit = float(current["close"])
+                    reason = "Time limit"
+            if reason and raw_exit is not None:
+                close_position(position, raw_exit, current["timestamp"], reason)
+            else:
+                survivors.append(position)
+        positions = survivors
+
+    # Close all remaining layers using the final available candle.
+    if positions:
+        final_row = records[-1]
+        for position in positions:
+            close_position(position, float(final_row["close"]), final_row["timestamp"], "End of available data")
+        positions = []
 
     in_sample = [trade for trade in trades if trade["sample"] == "in_sample"]
     out_sample = [trade for trade in trades if trade["sample"] == "out_of_sample"]
@@ -2904,10 +3062,12 @@ def run_backtest(
             "out_of_sample": summarize_trades(out_sample, max(holdout_start_cash, 0.01)),
             "sessions": len(sessions),
             "holdout_start": min(holdout_sessions) if holdout_sessions else None,
+            "concurrent_position_limit": int(settings.max_concurrent_positions),
+            "extended_hours_enabled": bool(settings.allow_extended_hours),
+            "pullback_breakout_required": bool(pullback_required),
         }
     )
     return result
-
 
 def _optimizer_number_options(
     value: float,
@@ -3551,10 +3711,10 @@ def _optimize_stock_strategies_historical(
     if len(tickers) != 1:
         raise AppError("Enter exactly one valid stock ticker to optimize.")
     target_symbol = tickers[0]
-    frame = bars_to_frame(rows)
+    frame = bars_to_frame(rows, include_extended_hours=settings.allow_extended_hours)
     sessions = list(dict.fromkeys(frame.get("session", pd.Series(dtype=str)).tolist()))
     if not sessions:
-        raise AppError("No regular-session historical candles were available for optimization.")
+        raise AppError("No historical candles were available for optimization.")
     minimum_historical_trades = (
         int(optimizer.minimum_historical_trades)
         if optimizer.enforce_historical_minimum_trades
@@ -3924,7 +4084,7 @@ def _screen_historical_strategies(
     Each strategy gets the same small stop/target sweep. This is intentionally only a
     screening stage; the winners are fully optimized afterward.
     """
-    frame = bars_to_frame(rows)
+    frame = bars_to_frame(rows, include_extended_hours=settings.allow_extended_hours)
     if frame.empty:
         return []
     ranking_minimum_historical_trades = (
@@ -4015,7 +4175,7 @@ def _optimize_stock_timeframes_historical(
     # Stage 1: screen all saved strategies on 5-minute candles with a tiny, equal grid.
     if progress:
         progress(20, 1000, f"Screening {len(strategies)} saved strategies…")
-    five_minute_rows = resample_intraday_bars(one_minute_rows, "5Min")
+    five_minute_rows = resample_intraday_bars(one_minute_rows, "5Min", include_extended_hours=settings.allow_extended_hours)
     strategy_screen = _screen_historical_strategies(
         five_minute_rows,
         strategies,
@@ -4048,7 +4208,7 @@ def _optimize_stock_timeframes_historical(
     screening_optimizer.validate()
     screened_intervals: list[tuple[str, list[dict[str, Any]], dict[str, Any]]] = []
     for index, interval in enumerate(requested):
-        interval_rows = resample_intraday_bars(one_minute_rows, interval)
+        interval_rows = resample_intraday_bars(one_minute_rows, interval, include_extended_hours=settings.allow_extended_hours)
         if progress:
             progress(200 + index * 80, 1000, f"Comparing {interval} candles…")
         report = _optimize_stock_strategies_historical(
@@ -4164,7 +4324,7 @@ def optimize_stock_strategies(
     if len(tickers) != 1:
         raise AppError("Enter exactly one valid stock ticker to optimize.")
     target_symbol = tickers[0]
-    frame = bars_to_frame(rows)
+    frame = bars_to_frame(rows, include_extended_hours=settings.allow_extended_hours)
     sessions = list(dict.fromkeys(frame.get("session", pd.Series(dtype=str)).tolist()))
     if len(sessions) < 3:
         raise AppError(
