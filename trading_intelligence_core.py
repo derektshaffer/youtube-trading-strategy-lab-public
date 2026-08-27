@@ -1416,6 +1416,7 @@ class GeminiBookAnalyzer:
         focus: str = "",
         progress_callback=None,
         checkpoint_callback=None,
+        resume_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         chunks = chunk_source_text(text)
         if not chunks:
@@ -1426,9 +1427,49 @@ class GeminiBookAnalyzer:
         summaries: list[str] = []
         detected_titles: list[str] = []
         detected_authors: list[str] = []
+        completed_section_indices: set[int] = set()
         completed_sections = 0
         models_used: list[str] = []
         failed_sections: dict[int, str] = {}
+
+        if isinstance(resume_state, dict):
+            resume_version = int(safe_float(resume_state.get("checkpoint_version"), 0) or 0)
+            resume_chunk_count = int(safe_float(resume_state.get("chunk_count"), 0) or 0)
+            if (
+                resume_version == BOOK_ANALYSIS_CACHE_VERSION
+                and resume_chunk_count == len(chunks)
+            ):
+                for value in resume_state.get("completed_section_indices") or []:
+                    index = int(safe_float(value, 0) or 0)
+                    if 1 <= index <= len(chunks):
+                        completed_section_indices.add(index)
+                completed_sections = len(completed_section_indices)
+
+                existing_summary = str(resume_state.get("summary") or "").strip()
+                if existing_summary:
+                    summaries.append(existing_summary)
+                existing_title = str(
+                    resume_state.get("detected_title")
+                    or resume_state.get("title")
+                    or ""
+                ).strip()
+                existing_author = str(
+                    resume_state.get("detected_author")
+                    or resume_state.get("author")
+                    or ""
+                ).strip()
+                if existing_title and existing_title != "Uploaded source":
+                    detected_titles.append(existing_title)
+                if existing_author:
+                    detected_authors.append(existing_author)
+                for raw in resume_state.get("strategies") or []:
+                    if not isinstance(raw, dict):
+                        continue
+                    name = str(raw.get("name") or "Unnamed strategy").strip()
+                    category = str(raw.get("category") or "Uncategorized").strip()
+                    key = re.sub(r"[^a-z0-9]+", " ", f"{name} {category}".casefold()).strip()
+                    if key:
+                        strategies_by_key[key] = dict(raw)
 
         def build_snapshot() -> dict[str, Any]:
             resolved_title = str(title or "").strip() or (
@@ -1466,6 +1507,8 @@ class GeminiBookAnalyzer:
                 "model_fallback_used": self.model_fallback_used,
                 "paid_fallback_used": self.paid_fallback_used,
                 "chunk_count": len(chunks),
+                "checkpoint_version": BOOK_ANALYSIS_CACHE_VERSION,
+                "completed_section_indices": sorted(completed_section_indices),
                 "completed_sections": completed_sections,
                 "analysis_incomplete": (
                     completed_sections < len(chunks) or bool(failed_sections)
@@ -1511,11 +1554,22 @@ class GeminiBookAnalyzer:
 
         def analyze_section(index: int, chunk: str, *, retry_pass: bool = False) -> bool:
             nonlocal completed_sections
+            if not retry_pass and index in completed_section_indices:
+                self._emit_progress(
+                    progress_callback,
+                    index,
+                    len(chunks),
+                    f"Using durable saved section {index} of {len(chunks)}…",
+                )
+                return True
+
             cache_path = cache_directory / f"section-{index:03d}.json"
             if not retry_pass:
                 cached = self._read_cached_chunk(cache_path)
                 if cached is not None:
-                    completed_sections += 1
+                    if index not in completed_section_indices:
+                        completed_section_indices.add(index)
+                        completed_sections = len(completed_section_indices)
                     self._emit_progress(
                         progress_callback,
                         index,
@@ -1569,7 +1623,9 @@ class GeminiBookAnalyzer:
                 analysis=analysis,
                 model=self.model,
             )
-            completed_sections += 1
+            if index not in completed_section_indices:
+                completed_section_indices.add(index)
+                completed_sections = len(completed_section_indices)
             failed_sections.pop(index, None)
             consume_analysis(analysis)
             emit_checkpoint()
