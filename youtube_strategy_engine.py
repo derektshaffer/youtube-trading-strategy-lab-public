@@ -1816,8 +1816,25 @@ class StrategyStore:
                 result[name] = []
         return result
 
+    @staticmethod
+    def _library_has_user_data(data: dict[str, Any]) -> bool:
+        for name in (
+            "videos",
+            "strategies",
+            "paper_positions",
+            "recovery_items",
+            "strategy_versions",
+            "knowledge_sources",
+            "research_runs",
+            "validation_runs",
+        ):
+            value = data.get(name)
+            if isinstance(value, list) and value:
+                return True
+        return False
+
     def load_latest(self) -> dict[str, Any]:
-        """Reconcile local and durable cloud copies without silently discarding either side."""
+        """Reconcile local/cloud copies using their last shared version, never timestamp winner-takes-all."""
         local = self.load()
         if self.cloud_backup is None:
             return local
@@ -1832,25 +1849,61 @@ class StrategyStore:
         remote_library = remote["library"]
         local_updated = str(local.get("updated_at") or "")
         remote_updated = str(remote_library.get("updated_at") or "")
+        sync_status = self.cloud_status()
+        synced_updated = str(sync_status.get("synced_updated_at") or "")
 
-        if local_updated and remote_updated and local_updated == remote_updated:
+        if local_updated == remote_updated:
             if local != remote_library:
                 raise AppError(
                     "The local and private GitHub libraries have different records with the same "
-                    "saved timestamp. Neither copy was overwritten. Restore/inspect the cloud copy "
-                    "before making another change."
+                    "saved timestamp. Neither copy was overwritten."
                 )
             self._record_cloud_success(remote_library)
             return local
 
-        if remote_updated and (not local_updated or remote_updated > local_updated):
+        if synced_updated:
+            local_changed = local_updated != synced_updated
+            remote_changed = remote_updated != synced_updated
+
+            if local_changed and remote_changed:
+                raise AppError(
+                    "Both the local Trading Lab library and the private GitHub library changed "
+                    "since their last shared version. Neither copy was overwritten. Close duplicate "
+                    "app tabs/processes and restore/inspect the cloud copy before retrying."
+                )
+            if remote_changed:
+                self._write_local(remote_library, make_backup=bool(self.path.exists()))
+                self._record_cloud_success(remote_library)
+                self.restored_on_startup = True
+                return self.load()
+            if local_changed:
+                # Safe unsynced local change: cloud is still exactly the version local branched from.
+                return local
+
+            # The synchronization token is stale/odd but neither side advertises a change.
+            if local == remote_library:
+                self._record_cloud_success(remote_library)
+                return local
+            raise AppError(
+                "The local and private GitHub libraries could not be reconciled safely. "
+                "Neither copy was overwritten."
+            )
+
+        # No known common ancestor (for example, first migration from local-only storage).
+        local_has_data = self._library_has_user_data(local)
+        remote_has_data = self._library_has_user_data(remote_library)
+        if local_has_data and remote_has_data:
+            raise AppError(
+                "Both local and private GitHub storage already contain Trading Lab records, "
+                "but no shared synchronization version is known. Neither copy was overwritten."
+            )
+        if remote_has_data and not local_has_data:
             self._write_local(remote_library, make_backup=bool(self.path.exists()))
             self._record_cloud_success(remote_library)
             self.restored_on_startup = True
             return self.load()
 
-        # Local is newer. Keep it, but remember exactly which cloud revision we observed so
-        # the next save can safely promote the local checkpoint instead of reporting a false conflict.
+        # Remote is empty (or both are empty), so preserving/migrating local is safe.
         self._record_cloud_status(
             last_synced_at=isoformat_utc(utc_now()),
             synced_updated_at=remote_library.get("updated_at"),
