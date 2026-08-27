@@ -767,7 +767,7 @@ def render_backtest_trade_chart(
         xaxis_rangeslider_visible=False,
         showlegend=True,
         dragmode="pan",
-        uirevision=f"{symbol}-{timeframe}",
+        uirevision=f"{symbol}-{timeframe}-{view_start.isoformat()}-{view_end.isoformat()}",
     )
 
     xaxis_common = dict(
