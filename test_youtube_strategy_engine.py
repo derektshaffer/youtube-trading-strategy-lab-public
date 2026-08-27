@@ -476,6 +476,95 @@ class DurableStorageTests(unittest.TestCase):
             self.assertEqual(status["repository"], "owner/private-backups")
 
 
+class CloudReconciliationTests(unittest.TestCase):
+    def test_newer_local_copy_is_kept_and_cloud_revision_is_remembered(self):
+        class FakeCloud:
+            repository = "owner/private-backups"
+            path = "trading-intelligence-lab/intelligence_library.json"
+
+            def read_library(self):
+                return {
+                    "library": {
+                        "version": 2,
+                        "strategies": [],
+                        "knowledge_sources": [{"id": "remote", "title": "Remote"}],
+                        "updated_at": "2026-08-27T17:00:00Z",
+                    },
+                    "sha": "a" * 40,
+                }
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = engine.StrategyStore(directory, cloud_backup=FakeCloud())
+            store._write_local(
+                {
+                    "version": 2,
+                    "strategies": [],
+                    "knowledge_sources": [{"id": "local", "title": "Local"}],
+                    "updated_at": "2026-08-27T17:10:00Z",
+                },
+                make_backup=False,
+            )
+            loaded = store.load_latest()
+            self.assertEqual(loaded["knowledge_sources"][0]["title"], "Local")
+            self.assertEqual(
+                store.cloud_status()["synced_updated_at"],
+                "2026-08-27T17:00:00Z",
+            )
+
+    def test_same_timestamp_different_data_is_not_silently_overwritten(self):
+        class FakeCloud:
+            repository = "owner/private-backups"
+            path = "trading-intelligence-lab/intelligence_library.json"
+
+            def read_library(self):
+                return {
+                    "library": {
+                        "version": 2,
+                        "strategies": [],
+                        "knowledge_sources": [{"id": "remote"}],
+                        "updated_at": "2026-08-27T17:00:00Z",
+                    },
+                    "sha": "a" * 40,
+                }
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = engine.StrategyStore(directory, cloud_backup=FakeCloud())
+            store._write_local(
+                {
+                    "version": 2,
+                    "strategies": [],
+                    "knowledge_sources": [{"id": "local"}],
+                    "updated_at": "2026-08-27T17:00:00Z",
+                },
+                make_backup=False,
+            )
+            with self.assertRaises(engine.AppError):
+                store.load_latest()
+
+    def test_successful_read_does_not_hide_previous_cloud_write_error(self):
+        class FakeCloud:
+            repository = "owner/private-backups"
+            path = "trading-intelligence-lab/intelligence_library.json"
+
+            def read_library(self):
+                return {
+                    "library": {
+                        "version": 2,
+                        "strategies": [],
+                        "updated_at": "2026-08-27T17:00:00Z",
+                    },
+                    "sha": "a" * 40,
+                }
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = engine.StrategyStore(directory, cloud_backup=FakeCloud())
+            store._record_cloud_status(last_error="Saved locally, but permanent cloud backup failed")
+            status = store.persistence_status(verify=True)
+            self.assertTrue(status["verified"])
+            self.assertFalse(status["healthy"])
+            self.assertIn("permanent cloud backup failed", status["last_error"])
+
+
 class CloudBackupFirstWriteTests(unittest.TestCase):
     def test_first_write_to_initialized_blank_cloud_library_is_allowed(self):
         cloud = engine.GitHubCloudBackup(
