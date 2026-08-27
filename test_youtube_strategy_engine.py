@@ -331,6 +331,51 @@ class BacktestTests(unittest.TestCase):
         entry_time = datetime.fromisoformat(result["trades"][0]["entry_time"].replace("Z", "+00:00")).astimezone(ET)
         self.assertEqual((entry_time.hour, entry_time.minute), (9, 34))
 
+    def test_optimizer_execution_variants_cover_entry_behavior_choices(self):
+        settings = engine.BacktestSettings(
+            starting_cash=10_000,
+            risk_per_trade_pct=5,
+            max_position_pct=80,
+            spread_bps=0,
+            slippage_bps=0,
+            max_concurrent_positions=4,
+            allow_extended_hours=True,
+            extended_hours_position_scale=0.25,
+            ignore_strategy_session_end=True,
+            allow_price_extension_after_qualification=True,
+            require_pullback_breakout_for_pullback_strategies=True,
+        )
+        variants = engine.generate_execution_variants(settings, maximum=8)
+        self.assertTrue({1, 2, 3, 4}.issubset({item.max_concurrent_positions for item in variants}))
+        self.assertEqual({False, True}, {item.allow_extended_hours for item in variants})
+        self.assertTrue({0.15, 0.25, 0.50}.issubset({
+            round(item.extended_hours_position_scale, 2)
+            for item in variants
+            if item.allow_extended_hours
+        }))
+        self.assertEqual({False, True}, {item.ignore_strategy_session_end for item in variants})
+        self.assertEqual({False, True}, {item.allow_price_extension_after_qualification for item in variants})
+        self.assertEqual(
+            {False, True},
+            {item.require_pullback_breakout_for_pullback_strategies for item in variants},
+        )
+
+    def test_legacy_behavior_settings_restore_original_entry_engine(self):
+        settings = engine.BacktestSettings(
+            max_concurrent_positions=4,
+            allow_extended_hours=True,
+            extended_hours_position_scale=0.5,
+            ignore_strategy_session_end=True,
+            allow_price_extension_after_qualification=True,
+            require_pullback_breakout_for_pullback_strategies=True,
+        )
+        legacy = engine.legacy_behavior_settings(settings)
+        self.assertEqual(legacy.max_concurrent_positions, 1)
+        self.assertFalse(legacy.allow_extended_hours)
+        self.assertFalse(legacy.ignore_strategy_session_end)
+        self.assertFalse(legacy.allow_price_extension_after_qualification)
+        self.assertFalse(legacy.require_pullback_breakout_for_pullback_strategies)
+
     def test_settings_reject_invalid_risk(self):
         with self.assertRaises(engine.AppError):
             engine.BacktestSettings(risk_per_trade_pct=0).validate()
