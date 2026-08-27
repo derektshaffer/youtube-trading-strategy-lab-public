@@ -496,7 +496,17 @@ elif module == "Knowledge Sources":
                     DEFAULT_GEMINI_BOOK_SPECIALIST_MODEL,
                 ),
             )
-            progress = st.progress(0.0, text="Preparing source…")
+            page_note = ""
+            if metadata.get("pages"):
+                page_note = f" · {int(metadata.get('pages') or 0)} pages"
+            progress = st.progress(
+                0.0,
+                text=(
+                    "File upload succeeded and readable text was extracted"
+                    + page_note
+                    + ". Preparing the AI reading batches…"
+                ),
+            )
             def on_progress(index: int, total: int, message: str | None = None) -> None:
                 progress.progress(
                     min(0.98, max(0.0, (index - 1) / max(1, total))),
