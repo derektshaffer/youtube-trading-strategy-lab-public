@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import fields
 from datetime import date, datetime, time, timedelta, timezone
 import math
+import re
 from statistics import median
 from typing import Any, Callable
 
@@ -82,6 +83,97 @@ def deterministic_symbol_sample(
     return result[:maximum]
 
 
+def _invalid_symbol_from_error(error: Exception | str) -> str | None:
+    match = re.search(
+        r"invalid symbol:\\s*([A-Za-z0-9.\\-]+)",
+        str(error),
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return match.group(1).strip().upper() or None
+
+
+def _load_bar_batch_resilient(
+    market: AlpacaMarketData,
+    batch: list[str],
+    *,
+    start,
+    end,
+    timeframe: str,
+    max_pages: int,
+    progress: Callable[[str], None] | None,
+) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
+    """Recover valid stocks when Alpaca rejects one legacy/inactive symbol in a batch."""
+    if not batch:
+        return {}, []
+    try:
+        return (
+            market.bars(
+                batch,
+                start=start,
+                end=end,
+                timeframe=timeframe,
+                max_pages=max_pages,
+            ),
+            [],
+        )
+    except AppError as exc:
+        message = str(exc)
+        invalid = _invalid_symbol_from_error(exc)
+        symbol_error = "invalid symbol" in message.casefold()
+
+        if invalid and invalid in batch:
+            _notify(
+                progress,
+                f"Skipping unusable historical symbol {invalid}; continuing the remaining stocks…",
+            )
+            recovered, skipped = _load_bar_batch_resilient(
+                market,
+                [symbol for symbol in batch if symbol != invalid],
+                start=start,
+                end=end,
+                timeframe=timeframe,
+                max_pages=max_pages,
+                progress=progress,
+            )
+            return recovered, [invalid, *skipped]
+
+        if symbol_error and len(batch) > 1:
+            # Alpaca occasionally returns a symbol-related 400 without naming the offender.
+            # Bisect only that class of error so unrelated provider failures still stop safely.
+            midpoint = max(1, len(batch) // 2)
+            left, left_skipped = _load_bar_batch_resilient(
+                market,
+                batch[:midpoint],
+                start=start,
+                end=end,
+                timeframe=timeframe,
+                max_pages=max_pages,
+                progress=progress,
+            )
+            right, right_skipped = _load_bar_batch_resilient(
+                market,
+                batch[midpoint:],
+                start=start,
+                end=end,
+                timeframe=timeframe,
+                max_pages=max_pages,
+                progress=progress,
+            )
+            return {**left, **right}, [*left_skipped, *right_skipped]
+
+        if symbol_error and len(batch) == 1:
+            bad = batch[0]
+            _notify(
+                progress,
+                f"Skipping unusable historical symbol {bad}; continuing the research run…",
+            )
+            return {}, [bad]
+
+        raise
+
+
 def _batched_bars(
     market: AlpacaMarketData,
     symbols: list[str],
@@ -92,19 +184,26 @@ def _batched_bars(
     batch_size: int = 125,
     max_pages: int = 16,
     progress: Callable[[str], None] | None = None,
+    skipped_symbols: list[str] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     output: dict[str, list[dict[str, Any]]] = {}
-    clean = [str(symbol).upper() for symbol in symbols if str(symbol).strip()]
+    clean = list(dict.fromkeys(str(symbol).upper() for symbol in symbols if str(symbol).strip()))
     batches = [clean[index : index + batch_size] for index in range(0, len(clean), batch_size)]
     for batch_index, batch in enumerate(batches, start=1):
         _notify(progress, f"Historical {timeframe} batch {batch_index} of {len(batches)}…")
-        chunk = market.bars(
+        chunk, skipped = _load_bar_batch_resilient(
+            market,
             batch,
             start=start,
             end=end,
             timeframe=timeframe,
             max_pages=max_pages,
+            progress=progress,
         )
+        if skipped_symbols is not None:
+            for symbol in skipped:
+                if symbol not in skipped_symbols:
+                    skipped_symbols.append(symbol)
         for symbol, rows in chunk.items():
             output[symbol] = list(rows or [])
     return output
@@ -653,6 +752,7 @@ def run_autonomous_research(
         f"Screening {len(symbols)} active + inactive stocks across about "
         f"{AUTO_DAILY_LOOKBACK_DAYS // 365} years of daily history…",
     )
+    skipped_historical_symbols: list[str] = []
     daily_rows = _batched_bars(
         market,
         symbols,
@@ -662,7 +762,10 @@ def run_autonomous_research(
         batch_size=100,
         max_pages=24,
         progress=progress,
+        skipped_symbols=skipped_historical_symbols,
     )
+    universe["skipped_unusable_historical_symbols"] = skipped_historical_symbols
+    universe["skipped_unusable_historical_symbol_count"] = len(skipped_historical_symbols)
     lifecycle_by_symbol = {
         symbol: infer_symbol_lifecycle(rows)
         for symbol, rows in daily_rows.items()
