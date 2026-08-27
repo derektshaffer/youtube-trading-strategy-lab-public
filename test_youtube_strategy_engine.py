@@ -286,6 +286,23 @@ class ProviderTests(unittest.TestCase):
         self.assertTrue(analyzer.model_fallback_used)
         self.assertEqual(analyzer.model, "gemini-3.6-flash")
 
+    def test_gemini_overload_can_advance_through_multiple_backup_models(self):
+        analyzer = engine.GeminiVideoAnalyzer(
+            "secret",
+            model="gemini-3.7-flash",
+            fallback_model="gemini-3.6-flash",
+        )
+        overload = engine.AppError(
+            "Provider request failed (503): This model is currently experiencing high demand. Please try again later."
+        )
+        self.assertTrue(analyzer._activate_model_fallback(overload))
+        self.assertEqual(analyzer.model, "gemini-3.6-flash")
+        self.assertTrue(analyzer._activate_model_fallback(overload))
+        self.assertEqual(analyzer.model, "gemini-3.5-flash")
+        self.assertTrue(analyzer._activate_model_fallback(overload))
+        self.assertEqual(analyzer.model, "gemini-2.5-flash")
+        self.assertFalse(analyzer._activate_model_fallback(overload))
+
     def test_alpaca_pagination_is_followed(self):
         market = engine.AlpacaMarketData("key", "secret")
         responses = [
