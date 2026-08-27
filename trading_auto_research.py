@@ -85,7 +85,7 @@ def deterministic_symbol_sample(
 
 def _invalid_symbol_from_error(error: Exception | str) -> str | None:
     match = re.search(
-        r"invalid symbol:\\s*([A-Za-z0-9.\\-]+)",
+        r"invalid symbol:\s*([A-Za-z0-9.\-]+)",
         str(error),
         flags=re.IGNORECASE,
     )
