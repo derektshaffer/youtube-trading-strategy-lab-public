@@ -35,7 +35,8 @@ from youtube_strategy_engine import (
 )
 
 CANONICAL_STRATEGY_VERSION = 2
-BOOK_ANALYSIS_CACHE_VERSION = 4
+BOOK_ANALYSIS_CACHE_VERSION = 5
+LEGACY_BOOK_ANALYSIS_CACHE_VERSION = 4
 DEFAULT_GEMINI_BOOK_MODEL = "gemini-3.6-flash"
 DEFAULT_GEMINI_BOOK_SPECIALIST_MODEL = "gemini-3.7-flash"
 DEFAULT_GEMINI_BOOK_FALLBACK_MODELS = ("gemini-3.5-flash", "gemini-2.5-flash")
@@ -43,12 +44,15 @@ BOOK_SPECIALIST_CONFIDENCE_THRESHOLD = 70.0
 BOOK_SPECIALIST_UNRESOLVED_THRESHOLD = 4
 BOOK_TRANSIENT_RETRIES_PER_MODEL = 1
 BOOK_TRANSIENT_MAX_WAIT_SECONDS = 10
-BOOK_QUOTA_RETRIES = 2
+BOOK_QUOTA_RETRIES = 1
 BOOK_QUOTA_MAX_WAIT_SECONDS = 90
 MAX_SOURCE_BYTES = 20 * 1024 * 1024
 MAX_SOURCE_CHARACTERS = 2_000_000
-DEFAULT_CHUNK_CHARACTERS = 28_000
-DEFAULT_CHUNK_OVERLAP = 1_500
+DEFAULT_CHUNK_CHARACTERS = 72_000
+DEFAULT_CHUNK_OVERLAP = 2_000
+BOOK_TARGET_MAX_CHUNKS = 6
+LEGACY_CHUNK_CHARACTERS = 28_000
+LEGACY_CHUNK_OVERLAP = 1_500
 BOOK_ADAPTIVE_SPLIT_MIN_CHARACTERS = 10_000
 BOOK_ADAPTIVE_SPLIT_MAX_DEPTH = 2
 BOOK_ADAPTIVE_SPLIT_OVERLAP = 700
@@ -488,6 +492,20 @@ class GeminiRuleCompiler:
         self.paid_fallback_used = True
         return True
 
+    def _activate_quota_model_fallback(self, error: Exception | str) -> bool:
+        """Try another model immediately when the current model's request quota is exhausted."""
+        if not provider_quota_reached(error):
+            return False
+        while self._fallback_model_index < len(self.fallback_models):
+            candidate = self.fallback_models[self._fallback_model_index]
+            self._fallback_model_index += 1
+            if candidate == self.model:
+                continue
+            self.model = candidate
+            self.model_fallback_used = True
+            return True
+        return False
+
     def _generate(self, payload: dict[str, Any]) -> dict[str, Any]:
         transient_attempts = 0
         quota_attempts = 0
@@ -756,6 +774,24 @@ def prepare_strategies_with_ai(
     for index, strategy in enumerate(strategies, start=1):
         if progress_callback:
             progress_callback(index, total, str(strategy.get("name") or "Unnamed strategy"))
+
+        readiness_before = research_readiness(strategy)
+        if readiness_before.get("label") == "ready_for_backtest":
+            # The Rule Compiler's purpose is to fill testability gaps. Calling Gemini again
+            # for a strategy that already has an enforceable entry/filter rule adds latency
+            # and quota usage without being necessary to start research.
+            item = dict(strategy)
+            item["autopilot_preparation"] = {
+                "prepared_at": _utc_iso(),
+                "model": "",
+                "compiler_skipped": True,
+                "skip_reason": "Already machine-testable from source-extracted rules.",
+                "suggestions_auto_applied": 0,
+            }
+            item["research_readiness"] = readiness_before
+            prepared.append(item)
+            continue
+
         try:
             compiled = compiler.compile(strategy)
             item = apply_compiler_suggestions(
@@ -1164,34 +1200,51 @@ class GeminiBookAnalyzer:
                         )
                         continue
 
-                retry_delay = self._quota_retry_delay(message)
-                if (
-                    provider_quota_reached(exc)
-                    and retry_delay is not None
-                    and quota_attempts < BOOK_QUOTA_RETRIES
-                ):
-                    quota_attempts += 1
-                    self._emit_progress(
-                        progress_callback,
-                        chunk_number,
-                        chunk_count,
-                        f"Gemini request limit reached. Retrying section {chunk_number} of "
-                        f"{chunk_count} in {retry_delay}s ({quota_attempts}/{BOOK_QUOTA_RETRIES})…",
-                    )
-                    sleep(retry_delay)
-                    continue
+                if provider_quota_reached(exc):
+                    # Do not burn a full provider cooldown before trying resources that may
+                    # have independent quota. Preserve the preferred model by trying the
+                    # separately configured paid-project key first, then alternate models.
+                    if self._activate_paid_fallback(exc):
+                        transient_attempts = 0
+                        quota_attempts = 0
+                        self._emit_progress(
+                            progress_callback,
+                            chunk_number,
+                            chunk_count,
+                            f"Gemini request limit reached. Switching section {chunk_number} of "
+                            f"{chunk_count} immediately to the backup API project…",
+                        )
+                        continue
 
-                if self._activate_paid_fallback(exc):
-                    transient_attempts = 0
-                    quota_attempts = 0
-                    self._emit_progress(
-                        progress_callback,
-                        chunk_number,
-                        chunk_count,
-                        f"Free Gemini quota reached. Continuing section {chunk_number} of "
-                        f"{chunk_count} with the backup API key…",
-                    )
-                    continue
+                    failed_model = self.model
+                    if self._activate_quota_model_fallback(exc):
+                        transient_attempts = 0
+                        quota_attempts = 0
+                        self._emit_progress(
+                            progress_callback,
+                            chunk_number,
+                            chunk_count,
+                            f"{failed_model} request limit reached. Trying section {chunk_number} of "
+                            f"{chunk_count} immediately with backup model {self.model}…",
+                        )
+                        continue
+
+                    retry_delay = self._quota_retry_delay(message)
+                    if retry_delay is not None and quota_attempts < BOOK_QUOTA_RETRIES:
+                        quota_attempts += 1
+                        # After all immediate alternatives are exhausted, cool down once and
+                        # retry the preferred model. Repeated minute-long waits made book
+                        # ingestion appear hung and did not improve durable progress.
+                        self._reset_model_fallback_chain()
+                        self._emit_progress(
+                            progress_callback,
+                            chunk_number,
+                            chunk_count,
+                            f"All Gemini routes are temporarily rate-limited. Cooling down once for "
+                            f"{retry_delay}s, then retrying section {chunk_number} of {chunk_count}…",
+                        )
+                        sleep(retry_delay)
+                        continue
 
                 raise
 
@@ -1424,7 +1477,41 @@ class GeminiBookAnalyzer:
         checkpoint_callback=None,
         resume_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        chunks = chunk_source_text(text)
+        resume_version = (
+            int(safe_float(resume_state.get("checkpoint_version"), 0) or 0)
+            if isinstance(resume_state, dict)
+            else 0
+        )
+        resume_completed = (
+            int(safe_float(resume_state.get("completed_sections"), 0) or 0)
+            if isinstance(resume_state, dict)
+            else 0
+        )
+        # Preserve the old 28k section map only when a previous run actually completed
+        # something. Zero-progress runs (the common quota-failure case) immediately benefit
+        # from the new larger-section plan.
+        legacy_resume = (
+            resume_version == LEGACY_BOOK_ANALYSIS_CACHE_VERSION
+            and resume_completed > 0
+        )
+        if legacy_resume:
+            chunk_target = LEGACY_CHUNK_CHARACTERS
+            chunk_overlap = LEGACY_CHUNK_OVERLAP
+            active_checkpoint_version = LEGACY_BOOK_ANALYSIS_CACHE_VERSION
+        else:
+            # Gemini's context window is much larger than our old 28k-character chunks.
+            # Aim for at most ~6 primary requests per book and let adaptive splitting handle
+            # the rare section that is genuinely too large or slow.
+            dynamic_target = (len(text) + BOOK_TARGET_MAX_CHUNKS - 1) // BOOK_TARGET_MAX_CHUNKS
+            chunk_target = max(DEFAULT_CHUNK_CHARACTERS, dynamic_target)
+            chunk_overlap = DEFAULT_CHUNK_OVERLAP
+            active_checkpoint_version = BOOK_ANALYSIS_CACHE_VERSION
+
+        chunks = chunk_source_text(
+            text,
+            target_chars=chunk_target,
+            overlap_chars=chunk_overlap,
+        )
         if not chunks:
             raise AppError("There was no readable source text to analyze.")
         # Source identity must survive title/author edits between resumed runs.
@@ -1441,10 +1528,9 @@ class GeminiBookAnalyzer:
         failed_sections: dict[int, str] = {}
 
         if isinstance(resume_state, dict):
-            resume_version = int(safe_float(resume_state.get("checkpoint_version"), 0) or 0)
             resume_chunk_count = int(safe_float(resume_state.get("chunk_count"), 0) or 0)
             if (
-                resume_version == BOOK_ANALYSIS_CACHE_VERSION
+                resume_version == active_checkpoint_version
                 and resume_chunk_count == len(chunks)
             ):
                 for value in resume_state.get("completed_section_indices") or []:
@@ -1517,7 +1603,8 @@ class GeminiBookAnalyzer:
                 "model_fallback_used": self.model_fallback_used,
                 "paid_fallback_used": self.paid_fallback_used,
                 "chunk_count": len(chunks),
-                "checkpoint_version": BOOK_ANALYSIS_CACHE_VERSION,
+                "checkpoint_version": active_checkpoint_version,
+                "chunk_target_characters": chunk_target,
                 "completed_section_indices": sorted(completed_section_indices),
                 "completed_sections": completed_sections,
                 "analysis_incomplete": (
