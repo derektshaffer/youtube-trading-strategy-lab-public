@@ -99,6 +99,79 @@ class UrlTests(unittest.TestCase):
         self.assertEqual(engine.parse_symbols("nvda, AAPL; BRK.B invalid! NVDA"), ["NVDA", "AAPL", "BRK.B"])
 
 
+class PriorDayRuleTests(unittest.TestCase):
+    def test_prior_day_rules_are_normalized(self):
+        rules = engine.normalize_machine_rules(
+            {
+                "previous_day_high_breakout": "true",
+                "min_previous_day_volume_ratio": "2.5",
+                "min_previous_day_change_pct": "4.0",
+            }
+        )
+        self.assertTrue(rules["previous_day_high_breakout"])
+        self.assertEqual(rules["min_previous_day_volume_ratio"], 2.5)
+        self.assertEqual(rules["min_previous_day_change_pct"], 4.0)
+
+    def test_prior_day_indicators_use_only_completed_sessions(self):
+        rows = [
+            bar(18, 0, 10.0, 10.2, 9.8, 10.0, 100),
+            bar(19, 0, 10.0, 10.2, 9.8, 10.0, 100),
+            bar(20, 0, 10.0, 10.2, 9.8, 10.0, 100),
+            bar(21, 0, 10.0, 11.5, 9.9, 11.0, 400),
+            bar(22, 0, 11.0, 12.0, 10.9, 12.0, 120),
+        ]
+        frame = engine.add_indicators(
+            engine.bars_to_frame(rows),
+            simple_strategy(
+                previous_day_high_breakout=True,
+                min_previous_day_volume_ratio=2.0,
+                min_previous_day_change_pct=5.0,
+            ),
+        )
+        current = frame[frame["session"] == "2026-08-22"].iloc[0]
+        self.assertAlmostEqual(float(current["previous_daily_high"]), 11.5, places=6)
+        self.assertAlmostEqual(float(current["previous_day_volume_ratio"]), 4.0, places=6)
+        self.assertAlmostEqual(float(current["previous_day_change_pct"]), 10.0, places=6)
+
+    def test_previous_day_high_breakout_requires_actual_crossing_bar(self):
+        rules = engine.normalize_machine_rules(
+            {
+                "previous_day_high_breakout": True,
+                "min_previous_day_volume_ratio": 2.0,
+                "min_previous_day_change_pct": 5.0,
+            }
+        )
+        crossing = {
+            "close": 12.0,
+            "previous_bar_close": 11.0,
+            "previous_daily_high": 11.5,
+            "previous_day_volume_ratio": 4.0,
+            "previous_day_change_pct": 10.0,
+            "session_minute": 10,
+        }
+        self.assertTrue(engine.evaluate_signal(crossing, rules))
+
+        already_above = dict(crossing)
+        already_above["previous_bar_close"] = 11.8
+        self.assertFalse(engine.evaluate_signal(already_above, rules))
+
+    def test_optimizer_tunes_prior_day_thresholds_but_keeps_structural_breakout(self):
+        strategy = simple_strategy(
+            previous_day_high_breakout=True,
+            min_previous_day_volume_ratio=2.0,
+            min_previous_day_change_pct=5.0,
+        )
+        variants = engine.generate_strategy_variants(strategy, maximum=36)
+        self.assertGreater(len(variants), 1)
+        self.assertTrue(all(item["previous_day_high_breakout"] is True for item in variants))
+        self.assertTrue(
+            any(item["min_previous_day_volume_ratio"] != 2.0 for item in variants)
+        )
+        self.assertTrue(
+            any(item["min_previous_day_change_pct"] != 5.0 for item in variants)
+        )
+
+
 class RuleTests(unittest.TestCase):
     def test_numeric_rules_are_cleaned(self):
         rules = engine.normalize_machine_rules({"min_price": "3.5", "max_price": "1.5", "stop_loss_pct": "-4", "reward_risk": "nan"})
