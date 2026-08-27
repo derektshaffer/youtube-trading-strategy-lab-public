@@ -2543,6 +2543,15 @@ with optimizer_tab:
                 index=2,
             )
 
+            with st.container(border=True, key="entry_behavior_optimizer"):
+                st.markdown("**Entry behavior search** · :green-background[🟩 AUTO]")
+                st.caption(
+                    "The optimizer also compares 1 / 2 / 3 / 4 simultaneous positions, regular-hours only vs extended hours, "
+                    "15% / 25% / 50% extended-hours sizing, respecting vs ignoring the saved session cutoff, "
+                    "price-cap continuation on/off, and basic-filter vs pullback→breakout entries. "
+                    "These choices are optimized together with stop, reward/risk, risk per trade, and position size."
+                )
+
             with st.container(border=True, key="eight_trade_safeguard"):
                 st.markdown("**8-trade sample safeguard** · Maximum historical P/L only")
                 require_eight_historical_trades = st.checkbox(
@@ -2900,6 +2909,118 @@ with optimizer_tab:
                 f'and {money(winning_profile.get("fee_per_order"))} per order.'
             )
 
+            section(
+                "Optimized entry behavior",
+                "These are optimizer-selected behavior settings, not permanently forced defaults.",
+            )
+            behavior_cards = st.columns(3)
+            metric_card(
+                behavior_cards[0],
+                "Simultaneous trades",
+                str(int(safe_float(winning_profile.get("max_concurrent_positions"), 1) or 1)),
+                "Layered entry slots sharing the same total risk/allocation ceiling",
+            )
+            extended_enabled = bool(winning_profile.get("allow_extended_hours"))
+            metric_card(
+                behavior_cards[1],
+                "Trading hours",
+                "4 AM–8 PM ET" if extended_enabled else "Regular hours",
+                (
+                    f'{(safe_float(winning_profile.get("extended_hours_position_scale"), 0.25) or 0.25) * 100:.0f}% size for extended-hour entries'
+                    if extended_enabled else
+                    "No premarket or after-hours entries"
+                ),
+            )
+            metric_card(
+                behavior_cards[2],
+                "Saved cutoff",
+                "Ignored" if bool(winning_profile.get("ignore_strategy_session_end")) else "Respected",
+                "Whether new entries may continue after a saved time such as 11:30 ET",
+            )
+            behavior_cards_two = st.columns(3)
+            metric_card(
+                behavior_cards_two[0],
+                "Above max-price continuation",
+                "Allowed" if bool(winning_profile.get("allow_price_extension_after_qualification")) else "Blocked",
+                "Can a stock stay eligible after beginning inside the strategy's price band?",
+            )
+            metric_card(
+                behavior_cards_two[1],
+                "Pullback confirmation",
+                "Required" if bool(winning_profile.get("require_pullback_breakout_for_pullback_strategies")) else "Basic filters",
+                "How pullback/bull-flag strategies trigger entries",
+            )
+            metric_card(
+                behavior_cards_two[2],
+                "Extended-hours size",
+                (
+                    percent((safe_float(winning_profile.get("extended_hours_position_scale"), 0.25) or 0.25) * 100)
+                    if extended_enabled else "—"
+                ),
+                "Percentage of a normal entry slot used outside regular hours",
+            )
+
+            behavior_comparison = optimization_report.get("behavior_comparison") or {}
+            if behavior_comparison:
+                section(
+                    "Original behavior vs optimized behavior",
+                    "Same winning strategy rules, stop, target, risk, and position ceiling — only the entry-behavior engine changes.",
+                )
+                legacy_metrics = behavior_comparison.get("legacy_metrics") or {}
+                optimized_behavior_metrics = behavior_comparison.get("optimized_metrics") or {}
+                legacy_settings = behavior_comparison.get("legacy_settings") or {}
+                optimized_behavior_settings = behavior_comparison.get("optimized_settings") or {}
+
+                def behavior_label(profile: dict[str, Any]) -> str:
+                    hours = "Extended" if profile.get("allow_extended_hours") else "Regular only"
+                    cutoff = "late entries ON" if profile.get("ignore_strategy_session_end") else "saved cutoff"
+                    pullback = (
+                        "pullback confirmation"
+                        if profile.get("require_pullback_breakout_for_pullback_strategies")
+                        else "basic filters"
+                    )
+                    return (
+                        f'{int(safe_float(profile.get("max_concurrent_positions"), 1) or 1)} slot(s) · '
+                        f'{hours} · {cutoff} · {pullback}'
+                    )
+
+                comparison_rows = [
+                    {
+                        "Mode": behavior_comparison.get("legacy_label") or "Original behavior",
+                        "Behavior": behavior_label(legacy_settings),
+                        "Net P/L": money(legacy_metrics.get("net_pnl")),
+                        "Return": percent(legacy_metrics.get("return_pct"), signed=True),
+                        "Trades": int(safe_float(legacy_metrics.get("trade_count"), 0) or 0),
+                        "Win rate": percent(legacy_metrics.get("win_rate_pct")),
+                        "Profit factor": (
+                            f'{safe_float(legacy_metrics.get("profit_factor")):.2f}x'
+                            if safe_float(legacy_metrics.get("profit_factor")) is not None else "—"
+                        ),
+                        "Max drawdown": percent(legacy_metrics.get("max_drawdown_pct")),
+                    },
+                    {
+                        "Mode": behavior_comparison.get("optimized_label") or "Optimized behavior",
+                        "Behavior": behavior_label(optimized_behavior_settings),
+                        "Net P/L": money(optimized_behavior_metrics.get("net_pnl")),
+                        "Return": percent(optimized_behavior_metrics.get("return_pct"), signed=True),
+                        "Trades": int(safe_float(optimized_behavior_metrics.get("trade_count"), 0) or 0),
+                        "Win rate": percent(optimized_behavior_metrics.get("win_rate_pct")),
+                        "Profit factor": (
+                            f'{safe_float(optimized_behavior_metrics.get("profit_factor")):.2f}x'
+                            if safe_float(optimized_behavior_metrics.get("profit_factor")) is not None else "—"
+                        ),
+                        "Max drawdown": percent(optimized_behavior_metrics.get("max_drawdown_pct")),
+                    },
+                ]
+                st.dataframe(pd.DataFrame(comparison_rows), hide_index=True, use_container_width=True)
+                behavior_delta = safe_float(behavior_comparison.get("net_pnl_delta"), 0.0) or 0.0
+                if behavior_delta > 0:
+                    st.success(f"Optimized entry behavior improved full-window simulated P/L by {money(behavior_delta)} versus the original behavior.")
+                elif behavior_delta < 0:
+                    st.warning(f"Original behavior beat the selected enhanced behavior by {money(abs(behavior_delta))}. Treat the original behavior as the better A/B result for this window.")
+                else:
+                    st.info("Original and optimized entry behavior produced the same simulated P/L in this window.")
+
             if optimization_report.get("timeframe_comparison"):
                 section("Which candle interval fits this stock best?", "Intervals are compared only on the separate validation data; the final holdout is not used to choose one.")
                 interval_rows = []
@@ -3060,7 +3181,8 @@ with optimizer_tab:
                     )
                     st.session_state["optimizer_saved_notice"] = (
                         f'Saved “{custom_optimized_name}” with the {optimized_symbol}-specific risk, position size, '
-                        "stop, reward target, trading costs, and candle interval. Select it in Backtesting "
+                        "stop, reward target, trading costs, candle interval, layered-entry count, session behavior, "
+                        "extended-hours sizing, price continuation, and pullback confirmation. Select it in Backtesting "
                         "to load those settings automatically."
                     )
                     st.session_state["optimized_save_confirmation"] = {
