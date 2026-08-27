@@ -90,7 +90,7 @@ st.markdown(
 )
 
 
-DEFAULT_PRIVATE_BACKUP_REPOSITORY = "derektshaffer/youtube-trading-strategy-backups"
+DEFAULT_PRIVATE_BACKUP_REPOSITORY = "derektshaffer/derektshaffer-youtube-trading-strategy-lab"
 
 
 def backup_token() -> str:
