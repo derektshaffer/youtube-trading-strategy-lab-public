@@ -13,6 +13,7 @@ import streamlit as st
 
 from youtube_strategy_engine import (
     ALPACA_DATA_URL,
+    DEFAULT_GEMINI_FALLBACK_MODEL,
     DEFAULT_GEMINI_MODEL,
     DEFAULT_GITHUB_BACKUP_PATH,
     ET,
@@ -538,7 +539,8 @@ with st.sidebar:
         st.caption("Optional paid Gemini backup is not configured.")
     st.success("Alpaca connected") if alpaca_ready else st.warning("Alpaca credentials needed")
     st.success("ChatGPT help connected") if openai_help_ready else st.caption("ChatGPT help not connected")
-    st.caption(f'Model: {setting("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)}')
+    st.caption(f'Primary model: {setting("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)}')
+    st.caption(f'Overload backup model: {setting("GEMINI_FALLBACK_MODEL", DEFAULT_GEMINI_FALLBACK_MODEL)}')
     st.caption(f'Live feed: {setting("ALPACA_LIVE_FEED", "iex").upper()}')
     st.caption(f'Historical feed: {setting("ALPACA_HISTORICAL_FEED", "sip").upper()}')
     st.divider()
@@ -736,6 +738,7 @@ with videos_tab:
                 setting("GEMINI_API_KEY"),
                 setting("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
                 fallback_api_key=setting("GEMINI_PAID_API_KEY"),
+                fallback_model=setting("GEMINI_FALLBACK_MODEL", DEFAULT_GEMINI_FALLBACK_MODEL),
             )
             progress = st.progress(0, text="Starting video analysis…")
             completed = 0
@@ -765,6 +768,11 @@ with videos_tab:
                         f'{analysis.get("video_title", "Video analyzed")}: '
                         f'{len(analysis.get("strategies") or [])} strategy or strategies extracted{section_label}.'
                     )
+                    if analysis.get("model_fallback_used"):
+                        st.info(
+                            f'The primary Gemini model was overloaded, so this video continued with '
+                            f'{analysis.get("model") or setting("GEMINI_FALLBACK_MODEL", DEFAULT_GEMINI_FALLBACK_MODEL)}.'
+                        )
                     if analysis.get("paid_fallback_used"):
                         st.info("Your free Gemini quota was reached, so this video continued using your paid backup key.")
                 except AppError as error:
@@ -2615,6 +2623,7 @@ with settings_tab:
         'GEMINI_API_KEY="paste your FREE Google Gemini API key"\n\n'
         '# Optional settings:\n'
         'GEMINI_PAID_API_KEY="paste a key from a SEPARATE PAID Google project"\n'
+        f'GEMINI_FALLBACK_MODEL="{DEFAULT_GEMINI_FALLBACK_MODEL}"\n'
         'ALPACA_LIVE_FEED="iex"\n'
         'ALPACA_HISTORICAL_FEED="sip"\n'
         f'GEMINI_MODEL="{DEFAULT_GEMINI_MODEL}"',
