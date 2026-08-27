@@ -682,6 +682,58 @@ class CloudWriteVerificationTests(unittest.TestCase):
             self.assertTrue(status["write_verified"])
             self.assertTrue(status["healthy"])
 
+    def test_write_verification_uses_remote_snapshot_not_stale_local_copy(self):
+        class FakeCloud:
+            repository = "owner/private-backups"
+            path = "trading-intelligence-lab/intelligence_library.json"
+
+            def __init__(self):
+                self.library = {
+                    "version": 2,
+                    "strategies": [],
+                    "knowledge_sources": [],
+                    "updated_at": "2026-08-27T17:15:00Z",
+                }
+                self.saved = None
+                self.previous = None
+                self.force_write_seen = False
+
+            def read_library(self):
+                return {
+                    "library": json.loads(json.dumps(self.library)),
+                    "sha": "a" * 40,
+                }
+
+            def save_library(self, data, *, previous_updated_at=None, force_write=False):
+                self.saved = json.loads(json.dumps(data))
+                self.previous = previous_updated_at
+                self.force_write_seen = force_write
+                return {"library": self.saved, "sha": "b" * 40}
+
+        with tempfile.TemporaryDirectory() as directory:
+            cloud = FakeCloud()
+            store = engine.StrategyStore(directory, cloud_backup=cloud)
+            store._write_local(
+                {
+                    "version": 2,
+                    "strategies": [],
+                    "knowledge_sources": [{"id": "stale-local", "title": "Unsynced local"}],
+                    "updated_at": "2026-08-27T17:30:00Z",
+                },
+                make_backup=False,
+            )
+
+            result = store.verify_cloud_write_access()
+
+            self.assertTrue(cloud.force_write_seen)
+            self.assertEqual(cloud.previous, "2026-08-27T17:15:00Z")
+            self.assertEqual(cloud.saved, cloud.library)
+            self.assertEqual(result, cloud.library)
+            status = store.persistence_status(verify=True)
+            self.assertTrue(status["write_verified"])
+            self.assertTrue(status["healthy"])
+
+
     def test_successful_store_save_marks_write_verified_and_healthy(self):
         class FakeCloud:
             repository = "owner/private-backups"
