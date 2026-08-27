@@ -492,17 +492,32 @@ elif module == "Knowledge Sources":
             "Analysis is temporarily disabled until permanent GitHub storage is healthy. "
             "This prevents a long book run from being lost if Streamlit restarts."
         )
-    analyze = st.button(
+    analyze_slot = st.empty()
+    analyze = analyze_slot.button(
         "🧠 Analyze source and extract strategies",
         type="primary",
         use_container_width=True,
         disabled=not can_analyze,
+        key="til_analyze_source",
     )
 
     if analyze and uploaded is not None:
+        analyze_slot.button(
+            "🧠 Analyzing…",
+            type="primary",
+            use_container_width=True,
+            disabled=True,
+            key="til_analyze_source_busy",
+        )
+        task_monitor = long_task_monitor("knowledge_source_analysis")
+        task_bar = st.progress(
+            0.01,
+            text=task_monitor.text(0.01, "Preparing source…"),
+        )
         try:
             payload = uploaded.getvalue()
             text, metadata = extract_source_text(uploaded.name, payload)
+            update_task_bar(task_bar, task_monitor, 0.03, "Readable source text extracted")
             ingest_id = hashlib.sha256(payload).hexdigest()[:24]
 
             current_library = intelligence_store().load_latest()
@@ -560,18 +575,22 @@ elif module == "Knowledge Sources":
             page_note = ""
             if metadata.get("pages"):
                 page_note = f" · {int(metadata.get('pages') or 0)} pages"
-            progress = st.progress(
-                0.0,
-                text=(
-                    "File upload succeeded and readable text was extracted"
-                    + page_note
-                    + ". Preparing the AI reading batches…"
-                ),
+            update_task_bar(
+                task_bar,
+                task_monitor,
+                0.06,
+                "File ready"
+                + page_note
+                + " · preparing AI reading batches",
             )
+
             def on_progress(index: int, total: int, message: str | None = None) -> None:
-                progress.progress(
-                    min(0.98, max(0.0, (index - 1) / max(1, total))),
-                    text=message or f"Analyzing source section {index} of {total}…",
+                local_fraction = (index - 1) / max(1, total)
+                update_task_bar(
+                    task_bar,
+                    task_monitor,
+                    0.08 + 0.48 * min(1.0, max(0.0, local_fraction)),
+                    message or f"Analyzing source section {index} of {total}…",
                 )
 
             def on_checkpoint(partial_analysis: dict[str, Any]) -> None:
@@ -619,7 +638,7 @@ elif module == "Knowledge Sources":
                 completion_text += f" · reliability fallback used: {analysis.get('model')}"
             if analysis.get("paid_fallback_used"):
                 completion_text += " · backup API key used"
-            progress.progress(1.0, text=completion_text)
+            update_task_bar(task_bar, task_monitor, 0.58, completion_text)
             if analysis.get("analysis_incomplete"):
                 failed_numbers = [
                     str(item.get("section"))
@@ -646,8 +665,13 @@ elif module == "Knowledge Sources":
                 )
 
                 def on_prepare(index: int, total: int, strategy_name: str) -> None:
-                    prep_status.write(
-                        f"Preparing {index} of {total}: {strategy_name}"
+                    message = f"Preparing {index} of {total}: {strategy_name}"
+                    prep_status.write(message)
+                    update_task_bar(
+                        task_bar,
+                        task_monitor,
+                        0.58 + 0.14 * min(1.0, index / max(1, total)),
+                        message,
                     )
 
                 analysis["strategies"] = prepare_strategies_with_ai(
@@ -673,6 +697,12 @@ elif module == "Knowledge Sources":
                     ),
                     state="complete",
                     expanded=False,
+                )
+                update_task_bar(
+                    task_bar,
+                    task_monitor,
+                    0.72,
+                    "AI rule preparation complete",
                 )
                 analysis["autopilot_summary"] = {
                     "enabled": True,
@@ -739,11 +769,23 @@ elif module == "Knowledge Sources":
                         "Historical Research Autopilot is building its own stock universe…",
                         expanded=True,
                     )
+                    nested_estimator = AutonomousResearchProgressEstimator()
+
+                    def on_nested_research(message: str) -> None:
+                        auto_status.write(message)
+                        nested_fraction = nested_estimator.update(message)
+                        update_task_bar(
+                            task_bar,
+                            task_monitor,
+                            0.72 + 0.25 * nested_fraction,
+                            message,
+                        )
+
                     try:
                         autonomous_report = run_autonomous_research(
                             market_client(),
                             ready_for_deep,
-                            progress=lambda message: auto_status.write(message),
+                            progress=on_nested_research,
                         )
                         data = merge_autonomous_research_into_library(data, autonomous_report)
                         intelligence_store().save(data)
@@ -789,12 +831,18 @@ elif module == "Knowledge Sources":
                         "error": autonomous_error,
                     }
 
+            update_task_bar(task_bar, task_monitor, 0.985, "Saving final source and strategy records")
             save_ingestion_checkpoint(
                 analysis,
                 filename=uploaded.name,
                 extraction_metadata=metadata,
                 ingest_id=ingest_id,
                 stage="partial" if analysis.get("analysis_incomplete") else "complete",
+            )
+            complete_task_bar(
+                task_bar,
+                task_monitor,
+                "Source analysis complete" if not analysis.get("analysis_incomplete") else "Partial source analysis saved",
             )
             st.session_state["til_last_analysis"] = analysis
             source_name = analysis.get("title") or title.strip() or uploaded.name
