@@ -683,7 +683,6 @@ class CloudWriteVerificationTests(unittest.TestCase):
             self.assertTrue(status["healthy"])
 
     def test_successful_store_save_marks_write_verified_and_healthy(self):
-    def test_successful_store_save_marks_write_verified_and_healthy(self):
         class FakeCloud:
             repository = "owner/private-backups"
             path = "trading-intelligence-lab/intelligence_library.json"
