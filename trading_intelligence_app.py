@@ -221,9 +221,13 @@ def save_ingestion_checkpoint(
 def persistence_summary() -> dict[str, Any]:
     store = intelligence_store()
     status = store.persistence_status(verify=True)
-    if status.get("configured") and status.get("verified") and status.get("last_error"):
-        # A prior deploy/network/config error may be stale. Retry one real synchronization
-        # automatically so green means the current deployment can actually write, not just read.
+    if (
+        status.get("configured")
+        and status.get("verified")
+        and (status.get("last_error") or not status.get("write_verified"))
+    ):
+        # Prove that THIS deployment can write, not merely read. This runs automatically
+        # after a fresh Streamlit filesystem/process or after a previous cloud-save error.
         try:
             store.save(store.load_latest())
         except AppError:
