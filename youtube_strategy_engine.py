@@ -1742,11 +1742,20 @@ class GitHubCloudBackup:
                     "The private GitHub backup contains different records with the same saved timestamp. "
                     "The cloud copy was not overwritten; inspect or restore the latest backup first."
                 )
-            if not previous_updated_at or remote_updated_at != previous_updated_at:
+            expected_previous = str(previous_updated_at or "").strip()
+            remote_previous = str(remote_updated_at or "").strip()
+            if expected_previous:
+                conflict = remote_previous != expected_previous
+            else:
+                # A newly initialized blank library can legitimately have no timestamp yet.
+                # Treat it as the expected first-write state, but never overwrite a dated remote
+                # when the caller has no synchronization token.
+                conflict = bool(remote_previous)
+            if conflict:
                 raise AppError(
                     "The private GitHub backup contains a different or newer saved library. "
                     "Your local change was kept, but the cloud copy was not overwritten. "
-                    "Use Setup & backups to restore the latest cloud backup before retrying."
+                    "Restore the latest cloud backup before retrying so newer records are preserved."
                 )
         serialized = json.dumps(data, indent=2, default=str, allow_nan=False).encode("utf-8")
         payload: dict[str, Any] = {
@@ -1830,9 +1839,33 @@ class StrategyStore:
             return self.load()
         return local
 
-    def persistence_status(self) -> dict[str, Any]:
+    def persistence_status(self, *, verify: bool = False) -> dict[str, Any]:
         status = self.cloud_status()
-        status["durable"] = self.cloud_backup is not None
+        configured = self.cloud_backup is not None
+        verified = False
+        library_exists = False
+        verification_error = None
+
+        if configured and verify:
+            try:
+                remote = self.cloud_backup.read_library()
+                verified = True
+                library_exists = remote is not None
+                if status.get("last_error"):
+                    self._record_cloud_status(last_error=None)
+                    status = self.cloud_status()
+            except AppError as exc:
+                verification_error = str(exc)
+                self._record_cloud_status(last_error=verification_error)
+                status = self.cloud_status()
+        elif configured:
+            verified = not bool(status.get("last_error"))
+
+        status["configured"] = configured
+        status["verified"] = verified
+        status["library_exists"] = library_exists if verify else None
+        status["durable"] = bool(configured and verified)
+        status["verification_error"] = verification_error
         status["local_path"] = str(self.path)
         status["local_exists"] = self.path.exists()
         return status
