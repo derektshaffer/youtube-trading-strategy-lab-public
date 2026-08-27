@@ -229,7 +229,7 @@ def persistence_summary() -> dict[str, Any]:
         # Prove that THIS deployment can write, not merely read. This runs automatically
         # after a fresh Streamlit filesystem/process or after a previous cloud-save error.
         try:
-            store.save(store.load_latest())
+            store.verify_cloud_write_access()
         except AppError:
             pass
         status = store.persistence_status(verify=True)
