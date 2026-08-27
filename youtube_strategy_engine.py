@@ -1804,6 +1804,25 @@ class StrategyStore:
             "updated_at": None,
         }
 
+    @classmethod
+    def normalize_library(cls, data: dict[str, Any]) -> dict[str, Any]:
+        result = cls.blank()
+        if isinstance(data, dict):
+            result.update(data)
+        for name in (
+            "videos",
+            "strategies",
+            "paper_positions",
+            "recovery_items",
+            "strategy_versions",
+            "knowledge_sources",
+            "research_runs",
+            "validation_runs",
+        ):
+            if not isinstance(result.get(name), list):
+                result[name] = []
+        return result
+
     def load(self) -> dict[str, Any]:
         if not self.path.exists():
             if self.cloud_backup is None:
@@ -1820,21 +1839,7 @@ class StrategyStore:
             raise AppError("Saved strategy data could not be read. Restore a previously exported backup.") from exc
         if not isinstance(data, dict):
             raise AppError("The saved strategy library is not a JSON object.")
-        result = self.blank()
-        result.update(data)
-        for name in (
-            "videos",
-            "strategies",
-            "paper_positions",
-            "recovery_items",
-            "strategy_versions",
-            "knowledge_sources",
-            "research_runs",
-            "validation_runs",
-        ):
-            if not isinstance(result[name], list):
-                result[name] = []
-        return result
+        return self.normalize_library(data)
 
     @staticmethod
     def _library_has_user_data(data: dict[str, Any]) -> bool:
@@ -1866,7 +1871,7 @@ class StrategyStore:
         if remote is None:
             return local
 
-        remote_library = remote["library"]
+        remote_library = self.normalize_library(remote["library"])
         local_updated = str(local.get("updated_at") or "")
         remote_updated = str(remote_library.get("updated_at") or "")
         sync_status = self.cloud_status()
@@ -2134,8 +2139,7 @@ class StrategyStore:
     def save(self, data: dict[str, Any]) -> dict[str, Any]:
         previous_updated_at = self.load().get("updated_at") if self.path.exists() else None
         synced_updated_at = self.cloud_status().get("synced_updated_at") if self.cloud_backup else None
-        value = self.blank()
-        value.update(data)
+        value = self.normalize_library(data)
         value["version"] = max(2, int(safe_float(value.get("version"), 2) or 2))
         value["updated_at"] = isoformat_utc(utc_now())
         self._write_local(value)
