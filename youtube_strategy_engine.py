@@ -4674,9 +4674,9 @@ def optimize_stock_strategies(
                     continue
                 seen_rule_signatures.add(signature)
                 candidate_settings = replace(
-                    settings,
-                    default_stop_pct=float(refined_rules.get("stop_loss_pct") or settings.default_stop_pct),
-                    default_reward_risk=float(refined_rules.get("reward_risk") or settings.default_reward_risk),
+                    seed["settings"],
+                    default_stop_pct=float(refined_rules.get("stop_loss_pct") or seed["settings"].default_stop_pct),
+                    default_reward_risk=float(refined_rules.get("reward_risk") or seed["settings"].default_reward_risk),
                 )
                 candidate_settings = effective_settings(refined_rules, candidate_settings)
                 candidate_strategy = {**source_strategy, "machine_rules": refined_rules}
