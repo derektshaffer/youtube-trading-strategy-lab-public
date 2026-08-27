@@ -30,6 +30,27 @@ def bar(day: int, minute: int, opening: float, high: float, low: float, close: f
     }
 
 
+def clock_bar(
+    day: int,
+    hour: int,
+    minute: int,
+    opening: float,
+    high: float,
+    low: float,
+    close: float,
+    volume: int = 1000,
+) -> dict:
+    local = datetime(2026, 8, day, hour, minute, tzinfo=ET)
+    return {
+        "t": local.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "o": opening,
+        "h": high,
+        "l": low,
+        "c": close,
+        "v": volume,
+    }
+
+
 def simple_strategy(**rules) -> dict:
     return {
         "id": "test-strategy",
@@ -164,6 +185,151 @@ class BacktestTests(unittest.TestCase):
         result = engine.run_backtest(rows, simple_strategy(), "TEST", self.settings)
         self.assertEqual(result["holdout_start"], "2026-08-20")
         self.assertGreater(result["out_of_sample"]["trade_count"], 0)
+
+    def test_layered_entries_can_overlap_without_multiplying_total_allocation(self):
+        rows = [
+            bar(18, 0, 100, 101, 99, 100),
+            bar(18, 1, 100, 101, 99, 100),
+            bar(18, 2, 100, 101, 99, 100),
+            bar(18, 3, 100, 101, 99, 100),
+            bar(18, 4, 100, 101, 99, 100),
+        ]
+        settings = engine.BacktestSettings(
+            starting_cash=10_000,
+            risk_per_trade_pct=3,
+            max_position_pct=90,
+            spread_bps=0,
+            slippage_bps=0,
+            max_concurrent_positions=3,
+            allow_extended_hours=False,
+        )
+        result = engine.run_backtest(rows, simple_strategy(stop_loss_pct=20, reward_risk=10), "TEST", settings)
+        self.assertEqual(result["metrics"]["trade_count"], 3)
+        self.assertEqual([trade["trade_id"] for trade in result["trades"]], [1, 2, 3])
+        self.assertLessEqual(
+            sum(trade["entry_price"] * trade["quantity"] for trade in result["trades"]),
+            settings.starting_cash * settings.max_position_pct / 100.0 + 1,
+        )
+
+    def test_extended_hours_can_trade_at_reduced_size(self):
+        rows = [
+            clock_bar(18, 17, 0, 10, 10.1, 9.9, 10),
+            clock_bar(18, 17, 5, 10, 10.1, 9.9, 10),
+            clock_bar(18, 17, 10, 10, 10.1, 9.9, 10),
+        ]
+        enabled = engine.BacktestSettings(
+            starting_cash=10_000,
+            risk_per_trade_pct=4,
+            max_position_pct=100,
+            spread_bps=0,
+            slippage_bps=0,
+            max_concurrent_positions=1,
+            allow_extended_hours=True,
+            extended_hours_position_scale=0.25,
+        )
+        disabled = engine.BacktestSettings(
+            starting_cash=10_000,
+            risk_per_trade_pct=4,
+            max_position_pct=100,
+            spread_bps=0,
+            slippage_bps=0,
+            max_concurrent_positions=1,
+            allow_extended_hours=False,
+        )
+        extended = engine.run_backtest(rows, simple_strategy(), "TEST", enabled)
+        regular_only = engine.run_backtest(rows, simple_strategy(), "TEST", disabled)
+        self.assertEqual(extended["metrics"]["trade_count"], 1)
+        self.assertEqual(extended["trades"][0]["entry_session_type"], "extended")
+        self.assertEqual(regular_only["metrics"]["trade_count"], 0)
+
+    def test_strategy_end_time_can_be_ignored(self):
+        rows = [
+            clock_bar(18, 12, 0, 10, 10.1, 9.9, 10),
+            clock_bar(18, 12, 5, 10, 10.1, 9.9, 10),
+            clock_bar(18, 12, 10, 10, 10.1, 9.9, 10),
+        ]
+        strategy = simple_strategy(session_end="11:30")
+        ignored = engine.run_backtest(
+            rows,
+            strategy,
+            "TEST",
+            engine.BacktestSettings(
+                spread_bps=0,
+                slippage_bps=0,
+                max_concurrent_positions=1,
+                ignore_strategy_session_end=True,
+            ),
+        )
+        respected = engine.run_backtest(
+            rows,
+            strategy,
+            "TEST",
+            engine.BacktestSettings(
+                spread_bps=0,
+                slippage_bps=0,
+                max_concurrent_positions=1,
+                ignore_strategy_session_end=False,
+            ),
+        )
+        self.assertGreater(ignored["metrics"]["trade_count"], 0)
+        self.assertEqual(respected["metrics"]["trade_count"], 0)
+
+    def test_price_band_can_unlock_momentum_continuation_above_max(self):
+        rows = [
+            bar(18, 0, 19.0, 19.2, 18.9, 19.0),
+            bar(18, 1, 21.0, 21.2, 20.8, 21.0),
+            bar(18, 2, 21.2, 21.4, 21.0, 21.2),
+        ]
+        strategy = simple_strategy(min_price=1.5, max_price=20, session_start="09:31")
+        unlocked = engine.run_backtest(
+            rows,
+            strategy,
+            "TEST",
+            engine.BacktestSettings(
+                spread_bps=0,
+                slippage_bps=0,
+                max_concurrent_positions=1,
+                allow_price_extension_after_qualification=True,
+            ),
+        )
+        locked = engine.run_backtest(
+            rows,
+            strategy,
+            "TEST",
+            engine.BacktestSettings(
+                spread_bps=0,
+                slippage_bps=0,
+                max_concurrent_positions=1,
+                allow_price_extension_after_qualification=False,
+            ),
+        )
+        self.assertEqual(unlocked["metrics"]["trade_count"], 1)
+        self.assertEqual(locked["metrics"]["trade_count"], 0)
+
+    def test_pullback_strategy_requires_pullback_then_breakout(self):
+        strategy = simple_strategy()
+        strategy["name"] = "Micro Pullback / Bull Flag Test"
+        rows = [
+            bar(18, 0, 10.0, 10.2, 9.9, 10.0),
+            bar(18, 1, 10.0, 10.1, 9.7, 9.8),
+            bar(18, 2, 9.8, 9.9, 9.6, 9.7),
+            bar(18, 3, 9.7, 10.6, 9.7, 10.5),
+            bar(18, 4, 10.5, 10.7, 10.4, 10.6),
+        ]
+        result = engine.run_backtest(
+            rows,
+            strategy,
+            "TEST",
+            engine.BacktestSettings(
+                spread_bps=0,
+                slippage_bps=0,
+                max_concurrent_positions=1,
+                require_pullback_breakout_for_pullback_strategies=True,
+            ),
+        )
+        self.assertEqual(result["metrics"]["trade_count"], 1)
+        entry_time = datetime.fromisoformat(result["trades"][0]["entry_time"].replace("Z", "+00:00")).astimezone(ET)
+        self.assertEqual((entry_time.hour, entry_time.minute), (9, 34))
 
     def test_settings_reject_invalid_risk(self):
         with self.assertRaises(engine.AppError):
