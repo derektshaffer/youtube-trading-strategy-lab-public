@@ -1807,6 +1807,36 @@ class StrategyStore:
                 result[name] = []
         return result
 
+    def load_latest(self) -> dict[str, Any]:
+        """Load local data, but prefer a newer durable cloud copy when one exists."""
+        local = self.load()
+        if self.cloud_backup is None:
+            return local
+        try:
+            remote = self.cloud_backup.read_library()
+        except AppError as exc:
+            self._record_cloud_status(last_error=str(exc))
+            return local
+        if remote is None:
+            return local
+
+        remote_library = remote["library"]
+        local_updated = str(local.get("updated_at") or "")
+        remote_updated = str(remote_library.get("updated_at") or "")
+        if remote_updated and (not local_updated or remote_updated > local_updated):
+            self._write_local(remote_library, make_backup=bool(self.path.exists()))
+            self._record_cloud_success(remote_library)
+            self.restored_on_startup = True
+            return self.load()
+        return local
+
+    def persistence_status(self) -> dict[str, Any]:
+        status = self.cloud_status()
+        status["durable"] = self.cloud_backup is not None
+        status["local_path"] = str(self.path)
+        status["local_exists"] = self.path.exists()
+        return status
+
     def cloud_status(self) -> dict[str, Any]:
         status: dict[str, Any] = {
             "configured": self.cloud_backup is not None,
