@@ -22,6 +22,8 @@ from trading_auto_research import (
     run_autonomous_research,
 )
 from trading_intelligence_core import (
+    DEFAULT_GEMINI_BOOK_MODEL,
+    DEFAULT_GEMINI_BOOK_SPECIALIST_MODEL,
     GeminiBookAnalyzer,
     GeminiRuleCompiler,
     canonicalize_existing_strategy,
@@ -285,8 +287,13 @@ elif module == "Knowledge Sources":
             text, metadata = extract_source_text(uploaded.name, payload)
             analyzer = GeminiBookAnalyzer(
                 setting("GEMINI_API_KEY"),
-                setting("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
+                setting("GEMINI_BOOK_MODEL", DEFAULT_GEMINI_BOOK_MODEL),
                 fallback_api_key=setting("GEMINI_PAID_API_KEY", ""),
+                fallback_model=setting("GEMINI_BOOK_FALLBACK_MODEL", "gemini-3.5-flash"),
+                specialist_model=setting(
+                    "GEMINI_BOOK_SPECIALIST_MODEL",
+                    DEFAULT_GEMINI_BOOK_SPECIALIST_MODEL,
+                ),
             )
             progress = st.progress(0.0, text="Preparing source…")
             def on_progress(index: int, total: int, message: str | None = None) -> None:
@@ -308,8 +315,16 @@ elif module == "Knowledge Sources":
                     f"Partial extraction saved · {int(analysis.get('completed_sections') or 0)} of "
                     f"{int(analysis.get('chunk_count') or 0)} sections completed"
                 )
+            if analysis.get("specialist_used"):
+                specialist_sections = ", ".join(
+                    str(value) for value in analysis.get("specialist_sections") or []
+                )
+                completion_text += (
+                    f" · {analysis.get('specialist_model')} specialist review"
+                    + (f" on section(s) {specialist_sections}" if specialist_sections else "")
+                )
             if analysis.get("model_fallback_used"):
-                completion_text += f" · backup model used: {analysis.get('model')}"
+                completion_text += f" · reliability fallback used: {analysis.get('model')}"
             if analysis.get("paid_fallback_used"):
                 completion_text += " · backup API key used"
             progress.progress(1.0, text=completion_text)
