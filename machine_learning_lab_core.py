@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from trading_progress_ui import LongTaskMonitor, session_task_profiles
 from youtube_strategy_engine import (
     DEFAULT_GITHUB_BACKUP_PATH,
     AlpacaMarketData,
@@ -468,9 +469,30 @@ st.caption(
     "with a one-session safety gap between training and test periods."
 )
 
-run = st.button("🧠 Train + walk-forward test", type="primary", use_container_width=True)
+ml_button_slot = st.empty()
+run = ml_button_slot.button(
+    "🧠 Train + walk-forward test",
+    type="primary",
+    use_container_width=True,
+    key="ml_train_walk_forward",
+)
 
 if run:
+    ml_button_slot.button(
+        "🧠 Training…",
+        type="primary",
+        use_container_width=True,
+        disabled=True,
+        key="ml_train_walk_forward_busy",
+    )
+    ml_monitor = LongTaskMonitor(
+        "machine_learning_train_walk_forward",
+        session_task_profiles(st.session_state, "machine_learning_train_walk_forward"),
+    )
+    ml_bar = st.progress(
+        0.03,
+        text=ml_monitor.text(0.03, "Preparing machine-learning research…"),
+    )
     clean = parse_symbols(symbol)
     if len(clean) != 1:
         st.error("Enter exactly one valid ticker.")
@@ -485,6 +507,7 @@ if run:
             )
             historical_start = historical_end - timedelta(days=int(history_days))
             st.write(f"Downloading {ticker} {timeframe} bars…")
+            ml_bar.progress(0.10, text=ml_monitor.text(0.10, f"Downloading {ticker} {timeframe} bars"))
             bars = market.bars(
                 [ticker],
                 start=historical_start,
@@ -497,12 +520,14 @@ if run:
                     f"Only {len(bars)} bars were returned. Increase the historical range or use a smaller candle interval."
                 )
 
+            ml_bar.progress(0.30, text=ml_monitor.text(0.30, f"Downloaded {len(bars):,} bars · engineering features"))
             st.write(f"Engineering features from {len(bars):,} bars…")
             base = bars_to_frame(bars)
             featured = add_ml_features(base, strategy)
             latest_row = featured.iloc[[-1]].copy()
             latest_session = str(featured.iloc[-1]["session"])
 
+            ml_bar.progress(0.45, text=ml_monitor.text(0.45, "Creating forward profit/stop outcome labels"))
             st.write("Creating forward profit/stop outcome labels…")
             labeled = add_outcome_labels(
                 featured,
@@ -536,6 +561,7 @@ if run:
             latest_row[usable_features] = latest_row[usable_features].replace([np.inf, -np.inf], np.nan)
 
             threshold = threshold_pct / 100.0
+            ml_bar.progress(0.62, text=ml_monitor.text(0.62, "Running chronological walk-forward tests"))
             st.write("Running chronological walk-forward tests…")
             oos, fold_rows = walk_forward_predictions(
                 model_data,
@@ -544,6 +570,7 @@ if run:
                 folds=4,
             )
 
+            ml_bar.progress(0.84, text=ml_monitor.text(0.84, "Fitting final model on completed historical sessions"))
             st.write("Fitting final model on all completed historical sessions…")
             final_model = build_pipeline()
             final_model.fit(model_data[usable_features], model_data["profitable_outcome"].astype(int))
@@ -551,6 +578,8 @@ if run:
             latest_strategy_match = bool(float(latest_row.iloc[0]["strategy_match"]) >= 0.5)
             importance = feature_importance_table(final_model, usable_features)
             status.update(label="Machine-learning run complete", state="complete", expanded=False)
+            ml_monitor.finish(st.session_state)
+            ml_bar.progress(1.0, text="Machine-learning run complete · 100%")
 
         actual = oos["profitable_outcome"].astype(int).to_numpy()
         probability = oos["ml_probability"].to_numpy(dtype=float)
