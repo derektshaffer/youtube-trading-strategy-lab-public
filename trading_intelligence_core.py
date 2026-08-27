@@ -1478,7 +1478,9 @@ class GeminiBookAnalyzer:
             resolved_author = str(author or "").strip() or (
                 detected_authors[0] if detected_authors else ""
             )
-            source_id = source_fingerprint(resolved_title, resolved_author, text)
+            # Keep the source/strategy identity stable across checkpoints even if Gemini
+            # learns the real title/author later in the book.
+            source_id = cache_source_id
             strategies = [
                 canonicalize_strategy(
                     item,
