@@ -1661,6 +1661,32 @@ class GeminiBookAnalyzer:
         return result
 
 
+def merge_ingestion_checkpoint_strategies(
+    existing: list[dict[str, Any]],
+    additions: list[dict[str, Any]],
+    *,
+    source_id: str,
+    replace_source: bool,
+) -> list[dict[str, Any]]:
+    """Keep progressive book checkpoints current without clobbering completed curated strategies."""
+    source_id = str(source_id or "")
+    if not replace_source:
+        return merge_strategies(existing, additions)
+
+    retained = [
+        dict(item)
+        for item in existing
+        if isinstance(item, dict)
+        and str(item.get("source_id") or "") != source_id
+    ]
+    incoming = [
+        dict(item)
+        for item in additions
+        if isinstance(item, dict) and item.get("id")
+    ]
+    return retained + incoming
+
+
 def merge_strategies(
     existing: list[dict[str, Any]],
     additions: list[dict[str, Any]],
