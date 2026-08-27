@@ -96,3 +96,23 @@ streamlit run youtube_strategy_app.py
 ```bash
 python3 -m unittest test_youtube_strategy_engine.py -v
 ```
+
+## Trading Intelligence Lab (new platform foundation)
+
+A second Streamlit entrypoint now lives in this repository:
+
+```
+trading_intelligence_app.py
+```
+
+It is intentionally separate from the current YouTube Trading Lab home screen. The first milestone adds:
+
+- PDF/TXT/Markdown knowledge-source ingestion
+- chunked Gemini extraction for books and research documents
+- one canonical strategy representation across books and YouTube sources
+- a separate intelligence-library backup at `trading-intelligence-lab/intelligence_library.json`
+- read/import access to strategies already saved by the YouTube Trading Lab
+- top-level modules for Strategy Lab, Validation, Market Discovery, Stock Analyzer, and Live/Paper integration
+
+To try it as a separate Streamlit app, deploy the same repository again and set the main file path to
+`trading_intelligence_app.py`. It reuses the existing `GEMINI_API_KEY` and GitHub backup secrets.
