@@ -14,6 +14,7 @@ from plotly.subplots import make_subplots
 import streamlit as st
 import streamlit.components.v1 as components
 
+from trading_progress_ui import LongTaskMonitor, session_task_profiles
 from youtube_strategy_engine import (
     ALPACA_DATA_URL,
     DEFAULT_GEMINI_FALLBACK_MODEL,
@@ -1479,21 +1480,48 @@ with videos_tab:
         elif len(urls) > 25:
             st.error("Analyze no more than 25 videos per batch to control API usage and processing time.")
         else:
+            st.button(
+                "🎥 Analyzing videos…",
+                use_container_width=True,
+                disabled=True,
+                key="video_analysis_busy_state",
+            )
+            video_monitor = LongTaskMonitor(
+                "youtube_video_analysis",
+                session_task_profiles(st.session_state, "youtube_video_analysis"),
+            )
             analyzer = GeminiVideoAnalyzer(
                 setting("GEMINI_API_KEY"),
                 setting("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
                 fallback_api_key=setting("GEMINI_PAID_API_KEY"),
                 fallback_model=setting("GEMINI_FALLBACK_MODEL", DEFAULT_GEMINI_FALLBACK_MODEL),
             )
-            progress = st.progress(0, text="Starting video analysis…")
+            progress = st.progress(
+                0.01,
+                text=video_monitor.text(0.01, "Starting video analysis…"),
+            )
             completed = 0
             extracted = 0
             for index, url in enumerate(urls):
-                progress.progress(index / len(urls), text=f"Analyzing video {index + 1} of {len(urls)}…")
+                fraction = index / max(1, len(urls))
+                progress.progress(
+                    min(0.98, max(0.01, fraction)),
+                    text=video_monitor.text(
+                        min(0.98, max(0.01, fraction)),
+                        f"Analyzing video {index + 1} of {len(urls)}…",
+                    ),
+                )
                 try:
                     def report_section_progress(completed_sections: int, total_sections: int, message: str) -> None:
                         fraction = (index + completed_sections / max(1, total_sections)) / len(urls)
-                        progress.progress(min(1.0, fraction), text=f"Video {index + 1} of {len(urls)} · {message}")
+                        mapped = min(0.98, max(0.01, fraction))
+                        progress.progress(
+                            mapped,
+                            text=video_monitor.text(
+                                mapped,
+                                f"Video {index + 1} of {len(urls)} · {message}",
+                            ),
+                        )
 
                     analysis = analyzer.analyze(
                         url,
@@ -1522,7 +1550,8 @@ with videos_tab:
                         st.info("Your free Gemini quota was reached, so this video continued using your paid backup key.")
                 except AppError as error:
                     st.error(f"{url}: {error}")
-            progress.progress(1.0, text="Video batch complete")
+            video_monitor.finish(st.session_state)
+            progress.progress(1.0, text="Video batch complete · 100%")
             if completed:
                 st.session_state["analysis_notice"] = f"Analyzed {completed} videos and extracted {extracted} strategies."
                 st.rerun()
@@ -1614,6 +1643,20 @@ with master_tab:
             )
 
         if create_master:
+            st.button(
+                "🧠 Combining strategies…",
+                use_container_width=True,
+                disabled=True,
+                key="master_strategy_busy_state",
+            )
+            master_monitor = LongTaskMonitor(
+                "master_strategy_synthesis",
+                session_task_profiles(st.session_state, "master_strategy_synthesis"),
+            )
+            master_bar = st.progress(
+                0.08,
+                text=master_monitor.text(0.08, "Preparing saved strategies for synthesis…"),
+            )
             chosen_sources = [
                 item for item in original_strategies
                 if source_scope == "All original video strategies" or item.get("approved")
@@ -1630,6 +1673,13 @@ with master_tab:
                         fallback_api_key=setting("GEMINI_PAID_API_KEY"),
                     )
                     chosen_video_count = len({str(item.get("source_url") or "") for item in chosen_sources})
+                    master_bar.progress(
+                        0.30,
+                        text=master_monitor.text(
+                            0.30,
+                            f"Combining {len(chosen_sources)} strategies from {chosen_video_count} videos",
+                        ),
+                    )
                     with st.spinner(
                         f"Combining {len(chosen_sources)} saved strategies from {chosen_video_count} analyzed videos…"
                     ):
@@ -1639,7 +1689,13 @@ with master_tab:
                             extra_instructions=master_focus,
                             master_name=master_name,
                         )
+                        master_bar.progress(
+                            0.90,
+                            text=master_monitor.text(0.90, "Saving synthesized master strategy"),
+                        )
                         store.save_master_strategy(master_strategy)
+                        master_monitor.finish(st.session_state)
+                        master_bar.progress(1.0, text="Master strategy synthesis complete · 100%")
                     st.session_state["master_strategy_notice"] = (
                         f'Saved "{master_strategy["name"]}" from {len(chosen_sources)} strategies and '
                         f'{chosen_video_count} videos. Your original strategies were preserved.'
@@ -2164,6 +2220,20 @@ with backtest_tab:
             run_requested = st.form_submit_button("Run historical backtest", use_container_width=True)
 
         if run_requested:
+            st.button(
+                "🧪 Running historical backtest…",
+                use_container_width=True,
+                disabled=True,
+                key="historical_backtest_busy_state",
+            )
+            backtest_monitor = LongTaskMonitor(
+                "historical_backtest",
+                session_task_profiles(st.session_state, "historical_backtest"),
+            )
+            backtest_bar = st.progress(
+                0.05,
+                text=backtest_monitor.text(0.05, "Preparing historical backtest…"),
+            )
             tickers = parse_symbols(tickers_raw)
             if not tickers:
                 st.error("Enter at least one valid ticker symbol.")
@@ -2211,9 +2281,29 @@ with backtest_tab:
                     delay = 16 if market.historical_feed == "sip" and market.live_feed != "sip" else 1
                     end = utc_now() - timedelta(minutes=delay)
                     start = end - timedelta(days=int(history_days))
+                    backtest_bar.progress(
+                        0.18,
+                        text=backtest_monitor.text(0.18, "Downloading Alpaca historical candles"),
+                    )
                     with st.spinner("Downloading Alpaca historical candles and running conservative simulations…"):
                         all_bars = market.bars(tickers, start=start, end=end, timeframe=timeframe)
-                        results = [run_backtest(all_bars.get(symbol, []), chosen, symbol, settings_value) for symbol in tickers]
+                        backtest_bar.progress(
+                            0.55,
+                            text=backtest_monitor.text(0.55, "Historical candles downloaded · running simulations"),
+                        )
+                        results = []
+                        for index, symbol in enumerate(tickers, start=1):
+                            results.append(
+                                run_backtest(all_bars.get(symbol, []), chosen, symbol, settings_value)
+                            )
+                            fraction = min(0.92, 0.55 + 0.35 * index / max(1, len(tickers)))
+                            backtest_bar.progress(
+                                fraction,
+                                text=backtest_monitor.text(
+                                    fraction,
+                                    f"Simulated {index} of {len(tickers)} stocks",
+                                ),
+                            )
                     store.record_backtest(
                         str(chosen.get("id") or ""),
                         results,
@@ -2227,6 +2317,8 @@ with backtest_tab:
                         for symbol in tickers
                     }
                     st.session_state["backtest_timeframe"] = str(timeframe)
+                    backtest_monitor.finish(st.session_state)
+                    backtest_bar.progress(1.0, text="Historical backtest complete · 100%")
                 except AppError as error:
                     st.error(str(error))
 
@@ -2580,6 +2672,16 @@ with optimizer_tab:
             )
 
         if optimization_requested:
+            st.button(
+                "⚙️ Optimizing…",
+                use_container_width=True,
+                disabled=True,
+                key="stock_optimizer_busy_state",
+            )
+            optimizer_monitor = LongTaskMonitor(
+                "stock_strategy_optimizer",
+                session_task_profiles(st.session_state, "stock_strategy_optimizer"),
+            )
             # A new optimization request must never leave a previous ticker's report on screen.
             st.session_state.pop("stock_optimization_report", None)
             requested_symbols = parse_symbols(optimizer_symbol_raw)
@@ -2657,19 +2759,33 @@ with optimizer_tab:
                         delay = 16 if market.historical_feed == "sip" and market.live_feed != "sip" else 1
                         end = utc_now() - timedelta(minutes=delay)
                         start = end - timedelta(days=int(optimizer_history_days))
-                        progress_bar = st.progress(0.0, text=f"Downloading historical candles for {ticker}…")
+                        progress_bar = st.progress(
+                            0.05,
+                            text=optimizer_monitor.text(0.05, f"Downloading historical candles for {ticker}"),
+                        )
                         automatic_intervals = optimizer_timeframe.startswith("Automatically compare")
                         selected_interval = "1Min" if automatic_intervals else optimizer_timeframe.split(" ", 1)[0]
                         candles = market.bars([ticker], start=start, end=end, timeframe=selected_interval).get(ticker, [])
+                        progress_bar.progress(
+                            0.20,
+                            text=optimizer_monitor.text(
+                                0.20,
+                                f"Downloaded {len(candles):,} candles · starting optimization",
+                            ),
+                        )
 
                         def optimization_progress(completed: int, total: int, message: str) -> None:
                             # Adaptive refinement can add work after the engine's original coarse
                             # progress total. Never show 100% until the report has actually returned
                             # and been stored in session state below.
                             reported_fraction = completed / max(total, 1)
+                            mapped_fraction = 0.20 + 0.75 * min(1.0, max(0.0, reported_fraction))
                             progress_bar.progress(
-                                min(0.97, max(0.0, reported_fraction)),
-                                text=message,
+                                min(0.95, mapped_fraction),
+                                text=optimizer_monitor.text(
+                                    min(0.95, mapped_fraction),
+                                    message,
+                                ),
                             )
 
                         if automatic_intervals:
@@ -2712,7 +2828,8 @@ with optimizer_tab:
                             report["warnings"] = list(dict.fromkeys([quote_warning, *(report.get("warnings") or [])]))
                         st.session_state["stock_optimization_report"] = report
                         st.session_state["optimizer_last_completed_symbol"] = ticker
-                        progress_bar.progress(1.0, text=f"Strategy optimization complete for {ticker} — results ready below")
+                        optimizer_monitor.finish(st.session_state)
+                        progress_bar.progress(1.0, text=f"Strategy optimization complete for {ticker} · 100%")
                         st.success(
                             f"Optimization complete for {ticker}: "
                             f"{int(report.get('variants_tested', 0)):,} settings tested. Results are shown below."
@@ -3321,12 +3438,36 @@ with scanner_tab:
             candidate_count = source_columns[3].number_input("Candidates per screener", min_value=5, max_value=50, value=20, step=5)
             scan_requested = st.form_submit_button("Run fresh strategy scan", use_container_width=True)
         if scan_requested:
+            st.button(
+                "🔎 Scanning…",
+                use_container_width=True,
+                disabled=True,
+                key="full_lab_live_scan_busy_state",
+            )
+            live_scan_monitor = LongTaskMonitor(
+                "full_lab_live_strategy_scan",
+                session_task_profiles(st.session_state, "full_lab_live_strategy_scan"),
+            )
+            live_scan_bar = st.progress(
+                0.08,
+                text=live_scan_monitor.text(0.08, "Preparing live strategy scan…"),
+            )
             try:
+                live_scan_bar.progress(
+                    0.30,
+                    text=live_scan_monitor.text(0.30, "Checking live snapshots and strategy rules"),
+                )
                 with st.spinner("Checking live Alpaca snapshots against your approved YouTube strategies…"):
                     results, warnings = run_live_scan(approved, parse_symbols(symbols_raw), movers_enabled, active_enabled, int(candidate_count), news_enabled)
+                live_scan_bar.progress(
+                    0.92,
+                    text=live_scan_monitor.text(0.92, f"Ranking {len(results)} live candidates"),
+                )
                 st.session_state["live_scan"] = results
                 st.session_state["live_scan_warnings"] = warnings
                 st.session_state["live_scan_at"] = isoformat_utc(utc_now())
+                live_scan_monitor.finish(st.session_state)
+                live_scan_bar.progress(1.0, text="Live strategy scan complete · 100%")
             except AppError as error:
                 st.error(str(error))
 
