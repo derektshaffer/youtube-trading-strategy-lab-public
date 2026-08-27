@@ -583,11 +583,15 @@ class FakePanel:
     def text_input(self, label, value="", **kwargs):
         return value
 
-    def number_input(self, label, **kwargs):
-        return kwargs.get("value", 0)
+    def number_input(self, label, *args, **kwargs):
+        if "value" in kwargs:
+            return kwargs["value"]
+        return args[2] if len(args) >= 3 else 0
 
-    def slider(self, label, **kwargs):
-        return kwargs.get("value", 0)
+    def slider(self, label, *args, **kwargs):
+        if "value" in kwargs:
+            return kwargs["value"]
+        return args[2] if len(args) >= 3 else 0
 
     def checkbox(self, label, value=False, **kwargs):
         return value
@@ -637,7 +641,9 @@ class FakeStreamlit(types.ModuleType):
         if name == "checkbox":
             return lambda label, value=False, **kwargs: value
         if name in {"number_input", "slider"}:
-            return lambda label, **kwargs: kwargs.get("value", 0)
+            return lambda label, *args, **kwargs: (
+                kwargs["value"] if "value" in kwargs else (args[2] if len(args) >= 3 else 0)
+            )
         if name in {"text_input", "text_area"}:
             return lambda label, value="", **kwargs: value
         if name == "rerun":
