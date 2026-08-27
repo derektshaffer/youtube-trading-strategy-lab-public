@@ -14,6 +14,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from trading_progress_ui import LongTaskMonitor, session_task_profiles
 from alpaca_paper_trader import (
     AlpacaPaperTrader,
     PaperTradeError,
@@ -440,17 +441,36 @@ def render() -> None:
         if armed:
             st.warning("PAPER AUTO-ENTRY IS ARMED. A full MATCH on Refresh can submit a simulated order.")
 
-    refresh = st.button(
+    refresh_slot = st.empty()
+    refresh = refresh_slot.button(
         "Refresh live signal",
         type="primary",
         width="stretch",
         disabled=not market_ready or not bool(ticker),
+        key="runner_refresh_live_signal",
     )
 
     if refresh:
+        refresh_slot.button(
+            "Checking…",
+            type="primary",
+            width="stretch",
+            disabled=True,
+            key="runner_refresh_live_signal_busy",
+        )
+        refresh_monitor = LongTaskMonitor(
+            "live_runner_refresh",
+            session_task_profiles(st.session_state, "live_runner_refresh"),
+        )
+        refresh_bar = st.progress(
+            0.08,
+            text=refresh_monitor.text(0.08, f"Checking {ticker} live signal…"),
+        )
         try:
+            refresh_bar.progress(0.25, text=refresh_monitor.text(0.25, "Loading market data and evaluating strategy rules"))
             with st.spinner(f"Checking {ticker} against {strategy.get('name') or 'the selected strategy'}…"):
                 metrics, signal, warnings = current_signal(ticker, strategy)
+            refresh_bar.progress(0.75, text=refresh_monitor.text(0.75, "Signal evaluation complete"))
             st.session_state["runner_snapshot_v2"] = {
                 "checked_at": isoformat_utc(utc_now()),
                 "strategy_id": strategy.get("id"),
@@ -461,6 +481,7 @@ def render() -> None:
             }
             st.session_state.pop("runner_execution_v2", None)
             if mode == "Alpaca paper auto-entry" and armed:
+                refresh_bar.progress(0.86, text=refresh_monitor.text(0.86, "Running paper-entry safeguards"))
                 st.session_state["runner_execution_v2"] = paper_entry(
                     strategy=strategy,
                     metrics=metrics,
@@ -473,6 +494,8 @@ def render() -> None:
                     max_open_positions=max_open_positions,
                     one_entry_per_symbol_day=one_entry_per_symbol_day,
                 )
+            refresh_monitor.finish(st.session_state)
+            refresh_bar.progress(1.0, text="Live signal refresh complete · 100%")
         except (AppError, PaperTradeError) as error:
             st.error(str(error))
 
