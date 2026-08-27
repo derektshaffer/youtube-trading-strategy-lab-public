@@ -1722,7 +1722,15 @@ class GitHubCloudBackup:
             raise AppError("The GitHub cloud backup is damaged or is not a valid JSON strategy library.") from exc
         if not isinstance(library, dict) or not isinstance(library.get("strategies"), list):
             raise AppError("The GitHub cloud backup does not contain a valid saved strategy library.")
-        for name in ("videos", "paper_positions", "recovery_items", "strategy_versions"):
+        for name in (
+            "videos",
+            "paper_positions",
+            "recovery_items",
+            "strategy_versions",
+            "knowledge_sources",
+            "research_runs",
+            "validation_runs",
+        ):
             if name in library and not isinstance(library[name], list):
                 raise AppError(f"The GitHub cloud backup contains an invalid {name} collection.")
         sha = str(record.get("sha") or "")
@@ -1790,6 +1798,9 @@ class StrategyStore:
             "paper_positions": [],
             "recovery_items": [],
             "strategy_versions": [],
+            "knowledge_sources": [],
+            "research_runs": [],
+            "validation_runs": [],
             "updated_at": None,
         }
 
@@ -1811,7 +1822,16 @@ class StrategyStore:
             raise AppError("The saved strategy library is not a JSON object.")
         result = self.blank()
         result.update(data)
-        for name in ("videos", "strategies", "paper_positions", "recovery_items", "strategy_versions"):
+        for name in (
+            "videos",
+            "strategies",
+            "paper_positions",
+            "recovery_items",
+            "strategy_versions",
+            "knowledge_sources",
+            "research_runs",
+            "validation_runs",
+        ):
             if not isinstance(result[name], list):
                 result[name] = []
         return result
