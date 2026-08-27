@@ -36,6 +36,8 @@ BOOK_ANALYSIS_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "source_summary": {"type": "string"},
+        "detected_title": {"type": "string"},
+        "detected_author": {"type": "string"},
         "strategies": {
             "type": "array",
             "items": {
@@ -88,7 +90,7 @@ BOOK_ANALYSIS_SCHEMA: dict[str, Any] = {
             },
         },
     },
-    "required": ["source_summary", "strategies"],
+    "required": ["source_summary", "detected_title", "detected_author", "strategies"],
 }
 
 BOOK_EXTRACTION_PROMPT = """You are extracting trading methods from a user-supplied educational source
@@ -114,6 +116,8 @@ For every strategy or setup:
   marker when available) and may include only a SHORT excerpt needed to identify the evidence.
   Do not reproduce long passages.
 - Confidence is extraction confidence from 0 to 100, not expected profitability.
+- Detect the source title and author/creator when they are clearly identifiable in the supplied
+  material. Return an empty string when either is not supported by the source; do not guess.
 - Do not claim that a strategy is validated, profitable, safe, or suitable for real-money trading.
 
 Return only JSON matching the supplied schema.
@@ -485,6 +489,180 @@ class GeminiRuleCompiler:
         return parsed
 
 
+def research_readiness(strategy: dict[str, Any]) -> dict[str, Any]:
+    """Describe whether a strategy is mechanically testable without implying that it has edge."""
+    effective = effective_strategy_for_research(strategy)
+    rules = {
+        key: value
+        for key, value in normalize_machine_rules(effective.get("machine_rules")).items()
+        if value is not None
+    }
+    non_entry_fields = {
+        "stop_loss_pct",
+        "reward_risk",
+        "max_hold_minutes",
+    }
+    entry_rules = [key for key in rules if key not in non_entry_fields]
+    evidence_count = len(
+        [item for item in strategy.get("evidence") or [] if isinstance(item, dict)]
+    )
+    unresolved_count = len([item for item in strategy.get("unresolved_rules") or [] if str(item).strip()])
+    assumption_count = len(
+        [
+            value
+            for value in normalize_machine_rules(strategy.get("research_rule_overrides")).values()
+            if value is not None
+        ]
+    )
+    explicit_count = len(
+        [
+            value
+            for value in normalize_machine_rules(strategy.get("machine_rules")).values()
+            if value is not None
+        ]
+    )
+
+    score = 10.0
+    score += min(45.0, len(entry_rules) * 12.0)
+    score += min(20.0, evidence_count * 4.0)
+    score += min(15.0, explicit_count * 3.0)
+    if assumption_count:
+        score += min(10.0, assumption_count * 2.0)
+    score -= min(25.0, unresolved_count * 2.5)
+    score = round(max(0.0, min(100.0, score)), 1)
+
+    if not entry_rules:
+        label = "needs_translation"
+        note = "No objective entry/filter rule is available to the deterministic backtester yet."
+    elif evidence_count == 0 and str(strategy.get("source_type") or "").lower() == "book_or_document":
+        label = "needs_evidence_review"
+        note = "Machine rules exist, but no source evidence reference was retained for this document strategy."
+    elif unresolved_count > max(6, len(entry_rules) * 3):
+        label = "partially_testable"
+        note = "The strategy can be backtested, but many source requirements remain qualitative or unavailable."
+    else:
+        label = "ready_for_backtest"
+        note = "The strategy has at least one objective entry/filter rule that the backtester can enforce."
+
+    return {
+        "label": label,
+        "score": score,
+        "entry_rule_count": len(entry_rules),
+        "explicit_rule_count": explicit_count,
+        "research_assumption_count": assumption_count,
+        "evidence_count": evidence_count,
+        "unresolved_count": unresolved_count,
+        "note": note,
+    }
+
+
+def apply_compiler_suggestions(
+    strategy: dict[str, Any],
+    compiled: dict[str, Any],
+    *,
+    minimum_confidence: float = 65.0,
+) -> dict[str, Any]:
+    """Auto-apply defensible compiler suggestions as research assumptions, never as author rules."""
+    item = dict(strategy or {})
+    explicit = normalize_machine_rules(item.get("machine_rules"))
+    current_overrides = {
+        key: value
+        for key, value in normalize_machine_rules(item.get("research_rule_overrides")).items()
+        if value is not None
+    }
+    assumption_log = list(item.get("compiler_assumptions") or [])
+    applied: list[dict[str, Any]] = []
+    skipped_low_confidence = 0
+
+    for suggestion in compiled.get("suggestions") or []:
+        if not isinstance(suggestion, dict):
+            continue
+        confidence = max(0.0, min(100.0, safe_float(suggestion.get("confidence"), 0.0) or 0.0))
+        if confidence < float(minimum_confidence):
+            skipped_low_confidence += 1
+            continue
+        target = str(suggestion.get("target_rule") or "").strip()
+        if target not in MACHINE_RULE_SCHEMA["properties"]:
+            continue
+        if explicit.get(target) is not None:
+            continue
+        value = suggestion.get("parsed_value")
+        if value is None:
+            try:
+                value = coerce_machine_rule_value(target, suggestion.get("proposed_value"))
+            except AppError:
+                continue
+        current_overrides[target] = value
+        record = {
+            "target_rule": target,
+            "value": value,
+            "source_requirement": suggestion.get("source_requirement"),
+            "rationale": suggestion.get("rationale"),
+            "confidence": confidence,
+            "accepted_at": compiled.get("generated_at") or _utc_iso(),
+            "model": compiled.get("model"),
+            "accepted_by": "ai_autopilot",
+            "is_research_assumption": True,
+        }
+        applied.append(record)
+        assumption_log.append(record)
+
+    if applied:
+        item["research_rule_overrides"] = current_overrides
+        item["compiler_assumptions"] = assumption_log[-150:]
+        # Any executable-rule change invalidates a previously frozen validation result.
+        item["validation_status"] = "unvalidated"
+        item.pop("validated_rules", None)
+        item.pop("validated_backtest_settings", None)
+        item.pop("validated_at", None)
+
+    item["autopilot_preparation"] = {
+        "prepared_at": _utc_iso(),
+        "model": compiled.get("model"),
+        "compiler_summary": compiled.get("summary") or "",
+        "suggestions_considered": len(compiled.get("suggestions") or []),
+        "suggestions_auto_applied": len(applied),
+        "minimum_confidence": float(minimum_confidence),
+        "skipped_low_confidence": skipped_low_confidence,
+        "unmapped_requirements": list(compiled.get("unmapped_requirements") or []),
+    }
+    item["research_readiness"] = research_readiness(item)
+    return item
+
+
+def prepare_strategies_with_ai(
+    strategies: list[dict[str, Any]],
+    compiler: GeminiRuleCompiler,
+    *,
+    minimum_confidence: float = 65.0,
+    progress_callback=None,
+) -> list[dict[str, Any]]:
+    """Run the Rule Compiler across extracted strategies so manual proxy selection is optional."""
+    prepared: list[dict[str, Any]] = []
+    total = len(strategies)
+    for index, strategy in enumerate(strategies, start=1):
+        if progress_callback:
+            progress_callback(index, total, str(strategy.get("name") or "Unnamed strategy"))
+        try:
+            compiled = compiler.compile(strategy)
+            item = apply_compiler_suggestions(
+                strategy,
+                compiled,
+                minimum_confidence=minimum_confidence,
+            )
+        except Exception as exc:
+            item = dict(strategy)
+            item["autopilot_preparation"] = {
+                "prepared_at": _utc_iso(),
+                "model": getattr(compiler, "model", ""),
+                "error": str(exc),
+                "suggestions_auto_applied": 0,
+            }
+            item["research_readiness"] = research_readiness(item)
+        prepared.append(item)
+    return prepared
+
+
 class GeminiBookAnalyzer:
     """Chunked document strategy extractor using the same Gemini service as the YouTube lab."""
 
@@ -635,9 +813,10 @@ class GeminiBookAnalyzer:
         chunks = chunk_source_text(text)
         if not chunks:
             raise AppError("There was no readable source text to analyze.")
-        source_id = source_fingerprint(title, author, text)
         strategies_by_key: dict[str, dict[str, Any]] = {}
         summaries: list[str] = []
+        detected_titles: list[str] = []
+        detected_authors: list[str] = []
 
         for index, chunk in enumerate(chunks, start=1):
             if progress_callback:
@@ -653,6 +832,12 @@ class GeminiBookAnalyzer:
             summary = str(analysis.get("source_summary") or "").strip()
             if summary and summary not in summaries:
                 summaries.append(summary)
+            detected_title = str(analysis.get("detected_title") or "").strip()
+            detected_author = str(analysis.get("detected_author") or "").strip()
+            if detected_title and detected_title not in detected_titles:
+                detected_titles.append(detected_title)
+            if detected_author and detected_author not in detected_authors:
+                detected_authors.append(detected_author)
 
             for raw in analysis.get("strategies") or []:
                 if not isinstance(raw, dict):
@@ -667,21 +852,26 @@ class GeminiBookAnalyzer:
                 else:
                     strategies_by_key[key] = dict(raw)
 
+        resolved_title = str(title or "").strip() or (detected_titles[0] if detected_titles else "Uploaded source")
+        resolved_author = str(author or "").strip() or (detected_authors[0] if detected_authors else "")
+        source_id = source_fingerprint(resolved_title, resolved_author, text)
         strategies = [
             canonicalize_strategy(
                 item,
                 source_id=source_id,
                 source_type="book_or_document",
-                source_title=title or "Uploaded source",
-                source_author=author,
+                source_title=resolved_title,
+                source_author=resolved_author,
             )
             for item in strategies_by_key.values()
         ]
         return {
             "id": source_id,
             "source_type": "book_or_document",
-            "title": title or "Uploaded source",
-            "author": author,
+            "title": resolved_title,
+            "author": resolved_author,
+            "detected_title": detected_titles[0] if detected_titles else "",
+            "detected_author": detected_authors[0] if detected_authors else "",
             "summary": " ".join(summaries)[:12000],
             "analyzed_at": _utc_iso(),
             "model": self.model,
