@@ -375,6 +375,22 @@ elif module == "Knowledge Sources":
                 list(analysis.get("strategies") or []),
             )
 
+            # Persist the expensive source reading/preparation before deeper market research begins.
+            # If Alpaca or Streamlit interrupts the later research funnel, the extracted work remains saved.
+            preliminary_source = {k: v for k, v in analysis.items() if k != "strategies"}
+            preliminary_source["filename"] = uploaded.name
+            preliminary_source["extraction_metadata"] = metadata
+            preliminary_source["autonomous_research_summary"] = {
+                "completed": False,
+                "status": "pending" if autopilot_research and autopilot_prepare else "not_requested",
+            }
+            data["knowledge_sources"] = [
+                item for item in data.get("knowledge_sources") or []
+                if item.get("id") != preliminary_source["id"]
+            ]
+            data["knowledge_sources"].insert(0, preliminary_source)
+            intelligence_store().save(data)
+
             autonomous_report = None
             autonomous_error = ""
             if autopilot_research and autopilot_prepare and analysis.get("strategies"):
