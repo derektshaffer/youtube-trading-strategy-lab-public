@@ -25,6 +25,8 @@ from trading_intelligence_core import (
     effective_strategy_for_research,
     extract_source_text,
     merge_strategies,
+    prepare_strategies_with_ai,
+    research_readiness,
 )
 from trading_universe_research import cross_stock_generalization
 from trading_validation_core import validation_strength, walk_forward_validate
@@ -194,15 +196,16 @@ if module == "Overview":
             unsafe_allow_html=True,
         )
 
-    st.markdown("### What is usable in this first build")
+    st.markdown("### What is usable now")
     st.success(
-        "Book/PDF ingestion, AI strategy extraction, a canonical strategy format, a separate "
-        "persistent intelligence library, and import of existing YouTube-lab strategies are wired up."
+        "Book/PDF ingestion, AI strategy extraction, automatic AI rule preparation, the historical "
+        "Strategy Lab, validation, catalyst intelligence, universe research, market discovery, and "
+        "the unified strategy library are all connected."
     )
     st.info(
-        "The Strategy Lab, validation engine, scanner/analyzer integration, and regime/catalyst "
-        "engines are represented in the architecture and will be connected incrementally rather "
-        "than by rewriting the working tools all at once."
+        "The normal workflow is now AI-first: upload a source once, let the AI extract and prepare "
+        "its strategies, then use deterministic market data and validation to decide what survives. "
+        "Manual review tools remain available when you want them, but they are no longer required for preparation."
     )
 
 
@@ -219,15 +222,36 @@ elif module == "Knowledge Sources":
         help="PDF, TXT, and Markdown are supported in the first version.",
     )
     a, b = st.columns(2)
-    title = a.text_input("Title", placeholder="How to Day Trade")
-    author = b.text_input("Author / creator", placeholder="Ross Cameron")
+    title = a.text_input(
+        "Title (optional)",
+        placeholder="AI will detect it when possible",
+        help="You can leave this blank. The AI will use the source itself to identify the title when it can.",
+    )
+    author = b.text_input(
+        "Author / creator (optional)",
+        placeholder="AI will detect it when possible",
+        help="You can leave this blank. The AI will identify the author/creator when the source clearly supports it.",
+    )
     focus = st.text_area(
         "Optional research focus",
-        placeholder="Example: catalyst momentum, first pullbacks, VWAP, relative volume, entries and exits",
+        placeholder="Leave blank to extract every strategy and trading principle the AI can find.",
         height=90,
     )
+    autopilot_prepare = st.checkbox(
+        "AI Autopilot — automatically prepare every extracted strategy for backtesting",
+        value=True,
+        help=(
+            "After extraction, AI translates defensible qualitative ideas into machine-testable research "
+            "assumptions. Those assumptions stay clearly separate from rules explicitly stated by the author."
+        ),
+    )
+    if autopilot_prepare:
+        st.caption(
+            "Autopilot only prepares research hypotheses. It does not label anything profitable or validated; "
+            "historical testing and unseen-data validation still make that determination."
+        )
 
-    can_analyze = uploaded is not None and bool(title.strip())
+    can_analyze = uploaded is not None
     analyze = st.button(
         "🧠 Analyze source and extract strategies",
         type="primary",
@@ -257,7 +281,66 @@ elif module == "Knowledge Sources":
                 focus=focus,
                 progress_callback=on_progress,
             )
-            progress.progress(1.0, text="Analysis complete")
+            progress.progress(1.0, text="Strategy extraction complete")
+
+            if autopilot_prepare and analysis.get("strategies"):
+                prep_status = st.status(
+                    "AI Autopilot is translating strategies into testable research rules…",
+                    expanded=True,
+                )
+                compiler = GeminiRuleCompiler(
+                    setting("GEMINI_API_KEY"),
+                    setting("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
+                )
+
+                def on_prepare(index: int, total: int, strategy_name: str) -> None:
+                    prep_status.write(
+                        f"Preparing {index} of {total}: {strategy_name}"
+                    )
+
+                analysis["strategies"] = prepare_strategies_with_ai(
+                    list(analysis.get("strategies") or []),
+                    compiler,
+                    minimum_confidence=65.0,
+                    progress_callback=on_prepare,
+                )
+                prepared = list(analysis.get("strategies") or [])
+                applied = sum(
+                    int((item.get("autopilot_preparation") or {}).get("suggestions_auto_applied") or 0)
+                    for item in prepared
+                )
+                ready = sum(
+                    1
+                    for item in prepared
+                    if (item.get("research_readiness") or {}).get("label") == "ready_for_backtest"
+                )
+                prep_status.update(
+                    label=(
+                        f"AI Autopilot prepared {len(prepared)} strategies · "
+                        f"{applied} research assumptions added · {ready} ready for backtesting"
+                    ),
+                    state="complete",
+                    expanded=False,
+                )
+                analysis["autopilot_summary"] = {
+                    "enabled": True,
+                    "strategies_prepared": len(prepared),
+                    "research_assumptions_added": applied,
+                    "ready_for_backtest": ready,
+                }
+            else:
+                for item in analysis.get("strategies") or []:
+                    item["research_readiness"] = research_readiness(item)
+                analysis["autopilot_summary"] = {
+                    "enabled": False,
+                    "strategies_prepared": 0,
+                    "research_assumptions_added": 0,
+                    "ready_for_backtest": sum(
+                        1
+                        for item in analysis.get("strategies") or []
+                        if (item.get("research_readiness") or {}).get("label") == "ready_for_backtest"
+                    ),
+                }
 
             data = load_library()
             source_record = {k: v for k, v in analysis.items() if k != "strategies"}
@@ -274,10 +357,19 @@ elif module == "Knowledge Sources":
             )
             intelligence_store().save(data)
             st.session_state["til_last_analysis"] = analysis
-            st.success(
-                f"Extracted {len(analysis.get('strategies') or [])} strategy "
-                f"hypotheses from {title.strip()}."
+            source_name = analysis.get("title") or title.strip() or uploaded.name
+            autopilot_summary = analysis.get("autopilot_summary") or {}
+            message = (
+                f"Extracted {len(analysis.get('strategies') or [])} strategy hypotheses from "
+                f"{source_name}."
             )
+            if autopilot_summary.get("enabled"):
+                message += (
+                    f" AI Autopilot added {int(autopilot_summary.get('research_assumptions_added') or 0)} "
+                    f"clearly labeled research assumptions and marked "
+                    f"{int(autopilot_summary.get('ready_for_backtest') or 0)} strategies ready for backtesting."
+                )
+            st.success(message)
             st.rerun()
         except AppError as exc:
             st.error(str(exc))
@@ -297,6 +389,14 @@ elif module == "Knowledge Sources":
                     f"AI sections: {src.get('chunk_count', '—')} · "
                     f"Analyzed: {src.get('analyzed_at', '—')}"
                 )
+                auto = src.get("autopilot_summary") or {}
+                if auto.get("enabled"):
+                    st.caption(
+                        "AI Autopilot: "
+                        f"{int(auto.get('strategies_prepared') or 0)} strategies prepared · "
+                        f"{int(auto.get('research_assumptions_added') or 0)} assumptions added · "
+                        f"{int(auto.get('ready_for_backtest') or 0)} ready for backtesting"
+                    )
     else:
         st.info("No book or document sources have been analyzed in the new library yet.")
 
@@ -346,6 +446,7 @@ elif module == "Strategy Library":
         rows = []
         for s in filtered:
             rules = normalize_machine_rules(s.get("machine_rules"))
+            readiness = s.get("research_readiness") or research_readiness(s)
             rows.append(
                 {
                     "Strategy": s.get("name"),
@@ -353,6 +454,7 @@ elif module == "Strategy Library":
                     "Direction": s.get("direction"),
                     "Source": source_label(s),
                     "Measurable rules": sum(v is not None for v in rules.values()),
+                    "AI readiness": str(readiness.get("label") or "unknown").replace("_", " ").title(),
                     "Extraction confidence": s.get("confidence"),
                     "Validation": s.get("validation_status") or "unvalidated",
                 }
@@ -367,10 +469,13 @@ elif module == "Strategy Library":
             selected = labels[st.selectbox("Inspect strategy", list(labels))]
             st.markdown(f"### {selected.get('name')}")
             st.write(selected.get("summary") or "No summary.")
-            x1, x2, x3 = st.columns(3)
+            readiness = selected.get("research_readiness") or research_readiness(selected)
+            x1, x2, x3, x4 = st.columns(4)
             x1.metric("Extraction confidence", f"{float(selected.get('confidence') or 0):.0f}%")
-            x2.metric("Validation", selected.get("validation_status") or "unvalidated")
-            x3.metric("Optimization", selected.get("optimization_status") or "not_run")
+            x2.metric("AI research readiness", f"{safe_float(readiness.get('score'), 0.0):.0f}/100")
+            x3.metric("Validation", selected.get("validation_status") or "unvalidated")
+            x4.metric("Optimization", selected.get("optimization_status") or "not_run")
+            st.caption(str(readiness.get("note") or ""))
             st.markdown("#### Source-extracted machine rules")
             active_rules = {
                 key: value for key, value in normalize_machine_rules(selected.get("machine_rules")).items()
@@ -383,11 +488,19 @@ elif module == "Strategy Library":
                 if value is not None
             }
             if research_overrides:
-                st.markdown("#### Accepted research assumptions")
+                st.markdown("#### AI / accepted research assumptions")
                 st.json(research_overrides)
-                st.caption(
-                    "These fill machine-testable gaps for research. They are not presented as explicit source rules."
-                )
+                auto_prep = selected.get("autopilot_preparation") or {}
+                auto_count = int(auto_prep.get("suggestions_auto_applied") or 0)
+                if auto_count:
+                    st.caption(
+                        f"AI Autopilot added {auto_count} of these assumptions. They fill machine-testable "
+                        "gaps for research and are never presented as explicit source rules."
+                    )
+                else:
+                    st.caption(
+                        "These fill machine-testable gaps for research. They are not presented as explicit source rules."
+                    )
             if (
                 str(selected.get("validation_status") or "").lower() == "validated"
                 and isinstance(selected.get("validated_rules"), dict)
@@ -412,8 +525,9 @@ elif module == "Strategy Library":
 elif module == "Rule Compiler":
     st.markdown("## Rule Compiler")
     st.caption(
-        "Turn qualitative source lessons into reviewable, measurable research proxies. "
-        "Accepted proxies are stored separately from the source-extracted rules."
+        "Advanced manual control for qualitative source lessons. AI Autopilot now does this automatically "
+        "during book ingestion; this page lets you inspect, replace, or add research proxies yourself. "
+        "All proxies stay separate from source-extracted rules."
     )
 
     if not strategies:
