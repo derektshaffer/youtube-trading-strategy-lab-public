@@ -251,6 +251,41 @@ class ProviderTests(unittest.TestCase):
         self.assertFalse(payload["store"])
         self.assertTrue(parsed["strategies"][0]["machine_rules"]["vwap_reclaim"])
 
+    def test_gemini_503_high_demand_is_treated_as_transient(self):
+        error = engine.AppError(
+            "Provider request failed (503): This model is currently experiencing high demand. Please try again later."
+        )
+        self.assertTrue(engine.provider_temporarily_unavailable(error))
+        self.assertFalse(engine.provider_quota_reached(error))
+
+    def test_gemini_overload_retries_then_switches_to_backup_model(self):
+        analyzer = engine.GeminiVideoAnalyzer(
+            "secret",
+            model="gemini-3.7-flash",
+            fallback_model="gemini-3.6-flash",
+        )
+        overload = engine.AppError(
+            "Provider request failed (503): This model is currently experiencing high demand. Please try again later."
+        )
+        with (
+            patch.object(
+                analyzer,
+                "_analyze_whole_video",
+                side_effect=[overload, overload, overload, {"video_title": "Recovered"}],
+            ) as mocked,
+            patch.object(engine, "sleep") as mocked_sleep,
+        ):
+            result = analyzer._analyze_whole_video_with_transient_retries(
+                "https://www.youtube.com/watch?v=abcDEF12_-3",
+                "prompt",
+                None,
+            )
+        self.assertEqual(result["video_title"], "Recovered")
+        self.assertEqual(mocked.call_count, 4)
+        self.assertEqual(mocked_sleep.call_count, 2)
+        self.assertTrue(analyzer.model_fallback_used)
+        self.assertEqual(analyzer.model, "gemini-3.6-flash")
+
     def test_alpaca_pagination_is_followed(self):
         market = engine.AlpacaMarketData("key", "secret")
         responses = [
