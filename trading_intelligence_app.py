@@ -1630,6 +1630,11 @@ elif module == "AI Research Autopilot":
         )
 
         started_at = time.monotonic()
+        attempt_started_at = utc_now().isoformat()
+        st.session_state["til_auto_research_last_attempt"] = {
+            "status": "running",
+            "started_at": attempt_started_at,
+        }
         estimator = AutonomousResearchProgressEstimator()
         activity_log: list[str] = []
         auto_progress = st.progress(
@@ -1689,6 +1694,13 @@ elif module == "AI Research Autopilot":
                 for item in report.get("results") or []
                 if item.get("validation_status") == "validated"
             )
+            failed_count = int(report.get("deep_strategies_failed") or 0)
+            st.session_state["til_auto_research_last_attempt"] = {
+                "status": str(report.get("run_status") or "complete"),
+                "started_at": attempt_started_at,
+                "completed_at": report.get("generated_at") or utc_now().isoformat(),
+                "failed_finalists": report.get("failed_finalists") or [],
+            }
             elapsed = format_elapsed(time.monotonic() - started_at)
             auto_progress.progress(
                 1.0,
@@ -1696,11 +1708,17 @@ elif module == "AI Research Autopilot":
             )
             latest_activity.success(
                 f"Autonomous research complete · "
-                f"{int(report.get('deep_strategies_tested') or 0)} deep finalists · "
-                f"{validated_count} validated"
+                f"{int(report.get('deep_strategies_tested') or 0)} deep finalists completed · "
+                f"{failed_count} skipped · {validated_count} validated"
             )
             st.rerun()
         except AppError as exc:
+            st.session_state["til_auto_research_last_attempt"] = {
+                "status": "stopped",
+                "started_at": attempt_started_at,
+                "stopped_at": utc_now().isoformat(),
+                "error": str(exc),
+            }
             elapsed = format_elapsed(time.monotonic() - started_at)
             auto_progress.progress(
                 max(0.01, estimator.fraction),
@@ -1709,6 +1727,12 @@ elif module == "AI Research Autopilot":
             latest_activity.error("Autonomous research stopped safely.")
             st.error(str(exc))
         except Exception as exc:
+            st.session_state["til_auto_research_last_attempt"] = {
+                "status": "failed",
+                "started_at": attempt_started_at,
+                "stopped_at": utc_now().isoformat(),
+                "error": str(exc),
+            }
             elapsed = format_elapsed(time.monotonic() - started_at)
             auto_progress.progress(
                 max(0.01, estimator.fraction),
@@ -1730,6 +1754,19 @@ elif module == "AI Research Autopilot":
 
     if current_auto:
         st.divider()
+        last_attempt = st.session_state.get("til_auto_research_last_attempt") or {}
+        attempt_status = str(last_attempt.get("status") or "")
+        attempt_started = str(last_attempt.get("started_at") or "")
+        report_generated = str(current_auto.get("generated_at") or "")
+        if (
+            attempt_status in {"stopped", "failed"}
+            and attempt_started
+            and (not report_generated or attempt_started > report_generated)
+        ):
+            st.warning(
+                "The leaderboard below is from the previous completed research run. "
+                "The newest attempt stopped before it could replace these results."
+            )
         st.markdown("### Latest autonomous leaderboard")
         universe = current_auto.get("universe") or {}
         sampled_count = (
@@ -1737,7 +1774,12 @@ elif module == "AI Research Autopilot":
             if universe.get("symbols")
             else universe.get("population_size", "—")
         )
+        run_status = str(current_auto.get("run_status") or "complete").replace("_", " ")
         st.caption(
+            f"Run: {run_status} · "
+            f"deep attempted: {current_auto.get('deep_strategies_attempted', current_auto.get('deep_strategies_tested', '—'))} · "
+            f"completed: {current_auto.get('deep_strategies_tested', '—')} · "
+            f"skipped: {current_auto.get('deep_strategies_failed', 0)} · "
             f"Universe: {universe.get('source') or '—'} · "
             f"sampled stocks: {sampled_count} · "
             f"active sampled: {universe.get('active_sampled', '—')} · "
@@ -1746,6 +1788,18 @@ elif module == "AI Research Autopilot":
             f"history horizon: {current_auto.get('point_in_time_horizon_years', '—')} years · "
             f"generated: {current_auto.get('generated_at') or '—'}"
         )
+        failed_finalists = current_auto.get("failed_finalists") or []
+        if failed_finalists:
+            with st.expander(
+                f"Skipped deep-research finalists ({len(failed_finalists)})",
+                expanded=False,
+            ):
+                for failed in failed_finalists:
+                    st.write(
+                        f"**{failed.get('strategy_name') or 'Strategy'}** — "
+                        f"{failed.get('error') or 'Research step could not be completed.'}"
+                    )
+
         result_rows = []
         for result in current_auto.get("results") or []:
             strength = result.get("strength") or {}
