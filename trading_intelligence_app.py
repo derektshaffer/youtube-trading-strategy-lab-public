@@ -23,7 +23,9 @@ from trading_progress_ui import (
     AutonomousResearchEtaEstimator,
     AutonomousResearchProgressEstimator,
     AutonomousResearchTimingRecorder,
+    LongTaskMonitor,
     format_eta_range,
+    session_task_profiles,
 )
 from trading_auto_research import (
     merge_autonomous_research_into_library,
@@ -276,6 +278,34 @@ def persistence_summary() -> dict[str, Any]:
             pass
         status = store.persistence_status(verify=True)
     return status
+
+
+def long_task_monitor(task_key: str) -> LongTaskMonitor:
+    return LongTaskMonitor(
+        task_key=task_key,
+        profiles=session_task_profiles(st.session_state, task_key),
+    )
+
+
+def update_task_bar(
+    bar,
+    monitor: LongTaskMonitor,
+    fraction: float,
+    message: str,
+) -> None:
+    bar.progress(
+        max(0.01, min(0.999, float(fraction))),
+        text=monitor.text(fraction, message),
+    )
+
+
+def complete_task_bar(
+    bar,
+    monitor: LongTaskMonitor,
+    message: str,
+) -> None:
+    monitor.finish(st.session_state)
+    bar.progress(1.0, text=f"{message} · 100%")
 
 
 def source_label(strategy: dict[str, Any]) -> str:
