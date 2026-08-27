@@ -305,6 +305,186 @@ def canonicalize_existing_strategy(strategy: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+RULE_COMPILER_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "suggestions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "source_requirement": {"type": "string"},
+                    "target_rule": {
+                        "type": "string",
+                        "enum": list(MACHINE_RULE_SCHEMA["properties"].keys()),
+                    },
+                    "proposed_value": {"type": "string"},
+                    "is_research_assumption": {"type": "boolean"},
+                    "rationale": {"type": "string"},
+                    "confidence": {"type": "number"},
+                },
+                "required": [
+                    "source_requirement",
+                    "target_rule",
+                    "proposed_value",
+                    "is_research_assumption",
+                    "rationale",
+                    "confidence",
+                ],
+            },
+        },
+        "unmapped_requirements": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["summary", "suggestions", "unmapped_requirements"],
+}
+
+RULE_COMPILER_PROMPT = """You are a strategy-rule compiler for a trading research application.
+The supplied strategy was extracted from an educational source.
+
+Your goal is NOT to rewrite the source or claim the strategy is profitable. Identify qualitative
+requirements that can reasonably be represented by the application's existing machine-rule fields.
+
+Strict rules:
+- Never replace an existing explicit machine rule from the source.
+- If the source did not give an exact numeric/time threshold, any concrete threshold you propose is
+  a RESEARCH ASSUMPTION. Set is_research_assumption=true.
+- Do not claim an assumed threshold came from the author.
+- Prefer leaving a requirement unmapped over forcing a bad proxy.
+- Only use target_rule values provided by the schema.
+- proposed_value must be a plain value string such as "3.0", "true", "15", or "10:30".
+- Keep tape-reading, Level 2, float, borrow, proprietary indicators, subjective catalyst quality,
+  and other unsupported concepts in unmapped_requirements unless an existing rule is a defensible proxy.
+- The user must explicitly accept suggestions later. Nothing here changes the strategy automatically.
+
+Return only JSON matching the supplied schema.
+"""
+
+
+def coerce_machine_rule_value(rule_name: str, raw_value: Any) -> Any:
+    """Parse a compiler suggestion using the same rule types as normalize_machine_rules."""
+    if rule_name not in MACHINE_RULE_SCHEMA["properties"]:
+        raise AppError(f"Unsupported machine rule: {rule_name}")
+    probe = {name: None for name in MACHINE_RULE_SCHEMA["properties"]}
+    probe[rule_name] = raw_value
+    parsed = normalize_machine_rules(probe).get(rule_name)
+    if parsed is None:
+        raise AppError(f"{raw_value!r} is not a valid value for {rule_name}.")
+    return parsed
+
+
+def effective_strategy_for_research(strategy: dict[str, Any]) -> dict[str, Any]:
+    """Overlay explicitly accepted research assumptions without mutating source-extracted rules."""
+    item = dict(strategy or {})
+    source_rules = normalize_machine_rules(item.get("machine_rules"))
+    overrides = item.get("research_rule_overrides")
+    if isinstance(overrides, dict):
+        for name, value in normalize_machine_rules(overrides).items():
+            # Source-explicit values remain authoritative. Research assumptions only fill gaps.
+            if source_rules.get(name) is None and value is not None:
+                source_rules[name] = value
+    item["machine_rules"] = source_rules
+    item["using_research_overrides"] = bool(
+        isinstance(overrides, dict)
+        and any(value is not None for value in normalize_machine_rules(overrides).values())
+    )
+    return item
+
+
+class GeminiRuleCompiler:
+    """Suggest reviewable measurable proxies for qualitative strategy requirements."""
+
+    def __init__(self, api_key: str, model: str = DEFAULT_GEMINI_MODEL):
+        key = str(api_key or "").strip()
+        if not key:
+            raise AppError("Add GEMINI_API_KEY to Streamlit Secrets before using the Rule Compiler.")
+        self.api_key = key
+        self.model = str(model or DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
+
+    @property
+    def headers(self) -> dict[str, str]:
+        return {
+            "x-goog-api-key": self.api_key,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+    def compile(self, strategy: dict[str, Any]) -> dict[str, Any]:
+        model_name = self.model.removeprefix("models/")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", model_name):
+            raise AppError("GEMINI_MODEL must contain a valid Gemini model name.")
+
+        source_rules = {
+            key: value
+            for key, value in normalize_machine_rules(strategy.get("machine_rules")).items()
+            if value is not None
+        }
+        context = {
+            "name": strategy.get("name"),
+            "category": strategy.get("category"),
+            "summary": strategy.get("summary"),
+            "indicators": strategy.get("indicators") or [],
+            "entry_conditions": strategy.get("entry_conditions") or [],
+            "exit_conditions": strategy.get("exit_conditions") or [],
+            "risk_rules": strategy.get("risk_rules") or [],
+            "avoid_conditions": strategy.get("avoid_conditions") or [],
+            "market_context": strategy.get("market_context") or [],
+            "stock_selection": strategy.get("stock_selection") or [],
+            "unresolved_rules": strategy.get("unresolved_rules") or [],
+            "explicit_machine_rules": source_rules,
+        }
+        prompt = RULE_COMPILER_PROMPT + "\n\nSTRATEGY JSON:\n" + json.dumps(context, indent=2, default=str)
+        response = _json_request(
+            f"{GEMINI_GENERATE_CONTENT_URL}/{model_name}:generateContent",
+            self.headers,
+            method="POST",
+            payload={
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "responseFormat": {
+                        "text": {"mimeType": "APPLICATION_JSON", "schema": RULE_COMPILER_SCHEMA}
+                    }
+                },
+            },
+            timeout=180,
+        )
+        raw = _extract_generate_content_text(response)
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise AppError("Gemini returned Rule Compiler output that was not valid JSON.") from exc
+        if not isinstance(parsed, dict):
+            raise AppError("Gemini returned an unexpected Rule Compiler format.")
+
+        cleaned: list[dict[str, Any]] = []
+        for suggestion in parsed.get("suggestions") or []:
+            if not isinstance(suggestion, dict):
+                continue
+            target = str(suggestion.get("target_rule") or "").strip()
+            if target not in MACHINE_RULE_SCHEMA["properties"] or target in source_rules:
+                continue
+            try:
+                parsed_value = coerce_machine_rule_value(target, suggestion.get("proposed_value"))
+            except AppError:
+                continue
+            cleaned.append(
+                {
+                    **suggestion,
+                    "target_rule": target,
+                    "parsed_value": parsed_value,
+                    "confidence": max(
+                        0.0,
+                        min(100.0, safe_float(suggestion.get("confidence"), 0.0) or 0.0),
+                    ),
+                    "is_research_assumption": bool(suggestion.get("is_research_assumption", True)),
+                }
+            )
+        parsed["suggestions"] = cleaned
+        parsed["generated_at"] = _utc_iso()
+        parsed["model"] = self.model
+        return parsed
+
+
 class GeminiBookAnalyzer:
     """Chunked document strategy extractor using the same Gemini service as the YouTube lab."""
 
@@ -531,8 +711,8 @@ def merge_strategies(
 
 
 def effective_strategy_for_live(strategy: dict[str, Any]) -> dict[str, Any]:
-    """Use the frozen validated rule set downstream without overwriting source-extracted rules."""
-    item = dict(strategy or {})
+    """Use frozen validated rules live; otherwise use current reviewed research rules."""
+    item = effective_strategy_for_research(strategy)
     validated = item.get("validated_rules")
     if (
         str(item.get("validation_status") or "").lower() == "validated"
@@ -541,6 +721,5 @@ def effective_strategy_for_live(strategy: dict[str, Any]) -> dict[str, Any]:
         item["machine_rules"] = normalize_machine_rules(validated)
         item["using_validated_rules"] = True
     else:
-        item["machine_rules"] = normalize_machine_rules(item.get("machine_rules"))
         item["using_validated_rules"] = False
     return item
