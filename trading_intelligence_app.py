@@ -859,10 +859,10 @@ elif module == "AI Research Autopilot":
     )
 
     st.info(
-        "The first stage samples broadly from Alpaca's active U.S. equities and always includes current "
-        "movers/most-active stocks. It uses daily history only to find opportunity-rich candidates; "
-        "future P/L is not used to choose those stocks. Delisted stocks are still missing, so survivorship "
-        "bias is disclosed in every run."
+        "The first stage now samples from Alpaca's active + inactive exchange-listed U.S. equity master "
+        "catalog and reserves part of every run for inactive/delisted names. Dated daily bars infer when "
+        "each symbol actually existed; future trade P/L is never used to choose candidate stocks. Deep "
+        "testing then downloads bounded intraday windows around the actual historical opportunity dates."
     )
 
     run_auto = st.button(
@@ -919,9 +919,17 @@ elif module == "AI Research Autopilot":
         st.divider()
         st.markdown("### Latest autonomous leaderboard")
         universe = current_auto.get("universe") or {}
+        sampled_count = (
+            len(universe.get("symbols") or [])
+            if universe.get("symbols")
+            else universe.get("population_size", "—")
+        )
         st.caption(
             f"Universe: {universe.get('source') or '—'} · "
-            f"sampled stocks: {len(universe.get('symbols') or []) if universe.get('symbols') else universe.get('population_size', '—')} · "
+            f"sampled stocks: {sampled_count} · "
+            f"active sampled: {universe.get('active_sampled', '—')} · "
+            f"inactive sampled: {universe.get('inactive_sampled', '—')} · "
+            f"symbols with historical bars: {universe.get('symbols_with_historical_bars', '—')} · "
             f"generated: {current_auto.get('generated_at') or '—'}"
         )
         result_rows = []
@@ -972,10 +980,17 @@ elif module == "AI Research Autopilot":
                             [
                                 {
                                     "Stock": item.get("symbol"),
+                                    "Current status": (result.get("asset_status_by_symbol") or {}).get(item.get("symbol")) or "—",
                                     "Opportunity days": item.get("event_count"),
                                     "Discovery score": item.get("score"),
                                     "Peak move %": item.get("peak_directional_move_pct"),
                                     "Peak RVOL": item.get("peak_relative_volume"),
+                                    "Observed from": ((result.get("symbol_lifecycles") or {}).get(item.get("symbol")) or {}).get("first_observed_date"),
+                                    "Observed through": ((result.get("symbol_lifecycles") or {}).get(item.get("symbol")) or {}).get("last_observed_date"),
+                                    "Research window": (
+                                        f"{((result.get('research_windows') or {}).get(item.get('symbol')) or {}).get('start_date', '—')} → "
+                                        f"{((result.get('research_windows') or {}).get(item.get('symbol')) or {}).get('end_date', '—')}"
+                                    ),
                                     "Selection": item.get("candidate_selection_mode"),
                                 }
                                 for item in opportunities
@@ -991,7 +1006,7 @@ elif module == "AI Research Autopilot":
                 else:
                     st.success(
                         "Passed anchor validation, untouched holdout, stress, cross-stock breadth, "
-                        "trade-count, and available walk-forward gates."
+                        "trade-count, available walk-forward gates, and the point-in-time universe gate."
                     )
 
         for limitation in current_auto.get("limitations") or []:
