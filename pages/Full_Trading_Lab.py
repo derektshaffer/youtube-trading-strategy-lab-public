@@ -300,6 +300,6 @@ exec(code, globals(), globals())
 
 with st.sidebar:
     st.divider()
-    st.caption("Build 2026-08-26.4")
+    st.caption("Build 2026-08-26.5")
     if st.button("← Trading Dashboard", key="full_lab_back_dashboard", use_container_width=True):
         st.switch_page("youtube_strategy_app.py")
