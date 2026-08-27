@@ -172,6 +172,189 @@ def strategy_fingerprint(source_id: str, name: str, category: str = "") -> str:
     return "til-" + hashlib.sha256(material).hexdigest()[:20]
 
 
+GENERIC_SOURCE_TITLES = {
+    "",
+    "uploaded source",
+    "untitled",
+    "untitled source",
+    "unknown source",
+    "existing trading lab strategy",
+}
+
+
+def _is_generic_source_title(value: Any) -> bool:
+    return str(value or "").strip().casefold() in GENERIC_SOURCE_TITLES
+
+
+def _title_author_from_filename(filename: str) -> tuple[str, str]:
+    """Recover a readable title/author from older uploaded-file records."""
+    stem = Path(str(filename or "").strip()).stem.strip()
+    if not stem:
+        return "", ""
+
+    # Strip common archive/download-site suffixes without touching real title text.
+    archive_pattern = re.compile(
+        r"\s*\((?=[^)]*(?:z-library|z-lib|1lib|libgen|pdfdrive|annas-archive))[^)]*\)\s*$",
+        re.IGNORECASE,
+    )
+    while archive_pattern.search(stem):
+        stem = archive_pattern.sub("", stem).strip()
+
+    author = ""
+    trailing = re.search(r"\s*\(([A-Za-z][A-Za-z .,'’\-]{2,80})\)\s*$", stem)
+    if trailing:
+        candidate = trailing.group(1).strip()
+        words = [word for word in candidate.split() if word]
+        if 1 < len(words) <= 6 and not any(
+            token in candidate.casefold()
+            for token in ("edition", "revised", "volume", "vol.", "chapter", "part")
+        ):
+            author = candidate
+            stem = stem[: trailing.start()].strip()
+
+    return stem, author
+
+
+def reconcile_knowledge_sources(
+    library: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    """Make Saved Sources a durable catalog of every real source represented by saved strategies.
+
+    Older versions of the Trading Lab persisted YouTube/book provenance only on strategy
+    records. Newer book ingestion writes a dedicated knowledge_sources record. This
+    reconciliation repairs generic upload titles and reconstructs missing source records
+    without asking the user to re-upload or re-analyze material.
+    """
+    result = dict(library or {})
+    sources = [
+        dict(item)
+        for item in result.get("knowledge_sources") or []
+        if isinstance(item, dict)
+    ]
+    strategies = [
+        dict(item)
+        for item in result.get("strategies") or []
+        if isinstance(item, dict)
+    ]
+    changed = False
+
+    source_index = {
+        str(item.get("id") or "").strip(): item
+        for item in sources
+        if str(item.get("id") or "").strip()
+    }
+
+    # Repair old "Uploaded source" book records from the filename that was already saved.
+    for source in sources:
+        source_id = str(source.get("id") or "").strip()
+        if _is_generic_source_title(source.get("title")) and source.get("filename"):
+            recovered_title, recovered_author = _title_author_from_filename(
+                str(source.get("filename") or "")
+            )
+            if recovered_title and recovered_title != str(source.get("title") or ""):
+                source["title"] = recovered_title
+                changed = True
+            if recovered_author and not str(source.get("author") or "").strip():
+                source["author"] = recovered_author
+                changed = True
+
+        # Keep strategy provenance labels aligned with a repaired source record.
+        resolved_title = str(source.get("title") or "").strip()
+        resolved_author = str(source.get("author") or "").strip()
+        if source_id and resolved_title:
+            for strategy in strategies:
+                if str(strategy.get("source_id") or "").strip() != source_id:
+                    continue
+                if (
+                    _is_generic_source_title(strategy.get("source_title"))
+                    and not _is_generic_source_title(resolved_title)
+                ):
+                    strategy["source_title"] = resolved_title
+                    changed = True
+                if resolved_author and not str(strategy.get("source_author") or "").strip():
+                    strategy["source_author"] = resolved_author
+                    changed = True
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for strategy in strategies:
+        source_id = str(strategy.get("source_id") or "").strip()
+        if not source_id:
+            continue
+        source_type = str(strategy.get("source_type") or "").strip().casefold()
+        source_url = str(strategy.get("source_url") or "").strip()
+
+        # Do not turn cross-source/synthetic strategy records into fake research sources.
+        if source_type == "youtube" and not (
+            source_url or source_id.casefold().startswith("yt-")
+        ):
+            continue
+        if source_type in {"synthetic", "strategy_dna", "research_synthesis"}:
+            continue
+        grouped.setdefault(source_id, []).append(strategy)
+
+    for source_id, group in grouped.items():
+        unique_strategy_ids = {
+            str(item.get("id") or "").strip()
+            for item in group
+            if str(item.get("id") or "").strip()
+        }
+        strategy_count = len(unique_strategy_ids) or len(group)
+
+        if source_id in source_index:
+            source = source_index[source_id]
+            if int(source.get("strategy_count") or 0) != strategy_count:
+                source["strategy_count"] = strategy_count
+                changed = True
+            continue
+
+        def best_text(field: str) -> str:
+            values = [
+                str(item.get(field) or "").strip()
+                for item in group
+                if str(item.get(field) or "").strip()
+            ]
+            if field == "source_title":
+                values = [value for value in values if not _is_generic_source_title(value)]
+            return values[0] if values else ""
+
+        source_type = best_text("source_type") or "research_source"
+        source_title = best_text("source_title")
+        source_author = best_text("source_author") or best_text("creator")
+        source_url = best_text("source_url")
+        if not source_title:
+            source_title = (
+                "Recovered YouTube source"
+                if source_type.casefold() == "youtube"
+                else "Recovered research source"
+            )
+
+        analyzed_at = best_text("analyzed_at") or best_text("created_at") or _utc_iso()
+        recovered = {
+            "id": source_id,
+            "source_type": source_type,
+            "title": source_title,
+            "author": source_author,
+            "source_url": source_url,
+            "summary": (
+                f"Recovered from {strategy_count} saved strategy record"
+                + ("" if strategy_count == 1 else "s")
+                + " already stored in the Trading Intelligence Library."
+            ),
+            "analyzed_at": analyzed_at,
+            "analysis_stage": "complete",
+            "analysis_in_progress": False,
+            "recovered_from_strategies": True,
+            "strategy_count": strategy_count,
+        }
+        sources.append(recovered)
+        source_index[source_id] = recovered
+        changed = True
+
+    result["knowledge_sources"] = sources
+    result["strategies"] = strategies
+    return result, changed
+
+
 def extract_source_text(filename: str, payload: bytes) -> tuple[str, dict[str, Any]]:
     """Extract text from PDF, TXT, or Markdown while preserving coarse page markers."""
     if not payload:
