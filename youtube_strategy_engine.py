@@ -3864,7 +3864,7 @@ def _optimize_stock_strategies_historical(
     if len(tickers) != 1:
         raise AppError("Enter exactly one valid stock ticker to optimize.")
     target_symbol = tickers[0]
-    frame = bars_to_frame(rows, include_extended_hours=settings.allow_extended_hours)
+    frame = bars_to_frame(rows, include_extended_hours=True)
     sessions = list(dict.fromkeys(frame.get("session", pd.Series(dtype=str)).tolist()))
     if not sessions:
         raise AppError("No historical candles were available for optimization.")
@@ -4268,7 +4268,7 @@ def _screen_historical_strategies(
     Each strategy gets the same small stop/target sweep. This is intentionally only a
     screening stage; the winners are fully optimized afterward.
     """
-    frame = bars_to_frame(rows, include_extended_hours=settings.allow_extended_hours)
+    frame = bars_to_frame(rows, include_extended_hours=True)
     if frame.empty:
         return []
     ranking_minimum_historical_trades = (
@@ -4364,7 +4364,7 @@ def _optimize_stock_timeframes_historical(
     # Stage 1: screen all saved strategies on 5-minute candles with a tiny, equal grid.
     if progress:
         progress(20, 1000, f"Screening {len(strategies)} saved strategies…")
-    five_minute_rows = resample_intraday_bars(one_minute_rows, "5Min", include_extended_hours=settings.allow_extended_hours)
+    five_minute_rows = resample_intraday_bars(one_minute_rows, "5Min", include_extended_hours=True)
     strategy_screen = _screen_historical_strategies(
         five_minute_rows,
         strategies,
@@ -4397,7 +4397,7 @@ def _optimize_stock_timeframes_historical(
     screening_optimizer.validate()
     screened_intervals: list[tuple[str, list[dict[str, Any]], dict[str, Any]]] = []
     for index, interval in enumerate(requested):
-        interval_rows = resample_intraday_bars(one_minute_rows, interval, include_extended_hours=settings.allow_extended_hours)
+        interval_rows = resample_intraday_bars(one_minute_rows, interval, include_extended_hours=True)
         if progress:
             progress(200 + index * 80, 1000, f"Comparing {interval} candles…")
         report = _optimize_stock_strategies_historical(
@@ -4513,7 +4513,7 @@ def optimize_stock_strategies(
     if len(tickers) != 1:
         raise AppError("Enter exactly one valid stock ticker to optimize.")
     target_symbol = tickers[0]
-    frame = bars_to_frame(rows, include_extended_hours=settings.allow_extended_hours)
+    frame = bars_to_frame(rows, include_extended_hours=True)
     sessions = list(dict.fromkeys(frame.get("session", pd.Series(dtype=str)).tolist()))
     if len(sessions) < 3:
         raise AppError(
@@ -5043,7 +5043,7 @@ def optimize_stock_timeframes(
         interval_rows = resample_intraday_bars(
             one_minute_rows,
             interval,
-            include_extended_hours=settings.allow_extended_hours,
+            include_extended_hours=True,
         )
 
         def interval_progress(completed: int, total: int, message: str) -> None:
