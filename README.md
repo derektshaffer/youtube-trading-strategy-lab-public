@@ -109,6 +109,7 @@ It is intentionally separate from the current YouTube Trading Lab home screen. T
 
 - PDF/TXT/Markdown knowledge-source ingestion
 - resilient chunked Gemini extraction for books and research documents, with retry/fallback/resume support
+- model-role routing for books: Gemini 3.6 Flash handles normal bulk extraction, Gemini 3.7 Flash is reserved for genuinely difficult/ambiguous sections, and Gemini 3.5/2.5 remain reliability fallbacks
 - automatic title/author detection when the source clearly identifies them
 - AI Autopilot that converts qualitative lessons into clearly labeled research assumptions
 - source-rule protection so AI assumptions never overwrite thresholds explicitly stated by the author
@@ -124,13 +125,14 @@ Normal book workflow:
 2. Leave title, author, and research focus blank unless you want to override or narrow the AI.
 3. Keep **AI Autopilot** and **Continue automatically into historical opportunity discovery + validation** enabled.
 4. Click **Analyze source and extract strategies** once.
-5. The AI extracts strategies, preserves source evidence, and creates clearly labeled research assumptions where needed.
-6. The Historical Research Autopilot builds a point-in-time-capable Alpaca universe automatically from the exchange-listed U.S. equity master catalog, including both active and inactive/delisted symbols. A fixed share of each broad sample is reserved for inactive names while current movers/most-active stocks are retained for present-day coverage.
-7. About five years of daily history is used only to identify stocks and dates that previously exhibited strategy-relevant conditions. Actual dated bar availability is used to infer when each symbol existed. Future trade P/L is not used for candidate selection.
-8. Instead of forcing every strategy into the latest 60 days, the Lab selects bounded historical research windows around the strongest actual opportunity clusters for each finalist stock. Those windows can be years in the past and can belong to symbols that are inactive today.
-9. The strongest research finalists receive intraday optimization, untouched holdout testing, cost stress testing, rolling walk-forward checks, and frozen-rule cross-stock testing inside those historical event windows.
-10. Results are saved automatically into the strategy and validation libraries. Strategies that miss any autonomous validation gate remain research-only; qualifying strategies receive a frozen validated rule set.
-11. Open **AI Research Autopilot** any time to inspect the automatic leaderboard, including current asset status, observed historical lifespan, and exact research window for each finalist.
+5. Gemini 3.6 Flash performs the normal bulk book extraction. Only sections with low confidence, conflicting/ambiguous requirements, evidence gaps, or unusually difficult formalization are escalated to Gemini 3.7 Flash for a specialist second pass. If 3.7 is unavailable, the successful 3.6 extraction is kept rather than discarded.
+6. The AI extracts strategies, preserves source evidence, and creates clearly labeled research assumptions where needed.
+7. The Historical Research Autopilot builds a point-in-time-capable Alpaca universe automatically from the exchange-listed U.S. equity master catalog, including both active and inactive/delisted symbols. A fixed share of each broad sample is reserved for inactive names while current movers/most-active stocks are retained for present-day coverage.
+8. About five years of daily history is used only to identify stocks and dates that previously exhibited strategy-relevant conditions. Actual dated bar availability is used to infer when each symbol existed. Future trade P/L is not used for candidate selection.
+9. Instead of forcing every strategy into the latest 60 days, the Lab selects bounded historical research windows around the strongest actual opportunity clusters for each finalist stock. Those windows can be years in the past and can belong to symbols that are inactive today.
+10. The strongest research finalists receive intraday optimization, untouched holdout testing, cost stress testing, rolling walk-forward checks, and frozen-rule cross-stock testing inside those historical event windows.
+11. Results are saved automatically into the strategy and validation libraries. Strategies that miss any autonomous validation gate remain research-only; qualifying strategies receive a frozen validated rule set.
+12. Open **AI Research Autopilot** any time to inspect the automatic leaderboard, including current asset status, observed historical lifespan, and exact research window for each finalist.
 
 Point-in-time limitation: historical membership is inferred from Alpaca's retained active + inactive asset master and actual dated bar history. This materially reduces survivorship bias, but extremely old symbols missing from Alpaca's retained catalog/history, ticker changes, mergers, and corporate actions can still create gaps or separate ticker identities.
 
