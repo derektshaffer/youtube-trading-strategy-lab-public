@@ -45,7 +45,7 @@ BOOK_SPECIALIST_UNRESOLVED_THRESHOLD = 4
 BOOK_TRANSIENT_RETRIES_PER_MODEL = 1
 BOOK_TRANSIENT_MAX_WAIT_SECONDS = 10
 BOOK_QUOTA_RETRIES = 1
-BOOK_QUOTA_MAX_WAIT_SECONDS = 90
+BOOK_QUOTA_MAX_WAIT_SECONDS = 60
 MAX_SOURCE_BYTES = 20 * 1024 * 1024
 MAX_SOURCE_CHARACTERS = 2_000_000
 DEFAULT_CHUNK_CHARACTERS = 72_000
@@ -1526,6 +1526,7 @@ class GeminiBookAnalyzer:
         completed_sections = 0
         models_used: list[str] = []
         failed_sections: dict[int, str] = {}
+        quota_circuit_open = False
 
         if isinstance(resume_state, dict):
             resume_chunk_count = int(safe_float(resume_state.get("chunk_count"), 0) or 0)
@@ -1650,7 +1651,7 @@ class GeminiBookAnalyzer:
                     strategies_by_key[key] = dict(raw)
 
         def analyze_section(index: int, chunk: str, *, retry_pass: bool = False) -> bool:
-            nonlocal completed_sections
+            nonlocal completed_sections, quota_circuit_open
             if not retry_pass and index in completed_section_indices:
                 self._emit_progress(
                     progress_callback,
@@ -1706,13 +1707,24 @@ class GeminiBookAnalyzer:
                 )
             except AppError as exc:
                 failed_sections[index] = str(exc)
-                self._emit_progress(
-                    progress_callback,
-                    index,
-                    len(chunks),
-                    f"Section {index} is still unavailable. Saving progress and continuing "
-                    "with the rest of the source before one final automatic retry…",
-                )
+                if provider_quota_reached(exc):
+                    quota_circuit_open = True
+                    self._emit_progress(
+                        progress_callback,
+                        index,
+                        len(chunks),
+                        f"All Gemini routes are still rate-limited after failover/cooldown. "
+                        f"Pausing at section {index} of {len(chunks)} instead of wasting more requests. "
+                        "Any completed sections are already saved.",
+                    )
+                else:
+                    self._emit_progress(
+                        progress_callback,
+                        index,
+                        len(chunks),
+                        f"Section {index} is still unavailable. Saving progress and continuing "
+                        "with the rest of the source before one final automatic retry…",
+                    )
                 return False
 
             self._write_cached_chunk(
@@ -1730,8 +1742,10 @@ class GeminiBookAnalyzer:
 
         for index, chunk in enumerate(chunks, start=1):
             analyze_section(index, chunk)
+            if quota_circuit_open:
+                break
 
-        if failed_sections:
+        if failed_sections and not quota_circuit_open:
             self._emit_progress(
                 progress_callback,
                 min(failed_sections),
@@ -1744,6 +1758,12 @@ class GeminiBookAnalyzer:
 
         if completed_sections == 0:
             details = next(iter(failed_sections.values()), "Gemini did not return any usable sections.")
+            if quota_circuit_open:
+                raise AppError(
+                    "The book upload and PDF text extraction succeeded, but every configured Gemini route "
+                    "is currently rate-limited. The app stopped after one cooldown instead of repeatedly "
+                    f"waiting through the whole book. Latest provider error: {details}"
+                )
             raise AppError(
                 "Gemini could not analyze any part of this source after model fallback, smaller-section "
                 f"retry, and a second pass. Latest provider error: {details}"
