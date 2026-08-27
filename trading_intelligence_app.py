@@ -147,8 +147,10 @@ def build_legacy_store() -> StrategyStore:
     return StrategyStore(cloud_backup=cloud)
 
 
-@st.cache_resource
 def intelligence_store() -> StrategyStore:
+    # Lightweight by design. Do not cache this object: Streamlit hot deploys can otherwise
+    # retain a StrategyStore created from an older class/configuration and keep using stale
+    # backup repository settings after the code has been fixed.
     return build_intelligence_store()
 
 
