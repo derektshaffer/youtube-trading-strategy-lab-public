@@ -463,12 +463,8 @@ def _family_summary(strategies: list[dict[str, Any]], family_id: int) -> dict[st
     ]
     categories = _unique([str(item.get("category") or "Uncategorized") for item in strategies])
     label_seed = structures[0] if structures else (categories[0] if categories else "Strategy")
-    family_strategy_ids = sorted(
-        str(item.get("id") or item.get("name") or "")
-        for item in strategies
-        if str(item.get("id") or item.get("name") or "").strip()
-    )
-    family_material = "|".join(family_strategy_ids) or "|".join(source_titles)
+    direction_signature = directions[0] if len(directions) == 1 else "mixed"
+    family_material = f"{direction_signature}|{label_seed.strip().casefold()}"
     stable_family_id = "dna-family-" + hashlib.sha256(
         family_material.encode("utf-8", errors="ignore")
     ).hexdigest()[:16]
@@ -726,14 +722,34 @@ def compile_candidate_blueprint(blueprint: dict[str, Any]) -> dict[str, Any]:
         "VWAP reclaim",
         "News catalyst",
     }
-    unresolved: list[str] = []
+    untranslated_dna: dict[str, list[str]] = {}
     for dimension in DNA_DIMENSIONS:
-        for concept in core_dna.get(dimension) or []:
-            if concept in mapped_concepts:
-                continue
+        values = [
+            concept
+            for concept in core_dna.get(dimension) or []
+            if concept not in mapped_concepts
+        ]
+        if values:
+            untranslated_dna[dimension] = values
+
+    # Only entry/context DNA belongs in unresolved_rules because that field controls whether
+    # autonomous testing is allowed. Risk/exit/execution concepts remain visible in
+    # untranslated_dna without falsely making an otherwise testable candidate "unready".
+    unresolved_dimensions = (
+        "universe",
+        "catalyst",
+        "momentum",
+        "structure",
+        "context",
+        "market_regime",
+    )
+    unresolved: list[str] = []
+    for dimension in unresolved_dimensions:
+        values = untranslated_dna.get(dimension) or []
+        if values:
             unresolved.append(
-                f"Shared Strategy DNA still needs objective translation or direct testing: "
-                f"{DNA_LABELS[dimension]} — {concept}"
+                f"Shared Strategy DNA needs objective translation or direct testing — "
+                f"{DNA_LABELS[dimension]}: {', '.join(values)}"
             )
 
     structure = list(core_dna.get("structure") or [])
@@ -795,6 +811,7 @@ def compile_candidate_blueprint(blueprint: dict[str, Any]) -> dict[str, Any]:
         "compiler_assumptions": assumption_log,
         "candidate_rule_options": source_options,
         "strategy_dna": core_dna,
+        "untranslated_dna": untranslated_dna,
         "source_type": "cross_source_synthesis",
         "source_id": "synthesis:" + str(blueprint.get("family_id") or blueprint.get("id") or "candidate"),
         "source_title": f"Cross-source synthesis · {source_count} independent sources",
