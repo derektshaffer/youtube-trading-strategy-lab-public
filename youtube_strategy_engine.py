@@ -2908,10 +2908,18 @@ def run_backtest(
         for session_name, session_frame in data.groupby("session", sort=False):
             if session_frame.empty:
                 continue
-            first_close = safe_float(session_frame.iloc[0].get("close"))
-            if first_close is None:
-                continue
-            if first_close <= max_price and (min_price is None or first_close >= min_price):
+            first_row = session_frame.iloc[0]
+            first_close = safe_float(first_row.get("close"))
+            prior_regular_close = safe_float(first_row.get("previous_daily_close"))
+            qualifying_reference = next(
+                (
+                    value
+                    for value in (first_close, prior_regular_close)
+                    if value is not None and value <= max_price and (min_price is None or value >= min_price)
+                ),
+                None,
+            )
+            if qualifying_reference is not None:
                 price_extension_sessions.add(str(session_name))
 
     def close_position(position: dict[str, Any], raw_exit: float, exit_time: Any, reason: str) -> None:
@@ -4783,11 +4791,13 @@ def optimize_stock_timeframes(
     progress: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, Any]:
     """Choose candle size using the selected optimization objective."""
+    settings = backtest_settings or BacktestSettings()
+    settings.validate()
     optimizer = optimization_settings or OptimizationSettings()
     optimizer.validate()
     if optimizer.selection_mode == "historical_pnl":
         return _optimize_stock_timeframes_historical(
-            one_minute_rows, strategies, symbol, backtest_settings, optimizer,
+            one_minute_rows, strategies, symbol, settings, optimizer,
             timeframes=timeframes, progress=progress,
         )
     requested = list(dict.fromkeys(str(item) for item in timeframes))
@@ -4795,7 +4805,11 @@ def optimize_stock_timeframes(
         raise AppError("Select one or more supported candle intervals: 1Min, 5Min, or 15Min.")
     by_interval: list[tuple[str, list[dict[str, Any]], dict[str, Any]]] = []
     for interval_index, interval in enumerate(requested):
-        interval_rows = resample_intraday_bars(one_minute_rows, interval)
+        interval_rows = resample_intraday_bars(
+            one_minute_rows,
+            interval,
+            include_extended_hours=settings.allow_extended_hours,
+        )
 
         def interval_progress(completed: int, total: int, message: str) -> None:
             if progress:
@@ -4806,8 +4820,8 @@ def optimize_stock_timeframes(
             interval_rows,
             strategies,
             symbol,
-            backtest_settings,
-            optimization_settings,
+            settings,
+            optimizer,
             progress=interval_progress,
             finalize_holdout=False,
         )
