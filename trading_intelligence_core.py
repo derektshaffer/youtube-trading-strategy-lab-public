@@ -127,9 +127,15 @@ Your job is to identify distinct trading hypotheses and preserve what the author
 
 For every strategy or setup:
 - Capture stock-selection rules, catalyst/news requirements, price and liquidity filters,
-  relative volume, VWAP, trend, breakout/pullback/reclaim structure, time-of-day rules,
-  entry confirmation, stop placement, profit-taking, position management, and avoid conditions
-  whenever the source supports them.
+  relative volume, VWAP, prior-day/session conditions, trend, breakout/pullback/reclaim structure,
+  time-of-day rules, entry confirmation, stop placement, profit-taking, position management,
+  and avoid conditions whenever the source supports them.
+- If the source explicitly requires price to break through the previous trading day's high,
+  encode previous_day_high_breakout=true. This is a structural boolean and does not need a number.
+- Use min_previous_day_volume_ratio only when the author gives an exact prior-session activity
+  multiple. If the author only says "extremely active", "high volume", etc., leave the number null
+  and retain the qualitative requirement so Autopilot can create a labeled research assumption.
+- Use min_previous_day_change_pct only when the source gives an explicit prior-day move threshold.
 - Separate long, short, and ambiguous ideas.
 - Convert ONLY explicit, measurable thresholds into machine_rules. Never invent a numeric
   value merely to make a strategy testable.
@@ -267,6 +273,119 @@ def chunk_source_text(
     return chunks
 
 
+NATIVE_RULE_SCHEMA_VERSION = 2
+
+
+def upgrade_native_strategy_rules(strategy: dict[str, Any]) -> dict[str, Any]:
+    """Upgrade saved strategy text into newly supported rules without inventing author claims."""
+    item = dict(strategy or {})
+    rules = normalize_machine_rules(item.get("machine_rules"))
+    overrides = {
+        key: value
+        for key, value in normalize_machine_rules(item.get("research_rule_overrides")).items()
+        if value is not None
+    }
+    text_parts = [
+        item.get("name"),
+        item.get("summary"),
+        *(item.get("entry_conditions") or []),
+        *(item.get("stock_selection") or []),
+        *(item.get("market_context") or []),
+        *(item.get("unresolved_rules") or []),
+    ]
+    text = " ".join(str(value or "") for value in text_parts).casefold()
+    changed = False
+    explicit_migrations = list(item.get("native_explicit_rule_migrations") or [])
+
+    previous_high_language = bool(
+        re.search(
+            r"(?:previous|prior)\s+(?:trading\s+)?day(?:'s)?\s+high|yesterday(?:'s)?\s+high",
+            text,
+        )
+    )
+    breakout_language = any(
+        token in text
+        for token in ("breakout", "break out", "break above", "break over", "fresh breakout")
+    )
+    if (
+        rules.get("previous_day_high_breakout") is None
+        and previous_high_language
+        and breakout_language
+    ):
+        rules["previous_day_high_breakout"] = True
+        explicit_migrations.append(
+            {
+                "rule": "previous_day_high_breakout",
+                "value": True,
+                "basis": "Explicit saved source text describes a breakout through the previous trading day's high.",
+            }
+        )
+        changed = True
+
+    previous_session_language = bool(
+        re.search(r"(?:previous|prior)\s+(?:trading\s+)?(?:day|session)|yesterday", text)
+    )
+    unusual_activity_language = any(
+        phrase in text
+        for phrase in (
+            "extremely active",
+            "very active",
+            "unusually active",
+            "unusual volume",
+            "heavy volume",
+            "high volume",
+        )
+    )
+    if (
+        rules.get("min_previous_day_volume_ratio") is None
+        and overrides.get("min_previous_day_volume_ratio") is None
+        and previous_session_language
+        and unusual_activity_language
+    ):
+        # The source supplied a qualitative prior-session activity requirement but no
+        # number. Seed a neutral research hypothesis that the optimizer can vary.
+        overrides["min_previous_day_volume_ratio"] = 2.0
+        assumptions = list(item.get("compiler_assumptions") or [])
+        if not any(
+            isinstance(record, dict)
+            and record.get("target_rule") == "min_previous_day_volume_ratio"
+            for record in assumptions
+        ):
+            assumptions.append(
+                {
+                    "target_rule": "min_previous_day_volume_ratio",
+                    "value": 2.0,
+                    "source_requirement": "Qualitative requirement that the previous session was unusually/extremely active.",
+                    "rationale": (
+                        "2.0x is an automated starting research hypothesis, not an author-stated threshold. "
+                        "The optimizer is allowed to vary it."
+                    ),
+                    "confidence": 80.0,
+                    "accepted_at": _utc_iso(),
+                    "model": "native-rule-upgrade",
+                    "accepted_by": "ai_autopilot",
+                    "is_research_assumption": True,
+                }
+            )
+        item["compiler_assumptions"] = assumptions[-150:]
+        changed = True
+
+    item["machine_rules"] = rules
+    if overrides:
+        item["research_rule_overrides"] = normalize_machine_rules(overrides)
+    if explicit_migrations:
+        item["native_explicit_rule_migrations"] = explicit_migrations[-50:]
+    item["native_rule_schema_version"] = NATIVE_RULE_SCHEMA_VERSION
+
+    if changed:
+        item["validation_status"] = "unvalidated"
+        item["optimization_status"] = "not_run"
+        item.pop("validated_rules", None)
+        item.pop("validated_backtest_settings", None)
+        item.pop("validated_at", None)
+    return item
+
+
 def canonicalize_strategy(
     strategy: dict[str, Any],
     *,
@@ -311,6 +430,7 @@ def canonicalize_strategy(
     ):
         value = item.get(field)
         result[field] = list(value) if isinstance(value, list) else []
+    result = upgrade_native_strategy_rules(result)
     # Strategy DNA is a reusable research fingerprint, not a claim of profitability.
     # It is deterministically inferred from source-extracted fields and explicit rules so
     # older strategies gain the same structure without needing to re-read the source.
@@ -387,9 +507,16 @@ Strict rules:
 - Prefer leaving a requirement unmapped over forcing a bad proxy.
 - Only use target_rule values provided by the schema.
 - proposed_value must be a plain value string such as "3.0", "true", "15", or "10:30".
+- Map an explicit previous-day-high breakout structure to previous_day_high_breakout=true.
+- A qualitative requirement that the previous session was "extremely active", "high volume",
+  or similar can defensibly map to min_previous_day_volume_ratio as a RESEARCH ASSUMPTION.
+  Do not imply the chosen multiple came from the author.
+- A qualitative "strong prior-day move" can map to min_previous_day_change_pct only as a
+  RESEARCH ASSUMPTION when the context clearly refers to price appreciation.
 - Keep tape-reading, Level 2, float, borrow, proprietary indicators, subjective catalyst quality,
   and other unsupported concepts in unmapped_requirements unless an existing rule is a defensible proxy.
-- The user must explicitly accept suggestions later. Nothing here changes the strategy automatically.
+- High-confidence suggestions may be auto-applied by AI Autopilot as clearly labeled research
+  assumptions. They must never overwrite or masquerade as explicit source rules.
 
 Return only JSON matching the supplied schema.
 """
