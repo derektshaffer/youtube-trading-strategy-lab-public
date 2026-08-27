@@ -16,6 +16,7 @@ from live_strategy_runner_page import (
     paper_entry,
 )
 from simple_ml_filter import score_setup
+from trading_progress_ui import LongTaskMonitor, session_task_profiles
 from youtube_strategy_engine import AppError, safe_float
 
 
@@ -231,25 +232,45 @@ with st.expander("⚙️ Advanced settings", expanded=False):
     )
 
 analyze_disabled = not ticker or strategy is None
-analyze = st.button(
+analyze_slot = st.empty()
+analyze = analyze_slot.button(
     "🔎 Analyze setup",
     type="primary",
     use_container_width=True,
     disabled=analyze_disabled,
+    key="simple_analyze_setup",
 )
 
 if analyze:
+    analyze_slot.button(
+        "🔎 Analyzing…",
+        type="primary",
+        use_container_width=True,
+        disabled=True,
+        key="simple_analyze_setup_busy",
+    )
+    analyze_monitor = LongTaskMonitor(
+        "simple_setup_analysis",
+        session_task_profiles(st.session_state, "simple_setup_analysis"),
+    )
+    analyze_bar = st.progress(
+        0.05,
+        text=analyze_monitor.text(0.05, f"Preparing {ticker} analysis…"),
+    )
     st.session_state["simple_ticker"] = ticker
     st.session_state.pop("simple_execution", None)
     try:
         with st.status(f"Analyzing {ticker}…", expanded=True) as status:
             st.write("Checking the saved trading setup…")
+            analyze_bar.progress(0.20, text=analyze_monitor.text(0.20, "Checking saved strategy and live market data"))
             metrics, signal, warnings = current_signal(ticker, strategy)
+            analyze_bar.progress(0.48, text=analyze_monitor.text(0.48, "Live strategy checks complete"))
 
             ml_result = None
             ml_error = None
             if use_ml:
                 st.write("Comparing this setup with historical market patterns…")
+                analyze_bar.progress(0.58, text=analyze_monitor.text(0.58, "Comparing with historical market patterns"))
                 try:
                     ml_result = score_setup(
                         market_client(),
@@ -259,6 +280,7 @@ if analyze:
                         history_days=int(ml_history_days),
                         threshold=ml_threshold_pct / 100.0,
                     )
+                    analyze_bar.progress(0.86, text=analyze_monitor.text(0.86, "Historical pattern check complete"))
                 except AppError as error:
                     ml_error = str(error)
 
@@ -322,7 +344,10 @@ if analyze:
                 "max_open_positions": max_open_positions,
                 "one_entry_per_symbol_day": one_entry_per_symbol_day,
             }
+            analyze_bar.progress(0.95, text=analyze_monitor.text(0.95, "Finalizing combined decision"))
             status.update(label="Analysis complete", state="complete", expanded=False)
+            analyze_monitor.finish(st.session_state)
+            analyze_bar.progress(1.0, text="Analysis complete · 100%")
     except (AppError, PaperTradeError) as error:
         st.error(str(error))
 
