@@ -14,10 +14,124 @@ from trading_intelligence_core import (
     effective_strategy_for_live,
     effective_strategy_for_research,
     prepare_strategies_with_ai,
+    reconcile_knowledge_sources,
     research_readiness,
     upgrade_native_strategy_rules,
 )
 from youtube_strategy_engine import AppError
+
+
+class KnowledgeSourceReconciliationTests(unittest.TestCase):
+    def test_repairs_generic_book_title_and_author_from_saved_filename(self):
+        library = {
+            "knowledge_sources": [
+                {
+                    "id": "book-1",
+                    "source_type": "book_or_document",
+                    "title": "Uploaded source",
+                    "author": "",
+                    "filename": (
+                        "How to Day Trade A Detailed Guide to Day Trading Strategies "
+                        "(Ross Cameron) (z-library.sk, 1lib.sk, z-lib.sk).pdf"
+                    ),
+                }
+            ],
+            "strategies": [
+                {
+                    "id": "strategy-1",
+                    "source_id": "book-1",
+                    "source_type": "book_or_document",
+                    "source_title": "Uploaded source",
+                    "source_author": "",
+                }
+            ],
+        }
+
+        reconciled, changed = reconcile_knowledge_sources(library)
+
+        self.assertTrue(changed)
+        source = reconciled["knowledge_sources"][0]
+        self.assertEqual(
+            source["title"],
+            "How to Day Trade A Detailed Guide to Day Trading Strategies",
+        )
+        self.assertEqual(source["author"], "Ross Cameron")
+        self.assertEqual(
+            reconciled["strategies"][0]["source_title"],
+            source["title"],
+        )
+        self.assertEqual(
+            reconciled["strategies"][0]["source_author"],
+            "Ross Cameron",
+        )
+
+    def test_recovers_real_youtube_sources_from_saved_strategy_provenance(self):
+        library = {
+            "knowledge_sources": [],
+            "strategies": [
+                {
+                    "id": "yt-strategy-1",
+                    "source_id": "yt-abc",
+                    "source_type": "youtube",
+                    "source_title": "Entries and Exits for Momentum Day Trading",
+                    "source_author": "Ross Cameron",
+                    "source_url": "https://www.youtube.com/watch?v=abcdefghijk",
+                    "analyzed_at": "2026-08-27T00:31:44Z",
+                },
+                {
+                    "id": "yt-strategy-2",
+                    "source_id": "yt-abc",
+                    "source_type": "youtube",
+                    "source_title": "Entries and Exits for Momentum Day Trading",
+                    "source_author": "Ross Cameron",
+                    "source_url": "https://www.youtube.com/watch?v=abcdefghijk",
+                },
+                {
+                    "id": "synthetic-1",
+                    "source_id": "legacy-combined",
+                    "source_type": "youtube",
+                    "source_title": "Combined lessons from 1 analyzed video",
+                    "source_url": "",
+                },
+            ],
+        }
+
+        reconciled, changed = reconcile_knowledge_sources(library)
+
+        self.assertTrue(changed)
+        self.assertEqual(len(reconciled["knowledge_sources"]), 1)
+        source = reconciled["knowledge_sources"][0]
+        self.assertEqual(source["id"], "yt-abc")
+        self.assertEqual(source["source_type"], "youtube")
+        self.assertEqual(
+            source["title"],
+            "Entries and Exits for Momentum Day Trading",
+        )
+        self.assertEqual(source["author"], "Ross Cameron")
+        self.assertEqual(source["strategy_count"], 2)
+        self.assertTrue(source["recovered_from_strategies"])
+        self.assertEqual(source["analysis_stage"], "complete")
+
+    def test_reconciliation_is_stable_after_first_migration(self):
+        library = {
+            "knowledge_sources": [],
+            "strategies": [
+                {
+                    "id": "yt-strategy-1",
+                    "source_id": "yt-abc",
+                    "source_type": "youtube",
+                    "source_title": "Scalp Trading for Beginners",
+                    "source_url": "https://www.youtube.com/watch?v=abcdefghijk",
+                }
+            ],
+        }
+
+        first, changed = reconcile_knowledge_sources(library)
+        second, changed_again = reconcile_knowledge_sources(first)
+
+        self.assertTrue(changed)
+        self.assertFalse(changed_again)
+        self.assertEqual(first["knowledge_sources"], second["knowledge_sources"])
 
 
 class NativeRuleUpgradeTests(unittest.TestCase):
