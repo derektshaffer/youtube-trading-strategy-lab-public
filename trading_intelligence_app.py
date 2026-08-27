@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import time
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,12 @@ from trading_catalyst_core import (
     historical_news,
 )
 from trading_market_discovery import analyze_stock_strategies, scan_strategy_universe
-from trading_progress_ui import AutonomousResearchProgressEstimator
+from trading_progress_ui import (
+    AutonomousResearchEtaEstimator,
+    AutonomousResearchProgressEstimator,
+    AutonomousResearchTimingRecorder,
+    format_eta_range,
+)
 from trading_auto_research import (
     merge_autonomous_research_into_library,
     run_autonomous_research,
@@ -1669,6 +1675,11 @@ elif module == "AI Research Autopilot":
         )
 
         attempt_started_at = utc_now().isoformat()
+        timing_started = time.monotonic()
+        timing_recorder = AutonomousResearchTimingRecorder()
+        eta_estimator = AutonomousResearchEtaEstimator.from_research_runs(
+            library.get("research_runs") or []
+        )
         st.session_state["til_auto_research_last_attempt"] = {
             "status": "running",
             "started_at": attempt_started_at,
@@ -1681,7 +1692,8 @@ elif module == "AI Research Autopilot":
         )
         st.caption(
             "Progress is estimated because API downloads, optimization, and walk-forward stages "
-            "do not all take the same amount of time."
+            "do not all take the same amount of time. Time remaining is learned from completed "
+            "Autopilot runs and is shown as a range rather than a fake countdown."
         )
 
         st.markdown("**Latest activity**")
@@ -1700,9 +1712,21 @@ elif module == "AI Research Autopilot":
                 del activity_log[:-250]
 
             fraction = estimator.update(text)
+            current_elapsed = time.monotonic() - timing_started
+            timing_recorder.record(fraction, current_elapsed, text)
+            eta_range = eta_estimator.estimate_range(
+                fraction,
+                current_elapsed_seconds=current_elapsed,
+            )
+            eta_text = format_eta_range(eta_range)
+            progress_text = f"Estimated progress: {estimator.percent}%"
+            if eta_text:
+                progress_text += f" · Estimated time remaining: {eta_text}"
+            else:
+                progress_text += " · Estimating time remaining…"
             auto_progress.progress(
                 max(0.01, fraction),
-                text=f"Estimated progress: {estimator.percent}%",
+                text=progress_text,
             )
 
             # Keep the compact panel focused on the newest work so the user never has to scroll it.
@@ -1723,6 +1747,18 @@ elif module == "AI Research Autopilot":
                 progress=update_auto_activity,
             )
             update_auto_activity("Saving autonomous research results…")
+            total_seconds = time.monotonic() - timing_started
+            universe_info = report.get("universe") or {}
+            report["timing_profile"] = timing_recorder.finish(
+                total_seconds,
+                deep_strategies_attempted=int(report.get("deep_strategies_attempted") or 0),
+                universe_sample_size=int(
+                    universe_info.get("sampled_stocks")
+                    or universe_info.get("sample_size")
+                    or universe_info.get("requested_sample_size")
+                    or 0
+                ),
+            )
             data = merge_autonomous_research_into_library(load_library(), report)
             intelligence_store().save(data)
             st.session_state["til_auto_research_result"] = report
