@@ -2890,20 +2890,47 @@ def add_indicators(frame: pd.DataFrame, strategy: dict[str, Any]) -> pd.DataFram
     data["vwap"] = data["cum_dollar_volume"].div(data["cum_volume"].replace(0, float("nan")))
     data["vwap_distance_pct"] = (data["close"].div(data["vwap"]) - 1.0) * 100.0
     data["previous_close"] = data.groupby("session", sort=False)["close"].shift(1)
+    data["previous_bar_close"] = data["close"].shift(1)
     data["previous_high"] = data.groupby("session", sort=False)["high"].shift(1)
     data["previous_vwap"] = data.groupby("session", sort=False)["vwap"].shift(1)
 
-    # Day-change should stay anchored to the prior regular-session close even when
-    # the backtest includes premarket and after-hours candles.
+    # Daily-reference rules use completed regular sessions when available. This keeps
+    # prior-day high/change/activity fully known before the current-session entry bar.
     all_session_close = data.groupby("session", sort=False)["close"].last()
+    all_session_high = data.groupby("session", sort=False)["high"].max()
+    all_session_volume = data.groupby("session", sort=False)["volume"].sum()
     if "is_regular_hours" in data.columns:
         regular = data[data["is_regular_hours"].fillna(False)]
         regular_close = regular.groupby("session", sort=False)["close"].last()
+        regular_high = regular.groupby("session", sort=False)["high"].max()
+        regular_volume = regular.groupby("session", sort=False)["volume"].sum()
         daily_close = regular_close.reindex(all_session_close.index).fillna(all_session_close)
+        daily_high = regular_high.reindex(all_session_high.index).fillna(all_session_high)
+        daily_volume = regular_volume.reindex(all_session_volume.index).fillna(all_session_volume)
     else:
         daily_close = all_session_close
-    previous_daily_close = daily_close.shift(1).to_dict()
-    data["previous_daily_close"] = data["session"].map(previous_daily_close)
+        daily_high = all_session_high
+        daily_volume = all_session_volume
+
+    previous_daily_close = daily_close.shift(1)
+    previous_daily_high = daily_high.shift(1)
+    daily_change = (daily_close.div(daily_close.shift(1)) - 1.0) * 100.0
+    previous_day_change = daily_change.shift(1)
+
+    # At current session D, compare D-1 completed volume with the trailing average that
+    # was known before D-1. This avoids using D-1 in its own baseline.
+    volume_baseline_for_day = daily_volume.shift(1).rolling(20, min_periods=3).mean()
+    previous_day_volume = daily_volume.shift(1)
+    previous_day_volume_baseline = volume_baseline_for_day.shift(1)
+    previous_day_volume_ratio = previous_day_volume.div(
+        previous_day_volume_baseline.replace(0, float("nan"))
+    )
+
+    data["previous_daily_close"] = data["session"].map(previous_daily_close.to_dict())
+    data["previous_daily_high"] = data["session"].map(previous_daily_high.to_dict())
+    data["previous_day_change_pct"] = data["session"].map(previous_day_change.to_dict())
+    data["previous_day_volume"] = data["session"].map(previous_day_volume.to_dict())
+    data["previous_day_volume_ratio"] = data["session"].map(previous_day_volume_ratio.to_dict())
     data["day_change_pct"] = (data["close"].div(data["previous_daily_close"]) - 1.0) * 100.0
 
     historical_session_volume = (
@@ -3010,6 +3037,8 @@ def evaluate_signal(
         ("min_day_change_pct", "day_change_pct", lambda actual, target: actual >= target),
         ("min_relative_volume", "relative_volume", lambda actual, target: actual >= target),
         ("min_dollar_volume", "cum_dollar_volume", lambda actual, target: actual >= target),
+        ("min_previous_day_volume_ratio", "previous_day_volume_ratio", lambda actual, target: actual >= target),
+        ("min_previous_day_change_pct", "previous_day_change_pct", lambda actual, target: actual >= target),
         ("max_vwap_distance_pct", "vwap_distance_pct", lambda actual, target: actual <= target),
         ("volume_surge_ratio", "volume_surge", lambda actual, target: actual >= target),
         ("minimum_green_bars", "green_streak", lambda actual, target: actual >= target),
@@ -3034,6 +3063,12 @@ def evaluate_signal(
         if not all(has_number(name) for name in ("previous_close", "previous_vwap", "vwap")):
             return False
         if not (float(row["previous_close"]) <= float(row["previous_vwap"]) and close > float(row["vwap"])):
+            return False
+    if rules.get("previous_day_high_breakout"):
+        if not all(has_number(name) for name in ("previous_bar_close", "previous_daily_high")):
+            return False
+        prior_high = float(row["previous_daily_high"])
+        if not (float(row["previous_bar_close"]) <= prior_high and close > prior_high):
             return False
     if rules.get("breakout_lookback_bars") is not None:
         if not has_number("prior_breakout_high") or close <= float(row["prior_breakout_high"]):
@@ -3577,6 +3612,8 @@ def generate_strategy_variants(
         ("max_price", (0.70, 0.85, 1.20, 1.50), 0.01, 5_000.0, False),
         ("min_day_change_pct", (0.50, 0.70, 0.85, 1.15, 1.30, 1.60), -50.0, 200.0, False),
         ("min_relative_volume", (0.50, 0.70, 0.85, 1.15, 1.30, 1.60), 0.10, 50.0, False),
+        ("min_previous_day_volume_ratio", (0.50, 0.70, 0.85, 1.15, 1.30, 1.60), 0.10, 50.0, False),
+        ("min_previous_day_change_pct", (0.50, 0.70, 0.85, 1.15, 1.30, 1.60), -50.0, 200.0, False),
         ("min_dollar_volume", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 100.0, 2_000_000_000.0, False),
         ("max_spread_pct", (0.60, 0.80, 1.25, 1.60), 0.01, 50.0, False),
         ("max_vwap_distance_pct", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 0.05, 100.0, False),
@@ -3709,6 +3746,8 @@ def generate_local_strategy_refinements(
         "max_price": ((2.0, 1.0, 0.50, 0.25), 0.01, 5_000.0, False),
         "min_day_change_pct": ((2.0, 1.0, 0.5, 0.25), -50.0, 200.0, False),
         "min_relative_volume": ((1.0, 0.5, 0.25, 0.10), 0.10, 50.0, False),
+        "min_previous_day_volume_ratio": ((1.0, 0.5, 0.25, 0.10), 0.10, 50.0, False),
+        "min_previous_day_change_pct": ((2.0, 1.0, 0.5, 0.25), -50.0, 200.0, False),
         "min_dollar_volume": ((500_000.0, 250_000.0, 100_000.0, 50_000.0), 100.0, 2_000_000_000.0, False),
         "max_spread_pct": ((0.50, 0.25, 0.10), 0.01, 50.0, False),
         "max_vwap_distance_pct": ((2.0, 1.0, 0.5, 0.25), 0.05, 100.0, False),
@@ -3725,6 +3764,8 @@ def generate_local_strategy_refinements(
         "max_price": ((0.50, 0.25, 0.10), 0.01, 5_000.0, False),
         "min_day_change_pct": ((0.50, 0.25, 0.10), -50.0, 200.0, False),
         "min_relative_volume": ((0.25, 0.10, 0.05), 0.10, 50.0, False),
+        "min_previous_day_volume_ratio": ((0.25, 0.10, 0.05), 0.10, 50.0, False),
+        "min_previous_day_change_pct": ((0.50, 0.25, 0.10), -50.0, 200.0, False),
         "min_dollar_volume": ((100_000.0, 50_000.0, 25_000.0), 100.0, 2_000_000_000.0, False),
         "max_spread_pct": ((0.10, 0.05, 0.02), 0.01, 50.0, False),
         "max_vwap_distance_pct": ((0.50, 0.25, 0.10), 0.05, 100.0, False),
