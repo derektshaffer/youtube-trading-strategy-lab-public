@@ -13,6 +13,7 @@ from trading_intelligence_core import (
     merge_ingestion_checkpoint_strategies,
     effective_strategy_for_live,
     effective_strategy_for_research,
+    prepare_strategies_with_ai,
     research_readiness,
 )
 from youtube_strategy_engine import AppError
@@ -243,7 +244,145 @@ class BookModelRoutingTests(unittest.TestCase):
         self.assertTrue(any("gemini-3.7-flash" in message for message in progress))
 
 
+class BookIngestionEfficiencyTests(unittest.TestCase):
+    def test_long_book_uses_small_request_count(self):
+        analyzer = GeminiBookAnalyzer("key")
+        long_text = ("[[PAGE 1]]\nTrading setup discussion.\n\n" * 14000).strip()
+        empty = {
+            "source_summary": "Read",
+            "detected_title": "",
+            "detected_author": "",
+            "strategies": [],
+        }
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {"YOUTUBE_STRATEGY_DATA_DIR": directory},
+        ), patch.object(
+            analyzer,
+            "_analyze_chunk_with_adaptive_split",
+            return_value=empty,
+        ):
+            result = analyzer.analyze(long_text, title="Book")
+
+        self.assertLessEqual(result["chunk_count"], 7)
+        self.assertGreaterEqual(result["chunk_target_characters"], 72000)
+        self.assertEqual(result["checkpoint_version"], 5)
+
+    def test_zero_progress_legacy_checkpoint_uses_new_chunk_plan(self):
+        analyzer = GeminiBookAnalyzer("key")
+        long_text = ("Paragraph about momentum and VWAP.\n\n" * 9000).strip()
+        empty = {
+            "source_summary": "Read",
+            "detected_title": "",
+            "detected_author": "",
+            "strategies": [],
+        }
+        resume = {
+            "checkpoint_version": 4,
+            "chunk_count": 17,
+            "completed_sections": 0,
+            "completed_section_indices": [],
+            "strategies": [],
+        }
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {"YOUTUBE_STRATEGY_DATA_DIR": directory},
+        ), patch.object(
+            analyzer,
+            "_analyze_chunk_with_adaptive_split",
+            return_value=empty,
+        ):
+            result = analyzer.analyze(long_text, title="Book", resume_state=resume)
+
+        self.assertEqual(result["checkpoint_version"], 5)
+        self.assertLess(result["chunk_count"], 17)
+
+    def test_autopilot_skips_extra_ai_call_when_strategy_is_already_testable(self):
+        class Compiler:
+            model = "test-model"
+
+            def compile(self, strategy):
+                raise AssertionError("Compiler should not be called for an already-testable strategy.")
+
+        strategy = {
+            "id": "ready",
+            "source_type": "book_or_document",
+            "machine_rules": {"min_relative_volume": 2.0},
+            "evidence": [
+                {"location": "p.1", "description": "RVOL entry filter", "source_excerpt": "short"}
+            ],
+            "unresolved_rules": [],
+        }
+        prepared = prepare_strategies_with_ai([strategy], Compiler())
+        self.assertEqual(len(prepared), 1)
+        self.assertTrue(prepared[0]["autopilot_preparation"]["compiler_skipped"])
+        self.assertEqual(
+            prepared[0]["research_readiness"]["label"],
+            "ready_for_backtest",
+        )
+
+
 class BookAnalyzerResilienceTests(unittest.TestCase):
+    def test_quota_uses_backup_api_project_before_waiting(self):
+        analyzer = GeminiBookAnalyzer(
+            "primary-key",
+            "gemini-3.6-flash",
+            fallback_api_key="paid-key",
+            fallback_model="gemini-3.5-flash",
+        )
+        progress_messages = []
+        with patch.object(
+            analyzer,
+            "_analyze_chunk",
+            side_effect=[
+                AppError("Provider request failed (429): RESOURCE_EXHAUSTED quota retry in 60s"),
+                {"source_summary": "Recovered", "strategies": []},
+            ],
+        ), patch("trading_intelligence_core.sleep") as sleeper:
+            result = analyzer._analyze_chunk_resilient(
+                "text",
+                title="Book",
+                author="Author",
+                chunk_number=1,
+                chunk_count=6,
+                focus="",
+                progress_callback=lambda i, total, message: progress_messages.append(message),
+            )
+
+        self.assertEqual(result["source_summary"], "Recovered")
+        self.assertEqual(analyzer.api_key, "paid-key")
+        self.assertTrue(analyzer.paid_fallback_used)
+        sleeper.assert_not_called()
+        self.assertTrue(any("backup api project" in message.lower() for message in progress_messages))
+
+    def test_quota_uses_backup_model_before_waiting_when_no_paid_key(self):
+        analyzer = GeminiBookAnalyzer(
+            "primary-key",
+            "gemini-3.6-flash",
+            fallback_model="gemini-3.5-flash",
+        )
+        with patch.object(
+            analyzer,
+            "_analyze_chunk",
+            side_effect=[
+                AppError("Provider request failed (429): RESOURCE_EXHAUSTED quota retry in 60s"),
+                {"source_summary": "Recovered", "strategies": []},
+            ],
+        ), patch("trading_intelligence_core.sleep") as sleeper:
+            result = analyzer._analyze_chunk_resilient(
+                "text",
+                title="Book",
+                author="Author",
+                chunk_number=1,
+                chunk_count=6,
+                focus="",
+                progress_callback=None,
+            )
+
+        self.assertEqual(result["source_summary"], "Recovered")
+        self.assertEqual(analyzer.model, "gemini-3.5-flash")
+        sleeper.assert_not_called()
+
     def test_503_switches_to_backup_model_after_retry_budget(self):
         analyzer = GeminiBookAnalyzer(
             "primary-key",
