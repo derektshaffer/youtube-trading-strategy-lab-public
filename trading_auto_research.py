@@ -652,3 +652,107 @@ def run_autonomous_research(
             "Autonomous validation is historical evidence, not a guarantee of future profitability.",
         ],
     }
+
+
+def merge_autonomous_research_into_library(
+    library: dict[str, Any],
+    report: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist autonomous research outcomes without requiring manual save clicks."""
+    data = dict(library or {})
+    strategies = [dict(item) for item in data.get("strategies") or [] if isinstance(item, dict)]
+    by_id = {str(item.get("id") or ""): item for item in strategies if item.get("id")}
+
+    validation_records: list[dict[str, Any]] = []
+    for result in report.get("results") or []:
+        strategy_id = str(result.get("strategy_id") or "")
+        item = by_id.get(strategy_id)
+        if item is None:
+            continue
+        optimization = result.get("optimization_report") or {}
+        winner = optimization.get("winner") or {}
+        strength = result.get("strength") or {}
+        generalization = result.get("generalization") or {}
+        walk = result.get("walk_forward") or {}
+        status = str(result.get("validation_status") or "research_only")
+
+        item["validation_status"] = status
+        item["optimization_status"] = str(winner.get("status") or "not_run").lower().replace(" ", "_")
+        item["last_autonomous_research"] = {
+            "generated_at": report.get("generated_at"),
+            "anchor_symbol": result.get("anchor_symbol"),
+            "candidate_symbols": result.get("candidate_symbols") or [],
+            "global_score": result.get("global_score"),
+            "robustness_score": strength.get("score"),
+            "robustness_label": strength.get("label"),
+            "generalization_score": (generalization.get("summary") or {}).get("score"),
+            "generalization_label": (generalization.get("summary") or {}).get("label"),
+            "validation_status": status,
+            "gate_reasons": result.get("gate_reasons") or [],
+            "universe_source": (report.get("universe") or {}).get("source"),
+        }
+        if status == "validated":
+            item["validated_rules"] = winner.get("optimized_rules") or {}
+            item["validated_backtest_settings"] = winner.get("optimized_backtest_settings") or {}
+            item["validated_at"] = report.get("generated_at")
+        else:
+            item.pop("validated_rules", None)
+            item.pop("validated_backtest_settings", None)
+            item.pop("validated_at", None)
+
+        run_id = f"auto:{strategy_id}:{result.get('anchor_symbol')}:{report.get('generated_at')}"
+        validation_records.append(
+            {
+                "id": run_id,
+                "strategy_id": strategy_id,
+                "strategy_name": result.get("strategy_name"),
+                "symbol": result.get("anchor_symbol"),
+                "generated_at": report.get("generated_at"),
+                "timeframe": report.get("timeframe"),
+                "history_days": report.get("intraday_lookback_days"),
+                "robustness": strength,
+                "optimizer_status": winner.get("status"),
+                "validation_status": status,
+                "training_metrics": winner.get("training_metrics") or {},
+                "validation_metrics": winner.get("validation_metrics") or {},
+                "holdout_metrics": winner.get("holdout_metrics") or {},
+                "stress_metrics": winner.get("stress_metrics") or {},
+                "walk_forward_summary": walk.get("summary"),
+                "optimized_rules": winner.get("optimized_rules") or {},
+                "optimized_backtest_settings": winner.get("optimized_backtest_settings") or {},
+                "autonomous": True,
+                "global_score": result.get("global_score"),
+                "generalization_summary": generalization.get("summary") or {},
+                "gate_reasons": result.get("gate_reasons") or [],
+            }
+        )
+
+    data["strategies"] = strategies
+    existing_validation = list(data.get("validation_runs") or [])
+    existing_ids = {str(item.get("id") or "") for item in validation_records}
+    data["validation_runs"] = (
+        validation_records
+        + [item for item in existing_validation if str(item.get("id") or "") not in existing_ids]
+    )[:250]
+
+    run_record = {
+        "id": f"autonomous:{report.get('generated_at')}",
+        "generated_at": report.get("generated_at"),
+        "kind": "autonomous_research",
+        "universe": report.get("universe") or {},
+        "daily_lookback_days": report.get("daily_lookback_days"),
+        "intraday_lookback_days": report.get("intraday_lookback_days"),
+        "timeframe": report.get("timeframe"),
+        "eligible_strategies": report.get("eligible_strategies"),
+        "strategies_with_opportunities": report.get("strategies_with_opportunities"),
+        "deep_strategies_tested": report.get("deep_strategies_tested"),
+        "results": report.get("results") or [],
+        "limitations": report.get("limitations") or [],
+    }
+    previous_runs = [
+        item
+        for item in data.get("research_runs") or []
+        if str(item.get("id") or "") != str(run_record["id"])
+    ]
+    data["research_runs"] = [run_record, *previous_runs][:30]
+    return data
