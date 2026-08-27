@@ -238,6 +238,10 @@ def infer_strategy_dna(strategy: dict[str, Any]) -> dict[str, list[str]]:
     return {dimension: _unique(dna[dimension]) for dimension in DNA_DIMENSIONS}
 
 
+def is_synthetic_strategy(strategy: dict[str, Any]) -> bool:
+    return str(strategy.get("source_type") or "").strip().lower() == "cross_source_synthesis"
+
+
 def source_identity(strategy: dict[str, Any]) -> str:
     return str(
         strategy.get("source_id")
@@ -263,7 +267,7 @@ def build_concept_graph(strategies: list[dict[str, Any]]) -> list[dict[str, Any]
     """Aggregate DNA concepts while keeping source agreement and validation distinct."""
     buckets: dict[tuple[str, str], dict[str, Any]] = {}
     for raw in strategies:
-        if not isinstance(raw, dict):
+        if not isinstance(raw, dict) or is_synthetic_strategy(raw):
             continue
         strategy = dict(raw)
         dna = infer_strategy_dna(strategy)
@@ -479,7 +483,11 @@ def build_strategy_families(
     similarity_threshold: float = 0.28,
 ) -> list[dict[str, Any]]:
     """Greedily cluster related strategies using reusable DNA rather than strategy names."""
-    items = [dict(item) for item in strategies if isinstance(item, dict)]
+    items = [
+        dict(item)
+        for item in strategies
+        if isinstance(item, dict) and not is_synthetic_strategy(item)
+    ]
     families: list[list[dict[str, Any]]] = []
 
     for strategy in items:
@@ -575,12 +583,18 @@ def build_candidate_blueprints(
                 "supporting_source_count": source_count,
                 "supporting_sources": list(family.get("source_titles") or []),
                 "supporting_strategy_count": int(family.get("strategy_count") or 0),
+                "contributing_strategy_ids": [
+                    str(item.get("id") or "")
+                    for item in family.get("strategies") or []
+                    if isinstance(item, dict) and item.get("id")
+                ],
                 "validated_source_count": int(family.get("validated_source_count") or 0),
                 "core_dna": core_by_dimension,
                 "consistent_explicit_rules": consistent_rules,
                 "conflicting_explicit_rules": conflicting_rules,
                 "rule_consensus": rule_consensus,
                 "status": "hypothesis_only",
+                "backtest_supported": str(family.get("direction") or "").lower() in {"long", "both"},
                 "requires_rule_compilation": bool(conflicting_rules) or not bool(consistent_rules),
                 "note": (
                     "Independent sources contribute to this candidate, but source agreement is not "
@@ -598,3 +612,200 @@ def build_candidate_blueprints(
         )
     )
     return candidates
+
+
+
+def _coerce_rule_option(rule_name: str, value: Any) -> Any:
+    try:
+        return normalize_machine_rules({rule_name: value}).get(rule_name)
+    except Exception:
+        return None
+
+
+def _representative_exact_option(values: list[Any]) -> Any:
+    """Choose a deterministic starting seed that is itself present in the source options."""
+    clean = []
+    for value in values:
+        if value not in clean:
+            clean.append(value)
+    if not clean:
+        return None
+    numeric = [
+        value
+        for value in clean
+        if not isinstance(value, bool) and isinstance(value, (int, float))
+    ]
+    if len(numeric) == len(clean):
+        ordered = sorted(numeric, key=float)
+        return ordered[(len(ordered) - 1) // 2]
+    bools = [value for value in clean if isinstance(value, bool)]
+    if len(bools) == len(clean):
+        true_count = sum(1 for value in bools if value)
+        false_count = len(bools) - true_count
+        return True if true_count >= false_count else False
+    return sorted(clean, key=lambda value: str(value).casefold())[0]
+
+
+def _semantic_rules_from_shared_dna(core_dna: dict[str, Any]) -> dict[str, Any]:
+    """Translate only shared DNA concepts with unambiguous boolean machine semantics."""
+    rules: dict[str, Any] = {}
+    structure = {str(value).casefold() for value in core_dna.get("structure") or []}
+    catalysts = {str(value).casefold() for value in core_dna.get("catalyst") or []}
+    if "above vwap" in structure:
+        rules["above_vwap"] = True
+    if "vwap reclaim" in structure:
+        rules["vwap_reclaim"] = True
+    if "news catalyst" in catalysts:
+        rules["catalyst_required"] = True
+    return rules
+
+
+def compile_candidate_blueprint(blueprint: dict[str, Any]) -> dict[str, Any]:
+    """Convert a cross-source blueprint into a research-only executable strategy.
+
+    Exact rules agreed on by all contributing observations remain explicit. When sources
+    disagree, one *source-supported* value is selected only as an optimizer seed and all
+    observed source values are retained in candidate_rule_options for direct testing.
+    No conflicting thresholds are averaged into a value that no source actually stated.
+    """
+    core_dna = normalize_strategy_dna(blueprint.get("core_dna"))
+    explicit = normalize_machine_rules(blueprint.get("consistent_explicit_rules"))
+    semantic = _semantic_rules_from_shared_dna(core_dna)
+    for name, value in semantic.items():
+        if explicit.get(name) is None:
+            explicit[name] = value
+
+    source_options: dict[str, list[Any]] = {}
+    research_overrides: dict[str, Any] = {}
+    assumption_log: list[dict[str, Any]] = []
+    consensus = blueprint.get("rule_consensus") or {}
+    for rule_name in blueprint.get("conflicting_explicit_rules") or []:
+        details = consensus.get(rule_name) if isinstance(consensus, dict) else None
+        raw_values = details.get("distinct_values") if isinstance(details, dict) else []
+        clean_values: list[Any] = []
+        for raw in raw_values or []:
+            parsed = _coerce_rule_option(str(rule_name), raw)
+            if parsed is not None and parsed not in clean_values:
+                clean_values.append(parsed)
+        if len(clean_values) < 2:
+            continue
+        source_options[str(rule_name)] = clean_values
+        if explicit.get(str(rule_name)) is None:
+            seed = _representative_exact_option(clean_values)
+            if seed is not None:
+                research_overrides[str(rule_name)] = seed
+                assumption_log.append(
+                    {
+                        "target_rule": str(rule_name),
+                        "value": seed,
+                        "source_requirement": (
+                            "Contributing sources explicitly disagree on this threshold."
+                        ),
+                        "rationale": (
+                            "Selected one exact source-supported value as a neutral optimizer starting seed; "
+                            "all observed source values are retained and tested separately."
+                        ),
+                        "confidence": 100.0,
+                        "accepted_by": "cross_source_synthesis_seed",
+                        "is_research_assumption": True,
+                    }
+                )
+
+    mapped_concepts = {
+        "Above VWAP",
+        "VWAP reclaim",
+        "News catalyst",
+    }
+    unresolved: list[str] = []
+    for dimension in DNA_DIMENSIONS:
+        for concept in core_dna.get(dimension) or []:
+            if concept in mapped_concepts:
+                continue
+            unresolved.append(
+                f"Shared Strategy DNA still needs objective translation or direct testing: "
+                f"{DNA_LABELS[dimension]} — {concept}"
+            )
+
+    structure = list(core_dna.get("structure") or [])
+    momentum = list(core_dna.get("momentum") or [])
+    catalyst = list(core_dna.get("catalyst") or [])
+    entry_conditions = [
+        f"Shared structure: {value}" for value in structure
+    ] + [
+        f"Shared momentum condition: {value}" for value in momentum
+    ] + [
+        f"Shared catalyst context: {value}" for value in catalyst
+    ]
+
+    supporting_sources = _unique(list(blueprint.get("supporting_sources") or []))
+    source_count = int(blueprint.get("supporting_source_count") or len(supporting_sources))
+    priority = safe_float(blueprint.get("research_priority_score"), 0.0) or 0.0
+    direction = str(blueprint.get("direction") or "unclear").lower()
+    support_confidence = min(95.0, max(50.0, 50.0 + source_count * 6.0))
+
+    return {
+        "id": "synth-" + str(blueprint.get("family_id") or blueprint.get("id") or "candidate"),
+        "name": str(blueprint.get("name") or "Cross-source strategy candidate"),
+        "category": "Cross-source synthesis",
+        "direction": direction,
+        "summary": (
+            f"Research-only strategy synthesized from {source_count} independent source(s). "
+            "Shared concepts and exact source thresholds are preserved; disagreements become optimizer seeds."
+        ),
+        "indicators": _unique(
+            [
+                concept
+                for dimension in ("momentum", "structure")
+                for concept in core_dna.get(dimension) or []
+            ]
+        ),
+        "entry_conditions": entry_conditions,
+        "exit_conditions": [
+            f"Shared exit concept: {value}" for value in core_dna.get("exit") or []
+        ],
+        "risk_rules": [
+            f"Shared risk concept: {value}" for value in core_dna.get("risk") or []
+        ],
+        "avoid_conditions": [],
+        "market_context": [
+            f"{DNA_LABELS[dimension]}: {value}"
+            for dimension in ("context", "market_regime")
+            for value in core_dna.get(dimension) or []
+        ],
+        "stock_selection": [
+            f"{DNA_LABELS[dimension]}: {value}"
+            for dimension in ("universe", "catalyst")
+            for value in core_dna.get(dimension) or []
+        ],
+        "unresolved_rules": unresolved,
+        "confidence": support_confidence,
+        "confidence_kind": "cross_source_structural_support",
+        "machine_rules": explicit,
+        "research_rule_overrides": research_overrides,
+        "compiler_assumptions": assumption_log,
+        "candidate_rule_options": source_options,
+        "strategy_dna": core_dna,
+        "source_type": "cross_source_synthesis",
+        "source_id": "synthesis:" + str(blueprint.get("family_id") or blueprint.get("id") or "candidate"),
+        "source_title": f"Cross-source synthesis · {source_count} independent sources",
+        "source_author": "",
+        "source_url": "",
+        "source_strategy_ids": list(blueprint.get("contributing_strategy_ids") or []),
+        "supporting_sources": supporting_sources,
+        "supporting_source_count": source_count,
+        "validated_source_count": int(blueprint.get("validated_source_count") or 0),
+        "synthesis_support_score": priority,
+        "synthesis_blueprint": dict(blueprint),
+        "evidence": [
+            {
+                "location": str(source),
+                "description": "Independent source contributing to this Strategy DNA family.",
+                "source_excerpt": "",
+            }
+            for source in supporting_sources
+        ],
+        "approved": False,
+        "validation_status": "unvalidated",
+        "optimization_status": "not_run",
+        "backtest_supported": direction in {"long", "both"},
+    }
