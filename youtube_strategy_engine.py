@@ -35,11 +35,14 @@ ALPACA_DATA_URL = "https://data.alpaca.markets"
 GEMINI_INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
 GEMINI_GENERATE_CONTENT_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 DEFAULT_GEMINI_MODEL = "gemini-3.7-flash"
+DEFAULT_GEMINI_FALLBACK_MODEL = "gemini-3.6-flash"
 MAX_SINGLE_VIDEO_SECONDS = 45 * 60
 VIDEO_SEGMENT_SECONDS = 40 * 60
 MAX_VIDEO_SEGMENTS = 30
 MAX_VIDEO_SECTION_RATE_LIMIT_RETRIES = 3
 MAX_VIDEO_SECTION_RATE_LIMIT_WAIT_SECONDS = 90
+MAX_VIDEO_SECTION_TRANSIENT_RETRIES = 2
+MAX_VIDEO_SECTION_TRANSIENT_WAIT_SECONDS = 20
 DEFAULT_DATA_DIRECTORY = ".youtube_strategy_data"
 DEFAULT_GITHUB_BACKUP_PATH = "youtube-strategy-lab/strategy_library.json"
 GITHUB_API_URL = "https://api.github.com"
@@ -59,6 +62,23 @@ def provider_quota_reached(error: Exception | str) -> bool:
     return any(
         marker in message
         for marker in ("rate limit", "quota", "resource_exhausted", "resource exhausted")
+    )
+
+
+def provider_temporarily_unavailable(error: Exception | str) -> bool:
+    message = str(error).lower()
+    return any(
+        marker in message
+        for marker in (
+            "(503)",
+            " 503",
+            "high demand",
+            "service unavailable",
+            "temporarily unavailable",
+            "temporarily overloaded",
+            "overloaded",
+            "try again later",
+        )
     )
 
 
@@ -605,6 +625,7 @@ class GeminiVideoAnalyzer:
         model: str = DEFAULT_GEMINI_MODEL,
         *,
         fallback_api_key: str = "",
+        fallback_model: str = DEFAULT_GEMINI_FALLBACK_MODEL,
     ):
         if not str(api_key or "").strip():
             raise AppError("Add GEMINI_API_KEY in this app's Streamlit Secrets before analyzing videos.")
@@ -617,6 +638,10 @@ class GeminiVideoAnalyzer:
             )
         self.paid_fallback_used = False
         self.model = str(model or DEFAULT_GEMINI_MODEL).strip()
+        self.primary_model = self.model
+        candidate_fallback_model = str(fallback_model or "").strip()
+        self.fallback_model = candidate_fallback_model if candidate_fallback_model != self.model else ""
+        self.model_fallback_used = False
 
     @property
     def headers(self) -> dict[str, str]:
@@ -631,6 +656,17 @@ class GeminiVideoAnalyzer:
             return False
         self.api_key = self.fallback_api_key
         self.paid_fallback_used = True
+        return True
+
+    def _activate_model_fallback(self, error: Exception | str) -> bool:
+        if (
+            self.model_fallback_used
+            or not self.fallback_model
+            or not provider_temporarily_unavailable(error)
+        ):
+            return False
+        self.model = self.fallback_model
+        self.model_fallback_used = True
         return True
 
     @staticmethod
@@ -690,6 +726,9 @@ class GeminiVideoAnalyzer:
         parsed["url"] = normalized_url
         parsed["analyzed_at"] = isoformat_utc(utc_now())
         parsed["model"] = self.model
+        parsed["primary_model"] = self.primary_model
+        parsed["fallback_model"] = self.fallback_model or None
+        parsed["model_fallback_used"] = self.model_fallback_used
         parsed["interaction_id"] = interaction_id
         parsed["usage"] = usage or {}
         parsed["paid_fallback_used"] = self.paid_fallback_used
@@ -960,7 +999,8 @@ class GeminiVideoAnalyzer:
             if cached_section is not None:
                 section, section_usage, response_id = cached_section
             else:
-                attempts = 0
+                rate_limit_attempts = 0
+                transient_attempts = 0
                 while True:
                     try:
                         section, section_usage, response_id = self._analyze_video_section(
@@ -975,20 +1015,49 @@ class GeminiVideoAnalyzer:
                     except AppError as exc:
                         message = str(exc)
                         retry_delay = self._video_section_retry_delay(message)
-                        if retry_delay is not None and attempts < MAX_VIDEO_SECTION_RATE_LIMIT_RETRIES:
-                            attempts += 1
+                        if retry_delay is not None and rate_limit_attempts < MAX_VIDEO_SECTION_RATE_LIMIT_RETRIES:
+                            rate_limit_attempts += 1
                             if progress:
                                 progress(
                                     index,
                                     total,
                                     f"Google's request limit was reached. Retrying {label} in "
-                                    f"{retry_delay} seconds (attempt {attempts} of "
+                                    f"{retry_delay} seconds (attempt {rate_limit_attempts} of "
                                     f"{MAX_VIDEO_SECTION_RATE_LIMIT_RETRIES})…",
                                 )
                             sleep(retry_delay)
                             continue
+                        if provider_temporarily_unavailable(exc):
+                            if transient_attempts < MAX_VIDEO_SECTION_TRANSIENT_RETRIES:
+                                retry_wait = min(
+                                    5 * (2 ** transient_attempts),
+                                    MAX_VIDEO_SECTION_TRANSIENT_WAIT_SECONDS,
+                                )
+                                transient_attempts += 1
+                                if progress:
+                                    progress(
+                                        index,
+                                        total,
+                                        f"Gemini is temporarily overloaded. Retrying {label} in "
+                                        f"{retry_wait} seconds (attempt {transient_attempts} of "
+                                        f"{MAX_VIDEO_SECTION_TRANSIENT_RETRIES})…",
+                                    )
+                                sleep(retry_wait)
+                                continue
+                            if self._activate_model_fallback(exc):
+                                rate_limit_attempts = 0
+                                transient_attempts = 0
+                                if progress:
+                                    progress(
+                                        index,
+                                        total,
+                                        f"{self.primary_model} is still overloaded. Switching {label} "
+                                        f"to backup model {self.model}…",
+                                    )
+                                continue
                         if self._activate_paid_fallback(exc):
-                            attempts = 0
+                            rate_limit_attempts = 0
+                            transient_attempts = 0
                             if progress:
                                 progress(
                                     index,
@@ -1077,6 +1146,45 @@ class GeminiVideoAnalyzer:
             pass
         return normalized
 
+    def _analyze_whole_video_with_transient_retries(
+        self,
+        normalized_url: str,
+        prompt: str,
+        progress: Callable[[int, int, str], None] | None,
+    ) -> dict[str, Any]:
+        transient_attempts = 0
+        while True:
+            try:
+                return self._analyze_whole_video(normalized_url, prompt)
+            except AppError as exc:
+                if not provider_temporarily_unavailable(exc):
+                    raise
+                if transient_attempts < MAX_VIDEO_SECTION_TRANSIENT_RETRIES:
+                    retry_wait = min(
+                        5 * (2 ** transient_attempts),
+                        MAX_VIDEO_SECTION_TRANSIENT_WAIT_SECONDS,
+                    )
+                    transient_attempts += 1
+                    if progress:
+                        progress(
+                            0,
+                            1,
+                            f"Gemini is temporarily overloaded. Retrying in {retry_wait} seconds "
+                            f"(attempt {transient_attempts} of {MAX_VIDEO_SECTION_TRANSIENT_RETRIES})…",
+                        )
+                    sleep(retry_wait)
+                    continue
+                if self._activate_model_fallback(exc):
+                    transient_attempts = 0
+                    if progress:
+                        progress(
+                            0,
+                            1,
+                            f"{self.primary_model} is still overloaded. Switching to backup model {self.model}…",
+                        )
+                    continue
+                raise
+
     def analyze(
         self,
         url: str,
@@ -1091,7 +1199,7 @@ class GeminiVideoAnalyzer:
         if duration is not None and duration > MAX_SINGLE_VIDEO_SECONDS:
             return self._analyze_long_video(normalized_url, prompt, duration, progress)
         try:
-            return self._analyze_whole_video(normalized_url, prompt)
+            return self._analyze_whole_video_with_transient_retries(normalized_url, prompt, progress)
         except AppError as exc:
             if self._activate_paid_fallback(exc):
                 if progress:
