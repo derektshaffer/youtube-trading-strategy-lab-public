@@ -825,8 +825,8 @@ elif module == "Knowledge Sources":
                 strategy_count = int(src.get("strategy_count") or 0)
                 if src.get("recovered_from_strategies"):
                     progress_label = (
-                        f"recovered from saved library · {strategy_count} strategy"
-                        + ("" if strategy_count == 1 else "ies")
+                        f"recovered from saved library · {strategy_count} "
+                        + ("strategy" if strategy_count == 1 else "strategies")
                     )
                 elif total:
                     progress_label = f"{completed}/{total} sections"
