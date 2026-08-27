@@ -4,8 +4,11 @@ from trading_progress_ui import (
     AutonomousResearchEtaEstimator,
     AutonomousResearchProgressEstimator,
     AutonomousResearchTimingRecorder,
+    LongTaskMonitor,
     autonomous_timing_profiles,
     format_eta_range,
+    save_session_task_profile,
+    session_task_profiles,
 )
 
 
@@ -134,6 +137,52 @@ class AutonomousResearchProgressEstimatorTests(unittest.TestCase):
         self.assertIsNone(format_eta_range(None))
         self.assertEqual(format_eta_range((20, 45)), "less than 1 min")
         self.assertEqual(format_eta_range((95, 245)), "about 1 min–5 min")
+
+    def test_session_task_profiles_are_isolated_by_action(self):
+        state = {}
+        profile_a = {
+            "total_seconds": 120.0,
+            "samples": [
+                {"fraction": 0.1, "elapsed_seconds": 10.0},
+                {"fraction": 1.0, "elapsed_seconds": 120.0},
+            ],
+        }
+        profile_b = {
+            "total_seconds": 30.0,
+            "samples": [
+                {"fraction": 0.1, "elapsed_seconds": 3.0},
+                {"fraction": 1.0, "elapsed_seconds": 30.0},
+            ],
+        }
+        save_session_task_profile(state, "book", profile_a)
+        save_session_task_profile(state, "scan", profile_b)
+        self.assertEqual(session_task_profiles(state, "book")[0]["total_seconds"], 120.0)
+        self.assertEqual(session_task_profiles(state, "scan")[0]["total_seconds"], 30.0)
+
+    def test_generic_long_task_monitor_uses_learned_eta(self):
+        profile = {
+            "total_seconds": 600.0,
+            "samples": [
+                {"fraction": 0.1, "elapsed_seconds": 60.0},
+                {"fraction": 0.5, "elapsed_seconds": 240.0},
+                {"fraction": 1.0, "elapsed_seconds": 600.0},
+            ],
+        }
+        monitor = LongTaskMonitor("generic", [profile])
+        text = monitor.text(0.5, "Halfway")
+        self.assertIn("Estimated progress: 50%", text)
+        self.assertIn("Estimated time remaining:", text)
+        self.assertIn("Halfway", text)
+
+    def test_generic_long_task_monitor_learns_after_finish(self):
+        state = {}
+        monitor = LongTaskMonitor("generic_finish", [])
+        monitor.text(0.2, "Starting")
+        profile = monitor.finish(state)
+        self.assertGreater(profile["total_seconds"], 0)
+        saved = session_task_profiles(state, "generic_finish")
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]["samples"][-1]["fraction"], 1.0)
 
     def test_only_autonomous_runs_with_valid_profiles_are_used(self):
         runs = [
