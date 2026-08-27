@@ -157,9 +157,13 @@ class BookAnalyzerResilienceTests(unittest.TestCase):
         self.assertTrue(analyzer.model_fallback_used)
         self.assertTrue(any("backup model" in message.lower() for message in progress_messages))
 
-    def test_completed_book_sections_resume_after_failure(self):
-        first_section = {"source_summary": "First section", "strategies": []}
-        second_section = {"source_summary": "Second section", "strategies": []}
+    def test_completed_book_sections_are_saved_when_one_section_stays_unavailable(self):
+        first_section = {
+            "source_summary": "First section",
+            "detected_title": "",
+            "detected_author": "",
+            "strategies": [],
+        }
 
         with tempfile.TemporaryDirectory() as directory, patch.dict(
             os.environ,
@@ -174,16 +178,29 @@ class BookAnalyzerResilienceTests(unittest.TestCase):
             first = GeminiBookAnalyzer("key", "gemini-3.7-flash")
             with patch.object(
                 first,
-                "_analyze_chunk_resilient",
-                side_effect=[first_section, AppError("Provider request failed (503): high demand")],
+                "_analyze_chunk_with_adaptive_split",
+                side_effect=[
+                    first_section,
+                    AppError("Provider request failed (503): high demand"),
+                    AppError("Provider request failed (503): high demand"),
+                ],
             ):
-                with self.assertRaises(AppError):
-                    first.analyze("book", title="Book", author="Author")
+                partial = first.analyze("book", title="Book", author="Author")
 
+            self.assertTrue(partial["analysis_incomplete"])
+            self.assertEqual(partial["completed_sections"], 1)
+            self.assertEqual(partial["failed_sections"][0]["section"], 2)
+
+            second_section = {
+                "source_summary": "Second section",
+                "detected_title": "",
+                "detected_author": "",
+                "strategies": [],
+            }
             second = GeminiBookAnalyzer("key", "gemini-3.7-flash")
             with patch.object(
                 second,
-                "_analyze_chunk_resilient",
+                "_analyze_chunk_with_adaptive_split",
                 return_value=second_section,
             ) as resumed_call:
                 result = second.analyze("book", title="Book", author="Author")
@@ -192,6 +209,81 @@ class BookAnalyzerResilienceTests(unittest.TestCase):
             self.assertIn("First section", result["summary"])
             self.assertIn("Second section", result["summary"])
             self.assertEqual(result["completed_sections"], 2)
+            self.assertFalse(result["analysis_incomplete"])
+
+    def test_read_timeout_switches_to_backup_model(self):
+        analyzer = GeminiBookAnalyzer(
+            "primary-key",
+            "gemini-3.7-flash",
+            fallback_model="gemini-3.6-flash",
+        )
+        progress_messages = []
+        with patch("trading_intelligence_core.BOOK_TRANSIENT_RETRIES_PER_MODEL", 0), patch.object(
+            analyzer,
+            "_analyze_chunk",
+            side_effect=[
+                AppError(
+                    "The provider could not be reached or took too long to respond: "
+                    "The read operation timed out"
+                ),
+                {
+                    "source_summary": "Recovered",
+                    "detected_title": "",
+                    "detected_author": "",
+                    "strategies": [],
+                },
+            ],
+        ):
+            result = analyzer._analyze_chunk_resilient(
+                "text",
+                title="Book",
+                author="Author",
+                chunk_number=1,
+                chunk_count=5,
+                focus="",
+                progress_callback=lambda i, total, message: progress_messages.append(message),
+            )
+
+        self.assertEqual(result["source_summary"], "Recovered")
+        self.assertEqual(analyzer.model, "gemini-3.6-flash")
+        self.assertTrue(any("backup model" in message.lower() for message in progress_messages))
+
+    def test_timeout_can_split_large_section_and_merge_results(self):
+        analyzer = GeminiBookAnalyzer("key", "gemini-3.7-flash")
+        large_chunk = ("First half paragraph.\n\n" * 400) + ("Second half paragraph.\n\n" * 400)
+        left = {
+            "source_summary": "Left recovered",
+            "detected_title": "Book",
+            "detected_author": "Author",
+            "strategies": [],
+        }
+        right = {
+            "source_summary": "Right recovered",
+            "detected_title": "Book",
+            "detected_author": "Author",
+            "strategies": [],
+        }
+        with patch.object(
+            analyzer,
+            "_analyze_chunk_resilient",
+            side_effect=[
+                AppError("The read operation timed out"),
+                left,
+                right,
+            ],
+        ):
+            result = analyzer._analyze_chunk_with_adaptive_split(
+                large_chunk,
+                title="Book",
+                author="Author",
+                chunk_number=1,
+                chunk_count=1,
+                focus="",
+                progress_callback=None,
+            )
+
+        self.assertIn("Left recovered", result["source_summary"])
+        self.assertIn("Right recovered", result["source_summary"])
 
 
 if __name__ == "__main__":
