@@ -4318,13 +4318,17 @@ def _screen_historical_strategies(
                     default_reward_risk=float(reward),
                 )
                 for behavior_settings in (base_settings, legacy_behavior_settings(base_settings)):
+                    behavior_frame = frame
+                    if not behavior_settings.allow_extended_hours and "is_regular_hours" in frame.columns:
+                        behavior_frame = frame[frame["is_regular_hours"].fillna(False)].copy().reset_index(drop=True)
                     candidate_settings = _automatic_slippage_settings(
-                        frame, rules, behavior_settings, automatic_slippage
+                        behavior_frame, rules, behavior_settings, automatic_slippage
                     )
-                    prepared = indicator_cache[key]
-                    if not candidate_settings.allow_extended_hours and "is_regular_hours" in prepared.columns:
-                        regular_frame = frame[frame["is_regular_hours"].fillna(False)].copy().reset_index(drop=True)
-                        prepared = add_indicators(regular_frame, candidate_strategy)
+                    prepared = (
+                        indicator_cache[key]
+                        if candidate_settings.allow_extended_hours
+                        else add_indicators(behavior_frame, candidate_strategy)
+                    )
                     result = run_backtest(
                         [], candidate_strategy, symbol, candidate_settings,
                         prepared_indicators=prepared,
