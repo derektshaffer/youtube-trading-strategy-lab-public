@@ -1032,128 +1032,159 @@ def run_autonomous_research(
             catalyst_summary_by_symbol[symbol] = summary
 
     research_results: list[dict[str, Any]] = []
+    failed_finalists: list[dict[str, Any]] = []
     for finalist_number, finalist in enumerate(finalists, start=1):
         strategy = finalist["strategy"]
-        opportunities = finalist["opportunities"]
-        candidate_symbols = [
-            str(item.get("symbol") or "")
-            for item in opportunities
-            if intraday_rows.get(str(item.get("symbol") or ""))
-        ]
-        if not candidate_symbols:
-            continue
-        anchor = candidate_symbols[0]
-        rows = list(intraday_rows.get(anchor) or [])
-        effective = effective_strategy_for_research(strategy)
-        # Defensive guarantee: no stock-specific deployment metadata reaches the optimizer,
-        # walk-forward engine, or cross-stock validation path.
-        for field in AUTONOMOUS_STOCK_SPECIFIC_FIELDS:
-            effective.pop(field, None)
-        settings = _automatic_backtest_settings(effective)
-        optimizer = _automatic_optimization_settings()
-
-        _notify(
-            progress,
-            f"Deep research {finalist_number}/{len(finalists)}: optimizing {strategy.get('name')} on {anchor}…",
-        )
-        report = optimize_stock_strategies(
-            rows,
-            [effective],
-            anchor,
-            settings,
-            optimizer,
-            finalize_holdout=True,
-        )
-        winner = report.get("winner") or {}
-        if not winner:
-            continue
-
-        walk_report = None
         try:
-            _notify(progress, f"Running rolling walk-forward checks for {strategy.get('name')}…")
-            walk_report = walk_forward_validate(
+            opportunities = finalist["opportunities"]
+            candidate_symbols = [
+                str(item.get("symbol") or "")
+                for item in opportunities
+                if intraday_rows.get(str(item.get("symbol") or ""))
+            ]
+            if not candidate_symbols:
+                failed_finalists.append(
+                    {
+                        "strategy_id": strategy.get("id"),
+                        "strategy_name": strategy.get("name"),
+                        "finalist_number": finalist_number,
+                        "error": "No candidate stocks had usable intraday history for deep testing.",
+                    }
+                )
+                _notify(
+                    progress,
+                    f"Deep research {finalist_number}/{len(finalists)} skipped "
+                    f"{strategy.get('name') or 'strategy'} because no usable intraday candidate data remained…",
+                )
+                continue
+            anchor = candidate_symbols[0]
+            rows = list(intraday_rows.get(anchor) or [])
+            effective = effective_strategy_for_research(strategy)
+            # Defensive guarantee: no stock-specific deployment metadata reaches the optimizer,
+            # walk-forward engine, or cross-stock validation path.
+            for field in AUTONOMOUS_STOCK_SPECIFIC_FIELDS:
+                effective.pop(field, None)
+            settings = _automatic_backtest_settings(effective)
+            optimizer = _automatic_optimization_settings()
+
+            _notify(
+                progress,
+                f"Deep research {finalist_number}/{len(finalists)}: optimizing {strategy.get('name')} on {anchor}…",
+            )
+            report = optimize_stock_strategies(
                 rows,
                 [effective],
                 anchor,
                 settings,
                 optimizer,
-                minimum_history_sessions=8,
-                test_sessions_per_fold=2,
-                max_folds=2,
+                finalize_holdout=True,
             )
-        except AppError:
+            winner = report.get("winner") or {}
+            if not winner:
+                continue
+
             walk_report = None
+            try:
+                _notify(progress, f"Running rolling walk-forward checks for {strategy.get('name')}…")
+                walk_report = walk_forward_validate(
+                    rows,
+                    [effective],
+                    anchor,
+                    settings,
+                    optimizer,
+                    minimum_history_sessions=8,
+                    test_sessions_per_fold=2,
+                    max_folds=2,
+                )
+            except AppError:
+                walk_report = None
 
-        strength = validation_strength(report, walk_report)
-        frozen = {
-            **strategy,
-            "validation_status": "validated",
-            "validated_rules": winner.get("optimized_rules") or {},
-        }
-        cross_settings = _backtest_settings_from_dict(
-            winner.get("optimized_backtest_settings") or {}
-        )
-        cross_rows = {
-            symbol: list(intraday_rows.get(symbol) or [])
-            for symbol in candidate_symbols
-            if intraday_rows.get(symbol)
-        }
-        _notify(progress, f"Testing frozen {strategy.get('name')} rules across {len(cross_rows)} stocks…")
-        generalization = cross_stock_generalization(
-            cross_rows,
-            frozen,
-            cross_settings,
-        )
+            strength = validation_strength(report, walk_report)
+            frozen = {
+                **strategy,
+                "validation_status": "validated",
+                "validated_rules": winner.get("optimized_rules") or {},
+            }
+            cross_settings = _backtest_settings_from_dict(
+                winner.get("optimized_backtest_settings") or {}
+            )
+            cross_rows = {
+                symbol: list(intraday_rows.get(symbol) or [])
+                for symbol in candidate_symbols
+                if intraday_rows.get(symbol)
+            }
+            _notify(progress, f"Testing frozen {strategy.get('name')} rules across {len(cross_rows)} stocks…")
+            generalization = cross_stock_generalization(
+                cross_rows,
+                frozen,
+                cross_settings,
+            )
 
-        validation_status, gate_reasons = _global_validation_gate(
-            anchor_report=report,
-            strength=strength,
-            generalization=generalization,
-            walk_forward=walk_report,
-            broad_universe=bool(universe.get("point_in_time_capable")),
-        )
-        global_score = round(
-            (safe_float(strength.get("score"), 0.0) or 0.0) * 0.65
-            + (safe_float((generalization.get("summary") or {}).get("score"), 0.0) or 0.0) * 0.35,
-            1,
-        )
-        research_results.append(
-            {
+            validation_status, gate_reasons = _global_validation_gate(
+                anchor_report=report,
+                strength=strength,
+                generalization=generalization,
+                walk_forward=walk_report,
+                broad_universe=bool(universe.get("point_in_time_capable")),
+            )
+            global_score = round(
+                (safe_float(strength.get("score"), 0.0) or 0.0) * 0.65
+                + (safe_float((generalization.get("summary") or {}).get("score"), 0.0) or 0.0) * 0.35,
+                1,
+            )
+            research_results.append(
+                {
+                    "strategy_id": strategy.get("id"),
+                    "strategy_name": strategy.get("name"),
+                    "source_title": strategy.get("source_title"),
+                    "priority_score": finalist.get("priority_score"),
+                    "opportunities": opportunities,
+                    "anchor_symbol": anchor,
+                    "candidate_symbols": candidate_symbols,
+                    "research_windows": {
+                        symbol: research_windows.get(symbol)
+                        for symbol in candidate_symbols
+                        if symbol in research_windows
+                    },
+                    "symbol_lifecycles": {
+                        symbol: lifecycle_by_symbol.get(symbol)
+                        for symbol in candidate_symbols
+                        if symbol in lifecycle_by_symbol
+                    },
+                    "asset_status_by_symbol": {
+                        symbol: ((universe.get("asset_metadata") or {}).get(symbol) or {}).get("status")
+                        for symbol in candidate_symbols
+                    },
+                    "optimization_report": report,
+                    "walk_forward": walk_report,
+                    "strength": strength,
+                    "generalization": generalization,
+                    "global_score": global_score,
+                    "validation_status": validation_status,
+                    "gate_reasons": gate_reasons,
+                    "catalyst_summary_by_symbol": {
+                        symbol: catalyst_summary_by_symbol.get(symbol)
+                        for symbol in candidate_symbols
+                        if symbol in catalyst_summary_by_symbol
+                    },
+                }
+            )
+
+
+        except AppError as exc:
+            failure = {
                 "strategy_id": strategy.get("id"),
                 "strategy_name": strategy.get("name"),
-                "source_title": strategy.get("source_title"),
-                "priority_score": finalist.get("priority_score"),
-                "opportunities": opportunities,
-                "anchor_symbol": anchor,
-                "candidate_symbols": candidate_symbols,
-                "research_windows": {
-                    symbol: research_windows.get(symbol)
-                    for symbol in candidate_symbols
-                    if symbol in research_windows
-                },
-                "symbol_lifecycles": {
-                    symbol: lifecycle_by_symbol.get(symbol)
-                    for symbol in candidate_symbols
-                    if symbol in lifecycle_by_symbol
-                },
-                "asset_status_by_symbol": {
-                    symbol: ((universe.get("asset_metadata") or {}).get(symbol) or {}).get("status")
-                    for symbol in candidate_symbols
-                },
-                "optimization_report": report,
-                "walk_forward": walk_report,
-                "strength": strength,
-                "generalization": generalization,
-                "global_score": global_score,
-                "validation_status": validation_status,
-                "gate_reasons": gate_reasons,
-                "catalyst_summary_by_symbol": {
-                    symbol: catalyst_summary_by_symbol.get(symbol)
-                    for symbol in candidate_symbols
-                    if symbol in catalyst_summary_by_symbol
-                },
+                "finalist_number": finalist_number,
+                "error": str(exc),
             }
-        )
+            failed_finalists.append(failure)
+            _notify(
+                progress,
+                f"Deep research {finalist_number}/{len(finalists)} skipped "
+                f"{strategy.get('name') or 'strategy'} after a research error; continuing…",
+            )
+            continue
 
     research_results.sort(
         key=lambda item: (
@@ -1173,7 +1204,11 @@ def run_autonomous_research(
         "timeframe": AUTO_TIMEFRAME,
         "eligible_strategies": len(eligible),
         "strategies_with_opportunities": len(discovery),
+        "deep_strategies_attempted": len(finalists),
         "deep_strategies_tested": len(research_results),
+        "deep_strategies_failed": len(failed_finalists),
+        "failed_finalists": failed_finalists,
+        "run_status": "complete_with_skips" if failed_finalists else "complete",
         "discovery": [
             {
                 "strategy_id": item["strategy"].get("id"),
