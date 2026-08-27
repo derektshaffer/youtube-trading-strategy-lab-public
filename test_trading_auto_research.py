@@ -4,10 +4,13 @@ import unittest
 
 from trading_auto_research import (
     _global_validation_gate,
+    deterministic_catalog_sample,
     deterministic_symbol_sample,
+    infer_symbol_lifecycle,
     merge_autonomous_research_into_library,
     rank_historical_opportunities,
     score_historical_opportunities,
+    select_event_research_window,
 )
 
 
@@ -48,6 +51,53 @@ class AutonomousResearchTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(first[:2], ["HOT1", "HOT2"])
         self.assertEqual(len(first), 50)
+
+    def test_catalog_sample_reserves_space_for_inactive_symbols(self):
+        catalog = [
+            {"symbol": f"A{index:03d}", "status": "active"}
+            for index in range(100)
+        ] + [
+            {"symbol": f"D{index:03d}", "status": "inactive"}
+            for index in range(60)
+        ]
+        sampled, stats = deterministic_catalog_sample(
+            catalog,
+            maximum=50,
+            priority=["A000", "A001"],
+            inactive_share=0.30,
+        )
+        self.assertEqual(sampled[:2], ["A000", "A001"])
+        self.assertEqual(len(sampled), 50)
+        self.assertEqual(stats["inactive_sampled"], 15)
+        self.assertEqual(stats["active_sampled"], 35)
+
+    def test_lifecycle_is_inferred_from_actual_bar_dates(self):
+        rows = [
+            {"t": "2024-01-03T21:00:00Z", "c": 10, "v": 1000},
+            {"t": "2024-01-04T21:00:00Z", "c": 11, "v": 1200},
+            {"t": "2024-02-01T21:00:00Z", "c": 9, "v": 900},
+        ]
+        lifecycle = infer_symbol_lifecycle(rows)
+        self.assertEqual(lifecycle["first_observed_date"], "2024-01-03")
+        self.assertEqual(lifecycle["last_observed_date"], "2024-02-01")
+        self.assertEqual(lifecycle["observed_sessions"], 3)
+
+    def test_event_window_selects_dense_historical_cluster(self):
+        opportunities = [
+            {"date": "2023-01-10", "relative_volume": 2.0, "day_change_pct": 5},
+            {"date": "2023-01-20", "relative_volume": 3.0, "day_change_pct": 8},
+            {"date": "2023-02-05", "relative_volume": 4.0, "day_change_pct": 10},
+            {"date": "2025-06-01", "relative_volume": 9.0, "day_change_pct": 20},
+        ]
+        window = select_event_research_window(
+            opportunities,
+            window_days=120,
+            buffer_days=30,
+        )
+        self.assertIsNotNone(window)
+        self.assertEqual(window["event_count"], 3)
+        self.assertIn("2023-01-20", window["event_dates"])
+        self.assertNotIn("2025-06-01", window["event_dates"])
 
     def test_opportunity_score_uses_historical_conditions_not_trade_outcomes(self):
         strategy = {
