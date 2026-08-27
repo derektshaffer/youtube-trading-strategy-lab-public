@@ -1817,7 +1817,7 @@ class StrategyStore:
         return result
 
     def load_latest(self) -> dict[str, Any]:
-        """Load local data, but prefer a newer durable cloud copy when one exists."""
+        """Reconcile local and durable cloud copies without silently discarding either side."""
         local = self.load()
         if self.cloud_backup is None:
             return local
@@ -1832,11 +1832,29 @@ class StrategyStore:
         remote_library = remote["library"]
         local_updated = str(local.get("updated_at") or "")
         remote_updated = str(remote_library.get("updated_at") or "")
+
+        if local_updated and remote_updated and local_updated == remote_updated:
+            if local != remote_library:
+                raise AppError(
+                    "The local and private GitHub libraries have different records with the same "
+                    "saved timestamp. Neither copy was overwritten. Restore/inspect the cloud copy "
+                    "before making another change."
+                )
+            self._record_cloud_success(remote_library)
+            return local
+
         if remote_updated and (not local_updated or remote_updated > local_updated):
             self._write_local(remote_library, make_backup=bool(self.path.exists()))
             self._record_cloud_success(remote_library)
             self.restored_on_startup = True
             return self.load()
+
+        # Local is newer. Keep it, but remember exactly which cloud revision we observed so
+        # the next save can safely promote the local checkpoint instead of reporting a false conflict.
+        self._record_cloud_status(
+            last_synced_at=isoformat_utc(utc_now()),
+            synced_updated_at=remote_library.get("updated_at"),
+        )
         return local
 
     def persistence_status(self, *, verify: bool = False) -> dict[str, Any]:
@@ -1851,7 +1869,12 @@ class StrategyStore:
                 remote = self.cloud_backup.read_library()
                 verified = True
                 library_exists = remote is not None
-                if status.get("last_error"):
+                # A successful read proves reachability, not that the last write succeeded.
+                # Preserve write/conflict errors until an actual synchronization succeeds.
+                last_error = str(status.get("last_error") or "")
+                if any(old in last_error for old in (
+                    "derektshaffer/youtube-trading-strategy-backups",
+                )):
                     self._record_cloud_status(last_error=None)
                     status = self.cloud_status()
             except AppError as exc:
@@ -1865,6 +1888,7 @@ class StrategyStore:
         status["verified"] = verified
         status["library_exists"] = library_exists if verify else None
         status["durable"] = bool(configured and verified)
+        status["healthy"] = bool(configured and verified and not status.get("last_error"))
         status["verification_error"] = verification_error
         status["local_path"] = str(self.path)
         status["local_exists"] = self.path.exists()
