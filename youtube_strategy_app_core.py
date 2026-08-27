@@ -466,7 +466,8 @@ def render_backtest_trade_chart(
             f"Exit: {exit_time.tz_convert(ET).strftime('%b %d, %Y · %I:%M %p ET')} @ {money(exit_price, 4)}<br>"
             f"P/L: {money(pnl)} ({return_pct:+.2f}%)<br>"
             f"Exit reason: {escape(reason)}<br>"
-            f"Sample: {sample_name}"
+            f"Sample: {sample_name}<br>"
+            f"Entry session: {escape(str(trade.get('entry_session_type') or 'regular').title())}"
         )
         entry_x.append(entry_time)
         entry_y.append(entry_price)
@@ -596,7 +597,7 @@ def render_backtest_trade_chart(
         rangeslider_visible=False,
         rangebreaks=[
             dict(bounds=["sat", "mon"]),
-            dict(bounds=[16, 9.5], pattern="hour"),
+            dict(bounds=[20, 4], pattern="hour"),
         ],
         row=1,
         col=1,
@@ -606,7 +607,7 @@ def render_backtest_trade_chart(
         showgrid=True,
         rangebreaks=[
             dict(bounds=["sat", "mon"]),
-            dict(bounds=[16, 9.5], pattern="hour"),
+            dict(bounds=[20, 4], pattern="hour"),
         ],
         row=2,
         col=1,
@@ -1899,6 +1900,70 @@ with backtest_tab:
                 value=max(0.0, min(50.0, safe_float(optimized_profile.get("fee_per_order"), 0.0) or 0.0)),
                 step=0.1,
             )
+
+            with st.expander("Layered entries & extended-hours behavior", expanded=False):
+                execution_row = st.columns(3)
+                max_concurrent_positions = execution_row[0].number_input(
+                    "Maximum simultaneous trades",
+                    min_value=1,
+                    max_value=10,
+                    value=max(1, min(10, int(safe_float(optimized_profile.get("max_concurrent_positions"), 4) or 4))),
+                    step=1,
+                    help=(
+                        "Allows several smaller entries to overlap. Total risk and total account allocation remain capped, "
+                        "so adding more slots splits the available exposure instead of multiplying it."
+                    ),
+                )
+                allow_extended_hours = execution_row[1].checkbox(
+                    "Allow extended-hours entries",
+                    value=bool(optimized_profile.get("allow_extended_hours", True)),
+                    help="Keeps 04:00-20:00 ET candles in the simulation instead of regular-hours candles only.",
+                )
+                extended_hours_scale_pct = execution_row[2].number_input(
+                    "Extended-hours entry size (%)",
+                    min_value=5,
+                    max_value=100,
+                    value=max(
+                        5,
+                        min(
+                            100,
+                            int(round((safe_float(optimized_profile.get("extended_hours_position_scale"), 0.25) or 0.25) * 100)),
+                        ),
+                    ),
+                    step=5,
+                    disabled=not allow_extended_hours,
+                    help="Each premarket/after-hours entry uses this percentage of a normal position slot.",
+                )
+
+                rule_row = st.columns(3)
+                ignore_strategy_session_end = rule_row[0].checkbox(
+                    "Keep taking entries after strategy end time",
+                    value=bool(optimized_profile.get("ignore_strategy_session_end", True)),
+                    help=(
+                        "Ignores a saved session-end rule such as 11:30 ET. A strategy session-start rule is still respected."
+                    ),
+                )
+                allow_price_extension = rule_row[1].checkbox(
+                    "Allow momentum continuation above max price",
+                    value=bool(optimized_profile.get("allow_price_extension_after_qualification", True)),
+                    help=(
+                        "If the stock begins the session inside the strategy's price band, it can stay eligible after momentum "
+                        "carries it above the saved maximum price."
+                    ),
+                )
+                require_pullback_breakout = rule_row[2].checkbox(
+                    "Require pullback → breakout on pullback strategies",
+                    value=bool(optimized_profile.get("require_pullback_breakout_for_pullback_strategies", True)),
+                    help=(
+                        "For strategies described as pullbacks or bull flags, entries require a recent pullback followed by "
+                        "a bullish break above the recent pullback highs instead of firing on filters alone."
+                    ),
+                )
+                st.caption(
+                    "Layered entries use a shared portfolio risk budget. With 4 simultaneous slots, each regular-hours entry "
+                    "can use up to roughly one quarter of the configured risk/allocation ceiling; extended-hours entries are smaller."
+                )
+
             run_requested = st.form_submit_button("Run historical backtest", use_container_width=True)
 
         if run_requested:
@@ -1917,6 +1982,12 @@ with backtest_tab:
                     spread_bps=spread_bps,
                     slippage_bps=slippage_bps,
                     fee_per_order=order_fee,
+                    max_concurrent_positions=int(max_concurrent_positions),
+                    allow_extended_hours=bool(allow_extended_hours),
+                    extended_hours_position_scale=float(extended_hours_scale_pct) / 100.0,
+                    ignore_strategy_session_end=bool(ignore_strategy_session_end),
+                    allow_price_extension_after_qualification=bool(allow_price_extension),
+                    require_pullback_breakout_for_pullback_strategies=bool(require_pullback_breakout),
                 )
                 st.session_state["last_manual_backtest_settings"] = {
                     "starting_cash": float(starting_cash),
@@ -1927,6 +1998,12 @@ with backtest_tab:
                     "spread_bps": float(spread_bps),
                     "slippage_bps": float(slippage_bps),
                     "fee_per_order": float(order_fee),
+                    "max_concurrent_positions": int(max_concurrent_positions),
+                    "allow_extended_hours": bool(allow_extended_hours),
+                    "extended_hours_position_scale": float(extended_hours_scale_pct) / 100.0,
+                    "ignore_strategy_session_end": bool(ignore_strategy_session_end),
+                    "allow_price_extension_after_qualification": bool(allow_price_extension),
+                    "require_pullback_breakout_for_pullback_strategies": bool(require_pullback_breakout),
                 }
                 st.session_state["last_manual_history_days"] = int(history_days)
                 st.session_state["last_manual_timeframe"] = str(timeframe)
@@ -2286,6 +2363,16 @@ with optimizer_tab:
                         spread_bps=optimizer_spread,
                         slippage_bps=optimizer_slippage,
                         fee_per_order=optimizer_fee,
+                        max_concurrent_positions=max(1, int(manual_optimizer_defaults.get("max_concurrent_positions", 4))),
+                        allow_extended_hours=bool(manual_optimizer_defaults.get("allow_extended_hours", True)),
+                        extended_hours_position_scale=float(manual_optimizer_defaults.get("extended_hours_position_scale", 0.25)),
+                        ignore_strategy_session_end=bool(manual_optimizer_defaults.get("ignore_strategy_session_end", True)),
+                        allow_price_extension_after_qualification=bool(
+                            manual_optimizer_defaults.get("allow_price_extension_after_qualification", True)
+                        ),
+                        require_pullback_breakout_for_pullback_strategies=bool(
+                            manual_optimizer_defaults.get("require_pullback_breakout_for_pullback_strategies", True)
+                        ),
                     )
                     tuning_settings = OptimizationSettings(
                         max_variants_per_strategy=combination_limit,
