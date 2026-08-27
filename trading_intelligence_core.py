@@ -421,11 +421,10 @@ class GeminiRuleCompiler:
     def __init__(
         self,
         api_key: str,
-        model: str = DEFAULT_GEMINI_BOOK_MODEL,
+        model: str = DEFAULT_GEMINI_MODEL,
         *,
         fallback_api_key: str = "",
-        fallback_model: str = "gemini-3.5-flash",
-        specialist_model: str = DEFAULT_GEMINI_BOOK_SPECIALIST_MODEL,
+        fallback_model: str = DEFAULT_GEMINI_FALLBACK_MODEL,
     ):
         key = str(api_key or "").strip()
         if not key:
@@ -436,15 +435,11 @@ class GeminiRuleCompiler:
             raise AppError(
                 "GEMINI_PAID_API_KEY must be a different key from a separate Google project."
             )
-        self.model = str(model or DEFAULT_GEMINI_BOOK_MODEL).strip() or DEFAULT_GEMINI_BOOK_MODEL
+        self.model = str(model or DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
         self.primary_model = self.model
-        self.specialist_model = (
-            str(specialist_model or DEFAULT_GEMINI_BOOK_SPECIALIST_MODEL).strip()
-            or DEFAULT_GEMINI_BOOK_SPECIALIST_MODEL
-        )
         fallback_candidates = [
             str(fallback_model or "").strip(),
-            *DEFAULT_GEMINI_BOOK_FALLBACK_MODELS,
+            *DEFAULT_GEMINI_ADDITIONAL_FALLBACK_MODELS,
         ]
         self.fallback_models: list[str] = []
         for candidate in fallback_candidates:
@@ -453,8 +448,6 @@ class GeminiRuleCompiler:
                 self.fallback_models.append(candidate)
         self._fallback_model_index = 0
         self.model_fallback_used = False
-        self.specialist_used = False
-        self.specialist_sections: list[int] = []
         self.paid_fallback_used = False
 
     @property
@@ -778,15 +771,16 @@ def prepare_strategies_with_ai(
 
 
 class GeminiBookAnalyzer:
-    """Chunked document strategy extractor with retry, fallback, and section resume."""
+    """Chunked document extractor: 3.6 bulk reader, 3.7 specialist, 3.5/2.5 reliability fallbacks."""
 
     def __init__(
         self,
         api_key: str,
-        model: str = DEFAULT_GEMINI_MODEL,
+        model: str = DEFAULT_GEMINI_BOOK_MODEL,
         *,
         fallback_api_key: str = "",
-        fallback_model: str = DEFAULT_GEMINI_FALLBACK_MODEL,
+        fallback_model: str = "gemini-3.5-flash",
+        specialist_model: str = DEFAULT_GEMINI_BOOK_SPECIALIST_MODEL,
     ):
         key = str(api_key or "").strip()
         if not key:
@@ -797,19 +791,30 @@ class GeminiBookAnalyzer:
             raise AppError(
                 "GEMINI_PAID_API_KEY must be a different key from a separate Google project."
             )
-        self.model = str(model or DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
+        self.model = str(model or DEFAULT_GEMINI_BOOK_MODEL).strip() or DEFAULT_GEMINI_BOOK_MODEL
         self.primary_model = self.model
+        self.specialist_model = (
+            str(specialist_model or DEFAULT_GEMINI_BOOK_SPECIALIST_MODEL).strip()
+            or DEFAULT_GEMINI_BOOK_SPECIALIST_MODEL
+        )
         fallback_candidates = [
             str(fallback_model or "").strip(),
-            *DEFAULT_GEMINI_ADDITIONAL_FALLBACK_MODELS,
+            *DEFAULT_GEMINI_BOOK_FALLBACK_MODELS,
         ]
         self.fallback_models: list[str] = []
         for candidate in fallback_candidates:
             candidate = str(candidate or "").strip()
-            if candidate and candidate != self.primary_model and candidate not in self.fallback_models:
+            if (
+                candidate
+                and candidate != self.primary_model
+                and candidate != self.specialist_model
+                and candidate not in self.fallback_models
+            ):
                 self.fallback_models.append(candidate)
         self._fallback_model_index = 0
         self.model_fallback_used = False
+        self.specialist_used = False
+        self.specialist_sections: list[int] = []
         self.paid_fallback_used = False
 
     @property
