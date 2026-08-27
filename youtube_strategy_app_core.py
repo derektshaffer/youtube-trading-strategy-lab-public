@@ -277,6 +277,28 @@ def compact(value: Any) -> str:
     return f"{number:,.0f}"
 
 
+def safe_utc_timestamp_series(values: pd.Series) -> pd.Series:
+    """Parse mixed timestamp values without letting one malformed value crash Streamlit."""
+    parsed: list[Any] = []
+    for value in values.tolist():
+        try:
+            if value is None or (isinstance(value, float) and pd.isna(value)):
+                parsed.append(pd.NaT)
+                continue
+            timestamp = value if isinstance(value, pd.Timestamp) else pd.Timestamp(value)
+            if pd.isna(timestamp):
+                parsed.append(pd.NaT)
+                continue
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.tz_localize("UTC")
+            else:
+                timestamp = timestamp.tz_convert("UTC")
+            parsed.append(timestamp)
+        except (TypeError, ValueError, OverflowError):
+            parsed.append(pd.NaT)
+    return pd.Series(parsed, index=values.index, dtype="datetime64[ns, UTC]")
+
+
 def local_timestamp(raw: str | None) -> str:
     if not raw:
         return "Unavailable"
@@ -2065,9 +2087,14 @@ with backtest_tab:
             factor = all_metrics["profit_factor"]
             metric_card(stat_columns[3], "Profit factor", f"{factor:.2f}x" if factor is not None else "—", "Gross gains divided by gross losses")
             curve = pd.DataFrame(detail["equity_curve"])
-            if len(curve) > 1:
-                curve["timestamp"] = pd.to_datetime(curve["timestamp"], errors="coerce", utc=True)
-                st.line_chart(curve.dropna(subset=["timestamp"]).set_index("timestamp")["equity"], height=280)
+            if len(curve) > 1 and "timestamp" in curve.columns and "equity" in curve.columns:
+                curve["timestamp"] = safe_utc_timestamp_series(curve["timestamp"])
+                curve["equity"] = pd.to_numeric(curve["equity"], errors="coerce")
+                clean_curve = curve.dropna(subset=["timestamp", "equity"]).sort_values("timestamp")
+                if len(clean_curve) > 1:
+                    st.line_chart(clean_curve.set_index("timestamp")["equity"], height=280)
+                elif not clean_curve.empty:
+                    st.caption(f"Equity after the completed backtest: {money(clean_curve.iloc[-1]['equity'])}")
 
             chart_bars = (st.session_state.get("backtest_price_bars") or {}).get(detail_symbol, [])
             chart_timeframe = str(st.session_state.get("backtest_timeframe") or preferred_timeframe)
