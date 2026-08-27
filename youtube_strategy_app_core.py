@@ -523,7 +523,7 @@ def render_backtest_trade_chart(
         contracted = max(current_span * 0.625, pd.Timedelta(minutes=10))
         view_start, view_end = set_view(current_midpoint - contracted / 2, current_midpoint + contracted / 2)
 
-    display_cols = st.columns(5)
+    display_cols = st.columns(6)
     show_volume = display_cols[0].checkbox(
         "Volume",
         value=True,
@@ -548,6 +548,12 @@ def render_backtest_trade_chart(
         "Entry → exit",
         value=True,
         key=f"backtest_trade_chart_connectors_{symbol}",
+    )
+    show_hover_details = display_cols[5].checkbox(
+        "Hover details",
+        value=True,
+        key=f"backtest_trade_chart_hover_{symbol}",
+        help="Turn this off to hide the large candle/trade pop-up descriptions while keeping zoom, pan, markers, and range controls active.",
     )
 
     # Auto-scale the price axis to the visible candles so a large historic window
@@ -583,6 +589,7 @@ def render_backtest_trade_chart(
             increasing_fillcolor="#35d597",
             decreasing_fillcolor="#ff7878",
             hoverlabel=dict(namelength=0),
+            hoverinfo="all" if show_hover_details else "skip",
         ),
         row=1,
         col=1,
@@ -600,7 +607,11 @@ def render_backtest_trade_chart(
                 name="Volume",
                 marker_color=volume_colors,
                 opacity=0.28,
-                hovertemplate="%{x|%b %d, %Y %I:%M %p}<br>Volume: %{y:,.0f}<extra></extra>",
+                hovertemplate=(
+                    "%{x|%b %d, %Y %I:%M %p}<br>Volume: %{y:,.0f}<extra></extra>"
+                    if show_hover_details else None
+                ),
+                hoverinfo="all" if show_hover_details else "skip",
             ),
             row=2,
             col=1,
@@ -700,8 +711,9 @@ def render_backtest_trade_chart(
                 mode="markers",
                 name="Entry",
                 marker=dict(symbol="triangle-up", size=11, color="#35d597", line=dict(color="#d8ffed", width=1)),
-                text=entry_hover,
-                hovertemplate="%{text}<extra></extra>",
+                text=entry_hover if show_hover_details else None,
+                hovertemplate="%{text}<extra></extra>" if show_hover_details else None,
+                hoverinfo="all" if show_hover_details else "skip",
             ),
             row=1,
             col=1,
@@ -714,8 +726,9 @@ def render_backtest_trade_chart(
                 mode="markers",
                 name="Exit",
                 marker=dict(symbol="triangle-down", size=11, color="#ff7878", line=dict(color="#ffd0d0", width=1)),
-                text=exit_hover,
-                hovertemplate="%{text}<extra></extra>",
+                text=exit_hover if show_hover_details else None,
+                hovertemplate="%{text}<extra></extra>" if show_hover_details else None,
+                hoverinfo="all" if show_hover_details else "skip",
             ),
             row=1,
             col=1,
@@ -761,9 +774,9 @@ def render_backtest_trade_chart(
             x=0,
             bgcolor="rgba(0,0,0,0)",
         ),
-        hovermode="x unified",
-        hoverdistance=80,
-        spikedistance=-1,
+        hovermode="x unified" if show_hover_details else False,
+        hoverdistance=80 if show_hover_details else 0,
+        spikedistance=-1 if show_hover_details else 0,
         xaxis_rangeslider_visible=False,
         showlegend=True,
         dragmode="pan",
@@ -779,7 +792,7 @@ def render_backtest_trade_chart(
             dict(bounds=["sat", "mon"]),
             dict(bounds=[20, 4], pattern="hour"),
         ],
-        showspikes=True,
+        showspikes=show_hover_details,
         spikemode="across",
         spikesnap="cursor",
         spikecolor="rgba(210,225,245,0.55)",
@@ -825,7 +838,8 @@ def render_backtest_trade_chart(
         loser_count = sum((safe_float(trade.get("pnl"), 0.0) or 0.0) < 0 for trade in visible_trades)
         st.caption(
             f"Showing {len(visible_trades)} trades · {winner_count} winners · {loser_count} losers. "
-            "Use +/− above or your mouse wheel/trackpad to zoom. Drag to pan. Double-click the chart to reset."
+            "Use +/− above or your mouse wheel/trackpad to zoom. Drag to pan. Double-click the chart to reset. "
+            "Turn Hover details off for a clean chart with no pop-up descriptions."
         )
     else:
         st.info("No trades match the selected chart filters.")
