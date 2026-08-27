@@ -17,7 +17,9 @@ import re
 from time import sleep
 from typing import Any
 
-from trading_strategy_dna import infer_strategy_dna\n\nfrom youtube_strategy_engine import (
+from trading_strategy_dna import infer_strategy_dna
+
+from youtube_strategy_engine import (
     AppError,
     DEFAULT_GEMINI_ADDITIONAL_FALLBACK_MODELS,
     DEFAULT_GEMINI_FALLBACK_MODEL,
