@@ -424,6 +424,58 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(len(result["strategies"]), 1)
 
 
+class DurableStorageTests(unittest.TestCase):
+    def test_load_latest_restores_cloud_after_local_directory_disappears(self):
+        class FakeCloud:
+            repository = "owner/private-backups"
+            path = "trading-intelligence-lab/intelligence_library.json"
+
+            def __init__(self):
+                self.library = None
+
+            def read_library(self):
+                if self.library is None:
+                    return None
+                return {"library": json.loads(json.dumps(self.library)), "sha": "a" * 40}
+
+            def save_library(self, data, *, previous_updated_at=None):
+                self.library = json.loads(json.dumps(data))
+                return {"library": self.library, "sha": "b" * 40}
+
+        cloud = FakeCloud()
+        with tempfile.TemporaryDirectory() as first_directory:
+            first = engine.StrategyStore(first_directory, cloud_backup=cloud)
+            first.save(
+                {
+                    "strategies": [],
+                    "knowledge_sources": [
+                        {"id": "book1", "title": "Saved Book", "analysis_stage": "complete"}
+                    ],
+                }
+            )
+            self.assertEqual(first.load_latest()["knowledge_sources"][0]["title"], "Saved Book")
+
+        with tempfile.TemporaryDirectory() as restarted_directory:
+            restarted = engine.StrategyStore(restarted_directory, cloud_backup=cloud)
+            restored = restarted.load_latest()
+            self.assertEqual(restored["knowledge_sources"][0]["title"], "Saved Book")
+            self.assertTrue(restarted.path.exists())
+
+    def test_persistence_status_reports_cloud_durability(self):
+        class FakeCloud:
+            repository = "owner/private-backups"
+            path = "trading-intelligence-lab/intelligence_library.json"
+
+            def read_library(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = engine.StrategyStore(directory, cloud_backup=FakeCloud())
+            status = store.persistence_status()
+            self.assertTrue(status["durable"])
+            self.assertEqual(status["repository"], "owner/private-backups")
+
+
 class ProviderTests(unittest.TestCase):
     def test_interaction_parser_uses_current_steps_schema(self):
         response = {"steps": [{"type": "thought"}, {"type": "model_output", "content": [{"type": "text", "text": '{"ok":true}'}]}]}
