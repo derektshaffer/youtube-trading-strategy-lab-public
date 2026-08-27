@@ -219,7 +219,17 @@ def save_ingestion_checkpoint(
 
 
 def persistence_summary() -> dict[str, Any]:
-    return intelligence_store().persistence_status(verify=True)
+    store = intelligence_store()
+    status = store.persistence_status(verify=True)
+    if status.get("configured") and status.get("verified") and status.get("last_error"):
+        # A prior deploy/network/config error may be stale. Retry one real synchronization
+        # automatically so green means the current deployment can actually write, not just read.
+        try:
+            store.save(store.load_latest())
+        except AppError:
+            pass
+        status = store.persistence_status(verify=True)
+    return status
 
 
 def source_label(strategy: dict[str, Any]) -> str:
@@ -382,7 +392,12 @@ elif module == "Knowledge Sources":
             "is automatically limited to the strongest research finalists."
         )
 
-    can_analyze = uploaded is not None
+    can_analyze = uploaded is not None and bool(storage.get("healthy"))
+    if uploaded is not None and not storage.get("healthy"):
+        st.warning(
+            "Analysis is temporarily disabled until permanent GitHub storage is healthy. "
+            "This prevents a long book run from being lost if Streamlit restarts."
+        )
     analyze = st.button(
         "🧠 Analyze source and extract strategies",
         type="primary",
