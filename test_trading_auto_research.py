@@ -6,6 +6,7 @@ from youtube_strategy_engine import AppError
 
 from trading_auto_research import (
     _batched_bars,
+    autonomous_research_baselines,
     _global_validation_gate,
     _invalid_symbol_from_error,
     deterministic_catalog_sample,
@@ -120,6 +121,80 @@ class PriorDayOpportunityTests(unittest.TestCase):
         self.assertTrue(event["previous_day_high_broken"])
         self.assertAlmostEqual(event["previous_day_volume_ratio"], 4.0, places=2)
         self.assertAlmostEqual(event["previous_day_change_pct"], 10.0, places=2)
+
+
+class AutonomousResearchBaselineTests(unittest.TestCase):
+    def test_nested_stock_optimized_copies_collapse_to_original_root(self):
+        root = {
+            "id": "root",
+            "name": "Low-Float Momentum & Micro Pullback Strategy",
+            "direction": "long",
+            "machine_rules": {"min_relative_volume": 1.5},
+            "validation_status": "unvalidated",
+        }
+        sdot = {
+            **root,
+            "id": "sdot-copy",
+            "name": "Low-Float Momentum & Micro Pullback Strategy — SDOT optimized",
+            "machine_rules": {"min_relative_volume": 3.0},
+            "optimized_for_symbol": "SDOT",
+            "parent_strategy_id": "root",
+            "validation_status": "validated",
+            "validated_rules": {"min_relative_volume": 3.0},
+        }
+        bbai = {
+            **sdot,
+            "id": "bbai-copy",
+            "name": "Low-Float Momentum & Micro Pullback Strategy — SDOT optimized on BBAI",
+            "machine_rules": {"min_relative_volume": 5.0},
+            "optimized_for_symbol": "BBAI",
+            "parent_strategy_id": "sdot-copy",
+        }
+
+        baselines = autonomous_research_baselines([bbai, sdot, root])
+
+        self.assertEqual(len(baselines), 1)
+        baseline = baselines[0]
+        self.assertEqual(baseline["id"], "root")
+        self.assertEqual(baseline["name"], root["name"])
+        self.assertEqual(baseline["machine_rules"]["min_relative_volume"], 1.5)
+        self.assertNotIn("optimized_for_symbol", baseline)
+        self.assertNotIn("parent_strategy_id", baseline)
+        self.assertNotIn("validated_rules", baseline)
+        self.assertEqual(baseline["validation_status"], "unvalidated")
+        self.assertEqual(baseline["optimization_status"], "not_run")
+
+    def test_orphaned_stock_optimized_copy_is_unlocked_defensively(self):
+        orphan = {
+            "id": "orphan",
+            "name": "Strategy — BBAI optimized",
+            "direction": "long",
+            "machine_rules": {"min_relative_volume": 2.5},
+            "optimized_for_symbol": "BBAI",
+            "parent_strategy_id": "missing-root",
+            "optimized_backtest_settings": {"starting_cash": 10000},
+            "validation_status": "validated",
+            "validated_rules": {"min_relative_volume": 2.5},
+        }
+
+        baselines = autonomous_research_baselines([orphan])
+
+        self.assertEqual(len(baselines), 1)
+        baseline = baselines[0]
+        self.assertEqual(baseline["id"], "orphan")
+        self.assertNotIn("optimized_for_symbol", baseline)
+        self.assertNotIn("parent_strategy_id", baseline)
+        self.assertNotIn("optimized_backtest_settings", baseline)
+        self.assertNotIn("validated_rules", baseline)
+        self.assertTrue(baseline["autonomous_research_unlocked"])
+
+    def test_distinct_root_strategies_remain_distinct(self):
+        strategies = [
+            {"id": "a", "name": "A", "direction": "long", "machine_rules": {}},
+            {"id": "b", "name": "B", "direction": "long", "machine_rules": {}},
+        ]
+        baselines = autonomous_research_baselines(strategies)
+        self.assertEqual({item["id"] for item in baselines}, {"a", "b"})
 
 
 class AutonomousResearchTests(unittest.TestCase):
