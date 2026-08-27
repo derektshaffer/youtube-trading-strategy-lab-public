@@ -2354,23 +2354,66 @@ class AlpacaMarketData:
         data = self._get("/v1beta1/screener/stocks/movers", {"top": max(1, min(50, int(top)))})
         return parse_symbols([item.get("symbol", "") for item in data.get("gainers") or [] if isinstance(item, dict)])
 
-    def active_equities(self) -> list[str]:
-        """Return currently active tradable U.S. equities for broad research-universe sampling."""
+    def equity_catalog(self, status: str | None = None) -> list[dict[str, Any]]:
+        """Return Alpaca's U.S.-equity master catalog, optionally filtered by asset status.
+
+        When status is omitted Alpaca returns all statuses. Keeping inactive exchange-listed
+        equities is important for point-in-time historical research because delisted symbols
+        are generally not tradable today.
+        """
+        params = {"asset_class": "us_equity"}
+        if status:
+            normalized_status = str(status).strip().lower()
+            if normalized_status not in {"active", "inactive"}:
+                raise AppError("Equity catalog status must be active, inactive, or omitted.")
+            params["status"] = normalized_status
+        query = urlencode(params)
         data = _json_request(
-            f"{ALPACA_PAPER_TRADING_URL}/v2/assets?status=active&asset_class=us_equity",
+            f"{ALPACA_PAPER_TRADING_URL}/v2/assets?{query}",
             self.headers,
             timeout=60,
         )
         if not isinstance(data, list):
-            raise AppError("Alpaca returned an unexpected active-equities response.")
-        symbols = [
-            item.get("symbol", "")
-            for item in data
-            if isinstance(item, dict)
-            and str(item.get("status") or "").lower() == "active"
-            and bool(item.get("tradable", True))
+            raise AppError("Alpaca returned an unexpected equity-catalog response.")
+
+        supported_exchanges = {"AMEX", "ARCA", "BATS", "NASDAQ", "NYSE", "NYSEARCA"}
+        catalog: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for raw in data:
+            if not isinstance(raw, dict):
+                continue
+            symbol = str(raw.get("symbol") or "").strip().upper()
+            exchange = str(raw.get("exchange") or "").strip().upper()
+            asset_status = str(raw.get("status") or "").strip().lower()
+            if not symbol or symbol in seen:
+                continue
+            if exchange and exchange not in supported_exchanges:
+                # OTC market data is not available through the normal stock feed.
+                continue
+            if asset_status not in {"active", "inactive"}:
+                continue
+            seen.add(symbol)
+            catalog.append(
+                {
+                    "id": str(raw.get("id") or ""),
+                    "symbol": symbol,
+                    "name": str(raw.get("name") or ""),
+                    "exchange": exchange,
+                    "status": asset_status,
+                    "tradable": bool(raw.get("tradable", False)),
+                    "fractionable": bool(raw.get("fractionable", False)),
+                }
+            )
+        catalog.sort(key=lambda item: (str(item.get("symbol") or "")))
+        return catalog
+
+    def active_equities(self) -> list[str]:
+        """Return currently active tradable U.S. equities."""
+        return [
+            str(item.get("symbol") or "")
+            for item in self.equity_catalog("active")
+            if bool(item.get("tradable"))
         ]
-        return parse_symbols(symbols)
 
     def most_active(self, top: int = 30) -> list[str]:
         data = self._get("/v1beta1/screener/stocks/most-actives", {"top": max(1, min(100, int(top))), "by": "volume"})
