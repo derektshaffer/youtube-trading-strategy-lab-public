@@ -2074,13 +2074,27 @@ class StrategyStore:
         return data
 
     def verify_cloud_write_access(self) -> dict[str, Any]:
-        """Prove the configured destination accepts writes without changing library contents."""
+        """Prove the configured destination accepts writes without changing library contents.
+
+        Storage health is about whether the configured GitHub destination can
+        accept a write. Do not make that proof depend on reconciling a possibly
+        stale Streamlit-local library first. When the remote file already
+        exists, write its exact current contents back to the same revision.
+        """
         if self.cloud_backup is None:
             raise AppError("Configure the private GitHub cloud backup before verifying write access.")
-        data = self.load_latest()
-        status = self.cloud_status()
-        expected = status.get("synced_updated_at") or data.get("updated_at")
+
         try:
+            remote = self.cloud_backup.read_library()
+            if remote is not None:
+                data = self.normalize_library(remote["library"])
+                expected = data.get("updated_at")
+            else:
+                # First-use destination: preserve any local records if they
+                # exist; otherwise initialize a blank library.
+                data = self.load()
+                expected = None
+
             self.cloud_backup.save_library(
                 data,
                 previous_updated_at=expected,
@@ -2089,6 +2103,7 @@ class StrategyStore:
         except AppError as exc:
             self._record_cloud_status(last_error=str(exc))
             raise
+
         self._record_cloud_write_success(data)
         return data
 
