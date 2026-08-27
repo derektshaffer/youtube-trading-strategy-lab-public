@@ -645,6 +645,44 @@ class CloudReconciliationTests(unittest.TestCase):
 
 
 class CloudWriteVerificationTests(unittest.TestCase):
+    def test_verify_cloud_write_access_forces_real_write_attempt(self):
+        class FakeCloud:
+            repository = "owner/private-backups"
+            path = "trading-intelligence-lab/intelligence_library.json"
+
+            def __init__(self):
+                self.library = {
+                    "version": 2,
+                    "strategies": [],
+                    "updated_at": "2026-08-27T17:00:00Z",
+                }
+                self.force_write_seen = False
+
+            def read_library(self):
+                return {
+                    "library": json.loads(json.dumps(self.library)),
+                    "sha": "a" * 40,
+                }
+
+            def save_library(self, data, *, previous_updated_at=None, force_write=False):
+                self.force_write_seen = force_write
+                self.library = json.loads(json.dumps(data))
+                return {"library": self.library, "sha": "b" * 40}
+
+        with tempfile.TemporaryDirectory() as directory:
+            cloud = FakeCloud()
+            store = engine.StrategyStore(directory, cloud_backup=cloud)
+            store._write_local(cloud.library, make_backup=False)
+            store._record_cloud_success(cloud.library)
+
+            store.verify_cloud_write_access()
+
+            self.assertTrue(cloud.force_write_seen)
+            status = store.persistence_status(verify=True)
+            self.assertTrue(status["write_verified"])
+            self.assertTrue(status["healthy"])
+
+    def test_successful_store_save_marks_write_verified_and_healthy(self):
     def test_successful_store_save_marks_write_verified_and_healthy(self):
         class FakeCloud:
             repository = "owner/private-backups"
@@ -720,6 +758,28 @@ class CloudDestinationBindingTests(unittest.TestCase):
 
 
 class CloudBackupFirstWriteTests(unittest.TestCase):
+    def test_force_write_does_not_short_circuit_identical_cloud_content(self):
+        cloud = engine.GitHubCloudBackup(
+            "owner/private-backups",
+            "token",
+            branch="main",
+            path="trading-intelligence-lab/intelligence_library.json",
+        )
+        data = {"strategies": [], "updated_at": "2026-08-27T17:00:00Z"}
+        current = {"library": dict(data), "sha": "a" * 40}
+        with patch.object(cloud, "read_library", return_value=current), patch.object(
+            cloud,
+            "_request",
+            return_value={"content": {"sha": "b" * 40}},
+        ) as request:
+            cloud.save_library(
+                data,
+                previous_updated_at="2026-08-27T17:00:00Z",
+                force_write=True,
+            )
+
+        self.assertEqual(request.call_args.kwargs["method"], "PUT")
+
     def test_first_write_to_initialized_blank_cloud_library_is_allowed(self):
         cloud = engine.GitHubCloudBackup(
             "owner/private-backups",
