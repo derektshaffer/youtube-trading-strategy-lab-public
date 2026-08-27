@@ -7,6 +7,7 @@ on:
       - "trading_intelligence_app.py"
       - "trading_intelligence_core.py"
       - "trading_validation_core.py"
+      - "trading_market_discovery.py"
       - "youtube_strategy_engine.py"
       - "requirements.txt"
       - ".github/workflows/validate-trading-intelligence.yml"
@@ -36,6 +37,7 @@ jobs:
           python -m py_compile trading_intelligence_app.py
           python -m py_compile trading_intelligence_core.py
           python -m py_compile trading_validation_core.py
+          python -m py_compile trading_market_discovery.py
           python -m py_compile youtube_strategy_engine.py
       - name: Run existing strategy-engine tests
         run: python -m unittest test_youtube_strategy_engine.py -q
