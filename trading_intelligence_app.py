@@ -92,6 +92,19 @@ st.markdown(
 
 
 DEFAULT_PRIVATE_BACKUP_REPOSITORY = "derektshaffer/derektshaffer-youtube-trading-strategy-lab"
+OBSOLETE_PRIVATE_BACKUP_REPOSITORIES = {
+    "derektshaffer/youtube-trading-strategy-backups",
+}
+
+
+def resolved_backup_repository() -> str:
+    repository = setting(
+        "GITHUB_BACKUP_REPOSITORY",
+        DEFAULT_PRIVATE_BACKUP_REPOSITORY,
+    )
+    if repository in OBSOLETE_PRIVATE_BACKUP_REPOSITORIES:
+        return DEFAULT_PRIVATE_BACKUP_REPOSITORY
+    return repository
 
 
 def backup_token() -> str:
@@ -103,10 +116,7 @@ def backup_token() -> str:
 
 
 def build_intelligence_store() -> StrategyStore:
-    repository = setting(
-        "GITHUB_BACKUP_REPOSITORY",
-        DEFAULT_PRIVATE_BACKUP_REPOSITORY,
-    )
+    repository = resolved_backup_repository()
     token = backup_token()
     cloud = None
     if repository and token:
@@ -124,10 +134,7 @@ def build_intelligence_store() -> StrategyStore:
 
 
 def build_legacy_store() -> StrategyStore:
-    repository = setting(
-        "GITHUB_BACKUP_REPOSITORY",
-        DEFAULT_PRIVATE_BACKUP_REPOSITORY,
-    )
+    repository = resolved_backup_repository()
     token = backup_token()
     cloud = None
     if repository and token:
