@@ -595,6 +595,15 @@ class FakePanel:
     def selectbox(self, label, options, index=0, **kwargs):
         return list(options)[index]
 
+    def radio(self, label, options, index=0, **kwargs):
+        return list(options)[index]
+
+    def metric(self, *args, **kwargs):
+        return None
+
+    def caption(self, *args, **kwargs):
+        return None
+
 
 class FakeStreamlit(types.ModuleType):
     def __init__(self, session_state=None):
@@ -621,8 +630,10 @@ class FakeStreamlit(types.ModuleType):
             return lambda count, **kwargs: [FakePanel() for _ in range(count if isinstance(count, int) else len(count))]
         if name in {"form", "expander", "spinner"}:
             return lambda *args, **kwargs: FakePanel()
-        if name == "selectbox":
+        if name in {"selectbox", "radio"}:
             return lambda label, options, index=0, **kwargs: list(options)[index]
+        if name == "metric":
+            return lambda *args, **kwargs: self.rendered.append((name, args))
         if name == "checkbox":
             return lambda label, value=False, **kwargs: value
         if name in {"number_input", "slider"}:
