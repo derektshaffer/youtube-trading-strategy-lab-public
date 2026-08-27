@@ -365,12 +365,27 @@ elif module == "Strategy Library":
             x1.metric("Extraction confidence", f"{float(selected.get('confidence') or 0):.0f}%")
             x2.metric("Validation", selected.get("validation_status") or "unvalidated")
             x3.metric("Optimization", selected.get("optimization_status") or "not_run")
-            st.markdown("#### Machine-testable rules")
+            st.markdown("#### Source-extracted machine rules")
             active_rules = {
                 key: value for key, value in normalize_machine_rules(selected.get("machine_rules")).items()
                 if value is not None
             }
             st.json(active_rules or {"status": "No objective thresholds extracted yet."})
+            if (
+                str(selected.get("validation_status") or "").lower() == "validated"
+                and isinstance(selected.get("validated_rules"), dict)
+            ):
+                st.markdown("#### Frozen validated rules used by live modules")
+                validated_rules = {
+                    key: value
+                    for key, value in normalize_machine_rules(selected.get("validated_rules")).items()
+                    if value is not None
+                }
+                st.json(validated_rules or {"status": "Validated run did not contain objective rules."})
+                st.caption(
+                    "The original source rules are preserved above. Market Discovery and Stock Analyzer "
+                    "use this frozen validated rule set so later research edits do not silently change a validated setup."
+                )
             if selected.get("unresolved_rules"):
                 st.markdown("#### Requires interpretation / unavailable data")
                 for item in selected.get("unresolved_rules") or []:
@@ -713,6 +728,10 @@ elif module == "Strategy Lab":
                 for item in data.get("strategies") or []:
                     if str(item.get("id") or "") == winner_id:
                         item["validation_status"] = validation_status
+                        if validation_status == "validated":
+                            item["validated_rules"] = winner.get("optimized_rules") or {}
+                            item["validated_backtest_settings"] = winner.get("optimized_backtest_settings") or {}
+                            item["validated_at"] = report.get("generated_at")
                         item["last_validation"] = {
                             "symbol": report.get("symbol"),
                             "generated_at": report.get("generated_at"),
