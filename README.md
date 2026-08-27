@@ -118,6 +118,8 @@ It is intentionally separate from the current YouTube Trading Lab home screen. T
 - Strategy DNA fingerprints that decompose setups into universe, catalyst, momentum, structure, context, risk, exit, execution, and market-regime components
 - cross-book concept mapping that counts independent-source agreement separately from historical validation
 - automatic strategy-family clustering and research-only cross-source candidate blueprints, with explicit rule conflicts surfaced instead of silently averaged
+- direct synthesized-candidate research: exact source-supported threshold disagreements are injected into the optimizer before generic nearby values, then candidates can run through historical discovery, optimization, walk-forward, untouched holdout, cost stress, and cross-stock validation from the Strategy DNA screen
+- synthetic candidates are excluded from independent-source counts so the system can never increase its own corroboration score by citing its own generated research
 - historical Strategy Lab optimization, untouched holdout testing, walk-forward validation, catalyst intelligence, universe research, market discovery, stock analysis, and Live/Paper integration
 - a separate intelligence-library backup at `trading-intelligence-lab/intelligence_library.json`
 - read/import access to strategies already saved by the YouTube Trading Lab
@@ -131,13 +133,15 @@ Normal book workflow:
 5. Gemini 3.6 Flash performs the normal bulk book extraction. Only sections with low confidence, conflicting/ambiguous requirements, evidence gaps, or unusually difficult formalization are escalated to Gemini 3.7 Flash for a specialist second pass. If 3.7 is unavailable, the successful 3.6 extraction is kept rather than discarded.
 6. The AI extracts strategies, preserves source evidence, and creates clearly labeled research assumptions where needed.
 7. The Strategy DNA layer converts each strategy into reusable components and compares those concepts across independent books/documents without treating author agreement as proof of an edge.
-8. Cross-source strategy families and candidate blueprints are generated as research hypotheses; conflicting explicit thresholds remain visible until historical testing decides what survives.
-7. The Historical Research Autopilot builds a point-in-time-capable Alpaca universe automatically from the exchange-listed U.S. equity master catalog, including both active and inactive/delisted symbols. A fixed share of each broad sample is reserved for inactive names while current movers/most-active stocks are retained for present-day coverage.
-8. About five years of daily history is used only to identify stocks and dates that previously exhibited strategy-relevant conditions. Actual dated bar availability is used to infer when each symbol existed. Future trade P/L is not used for candidate selection.
-9. Instead of forcing every strategy into the latest 60 days, the Lab selects bounded historical research windows around the strongest actual opportunity clusters for each finalist stock. Those windows can be years in the past and can belong to symbols that are inactive today.
-10. The strongest research finalists receive intraday optimization, untouched holdout testing, cost stress testing, rolling walk-forward checks, and frozen-rule cross-stock testing inside those historical event windows.
-11. Results are saved automatically into the strategy and validation libraries. Strategies that miss any autonomous validation gate remain research-only; qualifying strategies receive a frozen validated rule set.
-12. Open **AI Research Autopilot** any time to inspect the automatic leaderboard, including current asset status, observed historical lifespan, and exact research window for each finalist.
+8. Cross-source strategy families and candidate blueprints are generated as research hypotheses; conflicting explicit thresholds remain visible instead of being averaged into invented rules.
+9. Open **Strategy DNA → Candidate blueprints** to inspect a synthesized setup. **Save / refresh research candidate** stores it in the unified library. **Run full historical research pipeline** compiles the candidate and sends it directly through the existing research engine.
+10. When sources disagree on an explicit threshold (for example RVOL 5× versus 8×), each exact source-supported value is tested early as an optimizer seed before generic nearby values are explored.
+11. The Historical Research Autopilot builds a point-in-time-capable Alpaca universe automatically from the exchange-listed U.S. equity master catalog, including both active and inactive/delisted symbols. A fixed share of each broad sample is reserved for inactive names while current movers/most-active stocks are retained for present-day coverage.
+12. About five years of daily history is used only to identify stocks and dates that previously exhibited strategy-relevant conditions. Actual dated bar availability is used to infer when each symbol existed. Future trade P/L is not used for candidate selection.
+13. Instead of forcing every strategy into the latest 60 days, the Lab selects bounded historical research windows around the strongest actual opportunity clusters for each finalist stock. Those windows can be years in the past and can belong to symbols that are inactive today.
+14. The strongest research finalists receive intraday optimization, untouched holdout testing, cost stress testing, rolling walk-forward checks, and frozen-rule cross-stock testing inside those historical event windows.
+15. Results are saved automatically into the strategy and validation libraries. Strategies that miss any autonomous validation gate remain research-only; qualifying strategies receive a frozen validated rule set.
+16. Open **AI Research Autopilot** any time to inspect the automatic leaderboard, including current asset status, observed historical lifespan, and exact research window for each finalist.
 
 Point-in-time limitation: historical membership is inferred from Alpaca's retained active + inactive asset master and actual dated bar history. This materially reduces survivorship bias, but extremely old symbols missing from Alpaca's retained catalog/history, ticker changes, mergers, and corporate actions can still create gaps or separate ticker identities.
 
