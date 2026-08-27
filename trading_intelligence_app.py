@@ -47,6 +47,7 @@ from trading_intelligence_core import (
     merge_ingestion_checkpoint_strategies,
     merge_strategies,
     prepare_strategies_with_ai,
+    reconcile_knowledge_sources,
     research_readiness,
     upgrade_native_strategy_rules,
 )
@@ -169,7 +170,8 @@ def intelligence_store() -> StrategyStore:
 
 
 def load_library() -> dict[str, Any]:
-    data = intelligence_store().load_latest()
+    store = intelligence_store()
+    data = store.load_latest()
     data.setdefault("knowledge_sources", [])
     data.setdefault("strategies", [])
     data.setdefault("research_runs", [])
@@ -183,6 +185,18 @@ def load_library() -> dict[str, Any]:
         upgraded["research_readiness"] = research_readiness(upgraded)
         upgraded_strategies.append(upgraded)
     data["strategies"] = upgraded_strategies
+
+    # Older Trading Lab versions saved source provenance only on strategy records.
+    # Rebuild the Saved Sources catalog automatically so existing books/videos are
+    # visible without asking the user to upload or analyze them again.
+    data, sources_changed = reconcile_knowledge_sources(data)
+    if sources_changed:
+        try:
+            store.save(data)
+        except AppError:
+            # Keep the repaired catalog visible in this session. The storage-health
+            # panel will surface persistence problems and the migration retries next load.
+            pass
     return data
 
 
@@ -788,26 +802,52 @@ elif module == "Knowledge Sources":
 
     if sources:
         st.markdown("### Saved sources")
+        st.caption(
+            "This is the master research-source catalog. Books, PDFs, YouTube videos, and future "
+            "research sources stay here even when they were originally analyzed by an older version of the Lab."
+        )
         for src in sources:
+            source_type = str(src.get("source_type") or "document").strip().casefold()
+            source_icon = {
+                "youtube": "▶️",
+                "book_or_document": "📘",
+                "book": "📘",
+                "document": "📄",
+            }.get(source_type, "🧠")
             with st.expander(
-                f"{src.get('title') or 'Untitled'}"
+                f"{source_icon} {src.get('title') or 'Untitled'}"
                 + (f" — {src.get('author')}" if src.get("author") else "")
             ):
                 st.write(src.get("summary") or "No source-level summary saved.")
                 stage = str(src.get("analysis_stage") or "complete").replace("_", " ").title()
                 completed = int(src.get("completed_sections") or 0)
                 total = int(src.get("chunk_count") or 0)
-                progress_label = (
-                    f"{completed}/{total} sections"
-                    if total
-                    else "waiting for first section"
-                )
+                strategy_count = int(src.get("strategy_count") or 0)
+                if src.get("recovered_from_strategies"):
+                    progress_label = (
+                        f"recovered from saved library · {strategy_count} strategy"
+                        + ("" if strategy_count == 1 else "ies")
+                    )
+                elif total:
+                    progress_label = f"{completed}/{total} sections"
+                elif stage.casefold() == "complete":
+                    progress_label = "complete"
+                else:
+                    progress_label = "waiting for first section"
                 st.caption(
-                    f"Type: {src.get('source_type', 'document')} · "
+                    f"Type: {source_type.replace('_', ' ')} · "
                     f"Status: {stage} · "
                     f"Progress: {progress_label} · "
                     f"Analyzed: {src.get('analyzed_at', '—')}"
                 )
+                source_url = str(src.get("source_url") or "").strip()
+                if source_url:
+                    st.caption(f"Source link: {source_url}")
+                if src.get("recovered_from_strategies"):
+                    st.info(
+                        "This source was recovered automatically from strategy records saved by an older "
+                        "Trading Lab version. You do not need to upload or analyze it again."
+                    )
                 if src.get("analysis_in_progress"):
                     st.info(
                         "This source has a saved checkpoint. Re-uploading the same file and pressing Analyze "
@@ -822,7 +862,7 @@ elif module == "Knowledge Sources":
                         f"{int(auto.get('ready_for_backtest') or 0)} ready for backtesting"
                     )
     else:
-        st.info("No book or document sources have been analyzed in the new library yet.")
+        st.info("No research sources are saved yet.")
 
 
 elif module == "Strategy Library":
