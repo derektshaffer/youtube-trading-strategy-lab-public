@@ -468,13 +468,15 @@ def _daily_rows(rows: list[dict[str, Any]]) -> list[dict[str, float | str]]:
     normalized: list[dict[str, float | str]] = []
     for raw in rows:
         close = safe_float(raw.get("c"))
+        high = safe_float(raw.get("h"), close)
         volume = safe_float(raw.get("v"))
-        if close is None or close <= 0 or volume is None or volume < 0:
+        if close is None or close <= 0 or high is None or high <= 0 or volume is None or volume < 0:
             continue
         normalized.append(
             {
                 "timestamp": str(raw.get("t") or ""),
                 "close": close,
+                "high": high,
                 "volume": volume,
             }
         )
@@ -499,15 +501,22 @@ def score_historical_opportunities(
         "min_day_change_pct",
         "min_relative_volume",
         "min_dollar_volume",
+        "min_previous_day_volume_ratio",
+        "min_previous_day_change_pct",
+    )
+    structural_opportunity_rules = (
+        ["previous_day_high_breakout"]
+        if rules.get("previous_day_high_breakout")
+        else []
     )
     explicit_daily_rules = [
         name
         for name in (*price_rule_names, *opportunity_rule_names)
         if rules.get(name) is not None
-    ]
+    ] + structural_opportunity_rules
     explicit_opportunity_rules = [
         name for name in opportunity_rule_names if rules.get(name) is not None
-    ]
+    ] + structural_opportunity_rules
 
     events: list[dict[str, Any]] = []
     all_moves: list[float] = []
@@ -526,6 +535,26 @@ def score_historical_opportunities(
         average_volume = sum(prior_volumes) / len(prior_volumes) if prior_volumes else 0.0
         rvol = float(row["volume"]) / average_volume if average_volume > 0 else 0.0
         dollar_volume = close * float(row["volume"])
+
+        previous_day_change = None
+        if index >= 2:
+            two_days_back_close = float(series[index - 2]["close"])
+            if two_days_back_close > 0:
+                previous_day_change = (previous_close / two_days_back_close - 1.0) * 100.0
+
+        prior_to_previous_volumes = [
+            float(item["volume"])
+            for item in series[max(0, index - 21) : index - 1]
+        ]
+        previous_day_volume_ratio = None
+        if len(prior_to_previous_volumes) >= 3:
+            prior_average = sum(prior_to_previous_volumes) / len(prior_to_previous_volumes)
+            if prior_average > 0:
+                previous_day_volume_ratio = float(previous["volume"]) / prior_average
+
+        previous_day_high = float(previous.get("high") or previous_close)
+        current_high = float(row.get("high") or close)
+        previous_day_high_broken = current_high > previous_day_high
         all_moves.append(change)
         all_rvol.append(rvol)
         all_dollar_volume.append(dollar_volume)
@@ -545,6 +574,25 @@ def score_historical_opportunities(
             checks.append(rvol >= float(rules["min_relative_volume"]))
         if rules.get("min_dollar_volume") is not None:
             checks.append(dollar_volume >= float(rules["min_dollar_volume"]))
+        if rules.get("min_previous_day_volume_ratio") is not None:
+            checks.append(
+                previous_day_volume_ratio is not None
+                and previous_day_volume_ratio >= float(rules["min_previous_day_volume_ratio"])
+            )
+        if rules.get("min_previous_day_change_pct") is not None:
+            threshold = float(rules["min_previous_day_change_pct"])
+            if direction == "short":
+                checks.append(
+                    previous_day_change is not None
+                    and previous_day_change <= -abs(threshold)
+                )
+            else:
+                checks.append(
+                    previous_day_change is not None
+                    and previous_day_change >= threshold
+                )
+        if rules.get("previous_day_high_breakout"):
+            checks.append(previous_day_high_broken)
 
         if explicit_opportunity_rules:
             qualifies = all(checks) if checks else False
@@ -573,6 +621,18 @@ def score_historical_opportunities(
                     "day_change_pct": round(change, 2),
                     "relative_volume": round(rvol, 2),
                     "dollar_volume": round(dollar_volume, 2),
+                    "previous_day_high": round(previous_day_high, 4),
+                    "previous_day_high_broken": bool(previous_day_high_broken),
+                    "previous_day_volume_ratio": (
+                        round(previous_day_volume_ratio, 2)
+                        if previous_day_volume_ratio is not None
+                        else None
+                    ),
+                    "previous_day_change_pct": (
+                        round(previous_day_change, 2)
+                        if previous_day_change is not None
+                        else None
+                    ),
                 }
             )
 
