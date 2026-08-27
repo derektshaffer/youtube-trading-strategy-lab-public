@@ -3614,8 +3614,8 @@ def generate_execution_variants(
     for sizing in sizing_only:
         add(sizing)
 
-    for behavior in behaviors[:min(8, len(behaviors))]:
-        for sizing in sizing_only[:min(6, len(sizing_only))]:
+    for behavior in behaviors[:min(4, len(behaviors))]:
+        for sizing in sizing_only[:min(4, len(sizing_only))]:
             add(replace(
                 behavior,
                 risk_per_trade_pct=sizing.risk_per_trade_pct,
