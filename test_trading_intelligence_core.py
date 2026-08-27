@@ -1,13 +1,18 @@
 """Tests for unified Trading Intelligence strategy semantics."""
 
+import os
+import tempfile
 import unittest
+from unittest.mock import patch
 
 from trading_intelligence_core import (
+    GeminiBookAnalyzer,
     apply_compiler_suggestions,
     effective_strategy_for_live,
     effective_strategy_for_research,
     research_readiness,
 )
+from youtube_strategy_engine import AppError
 
 
 class EffectiveStrategyTests(unittest.TestCase):
@@ -116,6 +121,77 @@ class EffectiveStrategyTests(unittest.TestCase):
             }
         )
         self.assertEqual(ready["label"], "ready_for_backtest")
+
+
+
+
+class BookAnalyzerResilienceTests(unittest.TestCase):
+    def test_503_switches_to_backup_model_after_retry_budget(self):
+        analyzer = GeminiBookAnalyzer(
+            "primary-key",
+            "gemini-3.7-flash",
+            fallback_model="gemini-3.6-flash",
+        )
+        progress_messages = []
+
+        with patch("trading_intelligence_core.BOOK_TRANSIENT_RETRIES_PER_MODEL", 0), patch.object(
+            analyzer,
+            "_analyze_chunk",
+            side_effect=[
+                AppError("Provider request failed (503): high demand"),
+                {"source_summary": "Recovered", "strategies": []},
+            ],
+        ):
+            result = analyzer._analyze_chunk_resilient(
+                "text",
+                title="Book",
+                author="Author",
+                chunk_number=1,
+                chunk_count=5,
+                focus="",
+                progress_callback=lambda i, total, message: progress_messages.append(message),
+            )
+
+        self.assertEqual(result["source_summary"], "Recovered")
+        self.assertEqual(analyzer.model, "gemini-3.6-flash")
+        self.assertTrue(analyzer.model_fallback_used)
+        self.assertTrue(any("backup model" in message.lower() for message in progress_messages))
+
+    def test_completed_book_sections_resume_after_failure(self):
+        first_section = {"source_summary": "First section", "strategies": []}
+        second_section = {"source_summary": "Second section", "strategies": []}
+
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {"YOUTUBE_STRATEGY_DATA_DIR": directory},
+        ), patch(
+            "trading_intelligence_core.chunk_source_text",
+            return_value=["chunk one", "chunk two"],
+        ), patch(
+            "trading_intelligence_core.source_fingerprint",
+            return_value="resume-test",
+        ):
+            first = GeminiBookAnalyzer("key", "gemini-3.7-flash")
+            with patch.object(
+                first,
+                "_analyze_chunk_resilient",
+                side_effect=[first_section, AppError("Provider request failed (503): high demand")],
+            ):
+                with self.assertRaises(AppError):
+                    first.analyze("book", title="Book", author="Author")
+
+            second = GeminiBookAnalyzer("key", "gemini-3.7-flash")
+            with patch.object(
+                second,
+                "_analyze_chunk_resilient",
+                return_value=second_section,
+            ) as resumed_call:
+                result = second.analyze("book", title="Book", author="Author")
+
+            self.assertEqual(resumed_call.call_count, 1)
+            self.assertIn("First section", result["summary"])
+            self.assertIn("Second section", result["summary"])
+            self.assertEqual(result["completed_sections"], 2)
 
 
 if __name__ == "__main__":
