@@ -930,6 +930,7 @@ elif module == "AI Research Autopilot":
             f"active sampled: {universe.get('active_sampled', '—')} · "
             f"inactive sampled: {universe.get('inactive_sampled', '—')} · "
             f"symbols with historical bars: {universe.get('symbols_with_historical_bars', '—')} · "
+            f"history horizon: {current_auto.get('point_in_time_horizon_years', '—')} years · "
             f"generated: {current_auto.get('generated_at') or '—'}"
         )
         result_rows = []
