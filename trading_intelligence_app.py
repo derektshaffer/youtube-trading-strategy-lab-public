@@ -303,11 +303,29 @@ elif module == "Knowledge Sources":
                 progress_callback=on_progress,
             )
             completion_text = "Strategy extraction complete"
+            if analysis.get("analysis_incomplete"):
+                completion_text = (
+                    f"Partial extraction saved · {int(analysis.get('completed_sections') or 0)} of "
+                    f"{int(analysis.get('chunk_count') or 0)} sections completed"
+                )
             if analysis.get("model_fallback_used"):
                 completion_text += f" · backup model used: {analysis.get('model')}"
             if analysis.get("paid_fallback_used"):
                 completion_text += " · backup API key used"
             progress.progress(1.0, text=completion_text)
+            if analysis.get("analysis_incomplete"):
+                failed_numbers = [
+                    str(item.get("section"))
+                    for item in analysis.get("failed_sections") or []
+                    if isinstance(item, dict) and item.get("section") is not None
+                ]
+                st.warning(
+                    "Gemini remained unavailable for "
+                    + (", ".join(f"section {value}" for value in failed_numbers) if failed_numbers else "part of the source")
+                    + ". Everything else was saved. Historical validation is paused so an incomplete "
+                    "book cannot be mistaken for a fully extracted strategy source. Re-running the same "
+                    "source resumes only the missing work."
+                )
 
             if autopilot_prepare and analysis.get("strategies"):
                 prep_status = st.status(
@@ -393,7 +411,12 @@ elif module == "Knowledge Sources":
 
             autonomous_report = None
             autonomous_error = ""
-            if autopilot_research and autopilot_prepare and analysis.get("strategies"):
+            if (
+                autopilot_research
+                and autopilot_prepare
+                and analysis.get("strategies")
+                and not analysis.get("analysis_incomplete")
+            ):
                 ready_for_deep = [
                     item
                     for item in analysis.get("strategies") or []
@@ -475,7 +498,13 @@ elif module == "Knowledge Sources":
                     f"clearly labeled research assumptions and marked "
                     f"{int(autopilot_summary.get('ready_for_backtest') or 0)} strategies ready for backtesting."
                 )
-            if autonomous_report:
+            if analysis.get("analysis_incomplete"):
+                message += (
+                    f" {int(analysis.get('completed_sections') or 0)} of "
+                    f"{int(analysis.get('chunk_count') or 0)} source sections were saved; "
+                    "historical validation is intentionally paused until extraction is complete."
+                )
+            elif autonomous_report:
                 validated_count = sum(
                     1
                     for item in autonomous_report.get("results") or []
