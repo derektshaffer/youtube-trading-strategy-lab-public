@@ -19,8 +19,10 @@ from trading_catalyst_core import (
 from trading_market_discovery import analyze_stock_strategies, scan_strategy_universe
 from trading_intelligence_core import (
     GeminiBookAnalyzer,
+    GeminiRuleCompiler,
     canonicalize_existing_strategy,
     effective_strategy_for_live,
+    effective_strategy_for_research,
     extract_source_text,
     merge_strategies,
 )
@@ -138,6 +140,7 @@ with st.sidebar:
             "Overview",
             "Knowledge Sources",
             "Strategy Library",
+            "Rule Compiler",
             "Strategy Lab",
             "Universe Research",
             "Validation",
@@ -374,6 +377,17 @@ elif module == "Strategy Library":
                 if value is not None
             }
             st.json(active_rules or {"status": "No objective thresholds extracted yet."})
+            research_overrides = {
+                key: value
+                for key, value in normalize_machine_rules(selected.get("research_rule_overrides")).items()
+                if value is not None
+            }
+            if research_overrides:
+                st.markdown("#### Accepted research assumptions")
+                st.json(research_overrides)
+                st.caption(
+                    "These fill machine-testable gaps for research. They are not presented as explicit source rules."
+                )
             if (
                 str(selected.get("validation_status") or "").lower() == "validated"
                 and isinstance(selected.get("validated_rules"), dict)
@@ -393,6 +407,192 @@ elif module == "Strategy Library":
                 st.markdown("#### Requires interpretation / unavailable data")
                 for item in selected.get("unresolved_rules") or []:
                     st.write("• " + str(item))
+
+
+elif module == "Rule Compiler":
+    st.markdown("## Rule Compiler")
+    st.caption(
+        "Turn qualitative source lessons into reviewable, measurable research proxies. "
+        "Accepted proxies are stored separately from the source-extracted rules."
+    )
+
+    if not strategies:
+        st.info("Add or import a strategy before using the Rule Compiler.")
+    else:
+        compiler_choices = {}
+        for item in strategies:
+            label = f"{item.get('name') or 'Unnamed strategy'} · {source_label(item)}"
+            if label in compiler_choices:
+                label += f" · {str(item.get('id') or '')[:7]}"
+            compiler_choices[label] = item
+        compiler_strategy = compiler_choices[
+            st.selectbox("Strategy to compile", list(compiler_choices), key="til_compiler_strategy")
+        ]
+
+        explicit = {
+            key: value
+            for key, value in normalize_machine_rules(compiler_strategy.get("machine_rules")).items()
+            if value is not None
+        }
+        accepted_overrides = {
+            key: value
+            for key, value in normalize_machine_rules(
+                compiler_strategy.get("research_rule_overrides")
+            ).items()
+            if value is not None
+        }
+        compiler_cols = st.columns(3)
+        compiler_cols[0].metric("Explicit source rules", len(explicit))
+        compiler_cols[1].metric("Accepted research proxies", len(accepted_overrides))
+        compiler_cols[2].metric(
+            "Unresolved source requirements",
+            len(compiler_strategy.get("unresolved_rules") or []),
+        )
+
+        if explicit:
+            with st.expander("Explicit source rules — protected from compiler edits", expanded=False):
+                st.json(explicit)
+        if compiler_strategy.get("unresolved_rules"):
+            with st.expander("Qualitative / unresolved requirements", expanded=True):
+                for rule in compiler_strategy.get("unresolved_rules") or []:
+                    st.write("• " + str(rule))
+        if accepted_overrides:
+            with st.expander("Accepted research assumptions", expanded=True):
+                st.json(accepted_overrides)
+                st.warning(
+                    "These values are research assumptions, not claims about what the source author explicitly specified."
+                )
+
+        compile_rules = st.button(
+            "🧩 Ask AI for measurable proxy suggestions",
+            type="primary",
+            use_container_width=True,
+        )
+        if compile_rules:
+            try:
+                with st.status("Compiling qualitative requirements…", expanded=True) as status:
+                    compiler = GeminiRuleCompiler(
+                        setting("GEMINI_API_KEY"),
+                        setting("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
+                    )
+                    compiled = compiler.compile(compiler_strategy)
+                    st.session_state["til_rule_compiler_result"] = {
+                        "strategy_id": compiler_strategy.get("id"),
+                        "result": compiled,
+                    }
+                    status.update(label="Rule Compiler suggestions ready", state="complete", expanded=False)
+                st.rerun()
+            except AppError as exc:
+                st.error(str(exc))
+            except Exception as exc:
+                st.error(f"Rule Compiler failed: {exc}")
+
+        stored_compiler = st.session_state.get("til_rule_compiler_result") or {}
+        if stored_compiler.get("strategy_id") == compiler_strategy.get("id"):
+            compiled = stored_compiler.get("result") or {}
+            suggestions = list(compiled.get("suggestions") or [])
+            if compiled.get("summary"):
+                st.info(str(compiled.get("summary")))
+            if suggestions:
+                st.markdown("### Suggested measurable proxies")
+                suggestion_rows = []
+                labels = {}
+                for number, suggestion in enumerate(suggestions, start=1):
+                    label = (
+                        f"{number}. {suggestion.get('target_rule')} = "
+                        f"{suggestion.get('parsed_value')} · "
+                        f"{safe_float(suggestion.get('confidence'), 0.0):.0f}% confidence"
+                    )
+                    labels[label] = suggestion
+                    suggestion_rows.append(
+                        {
+                            "#": number,
+                            "Source requirement": suggestion.get("source_requirement"),
+                            "Machine rule": suggestion.get("target_rule"),
+                            "Proposed value": suggestion.get("parsed_value"),
+                            "Research assumption": bool(suggestion.get("is_research_assumption")),
+                            "Confidence": safe_float(suggestion.get("confidence"), 0.0),
+                            "Why this proxy": suggestion.get("rationale"),
+                        }
+                    )
+                st.dataframe(pd.DataFrame(suggestion_rows), use_container_width=True, hide_index=True)
+                chosen_labels = st.multiselect(
+                    "Accept suggestions into the research rule set",
+                    list(labels),
+                    default=[],
+                    help=(
+                        "Nothing is applied until you select suggestions here and press Save. "
+                        "They remain separate from explicit source rules."
+                    ),
+                )
+                save_compiler = st.button(
+                    "💾 Save selected research assumptions",
+                    use_container_width=True,
+                    disabled=not chosen_labels,
+                )
+                if save_compiler:
+                    data = load_library()
+                    for item in data.get("strategies") or []:
+                        if str(item.get("id") or "") != str(compiler_strategy.get("id") or ""):
+                            continue
+                        overrides = dict(item.get("research_rule_overrides") or {})
+                        assumption_log = list(item.get("compiler_assumptions") or [])
+                        for label in chosen_labels:
+                            suggestion = labels[label]
+                            target = str(suggestion.get("target_rule") or "")
+                            if normalize_machine_rules(item.get("machine_rules")).get(target) is not None:
+                                continue
+                            overrides[target] = suggestion.get("parsed_value")
+                            assumption_log.append(
+                                {
+                                    "target_rule": target,
+                                    "value": suggestion.get("parsed_value"),
+                                    "source_requirement": suggestion.get("source_requirement"),
+                                    "rationale": suggestion.get("rationale"),
+                                    "confidence": suggestion.get("confidence"),
+                                    "accepted_at": compiled.get("generated_at"),
+                                    "model": compiled.get("model"),
+                                }
+                            )
+                        item["research_rule_overrides"] = overrides
+                        item["compiler_assumptions"] = assumption_log[-100:]
+                        item["validation_status"] = "unvalidated"
+                        item.pop("validated_rules", None)
+                        item.pop("validated_backtest_settings", None)
+                        item.pop("validated_at", None)
+                        break
+                    intelligence_store().save(data)
+                    st.success(
+                        "Research assumptions saved. Any previous validation was cleared because the executable rule set changed."
+                    )
+                    st.session_state.pop("til_rule_compiler_result", None)
+                    st.rerun()
+            else:
+                st.info(
+                    "The compiler did not find a defensible mapping to the machine rules the backtester currently supports."
+                )
+
+            if compiled.get("unmapped_requirements"):
+                with st.expander("Still not machine-testable", expanded=False):
+                    for item in compiled.get("unmapped_requirements") or []:
+                        st.write("• " + str(item))
+
+        if accepted_overrides and st.button(
+            "Remove all accepted research assumptions",
+            use_container_width=True,
+        ):
+            data = load_library()
+            for item in data.get("strategies") or []:
+                if str(item.get("id") or "") == str(compiler_strategy.get("id") or ""):
+                    item["research_rule_overrides"] = {}
+                    item["validation_status"] = "unvalidated"
+                    item.pop("validated_rules", None)
+                    item.pop("validated_backtest_settings", None)
+                    item.pop("validated_at", None)
+                    break
+            intelligence_store().save(data)
+            st.success("Research assumptions removed; source-extracted rules were left unchanged.")
+            st.rerun()
 
 
 elif module == "Strategy Lab":
@@ -422,11 +622,16 @@ elif module == "Strategy Lab":
                 "families are competing for the same historical periods."
             ),
         )
-        candidates = strategies if compare_all else [selected_strategy]
+        candidates = (
+            [effective_strategy_for_research(item) for item in strategies]
+            if compare_all
+            else [effective_strategy_for_research(selected_strategy)]
+        )
+        selected_research_strategy = effective_strategy_for_research(selected_strategy)
 
         active_rules = {
             key: value
-            for key, value in normalize_machine_rules(selected_strategy.get("machine_rules")).items()
+            for key, value in normalize_machine_rules(selected_research_strategy.get("machine_rules")).items()
             if value is not None
         }
         entry_rule_count = sum(
