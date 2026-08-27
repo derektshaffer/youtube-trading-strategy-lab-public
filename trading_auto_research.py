@@ -503,7 +503,11 @@ def score_historical_opportunities(
         "peak_directional_move_pct": round(peak_move, 2),
         "peak_relative_volume": round(peak_rvol, 2),
         "median_dollar_volume": round(median_dollar_volume, 2),
-        "events": sorted(events, key=lambda item: (item["relative_volume"], item["day_change_pct"]), reverse=True)[:12],
+        "events": sorted(
+            events,
+            key=lambda item: (item["relative_volume"], abs(item["day_change_pct"])),
+            reverse=True,
+        )[:24],
     }
 
 
@@ -644,16 +648,32 @@ def run_autonomous_research(
     if market.historical_feed == "sip" and market.live_feed != "sip":
         historical_end -= timedelta(minutes=16)
 
-    _notify(progress, f"Screening {len(symbols)} stocks with daily history…")
+    _notify(
+        progress,
+        f"Screening {len(symbols)} active + inactive stocks across about "
+        f"{AUTO_DAILY_LOOKBACK_DAYS // 365} years of daily history…",
+    )
     daily_rows = _batched_bars(
         market,
         symbols,
         start=historical_end - timedelta(days=AUTO_DAILY_LOOKBACK_DAYS),
         end=historical_end,
         timeframe="1Day",
-        batch_size=125,
-        max_pages=18,
+        batch_size=100,
+        max_pages=24,
         progress=progress,
+    )
+    lifecycle_by_symbol = {
+        symbol: infer_symbol_lifecycle(rows)
+        for symbol, rows in daily_rows.items()
+        if rows
+    }
+    universe["symbols_with_historical_bars"] = len(lifecycle_by_symbol)
+    universe["inactive_symbols_with_historical_bars"] = sum(
+        1
+        for symbol in lifecycle_by_symbol
+        if str(((universe.get("asset_metadata") or {}).get(symbol) or {}).get("status") or "").lower()
+        == "inactive"
     )
 
     discovery: list[dict[str, Any]] = []
@@ -687,27 +707,39 @@ def run_autonomous_research(
 
     discovery.sort(key=lambda item: float(item.get("priority_score") or 0), reverse=True)
     finalists = discovery[: max(1, int(deep_strategy_limit))]
-    intraday_symbols: list[str] = []
+
+    opportunities_by_symbol: dict[str, list[dict[str, Any]]] = {}
     for finalist in finalists:
         for item in finalist["opportunities"]:
             symbol = str(item.get("symbol") or "")
-            if symbol and symbol not in intraday_symbols:
-                intraday_symbols.append(symbol)
+            if not symbol:
+                continue
+            existing_dates = {
+                str(event.get("date") or "")
+                for event in opportunities_by_symbol.get(symbol, [])
+                if isinstance(event, dict)
+            }
+            merged = list(opportunities_by_symbol.get(symbol, []))
+            for event in item.get("events") or []:
+                if not isinstance(event, dict):
+                    continue
+                event_date = str(event.get("date") or "")
+                if event_date and event_date not in existing_dates:
+                    merged.append(dict(event))
+                    existing_dates.add(event_date)
+            opportunities_by_symbol[symbol] = merged
 
     _notify(
         progress,
-        f"Downloading {AUTO_TIMEFRAME} intraday history for {len(intraday_symbols)} finalist stocks…",
+        f"Selecting historical event windows for {len(opportunities_by_symbol)} finalist stocks…",
     )
-    intraday_rows = _batched_bars(
+    intraday_rows, research_windows = load_point_in_time_intraday(
         market,
-        intraday_symbols,
-        start=historical_end - timedelta(days=AUTO_INTRADAY_LOOKBACK_DAYS),
-        end=historical_end,
+        opportunities_by_symbol,
         timeframe=AUTO_TIMEFRAME,
-        batch_size=12,
-        max_pages=24,
         progress=progress,
     )
+    intraday_symbols = list(intraday_rows)
 
     needs_catalysts = any(
         bool(
@@ -719,20 +751,26 @@ def run_autonomous_research(
     )
     catalyst_summary_by_symbol: dict[str, Any] = {}
     if needs_catalysts and intraday_symbols:
-        _notify(progress, "Loading point-in-time historical catalyst news for finalist stocks…")
-        articles = historical_news(
-            market,
-            intraday_symbols,
-            start=historical_end - timedelta(days=AUTO_INTRADAY_LOOKBACK_DAYS, hours=24),
-            end=historical_end,
-            max_pages=100,
-        )
-        for symbol in intraday_symbols:
-            symbol_articles = [
-                article
-                for article in articles
-                if symbol in [str(value).upper() for value in article.get("symbols") or []]
-            ]
+        _notify(progress, "Loading point-in-time catalyst news inside each historical research window…")
+        for index, symbol in enumerate(intraday_symbols, start=1):
+            window = research_windows.get(symbol) or {}
+            if not window:
+                continue
+            start, end = _window_datetimes(window)
+            _notify(
+                progress,
+                f"Historical catalyst window {index}/{len(intraday_symbols)}: {symbol}…",
+            )
+            try:
+                symbol_articles = historical_news(
+                    market,
+                    [symbol],
+                    start=start - timedelta(hours=24),
+                    end=end,
+                    max_pages=40,
+                )
+            except AppError:
+                symbol_articles = []
             enriched, summary = enrich_bars_with_point_in_time_catalysts(
                 list(intraday_rows.get(symbol) or []),
                 symbol_articles,
@@ -816,7 +854,7 @@ def run_autonomous_research(
             strength=strength,
             generalization=generalization,
             walk_forward=walk_report,
-            broad_universe=bool(universe.get("active_equities_available")),
+            broad_universe=bool(universe.get("point_in_time_capable")),
         )
         global_score = round(
             (safe_float(strength.get("score"), 0.0) or 0.0) * 0.65
@@ -832,6 +870,20 @@ def run_autonomous_research(
                 "opportunities": opportunities,
                 "anchor_symbol": anchor,
                 "candidate_symbols": candidate_symbols,
+                "research_windows": {
+                    symbol: research_windows.get(symbol)
+                    for symbol in candidate_symbols
+                    if symbol in research_windows
+                },
+                "symbol_lifecycles": {
+                    symbol: lifecycle_by_symbol.get(symbol)
+                    for symbol in candidate_symbols
+                    if symbol in lifecycle_by_symbol
+                },
+                "asset_status_by_symbol": {
+                    symbol: ((universe.get("asset_metadata") or {}).get(symbol) or {}).get("status")
+                    for symbol in candidate_symbols
+                },
                 "optimization_report": report,
                 "walk_forward": walk_report,
                 "strength": strength,
@@ -859,7 +911,8 @@ def run_autonomous_research(
         "generated_at": utc_now().isoformat(),
         "universe": universe,
         "daily_lookback_days": AUTO_DAILY_LOOKBACK_DAYS,
-        "intraday_lookback_days": AUTO_INTRADAY_LOOKBACK_DAYS,
+        "event_window_days": AUTO_EVENT_WINDOW_DAYS,
+        "intraday_lookback_days": AUTO_EVENT_WINDOW_DAYS,
         "timeframe": AUTO_TIMEFRAME,
         "eligible_strategies": len(eligible),
         "strategies_with_opportunities": len(discovery),
@@ -877,7 +930,8 @@ def run_autonomous_research(
         "limitations": [
             str(universe.get("selection_bias_warning") or ""),
             "Historical opportunity ranking uses only information available in each daily bar and prior-volume history; it does not use future trade P/L.",
-            "The active-equity universe excludes delisted securities, so survivorship bias remains.",
+            "Point-in-time membership is inferred from actual dated bar availability. Symbol renames, mergers, and corporate actions can create separate ticker identities across time.",
+            "The scan samples the active + inactive Alpaca asset master rather than exhaustively downloading every listed security in one run; repeated runs can broaden coverage without requiring manual ticker selection.",
             "Autonomous validation is historical evidence, not a guarantee of future profitability.",
         ],
     }
