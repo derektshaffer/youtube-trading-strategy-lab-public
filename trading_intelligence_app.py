@@ -1366,7 +1366,8 @@ elif module == "Strategy DNA":
                     use_container_width=True,
                     key=f"save_synth_{candidate.get('id')}",
                 )
-                run_candidate = action_cols[1].button(
+                synth_run_slot = action_cols[1].empty()
+                run_candidate = synth_run_slot.button(
                     "🧪 Run full historical research pipeline",
                     type="primary",
                     use_container_width=True,
@@ -1393,8 +1394,21 @@ elif module == "Strategy DNA":
                     st.rerun()
 
                 if run_candidate:
+                    synth_run_slot.button(
+                        "🧪 Researching…",
+                        type="primary",
+                        use_container_width=True,
+                        disabled=True,
+                        key=f"run_synth_busy_{candidate.get('id')}",
+                    )
+                    synth_monitor = long_task_monitor("synthesized_strategy_research")
+                    synth_bar = st.progress(
+                        0.01,
+                        text=synth_monitor.text(0.01, "Preparing synthesized strategy…"),
+                    )
                     try:
                         candidate_to_run = dict(executable)
+                        update_task_bar(synth_bar, synth_monitor, 0.05, "Checking research readiness")
                         candidate_to_run["research_readiness"] = research_readiness(candidate_to_run)
 
                         # Deterministic compilation happens first. Only if the shared DNA still does not
@@ -1408,6 +1422,12 @@ elif module == "Strategy DNA":
                                 "The shared DNA still has untestable gaps. AI Rule Compiler is creating "
                                 "clearly labeled research assumptions…",
                                 expanded=True,
+                            )
+                            update_task_bar(
+                                synth_bar,
+                                synth_monitor,
+                                0.12,
+                                "AI Rule Compiler is translating remaining qualitative rules",
                             )
                             compiler = GeminiRuleCompiler(
                                 setting("GEMINI_API_KEY"),
@@ -1436,16 +1456,34 @@ elif module == "Strategy DNA":
                         data = load_library()
                         data = upsert_strategy_record(data, candidate_to_run)
                         intelligence_store().save(data)
+                        update_task_bar(
+                            synth_bar,
+                            synth_monitor,
+                            0.28,
+                            "Research candidate saved · starting historical research",
+                        )
 
                         research_status = st.status(
                             "Running the synthesized candidate through Historical Research Autopilot…",
                             expanded=True,
                         )
+                        synth_nested = AutonomousResearchProgressEstimator()
+
+                        def on_synth_research(message: str) -> None:
+                            research_status.write(message)
+                            nested_fraction = synth_nested.update(message)
+                            update_task_bar(
+                                synth_bar,
+                                synth_monitor,
+                                0.28 + 0.68 * nested_fraction,
+                                message,
+                            )
+
                         report = run_autonomous_research(
                             market_client(),
                             [candidate_to_run],
                             deep_strategy_limit=1,
-                            progress=lambda message: research_status.write(message),
+                            progress=on_synth_research,
                         )
                         data = load_library()
                         data = merge_autonomous_research_into_library(data, report)
@@ -1454,6 +1492,11 @@ elif module == "Strategy DNA":
                             "candidate_id": candidate_to_run.get("id"),
                             "report": report,
                         }
+                        complete_task_bar(
+                            synth_bar,
+                            synth_monitor,
+                            "Historical research pipeline complete",
+                        )
 
                         result = (report.get("results") or [{}])[0]
                         status = str(result.get("validation_status") or "research_only")
@@ -1566,12 +1609,26 @@ elif module == "Rule Compiler":
                     "These values are research assumptions, not claims about what the source author explicitly specified."
                 )
 
-        compile_rules = st.button(
+        compiler_slot = st.empty()
+        compile_rules = compiler_slot.button(
             "🧩 Ask AI for measurable proxy suggestions",
             type="primary",
             use_container_width=True,
+            key="til_compile_rule_suggestions",
         )
         if compile_rules:
+            compiler_slot.button(
+                "🧩 Compiling…",
+                type="primary",
+                use_container_width=True,
+                disabled=True,
+                key="til_compile_rule_suggestions_busy",
+            )
+            compiler_monitor = long_task_monitor("ai_rule_compiler")
+            compiler_bar = st.progress(
+                0.10,
+                text=compiler_monitor.text(0.10, "Preparing strategy context…"),
+            )
             try:
                 with st.status("Compiling qualitative requirements…", expanded=True) as status:
                     compiler = GeminiRuleCompiler(
@@ -1579,12 +1636,29 @@ elif module == "Rule Compiler":
                         setting("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
                         fallback_api_key=setting("GEMINI_PAID_API_KEY", ""),
                     )
+                    update_task_bar(
+                        compiler_bar,
+                        compiler_monitor,
+                        0.35,
+                        "AI is generating measurable proxy suggestions",
+                    )
                     compiled = compiler.compile(compiler_strategy)
+                    update_task_bar(
+                        compiler_bar,
+                        compiler_monitor,
+                        0.90,
+                        "AI suggestions received · preparing results",
+                    )
                     st.session_state["til_rule_compiler_result"] = {
                         "strategy_id": compiler_strategy.get("id"),
                         "result": compiled,
                     }
                     status.update(label="Rule Compiler suggestions ready", state="complete", expanded=False)
+                    complete_task_bar(
+                        compiler_bar,
+                        compiler_monitor,
+                        "Rule Compiler suggestions ready",
+                    )
                 st.rerun()
             except AppError as exc:
                 st.error(str(exc))
