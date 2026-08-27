@@ -33,7 +33,7 @@ AUTO_UNIVERSE_SAMPLE_SIZE = 500
 AUTO_INACTIVE_SAMPLE_SHARE = 0.30
 AUTO_MAX_DEEP_STRATEGIES = 3
 AUTO_SYMBOLS_PER_STRATEGY = 6
-AUTO_DAILY_LOOKBACK_DAYS = 1095
+AUTO_DAILY_LOOKBACK_DAYS = 1825
 AUTO_EVENT_WINDOW_DAYS = 120
 AUTO_EVENT_WINDOW_BUFFER_DAYS = 30
 AUTO_TIMEFRAME = "5Min"
@@ -913,6 +913,7 @@ def run_autonomous_research(
         "daily_lookback_days": AUTO_DAILY_LOOKBACK_DAYS,
         "event_window_days": AUTO_EVENT_WINDOW_DAYS,
         "intraday_lookback_days": AUTO_EVENT_WINDOW_DAYS,
+        "point_in_time_horizon_years": round(AUTO_DAILY_LOOKBACK_DAYS / 365.0, 1),
         "timeframe": AUTO_TIMEFRAME,
         "eligible_strategies": len(eligible),
         "strategies_with_opportunities": len(discovery),
@@ -1024,6 +1025,8 @@ def merge_autonomous_research_into_library(
         "kind": "autonomous_research",
         "universe": report.get("universe") or {},
         "daily_lookback_days": report.get("daily_lookback_days"),
+        "event_window_days": report.get("event_window_days"),
+        "point_in_time_horizon_years": report.get("point_in_time_horizon_years"),
         "intraday_lookback_days": report.get("intraday_lookback_days"),
         "timeframe": report.get("timeframe"),
         "eligible_strategies": report.get("eligible_strategies"),
