@@ -32,6 +32,7 @@ import pandas as pd
 ET = ZoneInfo("America/New_York")
 UTC = timezone.utc
 ALPACA_DATA_URL = "https://data.alpaca.markets"
+ALPACA_PAPER_TRADING_URL = "https://paper-api.alpaca.markets"
 GEMINI_INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
 GEMINI_GENERATE_CONTENT_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 DEFAULT_GEMINI_MODEL = "gemini-3.7-flash"
@@ -2352,6 +2353,24 @@ class AlpacaMarketData:
     def movers(self, top: int = 30) -> list[str]:
         data = self._get("/v1beta1/screener/stocks/movers", {"top": max(1, min(50, int(top)))})
         return parse_symbols([item.get("symbol", "") for item in data.get("gainers") or [] if isinstance(item, dict)])
+
+    def active_equities(self) -> list[str]:
+        """Return currently active tradable U.S. equities for broad research-universe sampling."""
+        data = _json_request(
+            f"{ALPACA_PAPER_TRADING_URL}/v2/assets?status=active&asset_class=us_equity",
+            self.headers,
+            timeout=60,
+        )
+        if not isinstance(data, list):
+            raise AppError("Alpaca returned an unexpected active-equities response.")
+        symbols = [
+            item.get("symbol", "")
+            for item in data
+            if isinstance(item, dict)
+            and str(item.get("status") or "").lower() == "active"
+            and bool(item.get("tradable", True))
+        ]
+        return parse_symbols(symbols)
 
     def most_active(self, top: int = 30) -> list[str]:
         data = self._get("/v1beta1/screener/stocks/most-actives", {"top": max(1, min(100, int(top))), "by": "volume"})
