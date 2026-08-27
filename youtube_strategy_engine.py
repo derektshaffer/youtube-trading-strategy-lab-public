@@ -3967,20 +3967,30 @@ def _optimize_stock_strategies_historical(
 
         rule_candidates: list[dict[str, Any]] = []
         for variant_index, rules in enumerate(variants):
-            candidate_settings = replace(
+            base_candidate_settings = replace(
                 settings,
                 default_stop_pct=float(rules.get("stop_loss_pct") or settings.default_stop_pct),
                 default_reward_risk=float(rules.get("reward_risk") or settings.default_reward_risk),
             )
-            candidate_settings = effective_settings(rules, candidate_settings)
-            result = evaluate(rules, candidate_settings)
-            metrics = result["metrics"]
+            behavior_trials: list[dict[str, Any]] = []
+            for behavior_settings in (base_candidate_settings, legacy_behavior_settings(base_candidate_settings)):
+                candidate_settings = effective_settings(rules, behavior_settings)
+                metrics = evaluate(rules, candidate_settings)["metrics"]
+                behavior_trials.append({"settings": candidate_settings, "metrics": metrics})
+            best_behavior_trial = max(
+                behavior_trials,
+                key=lambda item: _historical_metric_key(
+                    item["metrics"],
+                    optimizer.maximum_drawdown_pct,
+                    ranking_minimum_historical_trades,
+                ),
+            )
             rule_candidates.append({
                 "variant_index": variant_index,
                 "execution_index": 0,
                 "rules": rules,
-                "settings": candidate_settings,
-                "metrics": metrics,
+                "settings": best_behavior_trial["settings"],
+                "metrics": best_behavior_trial["metrics"],
             })
             notify(f"{name}: rule set {variant_index + 1} of {len(variants)}")
 
