@@ -1322,7 +1322,11 @@ def merge_autonomous_research_into_library(
         "timeframe": report.get("timeframe"),
         "eligible_strategies": report.get("eligible_strategies"),
         "strategies_with_opportunities": report.get("strategies_with_opportunities"),
+        "deep_strategies_attempted": report.get("deep_strategies_attempted"),
         "deep_strategies_tested": report.get("deep_strategies_tested"),
+        "deep_strategies_failed": report.get("deep_strategies_failed"),
+        "failed_finalists": report.get("failed_finalists") or [],
+        "run_status": report.get("run_status") or "complete",
         "results": report.get("results") or [],
         "limitations": report.get("limitations") or [],
     }
