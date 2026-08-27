@@ -857,7 +857,7 @@ elif module == "Strategy Library":
                     "Source": source_label(s),
                     "Measurable rules": sum(v is not None for v in rules.values()),
                     "AI readiness": str(readiness.get("label") or "unknown").replace("_", " ").title(),
-                    "Extraction confidence": s.get("confidence"),
+                    "Confidence / support": s.get("confidence"),
                     "Validation": s.get("validation_status") or "unvalidated",
                 }
             )
@@ -873,7 +873,12 @@ elif module == "Strategy Library":
             st.write(selected.get("summary") or "No summary.")
             readiness = selected.get("research_readiness") or research_readiness(selected)
             x1, x2, x3, x4 = st.columns(4)
-            x1.metric("Extraction confidence", f"{float(selected.get('confidence') or 0):.0f}%")
+            confidence_label = (
+                "Synthesis support"
+                if is_synthetic_strategy(selected)
+                else "Extraction confidence"
+            )
+            x1.metric(confidence_label, f"{float(selected.get('confidence') or 0):.0f}%")
             x2.metric("AI research readiness", f"{safe_float(readiness.get('score'), 0.0):.0f}/100")
             x3.metric("Validation", selected.get("validation_status") or "unvalidated")
             x4.metric("Optimization", selected.get("optimization_status") or "not_run")
@@ -1195,10 +1200,20 @@ elif module == "Strategy DNA":
                     if executable.get("candidate_rule_options"):
                         st.markdown("**Exact source-supported alternatives tested first**")
                         st.json(executable.get("candidate_rule_options"))
+                    untranslated = executable.get("untranslated_dna") or {}
+                    if untranslated:
+                        st.markdown("**Shared DNA not directly represented by a machine rule yet**")
+                        for dimension in DNA_DIMENSIONS:
+                            concepts = list(untranslated.get(dimension) or [])
+                            if concepts:
+                                st.write(
+                                    f"**{DNA_LABELS[dimension]}:** " + " · ".join(concepts)
+                                )
                     if executable.get("unresolved_rules"):
-                        st.markdown("**Shared DNA still needing translation**")
-                        for item in executable.get("unresolved_rules") or []:
-                            st.write("• " + str(item))
+                        st.caption(
+                            "Entry/context concepts below remain visible to the AI Rule Compiler or "
+                            "direct historical testing; risk/exit concepts do not falsely block research readiness."
+                        )
 
                 action_cols = st.columns(2)
                 save_candidate = action_cols[0].button(
