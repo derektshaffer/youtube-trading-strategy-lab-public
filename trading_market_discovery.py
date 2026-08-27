@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
+from trading_intelligence_core import effective_strategy_for_live
 from youtube_strategy_engine import (
     ET,
     AlpacaMarketData,
@@ -54,6 +55,7 @@ def scan_strategy_universe(
     clean = parse_symbols(symbols)
     if not clean:
         return []
+    strategy = effective_strategy_for_live(strategy)
     if len(clean) > 30:
         clean = clean[:30]
 
@@ -152,7 +154,7 @@ def analyze_stock_strategies(
         raise AppError("Enter exactly one valid ticker.")
     ticker = clean[0]
     usable = [
-        item for item in strategies
+        effective_strategy_for_live(item) for item in strategies
         if isinstance(item, dict)
         and item.get("id")
         and str(item.get("direction", "long")).lower() in {"long", "both"}
