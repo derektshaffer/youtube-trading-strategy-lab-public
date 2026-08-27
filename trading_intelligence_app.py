@@ -12,6 +12,7 @@ import streamlit as st
 
 from live_strategy_runner_page import market_client, setting
 from trading_catalyst_core import (
+    classify_catalyst,
     enrich_bars_with_point_in_time_catalysts,
     historical_news,
 )
@@ -137,6 +138,7 @@ with st.sidebar:
             "Strategy Library",
             "Strategy Lab",
             "Validation",
+            "Catalyst Intelligence",
             "Market Discovery",
             "Stock Analyzer",
             "Live / Paper",
@@ -794,6 +796,124 @@ elif module == "Validation":
             "Validation history is evidence tracking, not a leaderboard. Large historical P/L with weak "
             "holdout or walk-forward behavior should rank below a smaller but more stable result."
         )
+
+
+elif module == "Catalyst Intelligence":
+    st.markdown("## Catalyst Intelligence")
+    st.caption(
+        "Inspect the same timestamped historical news taxonomy used by catalyst-aware backtests. "
+        "Generic articles are kept visible but do not receive a catalyst score."
+    )
+
+    cat_cols = st.columns([1.1, 1.0, 2.0])
+    catalyst_ticker = cat_cols[0].text_input(
+        "Catalyst ticker",
+        value=str(st.session_state.get("til_catalyst_ticker") or "SDOT"),
+        max_chars=10,
+    ).strip().upper()
+    catalyst_days = int(cat_cols[1].slider("History", 7, 180, 30, 1, key="til_catalyst_days"))
+    cat_cols[2].caption(
+        "The classifier is deliberately conservative. It identifies event categories from headline/summary "
+        "keywords; it does not claim the event caused the subsequent price move."
+    )
+
+    load_catalysts = st.button(
+        "📰 Load + classify historical catalysts",
+        type="primary",
+        use_container_width=True,
+        disabled=not catalyst_ticker,
+    )
+    if load_catalysts:
+        try:
+            st.session_state["til_catalyst_ticker"] = catalyst_ticker
+            market = market_client()
+            cat_end = utc_now()
+            cat_start = cat_end - timedelta(days=catalyst_days)
+            status_box = st.status(f"Loading {catalyst_ticker} historical news…", expanded=True)
+            raw_articles = historical_news(
+                market,
+                [catalyst_ticker],
+                start=cat_start,
+                end=cat_end,
+                max_pages=60,
+                progress=lambda page: status_box.write(f"Historical news page {page}…"),
+            )
+            classified = [classify_catalyst(item) for item in raw_articles]
+            classified.sort(key=lambda item: str(item.get("published_at") or ""), reverse=True)
+            st.session_state["til_catalyst_result"] = {
+                "symbol": catalyst_ticker,
+                "days": catalyst_days,
+                "articles": classified,
+            }
+            status_box.update(
+                label=f"{len(classified)} historical news items classified",
+                state="complete",
+                expanded=False,
+            )
+            st.rerun()
+        except AppError as exc:
+            st.error(str(exc))
+        except Exception as exc:
+            st.error(f"Catalyst history failed: {exc}")
+
+    catalyst_result = st.session_state.get("til_catalyst_result") or {}
+    if catalyst_result and catalyst_result.get("symbol") == catalyst_ticker:
+        classified = list(catalyst_result.get("articles") or [])
+        specific = [item for item in classified if item.get("is_specific_catalyst")]
+        positive = [item for item in specific if item.get("is_positive")]
+        negative = [item for item in specific if item.get("is_negative")]
+
+        st.divider()
+        summary_cols = st.columns(4)
+        summary_cols[0].metric("News items", len(classified))
+        summary_cols[1].metric("Specific catalysts", len(specific))
+        summary_cols[2].metric("Positive categories", len(positive))
+        summary_cols[3].metric("Negative/risk categories", len(negative))
+
+        filter_mode = st.radio(
+            "Show",
+            ["Specific catalysts", "All news", "Positive only", "Negative / risk only"],
+            horizontal=True,
+        )
+        if filter_mode == "Specific catalysts":
+            visible = specific
+        elif filter_mode == "Positive only":
+            visible = positive
+        elif filter_mode == "Negative / risk only":
+            visible = negative
+        else:
+            visible = classified
+
+        table_rows = [
+            {
+                "Published (UTC)": item.get("published_at"),
+                "Category": item.get("category"),
+                "Score": safe_float(item.get("score"), 0.0) or 0.0,
+                "Headline": item.get("headline"),
+                "Source": item.get("source"),
+            }
+            for item in visible
+        ]
+        if table_rows:
+            st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+            inspect_labels = {
+                f"{item.get('published_at') or 'Unknown time'} · {item.get('category')} · {str(item.get('headline') or '')[:70]}": item
+                for item in visible
+            }
+            selected_article = inspect_labels[st.selectbox("Inspect catalyst", list(inspect_labels))]
+            st.markdown(f"### {selected_article.get('category')}")
+            st.write(selected_article.get("headline") or "No headline")
+            if selected_article.get("summary"):
+                st.write(selected_article.get("summary"))
+            st.caption(
+                f"Published: {selected_article.get('published_at') or '—'} · "
+                f"Source: {selected_article.get('source') or '—'} · "
+                f"Classifier score: {safe_float(selected_article.get('score'), 0.0):+.1f}"
+            )
+            if selected_article.get("keywords"):
+                st.write("Matched terms: " + ", ".join(str(x) for x in selected_article.get("keywords") or []))
+        else:
+            st.info("No articles match this catalyst filter in the selected period.")
 
 
 elif module == "Market Discovery":
