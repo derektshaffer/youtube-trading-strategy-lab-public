@@ -1278,55 +1278,9 @@ class GeminiBookAnalyzer:
         detected_authors: list[str] = []
         completed_sections = 0
         models_used: list[str] = []
+        failed_sections: dict[int, str] = {}
 
-        for index, chunk in enumerate(chunks, start=1):
-            cache_path = cache_directory / f"section-{index:03d}.json"
-            cached = self._read_cached_chunk(cache_path)
-            if cached is not None:
-                analysis = cached
-                completed_sections += 1
-                self._emit_progress(
-                    progress_callback,
-                    index,
-                    len(chunks),
-                    f"Resuming saved section {index} of {len(chunks)}…",
-                )
-            else:
-                self._emit_progress(
-                    progress_callback,
-                    index,
-                    len(chunks),
-                    f"Analyzing source section {index} of {len(chunks)} with {self.model}…",
-                )
-                try:
-                    analysis = self._analyze_chunk_with_adaptive_split(
-                        chunk,
-                        title=title,
-                        author=author,
-                        chunk_number=index,
-                        chunk_count=len(chunks),
-                        focus=focus,
-                        progress_callback=progress_callback,
-                    )
-                except AppError as exc:
-                    message = str(exc)
-                    saved = index - 1
-                    if saved:
-                        message += (
-                            f" {saved} completed section{'s' if saved != 1 else ''} "
-                            f"{'were' if saved != 1 else 'was'} saved. "
-                            "Press Analyze again with the same source/title/focus to resume."
-                        )
-                    raise AppError(
-                        f"Section {index} of {len(chunks)} could not be analyzed: {message}"
-                    ) from exc
-                self._write_cached_chunk(
-                    cache_path,
-                    analysis=analysis,
-                    model=self.model,
-                )
-                completed_sections += 1
-
+        def consume_analysis(analysis: dict[str, Any]) -> None:
             if self.model not in models_used:
                 models_used.append(self.model)
 
@@ -1352,6 +1306,91 @@ class GeminiBookAnalyzer:
                     strategies_by_key[key] = self._merge_strategy(strategies_by_key[key], raw)
                 else:
                     strategies_by_key[key] = dict(raw)
+
+        def analyze_section(index: int, chunk: str, *, retry_pass: bool = False) -> bool:
+            nonlocal completed_sections
+            cache_path = cache_directory / f"section-{index:03d}.json"
+            if not retry_pass:
+                cached = self._read_cached_chunk(cache_path)
+                if cached is not None:
+                    completed_sections += 1
+                    self._emit_progress(
+                        progress_callback,
+                        index,
+                        len(chunks),
+                        f"Resuming saved section {index} of {len(chunks)}…",
+                    )
+                    consume_analysis(cached)
+                    failed_sections.pop(index, None)
+                    return True
+
+            if retry_pass:
+                self._reset_model_fallback_chain()
+                self._emit_progress(
+                    progress_callback,
+                    index,
+                    len(chunks),
+                    f"Automatically retrying previously failed section {index} of {len(chunks)}…",
+                )
+            else:
+                self._emit_progress(
+                    progress_callback,
+                    index,
+                    len(chunks),
+                    f"Analyzing source section {index} of {len(chunks)} with {self.model}…",
+                )
+
+            try:
+                analysis = self._analyze_chunk_with_adaptive_split(
+                    chunk,
+                    title=title,
+                    author=author,
+                    chunk_number=index,
+                    chunk_count=len(chunks),
+                    focus=focus,
+                    progress_callback=progress_callback,
+                )
+            except AppError as exc:
+                failed_sections[index] = str(exc)
+                self._emit_progress(
+                    progress_callback,
+                    index,
+                    len(chunks),
+                    f"Section {index} is still unavailable. Saving progress and continuing "
+                    "with the rest of the source before one final automatic retry…",
+                )
+                return False
+
+            self._write_cached_chunk(
+                cache_path,
+                analysis=analysis,
+                model=self.model,
+            )
+            completed_sections += 1
+            failed_sections.pop(index, None)
+            consume_analysis(analysis)
+            return True
+
+        for index, chunk in enumerate(chunks, start=1):
+            analyze_section(index, chunk)
+
+        if failed_sections:
+            self._emit_progress(
+                progress_callback,
+                min(failed_sections),
+                len(chunks),
+                f"Retrying {len(failed_sections)} temporarily failed source "
+                f"section{'s' if len(failed_sections) != 1 else ''} automatically…",
+            )
+            for index in list(failed_sections):
+                analyze_section(index, chunks[index - 1], retry_pass=True)
+
+        if completed_sections == 0:
+            details = next(iter(failed_sections.values()), "Gemini did not return any usable sections.")
+            raise AppError(
+                "Gemini could not analyze any part of this source after model fallback, smaller-section "
+                f"retry, and a second pass. Latest provider error: {details}"
+            )
 
         resolved_title = str(title or "").strip() or (
             detected_titles[0] if detected_titles else "Uploaded source"
@@ -1386,9 +1425,15 @@ class GeminiBookAnalyzer:
             "paid_fallback_used": self.paid_fallback_used,
             "chunk_count": len(chunks),
             "completed_sections": completed_sections,
+            "analysis_incomplete": bool(failed_sections),
+            "failed_sections": [
+                {"section": index, "error": message}
+                for index, message in sorted(failed_sections.items())
+            ],
             "strategies": strategies,
         }
-        self._clear_cache(cache_directory)
+        if not failed_sections:
+            self._clear_cache(cache_directory)
         return result
 
 
