@@ -329,6 +329,46 @@ class BookAnalyzerResilienceTests(unittest.TestCase):
         self.assertEqual(analyzer.model, "gemini-3.6-flash")
         self.assertTrue(any("backup model" in message.lower() for message in progress_messages))
 
+    def test_analyzer_emits_checkpoint_after_each_completed_section(self):
+        analyzer = GeminiBookAnalyzer("key")
+        checkpoints = []
+        first = {
+            "source_summary": "One",
+            "detected_title": "Book",
+            "detected_author": "Author",
+            "strategies": [],
+        }
+        second = {
+            "source_summary": "Two",
+            "detected_title": "Book",
+            "detected_author": "Author",
+            "strategies": [],
+        }
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {"YOUTUBE_STRATEGY_DATA_DIR": directory},
+        ), patch(
+            "trading_intelligence_core.chunk_source_text",
+            return_value=["chunk one", "chunk two"],
+        ), patch.object(
+            analyzer,
+            "_analyze_chunk_with_adaptive_split",
+            side_effect=[first, second],
+        ):
+            result = analyzer.analyze(
+                "book",
+                title="Book",
+                author="Author",
+                checkpoint_callback=lambda snapshot: checkpoints.append(snapshot),
+            )
+
+        self.assertEqual(result["completed_sections"], 2)
+        self.assertGreaterEqual(len(checkpoints), 2)
+        self.assertEqual(checkpoints[0]["completed_sections"], 1)
+        self.assertTrue(checkpoints[0]["analysis_incomplete"])
+        self.assertEqual(checkpoints[-1]["completed_sections"], 2)
+
+
     def test_timeout_can_split_large_section_and_merge_results(self):
         analyzer = GeminiBookAnalyzer("key", "gemini-3.7-flash")
         large_chunk = ("First half paragraph.\n\n" * 400) + ("Second half paragraph.\n\n" * 400)
