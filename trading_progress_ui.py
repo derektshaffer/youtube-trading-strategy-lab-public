@@ -319,3 +319,93 @@ def format_eta_range(eta_range: tuple[float, float] | None) -> str | None:
     if low_text == high_text:
         return f"about {high_text}"
     return f"about {low_text}–{high_text}"
+
+
+SESSION_TIMING_STATE_KEY = "_trading_lab_long_task_timings"
+
+
+def session_task_profiles(
+    state: Any,
+    task_key: str,
+    *,
+    limit: int = 12,
+) -> list[dict[str, Any]]:
+    """Read recent completed timing profiles for one UI task from Streamlit session state."""
+    try:
+        all_profiles = state.get(SESSION_TIMING_STATE_KEY) or {}
+    except AttributeError:
+        return []
+    if not isinstance(all_profiles, dict):
+        return []
+    values = all_profiles.get(str(task_key)) or []
+    if not isinstance(values, list):
+        return []
+    return [item for item in values[: max(1, int(limit))] if isinstance(item, dict)]
+
+
+def save_session_task_profile(
+    state: Any,
+    task_key: str,
+    profile: dict[str, Any],
+    *,
+    limit: int = 12,
+) -> None:
+    """Keep lightweight learned ETA history without touching trading/research records."""
+    try:
+        all_profiles = dict(state.get(SESSION_TIMING_STATE_KEY) or {})
+    except AttributeError:
+        return
+    current = [
+        item
+        for item in all_profiles.get(str(task_key)) or []
+        if isinstance(item, dict)
+    ]
+    all_profiles[str(task_key)] = [dict(profile), *current][: max(1, int(limit))]
+    state[SESSION_TIMING_STATE_KEY] = all_profiles
+
+
+@dataclass
+class LongTaskMonitor:
+    """Generic percentage + learned-ETA tracker for non-Autopilot long actions."""
+
+    task_key: str
+    profiles: list[dict[str, Any]] = field(default_factory=list)
+    started_at: float = field(default_factory=lambda: __import__("time").monotonic())
+    recorder: AutonomousResearchTimingRecorder = field(
+        default_factory=AutonomousResearchTimingRecorder
+    )
+
+    def __post_init__(self) -> None:
+        self.eta_estimator = AutonomousResearchEtaEstimator(list(self.profiles))
+
+    def text(
+        self,
+        fraction: float,
+        message: str = "",
+    ) -> str:
+        import time
+
+        fraction = max(0.0, min(0.999, float(fraction)))
+        elapsed = time.monotonic() - self.started_at
+        self.recorder.record(fraction, elapsed, message)
+        eta = self.eta_estimator.estimate_range(
+            fraction,
+            current_elapsed_seconds=elapsed,
+        )
+        eta_text = format_eta_range(eta)
+        progress_text = f"Estimated progress: {int(round(fraction * 100))}%"
+        if eta_text:
+            progress_text += f" · Estimated time remaining: {eta_text}"
+        else:
+            progress_text += " · Estimating time remaining…"
+        if message:
+            progress_text += f" · {message}"
+        return progress_text
+
+    def finish(self, state: Any | None = None) -> dict[str, Any]:
+        import time
+
+        profile = self.recorder.finish(time.monotonic() - self.started_at)
+        if state is not None:
+            save_session_task_profile(state, self.task_key, profile)
+        return profile
