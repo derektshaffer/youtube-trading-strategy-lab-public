@@ -163,6 +163,10 @@ source = replace_once(
     '''                    delay = 16 if market.historical_feed == "sip" and market.live_feed != "sip" else 1
                     end = utc_now() - timedelta(minutes=delay)
                     start = end - timedelta(days=int(history_days))
+                    backtest_bar.progress(
+                        0.18,
+                        text=backtest_monitor.text(0.18, "Downloading Alpaca historical candles"),
+                    )
                     with st.spinner("Downloading Alpaca historical candles and running conservative simulations…"):
 ''',
     '''                    if replay_payload and replay_payload.get("start_iso") and replay_payload.get("end_iso"):
@@ -186,6 +190,10 @@ source = replace_once(
                         start = end - timedelta(days=int(history_days))
                         history_days_for_record = int(history_days)
                         window_label_for_record = f"Rolling last {int(history_days)} calendar days"
+                    backtest_bar.progress(
+                        0.18,
+                        text=backtest_monitor.text(0.18, "Downloading Alpaca historical candles"),
+                    )
                     with st.spinner("Downloading Alpaca historical candles and running conservative simulations…"):
 ''',
     "replace historical timestamp calculation",
