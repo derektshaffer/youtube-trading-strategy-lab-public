@@ -163,7 +163,7 @@ def save_ingestion_checkpoint(
 ) -> dict[str, Any]:
     """Persist book progress immediately so Streamlit disconnects cannot erase completed work."""
     store = intelligence_store()
-    data = store.load()
+    data = store.load_latest()
     data.setdefault("knowledge_sources", [])
     data.setdefault("strategies", [])
     data.setdefault("research_runs", [])
