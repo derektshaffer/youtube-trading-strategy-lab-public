@@ -33,15 +33,18 @@ from youtube_strategy_engine import (
 )
 
 CANONICAL_STRATEGY_VERSION = 1
-BOOK_ANALYSIS_CACHE_VERSION = 2
-BOOK_TRANSIENT_RETRIES_PER_MODEL = 3
-BOOK_TRANSIENT_MAX_WAIT_SECONDS = 30
+BOOK_ANALYSIS_CACHE_VERSION = 3
+BOOK_TRANSIENT_RETRIES_PER_MODEL = 1
+BOOK_TRANSIENT_MAX_WAIT_SECONDS = 10
 BOOK_QUOTA_RETRIES = 2
 BOOK_QUOTA_MAX_WAIT_SECONDS = 90
 MAX_SOURCE_BYTES = 20 * 1024 * 1024
 MAX_SOURCE_CHARACTERS = 2_000_000
-DEFAULT_CHUNK_CHARACTERS = 42_000
+DEFAULT_CHUNK_CHARACTERS = 28_000
 DEFAULT_CHUNK_OVERLAP = 1_500
+BOOK_ADAPTIVE_SPLIT_MIN_CHARACTERS = 10_000
+BOOK_ADAPTIVE_SPLIT_MAX_DEPTH = 2
+BOOK_ADAPTIVE_SPLIT_OVERLAP = 700
 
 _STRING_LIST = {"type": "array", "items": {"type": "string"}}
 BOOK_ANALYSIS_SCHEMA: dict[str, Any] = {
@@ -927,13 +930,20 @@ class GeminiBookAnalyzer:
             prompt += "\nUser research focus: " + focus.strip()[:3000]
         prompt += "\n\nSOURCE CHUNK:\n" + chunk
 
+        generation_config: dict[str, Any] = {
+            "responseFormat": {
+                "text": {"mimeType": "APPLICATION_JSON", "schema": BOOK_ANALYSIS_SCHEMA}
+            }
+        }
+        # Book extraction is mostly structured reading rather than open-ended problem solving.
+        # Use low thinking on Gemini 3.x to reduce latency and timeout risk. Gemini 2.5 uses
+        # its own thinking-budget parameter, so leave that family on its API default.
+        if model_name.startswith("gemini-3"):
+            generation_config["thinkingConfig"] = {"thinkingLevel": "low"}
+
         payload = {
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "responseFormat": {
-                    "text": {"mimeType": "APPLICATION_JSON", "schema": BOOK_ANALYSIS_SCHEMA}
-                }
-            },
+            "generationConfig": generation_config,
         }
         response = _json_request(
             f"{GEMINI_GENERATE_CONTENT_URL}/{model_name}:generateContent",
@@ -1039,6 +1049,142 @@ class GeminiBookAnalyzer:
                     continue
 
                 raise
+
+    @staticmethod
+    def _timeout_like(error: Exception | str) -> bool:
+        message = str(error).lower()
+        return any(
+            marker in message
+            for marker in (
+                "timed out",
+                "timeout",
+                "provider could not be reached",
+                "connection reset",
+                "connection aborted",
+                "remote end closed connection",
+            )
+        )
+
+    def _reset_model_fallback_chain(self) -> None:
+        self.model = self.primary_model
+        self._fallback_model_index = 0
+
+    @staticmethod
+    def _split_chunk_for_retry(chunk: str) -> list[str]:
+        text = str(chunk or "").strip()
+        if len(text) < 2:
+            return [text] if text else []
+        midpoint = len(text) // 2
+        candidates = []
+        for separator in ("\n\n", "\n", ". "):
+            left = text.rfind(separator, max(0, midpoint - 5000), midpoint + 1)
+            right = text.find(separator, midpoint, min(len(text), midpoint + 5000))
+            if left > 0:
+                candidates.append(left + len(separator))
+            if right > 0:
+                candidates.append(right + len(separator))
+        split_at = min(candidates, key=lambda value: abs(value - midpoint)) if candidates else midpoint
+        overlap = min(BOOK_ADAPTIVE_SPLIT_OVERLAP, max(0, split_at // 8))
+        first = text[:split_at].strip()
+        second = text[max(0, split_at - overlap):].strip()
+        return [piece for piece in (first, second) if piece]
+
+    @classmethod
+    def _merge_chunk_analyses(cls, analyses: list[dict[str, Any]]) -> dict[str, Any]:
+        summaries: list[str] = []
+        detected_title = ""
+        detected_author = ""
+        strategies_by_key: dict[str, dict[str, Any]] = {}
+        for analysis in analyses:
+            summary = str(analysis.get("source_summary") or "").strip()
+            if summary and summary not in summaries:
+                summaries.append(summary)
+            if not detected_title:
+                detected_title = str(analysis.get("detected_title") or "").strip()
+            if not detected_author:
+                detected_author = str(analysis.get("detected_author") or "").strip()
+            for raw in analysis.get("strategies") or []:
+                if not isinstance(raw, dict):
+                    continue
+                name = str(raw.get("name") or "Unnamed strategy").strip()
+                category = str(raw.get("category") or "Uncategorized").strip()
+                key = re.sub(r"[^a-z0-9]+", " ", f"{name} {category}".casefold()).strip()
+                if not key:
+                    continue
+                if key in strategies_by_key:
+                    strategies_by_key[key] = cls._merge_strategy(strategies_by_key[key], raw)
+                else:
+                    strategies_by_key[key] = dict(raw)
+        return {
+            "source_summary": " ".join(summaries)[:12000],
+            "detected_title": detected_title,
+            "detected_author": detected_author,
+            "strategies": list(strategies_by_key.values()),
+        }
+
+    def _analyze_chunk_with_adaptive_split(
+        self,
+        chunk: str,
+        *,
+        title: str,
+        author: str,
+        chunk_number: int,
+        chunk_count: int,
+        focus: str,
+        progress_callback,
+        split_depth: int = 0,
+    ) -> dict[str, Any]:
+        try:
+            return self._analyze_chunk_resilient(
+                chunk,
+                title=title,
+                author=author,
+                chunk_number=chunk_number,
+                chunk_count=chunk_count,
+                focus=focus,
+                progress_callback=progress_callback,
+            )
+        except AppError as exc:
+            if (
+                not self._timeout_like(exc)
+                or split_depth >= BOOK_ADAPTIVE_SPLIT_MAX_DEPTH
+                or len(chunk) < BOOK_ADAPTIVE_SPLIT_MIN_CHARACTERS
+            ):
+                raise
+
+            pieces = self._split_chunk_for_retry(chunk)
+            if len(pieces) < 2:
+                raise
+            self._emit_progress(
+                progress_callback,
+                chunk_number,
+                chunk_count,
+                f"Section {chunk_number} is still timing out. Splitting it into "
+                f"{len(pieces)} smaller pieces automatically…",
+            )
+            analyses: list[dict[str, Any]] = []
+            for piece_index, piece in enumerate(pieces, start=1):
+                self._reset_model_fallback_chain()
+                self._emit_progress(
+                    progress_callback,
+                    chunk_number,
+                    chunk_count,
+                    f"Analyzing smaller piece {piece_index} of {len(pieces)} for "
+                    f"section {chunk_number}…",
+                )
+                analyses.append(
+                    self._analyze_chunk_with_adaptive_split(
+                        piece,
+                        title=title,
+                        author=author,
+                        chunk_number=chunk_number,
+                        chunk_count=chunk_count,
+                        focus=focus,
+                        progress_callback=progress_callback,
+                        split_depth=split_depth + 1,
+                    )
+                )
+            return self._merge_chunk_analyses(analyses)
 
     @staticmethod
     def _merge_string_lists(left: list[Any], right: list[Any], maximum: int = 120) -> list[str]:
@@ -1153,7 +1299,7 @@ class GeminiBookAnalyzer:
                     f"Analyzing source section {index} of {len(chunks)} with {self.model}…",
                 )
                 try:
-                    analysis = self._analyze_chunk_resilient(
+                    analysis = self._analyze_chunk_with_adaptive_split(
                         chunk,
                         title=title,
                         author=author,
