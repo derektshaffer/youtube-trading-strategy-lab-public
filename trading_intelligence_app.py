@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from datetime import timedelta
 from pathlib import Path
@@ -89,9 +90,23 @@ st.markdown(
 )
 
 
+DEFAULT_PRIVATE_BACKUP_REPOSITORY = "derektshaffer/youtube-trading-strategy-backups"
+
+
+def backup_token() -> str:
+    return (
+        setting("GITHUB_BACKUP_TOKEN")
+        or setting("GITHUB_TOKEN")
+        or setting("GH_TOKEN")
+    )
+
+
 def build_intelligence_store() -> StrategyStore:
-    repository = setting("GITHUB_BACKUP_REPOSITORY")
-    token = setting("GITHUB_BACKUP_TOKEN")
+    repository = setting(
+        "GITHUB_BACKUP_REPOSITORY",
+        DEFAULT_PRIVATE_BACKUP_REPOSITORY,
+    )
+    token = backup_token()
     cloud = None
     if repository and token:
         cloud = GitHubCloudBackup(
@@ -108,8 +123,11 @@ def build_intelligence_store() -> StrategyStore:
 
 
 def build_legacy_store() -> StrategyStore:
-    repository = setting("GITHUB_BACKUP_REPOSITORY")
-    token = setting("GITHUB_BACKUP_TOKEN")
+    repository = setting(
+        "GITHUB_BACKUP_REPOSITORY",
+        DEFAULT_PRIVATE_BACKUP_REPOSITORY,
+    )
+    token = backup_token()
     cloud = None
     if repository and token:
         cloud = GitHubCloudBackup(
@@ -127,12 +145,57 @@ def intelligence_store() -> StrategyStore:
 
 
 def load_library() -> dict[str, Any]:
-    data = intelligence_store().load()
+    data = intelligence_store().load_latest()
     data.setdefault("knowledge_sources", [])
     data.setdefault("strategies", [])
     data.setdefault("research_runs", [])
     data.setdefault("validation_runs", [])
     return data
+
+
+def save_ingestion_checkpoint(
+    analysis: dict[str, Any],
+    *,
+    filename: str,
+    extraction_metadata: dict[str, Any],
+    ingest_id: str,
+    stage: str,
+) -> dict[str, Any]:
+    """Persist book progress immediately so Streamlit disconnects cannot erase completed work."""
+    store = intelligence_store()
+    data = store.load()
+    data.setdefault("knowledge_sources", [])
+    data.setdefault("strategies", [])
+    data.setdefault("research_runs", [])
+    data.setdefault("validation_runs", [])
+
+    strategies = list(analysis.get("strategies") or [])
+    if strategies:
+        data["strategies"] = merge_strategies(
+            list(data.get("strategies") or []),
+            strategies,
+        )
+
+    source_record = {key: value for key, value in analysis.items() if key != "strategies"}
+    source_record["filename"] = filename
+    source_record["extraction_metadata"] = extraction_metadata
+    source_record["ingest_id"] = ingest_id
+    source_record["analysis_stage"] = stage
+    source_record["analysis_in_progress"] = stage not in {"complete", "partial"}
+    source_record["checkpointed_at"] = utc_now().isoformat()
+
+    data["knowledge_sources"] = [
+        item
+        for item in data.get("knowledge_sources") or []
+        if str(item.get("ingest_id") or "") != ingest_id
+        and str(item.get("id") or "") != str(source_record.get("id") or "")
+    ]
+    data["knowledge_sources"].insert(0, source_record)
+    return store.save(data)
+
+
+def persistence_summary() -> dict[str, Any]:
+    return intelligence_store().persistence_status()
 
 
 def source_label(strategy: dict[str, Any]) -> str:
