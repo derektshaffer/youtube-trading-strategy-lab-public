@@ -18,6 +18,7 @@ class ValidationStrengthTests(unittest.TestCase):
         }
         return {
             "winner": {
+                "status": "VALIDATED" if positive else "NO VALIDATED EDGE",
                 "training_metrics": dict(metrics),
                 "validation_metrics": dict(metrics),
                 "holdout_metrics": dict(metrics),
@@ -35,6 +36,62 @@ class ValidationStrengthTests(unittest.TestCase):
         self.assertGreater(strong["score"], weak["score"])
         self.assertTrue(strong["independently_positive"])
         self.assertFalse(weak["independently_positive"])
+
+    def test_unstable_anchor_cannot_receive_strong_robustness_from_walk_forward(self):
+        report = {
+            "winner": {
+                "status": "UNSTABLE",
+                "training_metrics": {
+                    "trade_count": 164,
+                    "net_pnl": -300.06,
+                    "profit_factor": 0.75,
+                    "max_drawdown_pct": 3.04,
+                },
+                "validation_metrics": {
+                    "trade_count": 55,
+                    "net_pnl": 30.98,
+                    "profit_factor": 1.093,
+                    "max_drawdown_pct": 1.54,
+                },
+                "holdout_metrics": {
+                    "trade_count": 90,
+                    "net_pnl": 102.64,
+                    "profit_factor": 1.193,
+                    "max_drawdown_pct": 1.45,
+                },
+                "stress_metrics": {
+                    "trade_count": 55,
+                    "net_pnl": 10.4,
+                    "profit_factor": 1.03,
+                    "max_drawdown_pct": 1.65,
+                },
+            },
+            "optimization_settings": {
+                "minimum_validation_trades": 2,
+                "maximum_drawdown_pct": 15.0,
+            },
+        }
+        result = validation_strength(
+            report,
+            {"summary": {"score": 99.3, "profitable_fold_pct": 100.0}},
+        )
+        self.assertGreater(result["raw_score_before_caps"], 80.0)
+        self.assertLessEqual(result["score"], 49.0)
+        self.assertEqual(result["label"], "WEAK")
+        self.assertFalse(result["independently_positive"])
+        self.assertEqual(result["optimizer_status"], "UNSTABLE")
+        self.assertTrue(any("UNSTABLE" in reason for reason in result["reasons"]))
+
+    def test_cost_sensitive_anchor_cannot_receive_strong_rating(self):
+        report = self._report(True)
+        report["winner"]["status"] = "COST SENSITIVE"
+        report["winner"]["stress_metrics"]["net_pnl"] = -5.0
+        result = validation_strength(
+            report,
+            {"summary": {"score": 95.0, "profitable_fold_pct": 100.0}},
+        )
+        self.assertLessEqual(result["score"], 49.0)
+        self.assertFalse(result["independently_positive"])
 
     def test_walk_forward_score_is_blended_not_treated_as_probability(self):
         base = self._report(True)
