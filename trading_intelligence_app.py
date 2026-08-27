@@ -195,7 +195,7 @@ def save_ingestion_checkpoint(
 
 
 def persistence_summary() -> dict[str, Any]:
-    return intelligence_store().persistence_status()
+    return intelligence_store().persistence_status(verify=True)
 
 
 def source_label(strategy: dict[str, Any]) -> str:
@@ -289,19 +289,23 @@ elif module == "Knowledge Sources":
     storage = persistence_summary()
     if storage.get("durable"):
         st.success(
-            "Permanent library storage is connected to the private GitHub backup. "
-            "Book progress is checkpointed as the AI works."
+            "Permanent library storage verified: "
+            f"{storage.get('repository')} · {storage.get('path')}. "
+            "Book progress is checkpointed to GitHub as the AI works."
         )
-        if storage.get("last_error"):
-            st.warning(
-                "The last cloud-save attempt reported a problem: "
-                + str(storage.get("last_error"))
+    elif storage.get("configured"):
+        st.error(
+            "Permanent GitHub storage is configured but NOT verified. "
+            + str(
+                storage.get("verification_error")
+                or storage.get("last_error")
+                or "The backup repository/path could not be verified."
             )
+        )
     else:
         st.error(
-            "Permanent library storage is NOT connected in this Streamlit deployment. "
-            "Local Streamlit files can disappear when the app sleeps or restarts. "
-            "The Lab will checkpoint locally, but this is not durable until a GitHub backup token is available."
+            "Permanent library storage is NOT configured in this Streamlit deployment. "
+            "Local Streamlit files can disappear when the app sleeps or restarts."
         )
 
     uploaded = st.file_uploader(
