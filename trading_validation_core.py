@@ -108,7 +108,62 @@ def validation_strength(
         if walk_score is not None:
             final_score = base_score * 0.60 + walk_score * 0.40
 
-    final_score = round(max(0.0, min(100.0, final_score)), 1)
+    raw_score = round(max(0.0, min(100.0, final_score)), 1)
+
+    # Robustness must not contradict the optimizer's own stability verdict. Additive
+    # scoring can otherwise reward tiny positive unseen slices + low drawdown enough
+    # to produce a 90+ score even when the training period is negative or the optimizer
+    # explicitly labels the setup UNSTABLE.
+    optimizer_status = str(winner.get("status") or "").strip().upper()
+    training_pnl = safe_float(training.get("net_pnl"), 0.0) or 0.0
+    validation_pf = _profit_factor(validation)
+    stress_pf = _profit_factor(stress)
+    score_cap = 100.0
+    penalties: list[str] = []
+
+    status_caps = {
+        "LIMITED DATA": 39.0,
+        "DRAWDOWN TOO HIGH": 39.0,
+        "NO VALIDATED EDGE": 39.0,
+        "UNSTABLE": 49.0,
+        "COST SENSITIVE": 59.0,
+    }
+    if optimizer_status in status_caps:
+        score_cap = min(score_cap, status_caps[optimizer_status])
+        penalties.append(
+            f"Optimizer status is {optimizer_status}; robustness is capped at {int(score_cap)}/100."
+        )
+
+    if training_pnl <= 0:
+        score_cap = min(score_cap, 49.0)
+        penalties.append("Training P/L is not positive, so the setup is not stable across the anchor history.")
+
+    if validation_pnl <= 0:
+        score_cap = min(score_cap, 39.0)
+    if holdout_pnl <= 0:
+        score_cap = min(score_cap, 39.0)
+    if stress_pnl <= 0:
+        score_cap = min(score_cap, 49.0)
+
+    if validation_pnl > 0 and validation_pf < 1.05:
+        score_cap = min(score_cap, 59.0)
+        penalties.append("Validation profit factor is too close to breakeven for a high robustness rating.")
+    if stress_pnl > 0 and stress_pf < 1.05:
+        score_cap = min(score_cap, 59.0)
+        penalties.append("Stress-test profit factor is too close to breakeven for a high robustness rating.")
+
+    wf_profitable_pct = None
+    if walk_forward_report:
+        wf_summary = walk_forward_report.get("summary") or {}
+        wf_profitable_pct = safe_float(wf_summary.get("profitable_fold_pct"), 0.0) or 0.0
+        if wf_profitable_pct < 50.0:
+            score_cap = min(score_cap, 49.0)
+            penalties.append("Fewer than half of active walk-forward folds were profitable.")
+        elif wf_profitable_pct < 66.7:
+            score_cap = min(score_cap, 64.0)
+            penalties.append("Walk-forward profitability is mixed rather than broadly consistent.")
+
+    final_score = round(min(raw_score, score_cap), 1)
     if final_score >= 80:
         label = "STRONG"
     elif final_score >= 65:
@@ -118,21 +173,31 @@ def validation_strength(
     else:
         label = "WEAK"
 
-    independently_positive = validation_pnl > 0 and holdout_pnl > 0
+    independently_positive = (
+        optimizer_status == "VALIDATED"
+        and training_pnl > 0
+        and validation_pnl > 0
+        and holdout_pnl > 0
+        and stress_pnl > 0
+    )
     if walk_forward_report:
-        wf_summary = walk_forward_report.get("summary") or {}
-        independently_positive = independently_positive and (
-            safe_float(wf_summary.get("profitable_fold_pct"), 0.0) or 0.0
-        ) >= 50.0
+        independently_positive = independently_positive and (wf_profitable_pct or 0.0) >= 50.0
 
     return {
         "score": final_score,
+        "raw_score_before_caps": raw_score,
+        "score_cap": round(score_cap, 1),
         "base_score": round(base_score, 1),
         "walk_forward_score": round(walk_score, 1) if walk_score is not None else None,
+        "optimizer_status": optimizer_status or None,
         "label": label,
         "independently_positive": bool(independently_positive),
-        "reasons": reasons,
-        "note": "Robustness score summarizes historical validation behavior; it is not a probability of profit.",
+        "reasons": list(dict.fromkeys([*reasons, *penalties])),
+        "note": (
+            "Robustness summarizes anchor-stock historical validation. Stability caps prevent "
+            "negative/unstable or near-breakeven evidence from receiving a misleading high rating; "
+            "it is not a probability of profit."
+        ),
     }
 
 
