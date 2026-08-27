@@ -36,6 +36,7 @@ GEMINI_INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/inte
 GEMINI_GENERATE_CONTENT_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 DEFAULT_GEMINI_MODEL = "gemini-3.7-flash"
 DEFAULT_GEMINI_FALLBACK_MODEL = "gemini-3.6-flash"
+DEFAULT_GEMINI_ADDITIONAL_FALLBACK_MODELS = ("gemini-3.5-flash", "gemini-2.5-flash")
 MAX_SINGLE_VIDEO_SECONDS = 45 * 60
 VIDEO_SEGMENT_SECONDS = 40 * 60
 MAX_VIDEO_SEGMENTS = 30
@@ -640,7 +641,17 @@ class GeminiVideoAnalyzer:
         self.model = str(model or DEFAULT_GEMINI_MODEL).strip()
         self.primary_model = self.model
         candidate_fallback_model = str(fallback_model or "").strip()
-        self.fallback_model = candidate_fallback_model if candidate_fallback_model != self.model else ""
+        fallback_candidates = [
+            candidate_fallback_model,
+            *DEFAULT_GEMINI_ADDITIONAL_FALLBACK_MODELS,
+        ]
+        self.fallback_models: list[str] = []
+        for candidate in fallback_candidates:
+            candidate = str(candidate or "").strip()
+            if candidate and candidate != self.primary_model and candidate not in self.fallback_models:
+                self.fallback_models.append(candidate)
+        self.fallback_model = self.fallback_models[0] if self.fallback_models else ""
+        self._fallback_model_index = 0
         self.model_fallback_used = False
 
     @property
@@ -659,15 +670,17 @@ class GeminiVideoAnalyzer:
         return True
 
     def _activate_model_fallback(self, error: Exception | str) -> bool:
-        if (
-            self.model_fallback_used
-            or not self.fallback_model
-            or not provider_temporarily_unavailable(error)
-        ):
+        if not provider_temporarily_unavailable(error):
             return False
-        self.model = self.fallback_model
-        self.model_fallback_used = True
-        return True
+        while self._fallback_model_index < len(self.fallback_models):
+            candidate = self.fallback_models[self._fallback_model_index]
+            self._fallback_model_index += 1
+            if candidate == self.model:
+                continue
+            self.model = candidate
+            self.model_fallback_used = True
+            return True
+        return False
 
     @staticmethod
     def _prompt(extra_instructions: str = "") -> str:
@@ -728,6 +741,7 @@ class GeminiVideoAnalyzer:
         parsed["model"] = self.model
         parsed["primary_model"] = self.primary_model
         parsed["fallback_model"] = self.fallback_model or None
+        parsed["fallback_models"] = list(self.fallback_models)
         parsed["model_fallback_used"] = self.model_fallback_used
         parsed["interaction_id"] = interaction_id
         parsed["usage"] = usage or {}
@@ -1044,6 +1058,7 @@ class GeminiVideoAnalyzer:
                                     )
                                 sleep(retry_wait)
                                 continue
+                            failed_model = self.model
                             if self._activate_model_fallback(exc):
                                 rate_limit_attempts = 0
                                 transient_attempts = 0
@@ -1051,7 +1066,7 @@ class GeminiVideoAnalyzer:
                                     progress(
                                         index,
                                         total,
-                                        f"{self.primary_model} is still overloaded. Switching {label} "
+                                        f"{failed_model} is still overloaded. Switching {label} "
                                         f"to backup model {self.model}…",
                                     )
                                 continue
@@ -1174,13 +1189,14 @@ class GeminiVideoAnalyzer:
                         )
                     sleep(retry_wait)
                     continue
+                failed_model = self.model
                 if self._activate_model_fallback(exc):
                     transient_attempts = 0
                     if progress:
                         progress(
                             0,
                             1,
-                            f"{self.primary_model} is still overloaded. Switching to backup model {self.model}…",
+                            f"{failed_model} is still overloaded. Switching to backup model {self.model}…",
                         )
                     continue
                 raise
