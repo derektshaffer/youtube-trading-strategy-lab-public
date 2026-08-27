@@ -3430,19 +3430,136 @@ def generate_local_execution_refinements(
         )
     ]
     candidates: list[BacktestSettings] = []
-    seen: set[tuple[float, float]] = set()
+    seen: set[tuple[Any, ...]] = set()
+
+    def add(candidate: BacktestSettings) -> None:
+        if len(candidates) >= limit:
+            return
+        candidate.validate()
+        signature = (
+            round(float(candidate.risk_per_trade_pct), 4),
+            round(float(candidate.max_position_pct), 4),
+            *(getattr(candidate, name) for name in BEHAVIOR_SETTING_FIELDS),
+        )
+        if signature in seen or candidate == seed_settings:
+            return
+        seen.add(signature)
+        candidates.append(candidate)
+
     for risk in risk_values:
         for position in position_values:
-            signature = (round(risk, 4), round(position, 4))
-            if signature in seen or (
-                math.isclose(risk, seed_settings.risk_per_trade_pct)
-                and math.isclose(position, seed_settings.max_position_pct)
-            ):
-                continue
-            seen.add(signature)
-            candidates.append(replace(seed_settings, risk_per_trade_pct=risk, max_position_pct=position))
-            if len(candidates) >= limit:
-                return candidates
+            add(replace(seed_settings, risk_per_trade_pct=risk, max_position_pct=position))
+
+    for count in (1, 2, 3, 4):
+        add(replace(seed_settings, max_concurrent_positions=count))
+    add(replace(seed_settings, allow_extended_hours=not seed_settings.allow_extended_hours))
+    for scale in (0.15, 0.25, 0.50):
+        add(replace(seed_settings, allow_extended_hours=True, extended_hours_position_scale=scale))
+    add(replace(seed_settings, ignore_strategy_session_end=not seed_settings.ignore_strategy_session_end))
+    add(replace(
+        seed_settings,
+        allow_price_extension_after_qualification=not seed_settings.allow_price_extension_after_qualification,
+    ))
+    add(replace(
+        seed_settings,
+        require_pullback_breakout_for_pullback_strategies=(
+            not seed_settings.require_pullback_breakout_for_pullback_strategies
+        ),
+    ))
+    return candidates[:limit]
+
+
+BEHAVIOR_SETTING_FIELDS = (
+    "max_concurrent_positions",
+    "allow_extended_hours",
+    "extended_hours_position_scale",
+    "ignore_strategy_session_end",
+    "allow_price_extension_after_qualification",
+    "require_pullback_breakout_for_pullback_strategies",
+)
+
+
+def legacy_behavior_settings(settings: BacktestSettings) -> BacktestSettings:
+    """Recreate the pre-enhancement entry behavior for direct A/B comparison."""
+    return replace(
+        settings,
+        max_concurrent_positions=1,
+        allow_extended_hours=False,
+        extended_hours_position_scale=0.25,
+        ignore_strategy_session_end=False,
+        allow_price_extension_after_qualification=False,
+        require_pullback_breakout_for_pullback_strategies=False,
+    )
+
+
+def generate_behavior_variants(settings: BacktestSettings) -> list[BacktestSettings]:
+    """Cover every enhanced entry-behavior dimension with a bounded profile set."""
+    settings.validate()
+    candidates: list[BacktestSettings] = []
+    seen: set[tuple[Any, ...]] = set()
+
+    def signature(candidate: BacktestSettings) -> tuple[Any, ...]:
+        return tuple(getattr(candidate, name) for name in BEHAVIOR_SETTING_FIELDS)
+
+    def add(candidate: BacktestSettings) -> None:
+        candidate.validate()
+        key = signature(candidate)
+        if key not in seen:
+            seen.add(key)
+            candidates.append(candidate)
+
+    add(settings)
+    add(legacy_behavior_settings(settings))
+
+    for count in (1, 2, 3, 4):
+        add(replace(settings, max_concurrent_positions=count))
+
+    add(replace(settings, allow_extended_hours=False))
+    for scale in (0.15, 0.25, 0.50):
+        add(replace(settings, allow_extended_hours=True, extended_hours_position_scale=scale))
+
+    add(replace(settings, ignore_strategy_session_end=False))
+    add(replace(settings, ignore_strategy_session_end=True))
+    add(replace(settings, allow_price_extension_after_qualification=False))
+    add(replace(settings, allow_price_extension_after_qualification=True))
+    add(replace(settings, require_pullback_breakout_for_pullback_strategies=False))
+    add(replace(settings, require_pullback_breakout_for_pullback_strategies=True))
+
+    add(replace(
+        settings,
+        max_concurrent_positions=2,
+        allow_extended_hours=False,
+        ignore_strategy_session_end=True,
+        allow_price_extension_after_qualification=True,
+        require_pullback_breakout_for_pullback_strategies=True,
+    ))
+    add(replace(
+        settings,
+        max_concurrent_positions=2,
+        allow_extended_hours=True,
+        extended_hours_position_scale=0.15,
+        ignore_strategy_session_end=True,
+        allow_price_extension_after_qualification=True,
+        require_pullback_breakout_for_pullback_strategies=True,
+    ))
+    add(replace(
+        settings,
+        max_concurrent_positions=3,
+        allow_extended_hours=True,
+        extended_hours_position_scale=0.25,
+        ignore_strategy_session_end=True,
+        allow_price_extension_after_qualification=True,
+        require_pullback_breakout_for_pullback_strategies=True,
+    ))
+    add(replace(
+        settings,
+        max_concurrent_positions=2,
+        allow_extended_hours=True,
+        extended_hours_position_scale=0.25,
+        ignore_strategy_session_end=True,
+        allow_price_extension_after_qualification=True,
+        require_pullback_breakout_for_pullback_strategies=False,
+    ))
     return candidates
 
 
@@ -3451,9 +3568,9 @@ def generate_execution_variants(
     *,
     maximum: int = 7,
 ) -> list[BacktestSettings]:
-    """Test a broad risk-per-trade x maximum-position grid while holding costs fixed."""
+    """Jointly test position sizing and entry-behavior choices."""
     settings.validate()
-    limit = max(1, min(64, int(maximum)))
+    sizing_limit = max(1, min(64, int(maximum)))
     risk_ceiling = float(settings.risk_per_trade_pct)
     position_ceiling = float(settings.max_position_pct)
 
@@ -3464,19 +3581,47 @@ def generate_execution_variants(
     risk_values = list(dict.fromkeys(round(max(0.01, value), 4) for value in risk_values))
     position_values = list(dict.fromkeys(round(max(0.01, value), 4) for value in position_values))
 
-    candidates: list[BacktestSettings] = []
-    seen: set[tuple[float, float]] = set()
+    sizing_only: list[BacktestSettings] = []
     for risk in risk_values:
         for position in position_values:
-            if len(candidates) >= limit:
-                return candidates
-            signature = (risk, position)
-            if signature in seen:
-                continue
-            seen.add(signature)
-            candidates.append(
-                replace(settings, risk_per_trade_pct=risk, max_position_pct=position)
-            )
+            sizing_only.append(replace(settings, risk_per_trade_pct=risk, max_position_pct=position))
+            if len(sizing_only) >= sizing_limit:
+                break
+        if len(sizing_only) >= sizing_limit:
+            break
+
+    behaviors = generate_behavior_variants(settings)
+    candidates: list[BacktestSettings] = []
+    seen: set[tuple[Any, ...]] = set()
+
+    def signature(candidate: BacktestSettings) -> tuple[Any, ...]:
+        return (
+            round(float(candidate.risk_per_trade_pct), 4),
+            round(float(candidate.max_position_pct), 4),
+            *(getattr(candidate, name) for name in BEHAVIOR_SETTING_FIELDS),
+        )
+
+    def add(candidate: BacktestSettings) -> None:
+        candidate.validate()
+        key = signature(candidate)
+        if key not in seen:
+            seen.add(key)
+            candidates.append(candidate)
+
+    add(settings)
+    for behavior in behaviors:
+        add(behavior)
+    for sizing in sizing_only:
+        add(sizing)
+
+    for behavior in behaviors[:min(8, len(behaviors))]:
+        for sizing in sizing_only[:min(6, len(sizing_only))]:
+            add(replace(
+                behavior,
+                risk_per_trade_pct=sizing.risk_per_trade_pct,
+                max_position_pct=sizing.max_position_pct,
+            ))
+
     return candidates
 
 def estimate_slippage_bps(
@@ -3991,7 +4136,18 @@ def _optimize_stock_strategies_historical(
         }
         changed_backtest_settings = {
             field_name: {"original": getattr(settings, field_name), "optimized": getattr(chosen_settings, field_name)}
-            for field_name in ("risk_per_trade_pct", "max_position_pct", "default_stop_pct", "default_reward_risk")
+            for field_name in (
+                "risk_per_trade_pct",
+                "max_position_pct",
+                "default_stop_pct",
+                "default_reward_risk",
+                "max_concurrent_positions",
+                "allow_extended_hours",
+                "extended_hours_position_scale",
+                "ignore_strategy_session_end",
+                "allow_price_extension_after_qualification",
+                "require_pullback_breakout_for_pullback_strategies",
+            )
             if getattr(settings, field_name) != getattr(chosen_settings, field_name)
         }
         settings_tested = (
@@ -4662,7 +4818,16 @@ def optimize_stock_strategies(
         changed_backtest_settings = {
             field_name: {"original": getattr(settings, field_name), "optimized": getattr(chosen_settings, field_name)}
             for field_name in (
-                "risk_per_trade_pct", "max_position_pct", "default_stop_pct", "default_reward_risk"
+                "risk_per_trade_pct",
+                "max_position_pct",
+                "default_stop_pct",
+                "default_reward_risk",
+                "max_concurrent_positions",
+                "allow_extended_hours",
+                "extended_hours_position_scale",
+                "ignore_strategy_session_end",
+                "allow_price_extension_after_qualification",
+                "require_pullback_breakout_for_pullback_strategies",
             )
             if getattr(settings, field_name) != getattr(chosen_settings, field_name)
         }
