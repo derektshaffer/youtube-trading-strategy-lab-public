@@ -24,8 +24,10 @@ on:
     paths:
       - "trading_intelligence_app.py"
       - "trading_intelligence_core.py"
+      - "trading_auto_research.py"
       - "trading_validation_core.py"
       - "youtube_strategy_engine.py"
+      - "test_trading_auto_research.py"
       - "requirements.txt"
 
 permissions:
