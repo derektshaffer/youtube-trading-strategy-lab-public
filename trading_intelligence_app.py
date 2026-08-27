@@ -11,6 +11,7 @@ import pandas as pd
 import streamlit as st
 
 from live_strategy_runner_page import market_client, setting
+from trading_market_discovery import scan_strategy_universe
 from trading_intelligence_core import (
     GeminiBookAnalyzer,
     canonicalize_existing_strategy,
@@ -748,10 +749,152 @@ elif module == "Validation":
 
 elif module == "Market Discovery":
     st.markdown("## Market Discovery")
-    st.info(
-        "This is where the existing momentum scanner will plug in as a market sensor. "
-        "The larger platform will then rank which validated strategy families fit each candidate."
+    st.caption(
+        "Use current Alpaca market data as a sensor, then apply a saved strategy's actual rules "
+        "to the candidates. Validation status and live setup matching remain separate."
     )
+
+    validated_strategies = [
+        item for item in strategies
+        if str(item.get("validation_status") or "").lower() == "validated"
+    ]
+    include_research = st.checkbox(
+        "Include unvalidated research strategies",
+        value=not bool(validated_strategies),
+        help="Unvalidated strategies can be explored here but should not be treated as proven live edges.",
+    )
+    discovery_strategies = strategies if include_research else validated_strategies
+
+    if not discovery_strategies:
+        st.info("No validated strategies are available yet. Validate a strategy or include research strategies.")
+    else:
+        strategy_choices = {}
+        for item in discovery_strategies:
+            status = str(item.get("validation_status") or "unvalidated").replace("_", " ").title()
+            label = f"{item.get('name') or 'Unnamed strategy'} · {status}"
+            if label in strategy_choices:
+                label += f" · {str(item.get('id') or '')[:7]}"
+            strategy_choices[label] = item
+        selected_discovery_strategy = strategy_choices[
+            st.selectbox("Strategy to scan for", list(strategy_choices))
+        ]
+
+        scan_cols = st.columns([1.1, 1.0, 2.0])
+        universe_mode = scan_cols[0].selectbox(
+            "Market universe",
+            ["Top gainers", "Most active", "Custom watchlist"],
+        )
+        candidate_count = int(scan_cols[1].slider("Candidates", 5, 30, 15, 5))
+        custom_symbols = scan_cols[2].text_input(
+            "Custom tickers",
+            placeholder="SDOT LUCY REAX",
+            disabled=universe_mode != "Custom watchlist",
+        )
+
+        scan_now = st.button("🔎 Scan current market", type="primary", use_container_width=True)
+        if scan_now:
+            try:
+                market = market_client()
+                status_box = st.status("Building live candidate universe…", expanded=True)
+                if universe_mode == "Top gainers":
+                    symbols = market.movers(top=candidate_count)
+                elif universe_mode == "Most active":
+                    symbols = market.most_active(top=candidate_count)
+                else:
+                    symbols = [
+                        token.strip().upper()
+                        for token in custom_symbols.replace(",", " ").split()
+                        if token.strip()
+                    ][:candidate_count]
+                if not symbols:
+                    raise AppError("No valid symbols were available for this scan.")
+
+                status_box.write(f"Applying {selected_discovery_strategy.get('name')} to {len(symbols)} candidates…")
+                results = scan_strategy_universe(
+                    market,
+                    symbols,
+                    selected_discovery_strategy,
+                    progress=lambda message: status_box.write(message),
+                )
+                st.session_state["til_market_discovery_result"] = {
+                    "strategy_id": selected_discovery_strategy.get("id"),
+                    "strategy_name": selected_discovery_strategy.get("name"),
+                    "validation_status": selected_discovery_strategy.get("validation_status"),
+                    "universe_mode": universe_mode,
+                    "results": results,
+                }
+                status_box.update(label=f"Scan complete · {len(results)} stocks evaluated", state="complete", expanded=False)
+                st.rerun()
+            except AppError as exc:
+                st.error(str(exc))
+            except Exception as exc:
+                st.error(f"Market scan failed: {exc}")
+
+        discovery_result = st.session_state.get("til_market_discovery_result") or {}
+        live_results = list(discovery_result.get("results") or [])
+        if live_results:
+            st.divider()
+            st.markdown(
+                f"### Current matches · {discovery_result.get('strategy_name') or 'Strategy'}"
+            )
+            if str(discovery_result.get("validation_status") or "").lower() != "validated":
+                st.warning(
+                    "This is an unvalidated research strategy. A live rule match is not evidence "
+                    "that the trade has positive expected value."
+                )
+
+            table_rows = []
+            for item in live_results:
+                metrics = item.get("metrics") or {}
+                table_rows.append(
+                    {
+                        "Symbol": item.get("symbol"),
+                        "Setup": item.get("status"),
+                        "Rule match %": safe_float(item.get("score"), 0.0) or 0.0,
+                        "Price": safe_float(metrics.get("price")),
+                        "Day move %": safe_float(metrics.get("day_change_pct")),
+                        "RVOL": safe_float(metrics.get("relative_volume")),
+                        "Spread %": safe_float(metrics.get("spread_pct")),
+                        "Catalyst": item.get("has_catalyst"),
+                        "Needs verification": int(safe_float(item.get("unknown"), 0) or 0),
+                    }
+                )
+            st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+
+            matches = [item for item in live_results if str(item.get("status")).upper() == "MATCH"]
+            watches = [
+                item for item in live_results
+                if str(item.get("status")).upper() in {"WATCH", "VERIFY"}
+            ]
+            summary_cols = st.columns(3)
+            summary_cols[0].metric("Full rule matches", len(matches))
+            summary_cols[1].metric("Watch / verify", len(watches))
+            summary_cols[2].metric("Stocks evaluated", len(live_results))
+
+            inspect_labels = {
+                f"{item.get('symbol')} · {item.get('status')} · {safe_float(item.get('score'), 0.0):.0f}%": item
+                for item in live_results
+            }
+            inspected = inspect_labels[st.selectbox("Inspect candidate", list(inspect_labels))]
+            metrics = inspected.get("metrics") or {}
+            signal = inspected.get("signal") or {}
+            detail_cols = st.columns(4)
+            detail_cols[0].metric("Price", f"\${safe_float(metrics.get('price'), 0.0):,.4f}")
+            detail_cols[1].metric("Day move", f"{safe_float(metrics.get('day_change_pct'), 0.0):+.2f}%")
+            rvol = safe_float(metrics.get("relative_volume"))
+            detail_cols[2].metric("Relative volume", f"{rvol:.2f}×" if rvol is not None else "—")
+            detail_cols[3].metric("Rule match", f"{safe_float(signal.get('score'), 0.0):.0f}%")
+
+            checks = signal.get("checks") or []
+            if checks:
+                with st.expander("Why this stock matched or failed", expanded=True):
+                    for check in checks:
+                        state = str(check.get("status") or "").upper()
+                        icon = "✅" if state == "PASS" else "❓" if state == "UNKNOWN" else "❌"
+                        st.write(
+                            f"{icon} **{check.get('label') or 'Rule'}** — "
+                            f"current: {check.get('actual')} · required: {check.get('required')}"
+                        )
 
 
 elif module == "Stock Analyzer":
