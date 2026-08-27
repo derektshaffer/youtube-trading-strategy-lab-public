@@ -727,8 +727,9 @@ class CloudWriteVerificationTests(unittest.TestCase):
 
             self.assertTrue(cloud.force_write_seen)
             self.assertEqual(cloud.previous, "2026-08-27T17:15:00Z")
-            self.assertEqual(cloud.saved, cloud.library)
-            self.assertEqual(result, cloud.library)
+            expected_remote = engine.StrategyStore.normalize_library(cloud.library)
+            self.assertEqual(cloud.saved, expected_remote)
+            self.assertEqual(result, expected_remote)
             status = store.persistence_status(verify=True)
             self.assertTrue(status["write_verified"])
             self.assertTrue(status["healthy"])
