@@ -140,26 +140,13 @@ def build_legacy_store() -> StrategyStore:
     return StrategyStore(cloud_backup=cloud)
 
 
+@st.cache_resource
 def intelligence_store() -> StrategyStore:
-    # StrategyStore is lightweight; rebuilding it avoids Streamlit retaining an
-    # instance created from an older class definition after a hot deployment.
     return build_intelligence_store()
 
 
-def load_store_latest(store: StrategyStore | None = None) -> dict[str, Any]:
-    """Load the freshest library while tolerating one-version deployment skew."""
-    active_store = store or intelligence_store()
-    loader = getattr(active_store, "load_latest", None)
-    if callable(loader):
-        return loader()
-    # Compatibility path for a stale Streamlit process that still has the
-    # pre-load_latest StrategyStore class in memory. A full process restart
-    # will naturally return to load_latest().
-    return active_store.load()
-
-
 def load_library() -> dict[str, Any]:
-    data = load_store_latest()
+    data = intelligence_store().load_latest()
     data.setdefault("knowledge_sources", [])
     data.setdefault("strategies", [])
     data.setdefault("research_runs", [])
@@ -177,7 +164,7 @@ def save_ingestion_checkpoint(
 ) -> dict[str, Any]:
     """Persist book progress immediately so Streamlit disconnects cannot erase completed work."""
     store = intelligence_store()
-    data = load_store_latest(store)
+    data = store.load_latest()
     data.setdefault("knowledge_sources", [])
     data.setdefault("strategies", [])
     data.setdefault("research_runs", [])
@@ -400,7 +387,7 @@ elif module == "Knowledge Sources":
             text, metadata = extract_source_text(uploaded.name, payload)
             ingest_id = hashlib.sha256(payload).hexdigest()[:24]
 
-            current_library = load_store_latest()
+            current_library = intelligence_store().load_latest()
             existing_source = next(
                 (
                     item
