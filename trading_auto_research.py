@@ -1327,6 +1327,7 @@ def merge_autonomous_research_into_library(
         "deep_strategies_failed": report.get("deep_strategies_failed"),
         "failed_finalists": report.get("failed_finalists") or [],
         "run_status": report.get("run_status") or "complete",
+        "timing_profile": report.get("timing_profile") or None,
         "results": report.get("results") or [],
         "limitations": report.get("limitations") or [],
     }
