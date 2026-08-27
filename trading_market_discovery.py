@@ -221,14 +221,19 @@ def analyze_stock_strategies(
         if intraday_rows and _needs_chart_data(strategy):
             enriched["chart_checks"] = chart_trigger_checks(intraday_rows, strategy)
         signal = match_strategy(enriched, strategy)
-        validation = strategy.get("last_validation") or {}
+        validation_status = str(strategy.get("validation_status") or "unvalidated")
+        validation = (
+            strategy.get("last_validation") or {}
+            if validation_status.lower() == "validated"
+            else {}
+        )
         comparisons.append(
             {
                 "strategy_id": strategy.get("id"),
                 "strategy_name": strategy.get("name") or "Unnamed strategy",
                 "source_type": strategy.get("source_type") or "legacy",
                 "source_title": strategy.get("source_title") or "",
-                "validation_status": strategy.get("validation_status") or "unvalidated",
+                "validation_status": validation_status,
                 "robustness_score": validation.get("robustness_score"),
                 "status": signal.get("status") or "UNKNOWN",
                 "score": signal.get("score") or 0,
