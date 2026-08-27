@@ -1916,8 +1916,15 @@ class StrategyStore:
             except (OSError, ValueError):
                 recorded = {}
             if isinstance(recorded, dict):
-                for key in ("last_synced_at", "synced_updated_at", "last_write_at", "last_error"):
-                    status[key] = recorded.get(key)
+                recorded_repository = str(recorded.get("repository") or "")
+                recorded_path = str(recorded.get("path") or "")
+                same_destination = (
+                    (not recorded_repository or recorded_repository == str(status.get("repository") or ""))
+                    and (not recorded_path or recorded_path == str(status.get("path") or ""))
+                )
+                if same_destination:
+                    for key in ("last_synced_at", "synced_updated_at", "last_write_at", "last_error"):
+                        status[key] = recorded.get(key)
         return status
 
     def _record_cloud_status(self, **values: Any) -> None:
@@ -1925,7 +1932,14 @@ class StrategyStore:
         status.update(values)
         public_status = {
             key: status.get(key)
-            for key in ("last_synced_at", "synced_updated_at", "last_write_at", "last_error")
+            for key in (
+                "repository",
+                "path",
+                "last_synced_at",
+                "synced_updated_at",
+                "last_write_at",
+                "last_error",
+            )
         }
         try:
             self.cloud_status_path.write_text(json.dumps(public_status, indent=2), encoding="utf-8")
