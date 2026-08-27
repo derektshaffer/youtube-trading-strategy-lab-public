@@ -95,6 +95,33 @@ class InvalidHistoricalSymbolTests(unittest.TestCase):
             )
 
 
+class PriorDayOpportunityTests(unittest.TestCase):
+    def test_daily_discovery_uses_previous_session_activity_and_high_breakout(self):
+        rows = [
+            {"t": "2026-07-01T20:00:00Z", "c": 10.0, "h": 10.2, "v": 100_000},
+            {"t": "2026-07-02T20:00:00Z", "c": 10.0, "h": 10.2, "v": 100_000},
+            {"t": "2026-07-03T20:00:00Z", "c": 10.0, "h": 10.2, "v": 100_000},
+            {"t": "2026-07-06T20:00:00Z", "c": 11.0, "h": 11.2, "v": 400_000},
+            {"t": "2026-07-07T20:00:00Z", "c": 11.8, "h": 12.0, "v": 120_000},
+            {"t": "2026-07-08T20:00:00Z", "c": 11.7, "h": 11.9, "v": 100_000},
+        ]
+        strategy = {
+            "direction": "long",
+            "machine_rules": {
+                "previous_day_high_breakout": True,
+                "min_previous_day_volume_ratio": 2.0,
+                "min_previous_day_change_pct": 5.0,
+            },
+        }
+        result = score_historical_opportunities(rows, strategy)
+        self.assertGreaterEqual(result["event_count"], 1)
+        self.assertEqual(result["candidate_selection_mode"], "strategy_daily_rules")
+        event = next(item for item in result["events"] if item["date"] == "2026-07-07")
+        self.assertTrue(event["previous_day_high_broken"])
+        self.assertAlmostEqual(event["previous_day_volume_ratio"], 4.0, places=2)
+        self.assertAlmostEqual(event["previous_day_change_pct"], 10.0, places=2)
+
+
 class AutonomousResearchTests(unittest.TestCase):
     def test_broad_sample_keeps_priority_and_is_deterministic(self):
         symbols = [f"S{index:04d}" for index in range(1000)]
