@@ -308,6 +308,108 @@ def complete_task_bar(
     bar.progress(1.0, text=f"{message} · 100%")
 
 
+RULE_FRIENDLY_LABELS = {
+    "min_price": "Minimum stock price",
+    "max_price": "Maximum stock price",
+    "min_day_change_pct": "Current-day price move",
+    "min_relative_volume": "Current relative volume",
+    "min_dollar_volume": "Minimum dollar volume",
+    "previous_day_high_breakout": "Previous-day high breakout",
+    "min_previous_day_volume_ratio": "Previous-day volume",
+    "min_previous_day_change_pct": "Previous-day price move",
+    "max_spread_pct": "Maximum bid/ask spread",
+    "above_vwap": "Price above VWAP",
+    "vwap_reclaim": "VWAP reclaim",
+    "max_vwap_distance_pct": "Maximum distance from VWAP",
+    "breakout_lookback_bars": "Breakout lookback",
+    "opening_range_minutes": "Opening-range breakout",
+    "volume_surge_ratio": "Volume surge",
+    "minimum_green_bars": "Consecutive green candles",
+    "catalyst_required": "News catalyst",
+    "stop_loss_pct": "Stop loss",
+    "reward_risk": "Reward-to-risk target",
+    "latest_entry_time": "Latest entry time",
+}
+
+
+def friendly_rule_label(rule_name: str) -> str:
+    key = str(rule_name or "")
+    return RULE_FRIENDLY_LABELS.get(
+        key,
+        key.replace("_", " ").strip().title() or "Trading rule",
+    )
+
+
+def _friendly_number(value: Any) -> str:
+    number = safe_float(value)
+    if number is None:
+        return str(value)
+    if abs(number - round(number)) < 1e-9:
+        return str(int(round(number)))
+    return f"{number:.2f}".rstrip("0").rstrip(".")
+
+
+def friendly_rule_text(rule_name: str, value: Any) -> str:
+    key = str(rule_name or "")
+    number = _friendly_number(value)
+    enabled = bool(value)
+
+    templates = {
+        "min_price": f"Only test stocks priced at or above **USD {number}**.",
+        "max_price": f"Only test stocks priced at or below **USD {number}**.",
+        "min_day_change_pct": f"Require the current session to be up at least **{number}%**.",
+        "min_relative_volume": f"Require current relative volume of at least **{number}× normal**.",
+        "min_dollar_volume": f"Require at least **USD {number}** of dollar volume.",
+        "min_previous_day_volume_ratio": (
+            f"Require the previous trading day's volume to be at least **{number}× its recent average**."
+        ),
+        "min_previous_day_change_pct": (
+            f"Require the previous trading day to have gained at least **{number}%**."
+        ),
+        "max_spread_pct": f"Reject stocks with a bid/ask spread wider than **{number}%**.",
+        "max_vwap_distance_pct": f"Keep price within **{number}% of VWAP**.",
+        "breakout_lookback_bars": f"Require a breakout above the prior **{number} candles**.",
+        "opening_range_minutes": f"Use the first **{number} minutes** to define the opening range.",
+        "volume_surge_ratio": f"Require a volume surge of at least **{number}× normal**.",
+        "minimum_green_bars": f"Require at least **{number} consecutive green candles**.",
+        "stop_loss_pct": f"Use a research stop about **{number}% below entry**.",
+        "reward_risk": f"Target about **{number}× the amount risked**.",
+        "latest_entry_time": f"Do not open a new trade after **{value}**.",
+    }
+    if key in templates:
+        return templates[key]
+
+    boolean_templates = {
+        "previous_day_high_breakout": (
+            "Enter only when price **crosses above the previous trading day's high**."
+        ),
+        "above_vwap": "Require price to be **above VWAP**.",
+        "vwap_reclaim": "Require price to **reclaim VWAP from below**.",
+        "catalyst_required": "Require a **qualifying news catalyst**.",
+    }
+    if key in boolean_templates:
+        if enabled:
+            return boolean_templates[key]
+        return f"{friendly_rule_label(key)} is **not required**."
+
+    return f"{friendly_rule_label(key)}: **{value}**."
+
+
+def render_plain_rules(
+    rules: dict[str, Any],
+    *,
+    assumption: bool = False,
+) -> None:
+    for rule_name, value in rules.items():
+        st.markdown(f"**{friendly_rule_label(rule_name)}**")
+        st.markdown(friendly_rule_text(rule_name, value))
+        if assumption:
+            st.caption(
+                "AI-added research assumption — this value is for historical testing and was not "
+                "necessarily specified by the source author."
+            )
+
+
 def source_label(strategy: dict[str, Any]) -> str:
     kind = str(strategy.get("source_type") or "legacy").replace("_", " ").title()
     return f"{kind} · {strategy.get('source_title') or 'Unknown source'}"
@@ -339,7 +441,7 @@ with st.sidebar:
             "Knowledge Sources",
             "Strategy Library",
             "Strategy DNA",
-            "Rule Compiler",
+            "Make Strategy Testable",
             "AI Research Autopilot",
             "Strategy Lab",
             "Universe Research",
@@ -1554,16 +1656,23 @@ elif module == "Strategy DNA":
                                     st.write("• " + str(reason))
 
 
-elif module == "Rule Compiler":
-    st.markdown("## Rule Compiler")
+elif module == "Make Strategy Testable":
+    st.markdown("## Make Strategy Testable")
+    st.info(
+        "**What this page does:** trading books often use phrases like “very active,” “strong chart,” "
+        "or “good news.” A backtester cannot test those phrases directly. This page lets AI translate "
+        "the measurable parts into concrete research rules so they can be tested historically."
+    )
     st.caption(
-        "Advanced manual control for qualitative source lessons. AI Autopilot now does this automatically "
-        "during book ingestion; this page lets you inspect, replace, or add research proxies yourself. "
-        "All proxies stay separate from source-extracted rules."
+        "You normally do not need to do this yourself — AI Autopilot already tries to handle it during "
+        "book ingestion. This page is mainly for seeing what the AI understood and what assumptions it added."
+    )
+    st.markdown(
+        "**Source idea → measurable test rule → historical backtest → validation decides whether it survives.**"
     )
 
     if not strategies:
-        st.info("Add or import a strategy before using the Rule Compiler.")
+        st.info("Add or import a strategy before asking AI to make it testable.")
     else:
         compiler_choices = {}
         for item in strategies:
@@ -1572,7 +1681,12 @@ elif module == "Rule Compiler":
                 label += f" · {str(item.get('id') or '')[:7]}"
             compiler_choices[label] = item
         compiler_strategy = compiler_choices[
-            st.selectbox("Strategy to compile", list(compiler_choices), key="til_compiler_strategy")
+            st.selectbox(
+                "Strategy to make testable",
+                list(compiler_choices),
+                key="til_compiler_strategy",
+                help="Choose the strategy whose vague or discretionary requirements you want AI to translate for research.",
+            )
         ]
 
         explicit = {
@@ -1588,37 +1702,44 @@ elif module == "Rule Compiler":
             if value is not None
         }
         compiler_cols = st.columns(3)
-        compiler_cols[0].metric("Explicit source rules", len(explicit))
-        compiler_cols[1].metric("Accepted research proxies", len(accepted_overrides))
+        compiler_cols[0].metric("Rules from the source", len(explicit))
+        compiler_cols[1].metric("AI test assumptions", len(accepted_overrides))
         compiler_cols[2].metric(
-            "Unresolved source requirements",
+            "Still vague / subjective",
             len(compiler_strategy.get("unresolved_rules") or []),
         )
 
         if explicit:
-            with st.expander("Explicit source rules — protected from compiler edits", expanded=False):
-                st.json(explicit)
+            with st.expander("Rules the source actually specified", expanded=False):
+                render_plain_rules(explicit)
+                st.caption(
+                    "These rules came from the source and are protected from AI assumption edits."
+                )
         if compiler_strategy.get("unresolved_rules"):
-            with st.expander("Qualitative / unresolved requirements", expanded=True):
+            with st.expander("Still needs interpretation", expanded=True):
+                st.caption(
+                    "These ideas are still too subjective or depend on data the backtester cannot measure directly."
+                )
                 for rule in compiler_strategy.get("unresolved_rules") or []:
                     st.write("• " + str(rule))
         if accepted_overrides:
-            with st.expander("Accepted research assumptions", expanded=True):
-                st.json(accepted_overrides)
+            with st.expander("AI-added test assumptions", expanded=True):
+                render_plain_rules(accepted_overrides, assumption=True)
                 st.warning(
-                    "These values are research assumptions, not claims about what the source author explicitly specified."
+                    "These are testing assumptions, not claims about what the author explicitly said. "
+                    "Historical validation still has to determine whether they are useful."
                 )
 
         compiler_slot = st.empty()
         compile_rules = compiler_slot.button(
-            "🧩 Ask AI for measurable proxy suggestions",
+            "🧩 Make remaining rules testable",
             type="primary",
             use_container_width=True,
             key="til_compile_rule_suggestions",
         )
         if compile_rules:
             compiler_slot.button(
-                "🧩 Compiling…",
+                "🧩 Translating…",
                 type="primary",
                 use_container_width=True,
                 disabled=True,
@@ -1630,7 +1751,7 @@ elif module == "Rule Compiler":
                 text=compiler_monitor.text(0.10, "Preparing strategy context…"),
             )
             try:
-                with st.status("Compiling qualitative requirements…", expanded=True) as status:
+                with st.status("Turning vague requirements into measurable test rules…", expanded=True) as status:
                     compiler = GeminiRuleCompiler(
                         setting("GEMINI_API_KEY"),
                         setting("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
@@ -1640,7 +1761,7 @@ elif module == "Rule Compiler":
                         compiler_bar,
                         compiler_monitor,
                         0.35,
-                        "AI is generating measurable proxy suggestions",
+                        "AI is translating subjective language into measurable test rules",
                     )
                     compiled = compiler.compile(compiler_strategy)
                     update_task_bar(
@@ -1653,17 +1774,17 @@ elif module == "Rule Compiler":
                         "strategy_id": compiler_strategy.get("id"),
                         "result": compiled,
                     }
-                    status.update(label="Rule Compiler suggestions ready", state="complete", expanded=False)
+                    status.update(label="Measurable test suggestions ready", state="complete", expanded=False)
                     complete_task_bar(
                         compiler_bar,
                         compiler_monitor,
-                        "Rule Compiler suggestions ready",
+                        "Test-rule suggestions ready",
                     )
                 st.rerun()
             except AppError as exc:
                 st.error(str(exc))
             except Exception as exc:
-                st.error(f"Rule Compiler failed: {exc}")
+                st.error(f"AI could not finish translating the strategy: {exc}")
 
         stored_compiler = st.session_state.get("til_rule_compiler_result") or {}
         if stored_compiler.get("strategy_id") == compiler_strategy.get("id"):
@@ -1672,39 +1793,45 @@ elif module == "Rule Compiler":
             if compiled.get("summary"):
                 st.info(str(compiled.get("summary")))
             if suggestions:
-                st.markdown("### Suggested measurable proxies")
+                st.markdown("### AI suggestions for historical testing")
+                st.caption(
+                    "These suggestions turn vague source language into something the backtester can measure. "
+                    "Any numeric value the author did not explicitly provide remains labeled as an AI research assumption."
+                )
                 suggestion_rows = []
                 labels = {}
                 for number, suggestion in enumerate(suggestions, start=1):
                     label = (
-                        f"{number}. {suggestion.get('target_rule')} = "
-                        f"{suggestion.get('parsed_value')} · "
-                        f"{safe_float(suggestion.get('confidence'), 0.0):.0f}% confidence"
+                        f"{number}. "
+                        f"{friendly_rule_text(str(suggestion.get('target_rule') or ''), suggestion.get('parsed_value')).replace('**', '')} "
+                        f"· {safe_float(suggestion.get('confidence'), 0.0):.0f}% confidence"
                     )
                     labels[label] = suggestion
                     suggestion_rows.append(
                         {
                             "#": number,
-                            "Source requirement": suggestion.get("source_requirement"),
-                            "Machine rule": suggestion.get("target_rule"),
-                            "Proposed value": suggestion.get("parsed_value"),
-                            "Research assumption": bool(suggestion.get("is_research_assumption")),
+                            "What the source says": suggestion.get("source_requirement"),
+                            "How AI proposes to test it": friendly_rule_text(
+                                str(suggestion.get("target_rule") or ""),
+                                suggestion.get("parsed_value"),
+                            ).replace("**", ""),
+                            "AI-added assumption": "Yes" if bool(suggestion.get("is_research_assumption")) else "No",
                             "Confidence": safe_float(suggestion.get("confidence"), 0.0),
-                            "Why this proxy": suggestion.get("rationale"),
+                            "Why": suggestion.get("rationale"),
                         }
                     )
                 st.dataframe(pd.DataFrame(suggestion_rows), use_container_width=True, hide_index=True)
                 chosen_labels = st.multiselect(
-                    "Accept suggestions into the research rule set",
+                    "Choose AI test assumptions to use",
                     list(labels),
                     default=[],
                     help=(
-                        "Nothing is applied until you select suggestions here and press Save. "
-                        "They remain separate from explicit source rules."
+                        "These are only used for research/backtesting. They stay separate from rules "
+                        "the source author actually specified."
                     ),
                 )
                 save_compiler = st.button(
-                    "💾 Save selected research assumptions",
+                    "💾 Use selected assumptions for research",
                     use_container_width=True,
                     disabled=not chosen_labels,
                 )
@@ -1741,22 +1868,23 @@ elif module == "Rule Compiler":
                         break
                     intelligence_store().save(data)
                     st.success(
-                        "Research assumptions saved. Any previous validation was cleared because the executable rule set changed."
+                        "AI test assumptions saved. The strategy now has more measurable rules for research. "
+                        "Any earlier validation was cleared because the executable test rules changed."
                     )
                     st.session_state.pop("til_rule_compiler_result", None)
                     st.rerun()
             else:
                 st.info(
-                    "The compiler did not find a defensible mapping to the machine rules the backtester currently supports."
+                    "AI could not turn the remaining subjective language into a reliable measurable rule with the data the Lab currently supports."
                 )
 
             if compiled.get("unmapped_requirements"):
-                with st.expander("Still not machine-testable", expanded=False):
+                with st.expander("Ideas AI still cannot test reliably", expanded=False):
                     for item in compiled.get("unmapped_requirements") or []:
                         st.write("• " + str(item))
 
         if accepted_overrides and st.button(
-            "Remove all accepted research assumptions",
+            "Remove all AI test assumptions",
             use_container_width=True,
         ):
             data = load_library()
@@ -1769,7 +1897,7 @@ elif module == "Rule Compiler":
                     item.pop("validated_at", None)
                     break
             intelligence_store().save(data)
-            st.success("Research assumptions removed; source-extracted rules were left unchanged.")
+            st.success("AI test assumptions removed. Rules that came directly from the source were left unchanged.")
             st.rerun()
 
 
