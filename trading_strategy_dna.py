@@ -462,8 +462,17 @@ def _family_summary(strategies: list[dict[str, Any]], family_id: int) -> dict[st
     ]
     categories = _unique([str(item.get("category") or "Uncategorized") for item in strategies])
     label_seed = structures[0] if structures else (categories[0] if categories else "Strategy")
+    family_strategy_ids = sorted(
+        str(item.get("id") or item.get("name") or "")
+        for item in strategies
+        if str(item.get("id") or item.get("name") or "").strip()
+    )
+    family_material = "|".join(family_strategy_ids) or "|".join(source_titles)
+    stable_family_id = "dna-family-" + hashlib.sha256(
+        family_material.encode("utf-8", errors="ignore")
+    ).hexdigest()[:16]
     return {
-        "id": f"dna-family-{family_id}",
+        "id": stable_family_id,
         "name": f"{label_seed} family",
         "direction": directions[0] if len(directions) == 1 else "mixed",
         "strategy_count": len(strategies),
