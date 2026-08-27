@@ -376,6 +376,9 @@ MACHINE_RULE_SCHEMA: dict[str, Any] = {
         "min_day_change_pct": NULLABLE_NUMBER,
         "min_relative_volume": NULLABLE_NUMBER,
         "min_dollar_volume": NULLABLE_NUMBER,
+        "previous_day_high_breakout": NULLABLE_BOOLEAN,
+        "min_previous_day_volume_ratio": NULLABLE_NUMBER,
+        "min_previous_day_change_pct": NULLABLE_NUMBER,
         "max_spread_pct": NULLABLE_NUMBER,
         "above_vwap": NULLABLE_BOOLEAN,
         "vwap_reclaim": NULLABLE_BOOLEAN,
@@ -517,8 +520,12 @@ For each setup:
 - Provide exact source timestamps for the most useful evidence and distinguish visual evidence
   from spoken evidence. If small chart text is unreadable, say so; do not invent values or tickers.
 - Capture the stock universe, price range, liquidity, relative volume, VWAP, breakout level,
-  opening range, trend, entry trigger, stop, target, reward/risk, session time, news catalyst,
-  and explicit reasons to avoid the setup whenever the presenter gives them.
+  opening range, prior-day/session conditions, trend, entry trigger, stop, target, reward/risk,
+  session time, news catalyst, and explicit reasons to avoid the setup whenever the presenter gives them.
+- If the presenter explicitly requires a breakout through the previous trading day's high,
+  encode previous_day_high_breakout=true even when no numeric threshold is needed.
+- Use min_previous_day_volume_ratio only when the source explicitly gives a numeric prior-session
+  activity/volume multiple. Use min_previous_day_change_pct only for an explicit prior-day move threshold.
 - Convert ONLY explicitly stated or visually verified numeric thresholds into machine_rules.
   Set unavailable thresholds to null. Never fabricate values to make a strategy testable.
 - Put subjective or unavailable requirements (level 2, float, tape speed, proprietary indicators,
@@ -603,10 +610,11 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
     result: dict[str, Any] = {}
     number_fields = {
         "min_price", "max_price", "min_day_change_pct", "min_relative_volume", "min_dollar_volume",
+        "min_previous_day_volume_ratio", "min_previous_day_change_pct",
         "max_spread_pct", "max_vwap_distance_pct", "volume_surge_ratio", "stop_loss_pct", "reward_risk",
     }
     integer_fields = {"breakout_lookback_bars", "opening_range_minutes", "minimum_green_bars", "max_hold_minutes"}
-    boolean_fields = {"above_vwap", "vwap_reclaim", "catalyst_required"}
+    boolean_fields = {"above_vwap", "vwap_reclaim", "catalyst_required", "previous_day_high_breakout"}
     for name in MACHINE_RULE_SCHEMA["properties"]:
         value = raw_rules.get(name)
         if name in number_fields:
@@ -620,7 +628,11 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
             text = str(value).strip() if value is not None else ""
             result[name] = text if re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", text) else None
 
-    for name in {"min_price", "max_price", "min_relative_volume", "min_dollar_volume", "max_spread_pct", "max_vwap_distance_pct", "volume_surge_ratio", "stop_loss_pct", "reward_risk"}:
+    for name in {
+        "min_price", "max_price", "min_relative_volume", "min_dollar_volume",
+        "min_previous_day_volume_ratio", "max_spread_pct", "max_vwap_distance_pct",
+        "volume_surge_ratio", "stop_loss_pct", "reward_risk",
+    }:
         if result[name] is not None and result[name] < 0:
             result[name] = None
     if result["stop_loss_pct"] is not None and not 0 < result["stop_loss_pct"] < 100:
