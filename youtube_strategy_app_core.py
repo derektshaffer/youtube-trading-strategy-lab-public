@@ -9,6 +9,8 @@ import os
 from typing import Any
 
 import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -307,6 +309,341 @@ def status_pill(label: str, color: str = "blue") -> str:
 
 def action_success(message: str) -> None:
     st.markdown(f'<div class="action-success">✓ {escape(message)}</div>', unsafe_allow_html=True)
+
+
+def _backtest_chart_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
+    """Normalize Alpaca bars for the interactive backtest candlestick chart."""
+    if not rows:
+        return pd.DataFrame()
+    frame = pd.DataFrame(rows).rename(
+        columns={
+            "t": "timestamp",
+            "o": "open",
+            "h": "high",
+            "l": "low",
+            "c": "close",
+            "v": "volume",
+        }
+    )
+    required = {"timestamp", "open", "high", "low", "close"}
+    if not required.issubset(frame.columns):
+        return pd.DataFrame()
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce", utc=True)
+    for name in ("open", "high", "low", "close", "volume"):
+        if name in frame.columns:
+            frame[name] = pd.to_numeric(frame[name], errors="coerce")
+    frame = (
+        frame.dropna(subset=list(required))
+        .sort_values("timestamp")
+        .drop_duplicates("timestamp")
+        .reset_index(drop=True)
+    )
+    return frame
+
+
+def render_backtest_trade_chart(
+    symbol: str,
+    bars: list[dict[str, Any]],
+    trades: list[dict[str, Any]],
+    timeframe: str,
+) -> None:
+    """Render interactive candles with exact simulated entry/exit locations."""
+    frame = _backtest_chart_frame(bars)
+    if frame.empty:
+        st.info("Candle data for this completed backtest is unavailable. Run the backtest again to build the trade chart.")
+        return
+
+    st.markdown("### Trades on price chart")
+    st.caption(
+        f"{symbol} · {timeframe} candles · hover over any marker for the exact simulated entry, exit, P/L, and exit reason."
+    )
+
+    filter_col, sample_col, connector_col = st.columns([1.1, 1.1, 1.0])
+    trade_filter = filter_col.selectbox(
+        "Trades to show",
+        ["All trades", "Winners only", "Losers only"],
+        key=f"backtest_trade_chart_filter_{symbol}",
+    )
+    sample_filter = sample_col.selectbox(
+        "Sample",
+        ["Both", "In-sample only", "Holdout only"],
+        key=f"backtest_trade_chart_sample_{symbol}",
+    )
+    show_connectors = connector_col.checkbox(
+        "Show entry → exit lines",
+        value=True,
+        key=f"backtest_trade_chart_connectors_{symbol}",
+    )
+
+    visible_trades: list[dict[str, Any]] = []
+    for trade in trades or []:
+        pnl = safe_float(trade.get("pnl"), 0.0) or 0.0
+        sample = str(trade.get("sample") or "")
+        if trade_filter == "Winners only" and pnl <= 0:
+            continue
+        if trade_filter == "Losers only" and pnl >= 0:
+            continue
+        if sample_filter == "In-sample only" and sample != "in_sample":
+            continue
+        if sample_filter == "Holdout only" and sample != "out_of_sample":
+            continue
+        visible_trades.append(trade)
+
+    figure = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.035,
+        row_heights=[0.80, 0.20],
+    )
+    figure.add_trace(
+        go.Candlestick(
+            x=frame["timestamp"],
+            open=frame["open"],
+            high=frame["high"],
+            low=frame["low"],
+            close=frame["close"],
+            name="Price",
+            increasing_line_color="#35d597",
+            decreasing_line_color="#ff7878",
+            increasing_fillcolor="#35d597",
+            decreasing_fillcolor="#ff7878",
+            hoverlabel=dict(namelength=0),
+        ),
+        row=1,
+        col=1,
+    )
+
+    if "volume" in frame.columns:
+        volume_colors = [
+            "#35d597" if close >= open_price else "#ff7878"
+            for close, open_price in zip(frame["close"], frame["open"])
+        ]
+        figure.add_trace(
+            go.Bar(
+                x=frame["timestamp"],
+                y=frame["volume"].fillna(0),
+                name="Volume",
+                marker_color=volume_colors,
+                opacity=0.32,
+                hovertemplate="%{x|%b %d, %Y %I:%M %p}<br>Volume: %{y:,.0f}<extra></extra>",
+            ),
+            row=2,
+            col=1,
+        )
+
+    entry_x: list[Any] = []
+    entry_y: list[float] = []
+    entry_hover: list[str] = []
+    exit_x: list[Any] = []
+    exit_y: list[float] = []
+    exit_hover: list[str] = []
+    winner_x: list[Any] = []
+    winner_y: list[float] = []
+    loser_x: list[Any] = []
+    loser_y: list[float] = []
+    winner_connector_x: list[Any] = []
+    winner_connector_y: list[Any] = []
+    loser_connector_x: list[Any] = []
+    loser_connector_y: list[Any] = []
+
+    for trade in visible_trades:
+        entry_time = pd.to_datetime(trade.get("entry_time"), errors="coerce", utc=True)
+        exit_time = pd.to_datetime(trade.get("exit_time"), errors="coerce", utc=True)
+        entry_price = safe_float(trade.get("entry_price"))
+        exit_price = safe_float(trade.get("exit_price"))
+        pnl = safe_float(trade.get("pnl"), 0.0) or 0.0
+        return_pct = safe_float(trade.get("return_pct"), 0.0) or 0.0
+        reason = str(trade.get("reason") or "Unknown")
+        sample_name = "Holdout" if str(trade.get("sample") or "") == "out_of_sample" else "In-sample"
+
+        if pd.isna(entry_time) or pd.isna(exit_time) or entry_price is None or exit_price is None:
+            continue
+
+        hover = (
+            f"<b>{'WINNER' if pnl > 0 else 'LOSER' if pnl < 0 else 'FLAT'}</b><br>"
+            f"Entry: {entry_time.tz_convert(ET).strftime('%b %d, %Y · %I:%M %p ET')} @ {money(entry_price, 4)}<br>"
+            f"Exit: {exit_time.tz_convert(ET).strftime('%b %d, %Y · %I:%M %p ET')} @ {money(exit_price, 4)}<br>"
+            f"P/L: {money(pnl)} ({return_pct:+.2f}%)<br>"
+            f"Exit reason: {escape(reason)}<br>"
+            f"Sample: {sample_name}"
+        )
+        entry_x.append(entry_time)
+        entry_y.append(entry_price)
+        entry_hover.append(hover)
+        exit_x.append(exit_time)
+        exit_y.append(exit_price)
+        exit_hover.append(hover)
+
+        if pnl >= 0:
+            winner_x.append(exit_time)
+            winner_y.append(exit_price)
+            if show_connectors:
+                winner_connector_x.extend([entry_time, exit_time, None])
+                winner_connector_y.extend([entry_price, exit_price, None])
+        else:
+            loser_x.append(exit_time)
+            loser_y.append(exit_price)
+            if show_connectors:
+                loser_connector_x.extend([entry_time, exit_time, None])
+                loser_connector_y.extend([entry_price, exit_price, None])
+
+    if winner_connector_x:
+        figure.add_trace(
+            go.Scatter(
+                x=winner_connector_x,
+                y=winner_connector_y,
+                mode="lines",
+                name="Winning trade",
+                line=dict(color="#35d597", width=1.4, dash="dot"),
+                opacity=0.75,
+                hoverinfo="skip",
+            ),
+            row=1,
+            col=1,
+        )
+    if loser_connector_x:
+        figure.add_trace(
+            go.Scatter(
+                x=loser_connector_x,
+                y=loser_connector_y,
+                mode="lines",
+                name="Losing trade",
+                line=dict(color="#ff7878", width=1.4, dash="dot"),
+                opacity=0.75,
+                hoverinfo="skip",
+            ),
+            row=1,
+            col=1,
+        )
+
+    if entry_x:
+        figure.add_trace(
+            go.Scatter(
+                x=entry_x,
+                y=entry_y,
+                mode="markers",
+                name="Entry",
+                marker=dict(symbol="triangle-up", size=12, color="#35d597", line=dict(color="#d8ffed", width=1)),
+                text=entry_hover,
+                hovertemplate="%{text}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+    if exit_x:
+        figure.add_trace(
+            go.Scatter(
+                x=exit_x,
+                y=exit_y,
+                mode="markers",
+                name="Exit",
+                marker=dict(symbol="triangle-down", size=12, color="#ff7878", line=dict(color="#ffd0d0", width=1)),
+                text=exit_hover,
+                hovertemplate="%{text}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+    if winner_x:
+        figure.add_trace(
+            go.Scatter(
+                x=winner_x,
+                y=winner_y,
+                mode="markers",
+                name="Winner",
+                marker=dict(symbol="circle-open", size=17, color="#35d597", line=dict(width=2)),
+                hoverinfo="skip",
+            ),
+            row=1,
+            col=1,
+        )
+    if loser_x:
+        figure.add_trace(
+            go.Scatter(
+                x=loser_x,
+                y=loser_y,
+                mode="markers",
+                name="Loser",
+                marker=dict(symbol="circle-open", size=17, color="#ff7878", line=dict(width=2)),
+                hoverinfo="skip",
+            ),
+            row=1,
+            col=1,
+        )
+
+    figure.update_layout(
+        height=690,
+        margin=dict(l=8, r=8, t=34, b=8),
+        paper_bgcolor="#090f1a",
+        plot_bgcolor="#0c1422",
+        font=dict(color="#eaf2ff"),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.015,
+            xanchor="left",
+            x=0,
+            bgcolor="rgba(0,0,0,0)",
+        ),
+        hovermode="closest",
+        xaxis_rangeslider_visible=False,
+        showlegend=True,
+    )
+    figure.update_xaxes(
+        gridcolor="rgba(105,135,170,0.13)",
+        showgrid=True,
+        rangeslider_visible=False,
+        rangebreaks=[
+            dict(bounds=["sat", "mon"]),
+            dict(bounds=[16, 9.5], pattern="hour"),
+        ],
+        row=1,
+        col=1,
+    )
+    figure.update_xaxes(
+        gridcolor="rgba(105,135,170,0.13)",
+        showgrid=True,
+        rangebreaks=[
+            dict(bounds=["sat", "mon"]),
+            dict(bounds=[16, 9.5], pattern="hour"),
+        ],
+        row=2,
+        col=1,
+    )
+    figure.update_yaxes(
+        title_text="Price",
+        gridcolor="rgba(105,135,170,0.13)",
+        zeroline=False,
+        row=1,
+        col=1,
+    )
+    figure.update_yaxes(
+        title_text="Volume",
+        gridcolor="rgba(105,135,170,0.08)",
+        zeroline=False,
+        row=2,
+        col=1,
+    )
+
+    if visible_trades:
+        st.plotly_chart(
+            figure,
+            use_container_width=True,
+            config={
+                "displaylogo": False,
+                "scrollZoom": True,
+                "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+            },
+        )
+        winner_count = sum((safe_float(trade.get("pnl"), 0.0) or 0.0) > 0 for trade in visible_trades)
+        loser_count = sum((safe_float(trade.get("pnl"), 0.0) or 0.0) < 0 for trade in visible_trades)
+        st.caption(
+            f"Showing {len(visible_trades)} trades · {winner_count} winners · {loser_count} losers. "
+            "Drag to zoom, double-click to reset, or use the Plotly controls in the upper-right."
+        )
+    else:
+        st.info("No trades match the selected chart filters.")
 
 
 def analyzed_youtube_video_index(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -1611,6 +1948,11 @@ with backtest_tab:
                     )
                     st.session_state["backtest_results"] = results
                     st.session_state["backtest_strategy_id"] = chosen.get("id")
+                    st.session_state["backtest_price_bars"] = {
+                        symbol: all_bars.get(symbol, [])
+                        for symbol in tickers
+                    }
+                    st.session_state["backtest_timeframe"] = str(timeframe)
                 except AppError as error:
                     st.error(str(error))
 
@@ -1649,7 +1991,16 @@ with backtest_tab:
             if len(curve) > 1:
                 curve["timestamp"] = pd.to_datetime(curve["timestamp"], errors="coerce", utc=True)
                 st.line_chart(curve.dropna(subset=["timestamp"]).set_index("timestamp")["equity"], height=280)
+
+            chart_bars = (st.session_state.get("backtest_price_bars") or {}).get(detail_symbol, [])
+            chart_timeframe = str(st.session_state.get("backtest_timeframe") or preferred_timeframe)
             if detail["trades"]:
+                render_backtest_trade_chart(
+                    detail_symbol,
+                    chart_bars,
+                    detail["trades"],
+                    chart_timeframe,
+                )
                 st.markdown("**Simulated trade log**")
                 st.dataframe(pd.DataFrame(detail["trades"]), use_container_width=True, hide_index=True)
             else:
