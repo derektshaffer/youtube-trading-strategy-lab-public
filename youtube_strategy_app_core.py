@@ -540,7 +540,10 @@ with st.sidebar:
     st.success("Alpaca connected") if alpaca_ready else st.warning("Alpaca credentials needed")
     st.success("ChatGPT help connected") if openai_help_ready else st.caption("ChatGPT help not connected")
     st.caption(f'Primary model: {setting("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)}')
-    st.caption(f'Overload backup model: {setting("GEMINI_FALLBACK_MODEL", DEFAULT_GEMINI_FALLBACK_MODEL)}')
+    st.caption(
+        "Overload backup sequence: "
+        f'{setting("GEMINI_FALLBACK_MODEL", DEFAULT_GEMINI_FALLBACK_MODEL)} → gemini-3.5-flash → gemini-2.5-flash'
+    )
     st.caption(f'Live feed: {setting("ALPACA_LIVE_FEED", "iex").upper()}')
     st.caption(f'Historical feed: {setting("ALPACA_HISTORICAL_FEED", "sip").upper()}')
     st.divider()
