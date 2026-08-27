@@ -3934,19 +3934,32 @@ def _optimize_stock_strategies_historical(
     for source_strategy, variants in search_plan:
         name = str(source_strategy.get("name") or "Unnamed strategy")
         original = normalize_machine_rules(source_strategy.get("machine_rules"))
-        indicator_cache: dict[tuple[int, int], pd.DataFrame] = {}
+        indicator_cache: dict[tuple[bool, int, int], pd.DataFrame] = {}
+
+        def frame_for_settings(chosen_settings: BacktestSettings) -> pd.DataFrame:
+            if chosen_settings.allow_extended_hours:
+                return frame
+            if "is_regular_hours" in frame.columns:
+                return frame[frame["is_regular_hours"].fillna(False)].copy().reset_index(drop=True)
+            return frame
 
         def effective_settings(candidate_rules: dict[str, Any], chosen_settings: BacktestSettings) -> BacktestSettings:
-            return _automatic_slippage_settings(frame, candidate_rules, chosen_settings, optimizer.automatic_slippage)
+            return _automatic_slippage_settings(
+                frame_for_settings(chosen_settings),
+                candidate_rules,
+                chosen_settings,
+                optimizer.automatic_slippage,
+            )
 
         def evaluate(candidate_rules: dict[str, Any], chosen_settings: BacktestSettings) -> dict[str, Any]:
             candidate_strategy = {**source_strategy, "machine_rules": candidate_rules}
             key = (
+                bool(chosen_settings.allow_extended_hours),
                 int(candidate_rules.get("breakout_lookback_bars") or 20),
                 int(candidate_rules.get("opening_range_minutes") or 15),
             )
             if key not in indicator_cache:
-                indicator_cache[key] = add_indicators(frame, candidate_strategy)
+                indicator_cache[key] = add_indicators(frame_for_settings(chosen_settings), candidate_strategy)
             return run_backtest(
                 [], candidate_strategy, target_symbol, chosen_settings,
                 prepared_indicators=indicator_cache[key],
@@ -4206,6 +4219,12 @@ def _optimize_stock_strategies_historical(
     winner["full_metrics"] = winning_backtest["metrics"]
     winner["training_metrics"] = winning_backtest["metrics"]
     winner["validation_metrics"] = winning_backtest["metrics"]
+    behavior_comparison = behavior_ab_comparison(
+        rows,
+        winner_strategy,
+        target_symbol,
+        winner_settings,
+    )
 
     return {
         "symbol": target_symbol,
@@ -4229,6 +4248,7 @@ def _optimize_stock_strategies_historical(
         "rankings": ranked,
         "winner": winner,
         "winning_backtest": winning_backtest,
+        "behavior_comparison": behavior_comparison,
         "recommended_backtest_settings": winner["optimized_backtest_settings"],
         "warnings": list(dict.fromkeys(warnings)),
     }
@@ -4282,29 +4302,34 @@ def _screen_historical_strategies(
                 )
                 if key not in indicator_cache:
                     indicator_cache[key] = add_indicators(frame, candidate_strategy)
-                candidate_settings = replace(
+                base_settings = replace(
                     settings,
                     default_stop_pct=float(stop),
                     default_reward_risk=float(reward),
                 )
-                candidate_settings = _automatic_slippage_settings(
-                    frame, rules, candidate_settings, automatic_slippage
-                )
-                result = run_backtest(
-                    [], candidate_strategy, symbol, candidate_settings,
-                    prepared_indicators=indicator_cache[key],
-                )
-                metrics = result.get("metrics") or {}
-                record = {
-                    "strategy": strategy,
-                    "strategy_id": strategy.get("id"),
-                    "strategy_name": strategy.get("name") or "Unnamed strategy",
-                    "metrics": metrics,
-                    "rules": rules,
-                    "settings": candidate_settings,
-                }
-                if best is None or _historical_metric_key(metrics, maximum_drawdown_pct, ranking_minimum_historical_trades) > _historical_metric_key(best["metrics"], maximum_drawdown_pct, ranking_minimum_historical_trades):
-                    best = record
+                for behavior_settings in (base_settings, legacy_behavior_settings(base_settings)):
+                    candidate_settings = _automatic_slippage_settings(
+                        frame, rules, behavior_settings, automatic_slippage
+                    )
+                    prepared = indicator_cache[key]
+                    if not candidate_settings.allow_extended_hours and "is_regular_hours" in prepared.columns:
+                        regular_frame = frame[frame["is_regular_hours"].fillna(False)].copy().reset_index(drop=True)
+                        prepared = add_indicators(regular_frame, candidate_strategy)
+                    result = run_backtest(
+                        [], candidate_strategy, symbol, candidate_settings,
+                        prepared_indicators=prepared,
+                    )
+                    metrics = result.get("metrics") or {}
+                    record = {
+                        "strategy": strategy,
+                        "strategy_id": strategy.get("id"),
+                        "strategy_name": strategy.get("name") or "Unnamed strategy",
+                        "metrics": metrics,
+                        "rules": rules,
+                        "settings": candidate_settings,
+                    }
+                    if best is None or _historical_metric_key(metrics, maximum_drawdown_pct, ranking_minimum_historical_trades) > _historical_metric_key(best["metrics"], maximum_drawdown_pct, ranking_minimum_historical_trades):
+                        best = record
         if best is not None:
             candidates.append(best)
     candidates.sort(
@@ -4547,22 +4572,34 @@ def optimize_stock_strategies(
         for _, variants in search_plan
     ) + int(finalize_holdout)
     completed_steps = 0
-    indicator_cache: dict[tuple[str, int, int], pd.DataFrame] = {}
+    indicator_cache: dict[tuple[str, bool, int, int], pd.DataFrame] = {}
+
+    def frame_for_settings(period: str, chosen_settings: BacktestSettings) -> pd.DataFrame:
+        candidate_frame = frames[period]
+        if chosen_settings.allow_extended_hours:
+            return candidate_frame
+        if "is_regular_hours" in candidate_frame.columns:
+            return candidate_frame[candidate_frame["is_regular_hours"].fillna(False)].copy().reset_index(drop=True)
+        return candidate_frame
 
     def effective_settings(rules: dict[str, Any], chosen_settings: BacktestSettings) -> BacktestSettings:
         return _automatic_slippage_settings(
-            frames["training"], rules, chosen_settings, optimizer.automatic_slippage
+            frame_for_settings("training", chosen_settings),
+            rules,
+            chosen_settings,
+            optimizer.automatic_slippage,
         )
 
     def evaluate(candidate_strategy: dict[str, Any], period: str, chosen_settings: BacktestSettings) -> dict[str, Any]:
         rules = normalize_machine_rules(candidate_strategy.get("machine_rules"))
         key = (
             period,
+            bool(chosen_settings.allow_extended_hours),
             int(rules.get("breakout_lookback_bars") or 20),
             int(rules.get("opening_range_minutes") or 15),
         )
         if key not in indicator_cache:
-            indicator_cache[key] = add_indicators(frames[period], candidate_strategy)
+            indicator_cache[key] = add_indicators(frame_for_settings(period, chosen_settings), candidate_strategy)
         return run_backtest([], candidate_strategy, target_symbol, chosen_settings, prepared_indicators=indicator_cache[key])
 
     def notify(message: str) -> None:
@@ -4911,6 +4948,33 @@ def optimize_stock_strategies(
     return report
 
 
+def behavior_ab_comparison(
+    rows: list[dict[str, Any]],
+    strategy: dict[str, Any],
+    symbol: str,
+    optimized_settings: BacktestSettings,
+) -> dict[str, Any]:
+    """Compare legacy entry behavior against the optimized behavior with identical rules/sizing."""
+    legacy_settings = legacy_behavior_settings(optimized_settings)
+    legacy_result = run_backtest(rows, strategy, symbol, legacy_settings)
+    optimized_result = run_backtest(rows, strategy, symbol, optimized_settings)
+    legacy_metrics = legacy_result.get("metrics") or {}
+    optimized_metrics = optimized_result.get("metrics") or {}
+    return {
+        "legacy_label": "Original behavior",
+        "optimized_label": "Optimized behavior",
+        "legacy_settings": asdict(legacy_settings),
+        "optimized_settings": asdict(optimized_settings),
+        "legacy_metrics": legacy_metrics,
+        "optimized_metrics": optimized_metrics,
+        "net_pnl_delta": round(
+            (safe_float(optimized_metrics.get("net_pnl"), 0.0) or 0.0)
+            - (safe_float(legacy_metrics.get("net_pnl"), 0.0) or 0.0),
+            2,
+        ),
+    }
+
+
 def finalize_stock_optimization(
     report: dict[str, Any],
     rows: list[dict[str, Any]],
@@ -4929,6 +4993,12 @@ def finalize_stock_optimization(
     winner["holdout_metrics"] = holdout
     winner["full_metrics"] = full_result["metrics"]
     report["winning_backtest"] = full_result
+    report["behavior_comparison"] = behavior_ab_comparison(
+        rows,
+        strategy,
+        str(report.get("symbol") or ""),
+        selected_settings,
+    )
     report["recommended_backtest_settings"] = asdict(selected_settings)
     warnings = list(report.get("warnings") or [])
     minimum = int((report.get("optimization_settings") or {}).get("minimum_validation_trades") or 1)
