@@ -286,6 +286,24 @@ elif module == "Knowledge Sources":
         "evidence references; it does not reproduce the book or treat the author's claims as validated."
     )
 
+    storage = persistence_summary()
+    if storage.get("durable"):
+        st.success(
+            "Permanent library storage is connected to the private GitHub backup. "
+            "Book progress is checkpointed as the AI works."
+        )
+        if storage.get("last_error"):
+            st.warning(
+                "The last cloud-save attempt reported a problem: "
+                + str(storage.get("last_error"))
+            )
+    else:
+        st.error(
+            "Permanent library storage is NOT connected in this Streamlit deployment. "
+            "Local Streamlit files can disappear when the app sleeps or restarts. "
+            "The Lab will checkpoint locally, but this is not durable until a GitHub backup token is available."
+        )
+
     uploaded = st.file_uploader(
         "Book or research document",
         type=["pdf", "txt", "md", "markdown"],
@@ -348,6 +366,29 @@ elif module == "Knowledge Sources":
         try:
             payload = uploaded.getvalue()
             text, metadata = extract_source_text(uploaded.name, payload)
+            ingest_id = hashlib.sha256(payload).hexdigest()[:24]
+
+            pending_analysis = {
+                "id": f"pending-{ingest_id}",
+                "source_type": "book_or_document",
+                "title": title.strip() or uploaded.name,
+                "author": author.strip(),
+                "summary": "Analysis started. Completed sections will be saved automatically.",
+                "analyzed_at": utc_now().isoformat(),
+                "chunk_count": 0,
+                "completed_sections": 0,
+                "analysis_incomplete": True,
+                "failed_sections": [],
+                "strategies": [],
+            }
+            save_ingestion_checkpoint(
+                pending_analysis,
+                filename=uploaded.name,
+                extraction_metadata=metadata,
+                ingest_id=ingest_id,
+                stage="reading",
+            )
+
             analyzer = GeminiBookAnalyzer(
                 setting("GEMINI_API_KEY"),
                 setting("GEMINI_BOOK_MODEL", DEFAULT_GEMINI_BOOK_MODEL),
@@ -365,12 +406,31 @@ elif module == "Knowledge Sources":
                     text=message or f"Analyzing source section {index} of {total}…",
                 )
 
+            def on_checkpoint(partial_analysis: dict[str, Any]) -> None:
+                save_ingestion_checkpoint(
+                    partial_analysis,
+                    filename=uploaded.name,
+                    extraction_metadata=metadata,
+                    ingest_id=ingest_id,
+                    stage="reading",
+                )
+
             analysis = analyzer.analyze(
                 text,
                 title=title.strip(),
                 author=author.strip(),
                 focus=focus,
                 progress_callback=on_progress,
+                checkpoint_callback=on_checkpoint,
+            )
+
+            # Extraction itself is valuable work. Save it before the Rule Compiler or market research starts.
+            save_ingestion_checkpoint(
+                analysis,
+                filename=uploaded.name,
+                extraction_metadata=metadata,
+                ingest_id=ingest_id,
+                stage="extracted",
             )
             completion_text = "Strategy extraction complete"
             if analysis.get("analysis_incomplete"):
@@ -451,6 +511,13 @@ elif module == "Knowledge Sources":
                     "research_assumptions_added": applied,
                     "ready_for_backtest": ready,
                 }
+                save_ingestion_checkpoint(
+                    analysis,
+                    filename=uploaded.name,
+                    extraction_metadata=metadata,
+                    ingest_id=ingest_id,
+                    stage="prepared",
+                )
             else:
                 for item in analysis.get("strategies") or []:
                     item["research_readiness"] = research_readiness(item)
@@ -464,8 +531,15 @@ elif module == "Knowledge Sources":
                         if (item.get("research_readiness") or {}).get("label") == "ready_for_backtest"
                     ),
                 }
+                save_ingestion_checkpoint(
+                    analysis,
+                    filename=uploaded.name,
+                    extraction_metadata=metadata,
+                    ingest_id=ingest_id,
+                    stage="extracted",
+                )
 
-            data = load_library()
+            data = intelligence_store().load()
             data["strategies"] = merge_strategies(
                 list(data.get("strategies") or []),
                 list(analysis.get("strategies") or []),
