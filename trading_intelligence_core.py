@@ -408,14 +408,39 @@ def effective_strategy_for_research(strategy: dict[str, Any]) -> dict[str, Any]:
 
 
 class GeminiRuleCompiler:
-    """Suggest reviewable measurable proxies for qualitative strategy requirements."""
+    """Suggest measurable proxies with transient retry and model fallback."""
 
-    def __init__(self, api_key: str, model: str = DEFAULT_GEMINI_MODEL):
+    def __init__(
+        self,
+        api_key: str,
+        model: str = DEFAULT_GEMINI_MODEL,
+        *,
+        fallback_api_key: str = "",
+        fallback_model: str = DEFAULT_GEMINI_FALLBACK_MODEL,
+    ):
         key = str(api_key or "").strip()
         if not key:
             raise AppError("Add GEMINI_API_KEY to Streamlit Secrets before using the Rule Compiler.")
         self.api_key = key
+        self.fallback_api_key = str(fallback_api_key or "").strip()
+        if self.fallback_api_key and self.fallback_api_key == self.api_key:
+            raise AppError(
+                "GEMINI_PAID_API_KEY must be a different key from a separate Google project."
+            )
         self.model = str(model or DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
+        self.primary_model = self.model
+        fallback_candidates = [
+            str(fallback_model or "").strip(),
+            *DEFAULT_GEMINI_ADDITIONAL_FALLBACK_MODELS,
+        ]
+        self.fallback_models: list[str] = []
+        for candidate in fallback_candidates:
+            candidate = str(candidate or "").strip()
+            if candidate and candidate != self.primary_model and candidate not in self.fallback_models:
+                self.fallback_models.append(candidate)
+        self._fallback_model_index = 0
+        self.model_fallback_used = False
+        self.paid_fallback_used = False
 
     @property
     def headers(self) -> dict[str, str]:
@@ -425,11 +450,74 @@ class GeminiRuleCompiler:
             "Accept": "application/json",
         }
 
-    def compile(self, strategy: dict[str, Any]) -> dict[str, Any]:
-        model_name = self.model.removeprefix("models/")
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+", model_name):
-            raise AppError("GEMINI_MODEL must contain a valid Gemini model name.")
+    def _activate_model_fallback(self, error: Exception | str) -> bool:
+        if not provider_temporarily_unavailable(error):
+            return False
+        while self._fallback_model_index < len(self.fallback_models):
+            candidate = self.fallback_models[self._fallback_model_index]
+            self._fallback_model_index += 1
+            if candidate == self.model:
+                continue
+            self.model = candidate
+            self.model_fallback_used = True
+            return True
+        return False
 
+    def _activate_paid_fallback(self, error: Exception | str) -> bool:
+        if (
+            self.paid_fallback_used
+            or not self.fallback_api_key
+            or not provider_quota_reached(error)
+        ):
+            return False
+        self.api_key = self.fallback_api_key
+        self.paid_fallback_used = True
+        return True
+
+    def _generate(self, payload: dict[str, Any]) -> dict[str, Any]:
+        transient_attempts = 0
+        quota_attempts = 0
+        while True:
+            model_name = self.model.removeprefix("models/")
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+", model_name):
+                raise AppError("GEMINI_MODEL must contain a valid Gemini model name.")
+            try:
+                return _json_request(
+                    f"{GEMINI_GENERATE_CONTENT_URL}/{model_name}:generateContent",
+                    self.headers,
+                    method="POST",
+                    payload=payload,
+                    timeout=180,
+                )
+            except AppError as exc:
+                message = str(exc)
+                if provider_temporarily_unavailable(exc):
+                    if transient_attempts < BOOK_TRANSIENT_RETRIES_PER_MODEL:
+                        retry_wait = min(
+                            5 * (2 ** transient_attempts),
+                            BOOK_TRANSIENT_MAX_WAIT_SECONDS,
+                        )
+                        transient_attempts += 1
+                        sleep(retry_wait)
+                        continue
+                    if self._activate_model_fallback(exc):
+                        transient_attempts = 0
+                        quota_attempts = 0
+                        continue
+
+                if provider_quota_reached(exc):
+                    retry_delay = GeminiBookAnalyzer._quota_retry_delay(message)
+                    if retry_delay is not None and quota_attempts < BOOK_QUOTA_RETRIES:
+                        quota_attempts += 1
+                        sleep(retry_delay)
+                        continue
+                    if self._activate_paid_fallback(exc):
+                        transient_attempts = 0
+                        quota_attempts = 0
+                        continue
+                raise
+
+    def compile(self, strategy: dict[str, Any]) -> dict[str, Any]:
         source_rules = {
             key: value
             for key, value in normalize_machine_rules(strategy.get("machine_rules")).items()
@@ -450,19 +538,15 @@ class GeminiRuleCompiler:
             "explicit_machine_rules": source_rules,
         }
         prompt = RULE_COMPILER_PROMPT + "\n\nSTRATEGY JSON:\n" + json.dumps(context, indent=2, default=str)
-        response = _json_request(
-            f"{GEMINI_GENERATE_CONTENT_URL}/{model_name}:generateContent",
-            self.headers,
-            method="POST",
-            payload={
+        response = self._generate(
+            {
                 "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                 "generationConfig": {
                     "responseFormat": {
                         "text": {"mimeType": "APPLICATION_JSON", "schema": RULE_COMPILER_SCHEMA}
                     }
                 },
-            },
-            timeout=180,
+            }
         )
         raw = _extract_generate_content_text(response)
         try:
@@ -498,6 +582,9 @@ class GeminiRuleCompiler:
         parsed["suggestions"] = cleaned
         parsed["generated_at"] = _utc_iso()
         parsed["model"] = self.model
+        parsed["primary_model"] = self.primary_model
+        parsed["model_fallback_used"] = self.model_fallback_used
+        parsed["paid_fallback_used"] = self.paid_fallback_used
         return parsed
 
 
