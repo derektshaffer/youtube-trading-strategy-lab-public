@@ -4625,27 +4625,34 @@ def optimize_stock_strategies(
         trained: list[dict[str, Any]] = []
         for index, candidate_rules in enumerate(variants):
             candidate_strategy = {**source_strategy, "machine_rules": candidate_rules}
-            candidate_settings = replace(
+            base_candidate_settings = replace(
                 settings,
                 default_stop_pct=float(candidate_rules.get("stop_loss_pct") or settings.default_stop_pct),
                 default_reward_risk=float(candidate_rules.get("reward_risk") or settings.default_reward_risk),
             )
-            candidate_settings = effective_settings(candidate_rules, candidate_settings)
-            result = evaluate(candidate_strategy, "training", candidate_settings)
-            metrics = result["metrics"]
-            trained.append(
-                {
-                    "variant_index": index,
-                    "execution_index": 0,
-                    "rules": candidate_rules,
+            behavior_trials: list[dict[str, Any]] = []
+            for behavior_settings in (base_candidate_settings, legacy_behavior_settings(base_candidate_settings)):
+                candidate_settings = effective_settings(candidate_rules, behavior_settings)
+                metrics = evaluate(candidate_strategy, "training", candidate_settings)["metrics"]
+                behavior_trials.append({
                     "settings": candidate_settings,
-                    "training_metrics": metrics,
-                    "training_score": _optimization_score(
+                    "metrics": metrics,
+                    "score": _optimization_score(
                         metrics,
                         candidate_settings,
                         optimizer.minimum_training_trades,
                         maximum_drawdown_pct=optimizer.maximum_drawdown_pct,
                     ),
+                })
+            best_behavior_trial = max(behavior_trials, key=lambda item: item["score"])
+            trained.append(
+                {
+                    "variant_index": index,
+                    "execution_index": 0,
+                    "rules": candidate_rules,
+                    "settings": best_behavior_trial["settings"],
+                    "training_metrics": best_behavior_trial["metrics"],
+                    "training_score": best_behavior_trial["score"],
                 }
             )
             notify(f"Testing {name}: strategy rules {index + 1} of {len(variants)}")
