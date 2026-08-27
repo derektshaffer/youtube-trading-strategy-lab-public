@@ -28,7 +28,9 @@ from trading_strategy_dna import (
     build_candidate_blueprints,
     build_concept_graph,
     build_strategy_families,
+    compile_candidate_blueprint,
     infer_strategy_dna,
+    is_synthetic_strategy,
     source_identity,
 )
 from trading_intelligence_core import (
@@ -248,6 +250,23 @@ def persistence_summary() -> dict[str, Any]:
 def source_label(strategy: dict[str, Any]) -> str:
     kind = str(strategy.get("source_type") or "legacy").replace("_", " ").title()
     return f"{kind} · {strategy.get('source_title') or 'Unknown source'}"
+
+
+def upsert_strategy_record(
+    data: dict[str, Any],
+    strategy: dict[str, Any],
+) -> dict[str, Any]:
+    """Insert or replace one strategy record by stable ID."""
+    result = dict(data or {})
+    strategy_id = str(strategy.get("id") or "")
+    existing = [
+        dict(item)
+        for item in result.get("strategies") or []
+        if isinstance(item, dict)
+        and str(item.get("id") or "") != strategy_id
+    ]
+    result["strategies"] = [dict(strategy), *existing]
+    return result
 
 
 with st.sidebar:
@@ -918,6 +937,8 @@ elif module == "Strategy DNA":
     else:
         dna_strategies = []
         for item in strategies:
+            if is_synthetic_strategy(item):
+                continue
             enriched = dict(item)
             enriched["strategy_dna"] = infer_strategy_dna(enriched)
             dna_strategies.append(enriched)
@@ -1138,6 +1159,196 @@ elif module == "Strategy DNA":
                     "Next step for this candidate is deterministic rule compilation plus historical optimization, "
                     "walk-forward testing, untouched holdout validation, and cross-stock generalization."
                 )
+
+                executable = compile_candidate_blueprint(candidate)
+                readiness = research_readiness(executable)
+                effective_rules = normalize_machine_rules(
+                    effective_strategy_for_research(executable).get("machine_rules")
+                )
+                active_effective_rules = {
+                    key: value for key, value in effective_rules.items() if value is not None
+                }
+                st.divider()
+                st.markdown("### Research pipeline")
+                p1, p2, p3 = st.columns(3)
+                p1.metric(
+                    "Executable rule count",
+                    sum(value is not None for value in effective_rules.values()),
+                )
+                p2.metric(
+                    "Research readiness",
+                    f"{safe_float(readiness.get('score'), 0.0):.0f}/100",
+                )
+                p3.metric(
+                    "Exact source-seed rules",
+                    len(executable.get("candidate_rule_options") or {}),
+                )
+                st.caption(
+                    "Conflicting source thresholds are not averaged. One exact source value is used only as "
+                    "the initial research seed, and every source-supported alternative is injected into the "
+                    "optimizer before generic nearby values are explored."
+                )
+
+                with st.expander("Compiled research strategy", expanded=False):
+                    st.markdown("**Effective starting rules**")
+                    st.json(active_effective_rules or {"status": "No executable rules yet."})
+                    if executable.get("candidate_rule_options"):
+                        st.markdown("**Exact source-supported alternatives tested first**")
+                        st.json(executable.get("candidate_rule_options"))
+                    if executable.get("unresolved_rules"):
+                        st.markdown("**Shared DNA still needing translation**")
+                        for item in executable.get("unresolved_rules") or []:
+                            st.write("• " + str(item))
+
+                action_cols = st.columns(2)
+                save_candidate = action_cols[0].button(
+                    "💾 Save / refresh research candidate",
+                    use_container_width=True,
+                    key=f"save_synth_{candidate.get('id')}",
+                )
+                run_candidate = action_cols[1].button(
+                    "🧪 Run full historical research pipeline",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=not bool(candidate.get("backtest_supported")),
+                    key=f"run_synth_{candidate.get('id')}",
+                    help=(
+                        "Runs historical opportunity discovery, optimization, walk-forward checks, untouched "
+                        "holdout validation, cost stress testing, and frozen-rule cross-stock generalization."
+                    ),
+                )
+
+                if not candidate.get("backtest_supported"):
+                    st.warning(
+                        "This synthesized family is not currently supported by the long-only backtester. "
+                        "Its DNA remains useful for research, but automatic validation is disabled for now."
+                    )
+
+                if save_candidate:
+                    data = load_library()
+                    executable["research_readiness"] = readiness
+                    data = upsert_strategy_record(data, executable)
+                    intelligence_store().save(data)
+                    st.success("Saved the synthesized research candidate to the unified Strategy Library.")
+                    st.rerun()
+
+                if run_candidate:
+                    try:
+                        candidate_to_run = dict(executable)
+                        candidate_to_run["research_readiness"] = research_readiness(candidate_to_run)
+
+                        # Deterministic compilation happens first. Only if the shared DNA still does not
+                        # provide a testable entry/filter rule do we ask the existing AI Rule Compiler
+                        # for clearly labeled research assumptions.
+                        if (
+                            (candidate_to_run.get("research_readiness") or {}).get("label")
+                            != "ready_for_backtest"
+                        ):
+                            compile_status = st.status(
+                                "The shared DNA still has untestable gaps. AI Rule Compiler is creating "
+                                "clearly labeled research assumptions…",
+                                expanded=True,
+                            )
+                            compiler = GeminiRuleCompiler(
+                                setting("GEMINI_API_KEY"),
+                                setting("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
+                                fallback_api_key=setting("GEMINI_PAID_API_KEY", ""),
+                            )
+                            candidate_to_run = prepare_strategies_with_ai(
+                                [candidate_to_run],
+                                compiler,
+                                minimum_confidence=65.0,
+                            )[0]
+                            candidate_to_run["research_readiness"] = research_readiness(candidate_to_run)
+                            compile_status.update(
+                                label="Research-rule compilation finished",
+                                state="complete",
+                                expanded=False,
+                            )
+
+                        final_readiness = candidate_to_run.get("research_readiness") or {}
+                        if final_readiness.get("label") != "ready_for_backtest":
+                            raise AppError(
+                                "This synthesized candidate still does not contain an objective entry/filter "
+                                "rule that the deterministic backtester can enforce."
+                            )
+
+                        data = load_library()
+                        data = upsert_strategy_record(data, candidate_to_run)
+                        intelligence_store().save(data)
+
+                        research_status = st.status(
+                            "Running the synthesized candidate through Historical Research Autopilot…",
+                            expanded=True,
+                        )
+                        report = run_autonomous_research(
+                            market_client(),
+                            [candidate_to_run],
+                            deep_strategy_limit=1,
+                            progress=lambda message: research_status.write(message),
+                        )
+                        data = load_library()
+                        data = merge_autonomous_research_into_library(data, report)
+                        intelligence_store().save(data)
+                        st.session_state["til_synth_research_result"] = {
+                            "candidate_id": candidate_to_run.get("id"),
+                            "report": report,
+                        }
+
+                        result = (report.get("results") or [{}])[0]
+                        status = str(result.get("validation_status") or "research_only")
+                        score = safe_float(result.get("global_score"), 0.0) or 0.0
+                        research_status.update(
+                            label=(
+                                f"Cross-source research complete · {status.replace('_', ' ').title()} · "
+                                f"global robustness {score:.1f}/100"
+                            ),
+                            state="complete",
+                            expanded=False,
+                        )
+                        st.success(
+                            "The candidate was saved, optimized, walk-forward tested, holdout tested, "
+                            "stress tested, and checked across multiple stocks. Only candidates that pass "
+                            "the existing validation gates receive frozen validated rules."
+                        )
+                        st.rerun()
+                    except AppError as exc:
+                        st.error(str(exc))
+                    except Exception as exc:
+                        st.error(f"Synthesized candidate research failed: {exc}")
+
+                stored_synth = st.session_state.get("til_synth_research_result") or {}
+                if stored_synth.get("candidate_id") == executable.get("id"):
+                    report = stored_synth.get("report") or {}
+                    results = list(report.get("results") or [])
+                    if results:
+                        result = results[0]
+                        st.divider()
+                        st.markdown("### Latest synthesized-candidate research result")
+                        r1, r2, r3, r4 = st.columns(4)
+                        r1.metric(
+                            "Validation",
+                            str(result.get("validation_status") or "research_only")
+                            .replace("_", " ")
+                            .title(),
+                        )
+                        r2.metric(
+                            "Global robustness",
+                            f"{safe_float(result.get('global_score'), 0.0):.1f}/100",
+                        )
+                        r3.metric(
+                            "Anchor stock",
+                            result.get("anchor_symbol") or "—",
+                        )
+                        r4.metric(
+                            "Stocks tested",
+                            len(result.get("candidate_symbols") or []),
+                        )
+                        reasons = list(result.get("gate_reasons") or [])
+                        if reasons:
+                            with st.expander("Why it did not pass every validation gate", expanded=True):
+                                for reason in reasons:
+                                    st.write("• " + str(reason))
 
 
 elif module == "Rule Compiler":
