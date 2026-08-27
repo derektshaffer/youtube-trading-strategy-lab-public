@@ -329,6 +329,18 @@ class AutonomousResearchTests(unittest.TestCase):
             "timeframe": "5Min",
             "intraday_lookback_days": 60,
             "universe": {"source": "active_equities_sample"},
+            "run_status": "complete_with_skips",
+            "deep_strategies_attempted": 2,
+            "deep_strategies_tested": 1,
+            "deep_strategies_failed": 1,
+            "failed_finalists": [
+                {
+                    "strategy_id": "s2",
+                    "strategy_name": "Skipped",
+                    "finalist_number": 2,
+                    "error": "Synthetic research failure",
+                }
+            ],
             "results": [
                 {
                     "strategy_id": "s1",
@@ -360,7 +372,13 @@ class AutonomousResearchTests(unittest.TestCase):
         self.assertEqual(strategy["validation_status"], "validated")
         self.assertEqual(strategy["validated_rules"]["min_relative_volume"], 2.5)
         self.assertTrue(merged["validation_runs"][0]["autonomous"])
-        self.assertEqual(merged["research_runs"][0]["kind"], "autonomous_research")
+        saved_run = merged["research_runs"][0]
+        self.assertEqual(saved_run["kind"], "autonomous_research")
+        self.assertEqual(saved_run["run_status"], "complete_with_skips")
+        self.assertEqual(saved_run["deep_strategies_attempted"], 2)
+        self.assertEqual(saved_run["deep_strategies_tested"], 1)
+        self.assertEqual(saved_run["deep_strategies_failed"], 1)
+        self.assertEqual(saved_run["failed_finalists"][0]["strategy_name"], "Skipped")
 
 
 if __name__ == "__main__":
