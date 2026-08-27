@@ -1738,18 +1738,25 @@ class GitHubCloudBackup:
             raise AppError("GitHub did not return a valid version identifier for the cloud backup.")
         return {"library": library, "sha": sha}
 
-    def save_library(self, data: dict[str, Any], *, previous_updated_at: str | None = None) -> dict[str, Any]:
+    def save_library(
+        self,
+        data: dict[str, Any],
+        *,
+        previous_updated_at: str | None = None,
+        force_write: bool = False,
+    ) -> dict[str, Any]:
         current = self.read_library()
         if current is not None:
             remote_updated_at = current["library"].get("updated_at")
             local_updated_at = data.get("updated_at")
             if remote_updated_at == local_updated_at:
-                if current["library"] == data:
+                if current["library"] == data and not force_write:
                     return current
-                raise AppError(
-                    "The private GitHub backup contains different records with the same saved timestamp. "
-                    "The cloud copy was not overwritten; inspect or restore the latest backup first."
-                )
+                if current["library"] != data:
+                    raise AppError(
+                        "The private GitHub backup contains different records with the same saved timestamp. "
+                        "The cloud copy was not overwritten; inspect or restore the latest backup first."
+                    )
             expected_previous = str(previous_updated_at or "").strip()
             remote_previous = str(remote_updated_at or "").strip()
             if expected_previous:
@@ -2060,6 +2067,25 @@ class StrategyStore:
         expected = status.get("synced_updated_at") or data.get("updated_at")
         try:
             self.cloud_backup.save_library(data, previous_updated_at=expected)
+        except AppError as exc:
+            self._record_cloud_status(last_error=str(exc))
+            raise
+        self._record_cloud_write_success(data)
+        return data
+
+    def verify_cloud_write_access(self) -> dict[str, Any]:
+        """Prove the configured destination accepts writes without changing library contents."""
+        if self.cloud_backup is None:
+            raise AppError("Configure the private GitHub cloud backup before verifying write access.")
+        data = self.load_latest()
+        status = self.cloud_status()
+        expected = status.get("synced_updated_at") or data.get("updated_at")
+        try:
+            self.cloud_backup.save_library(
+                data,
+                previous_updated_at=expected,
+                force_write=True,
+            )
         except AppError as exc:
             self._record_cloud_status(last_error=str(exc))
             raise
