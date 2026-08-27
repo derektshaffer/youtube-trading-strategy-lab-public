@@ -1,6 +1,12 @@
 import unittest
 
-from trading_progress_ui import AutonomousResearchProgressEstimator, format_elapsed
+from trading_progress_ui import (
+    AutonomousResearchEtaEstimator,
+    AutonomousResearchProgressEstimator,
+    AutonomousResearchTimingRecorder,
+    autonomous_timing_profiles,
+    format_eta_range,
+)
 
 
 class AutonomousResearchProgressEstimatorTests(unittest.TestCase):
@@ -42,10 +48,109 @@ class AutonomousResearchProgressEstimatorTests(unittest.TestCase):
         after = tracker.update("Skipping unusable historical symbol TEST; continuing…")
         self.assertEqual(after, before)
 
-    def test_elapsed_format(self):
-        self.assertEqual(format_elapsed(9), "9s")
-        self.assertEqual(format_elapsed(75), "1m 15s")
-        self.assertEqual(format_elapsed(3670), "1h 01m")
+    def test_timing_recorder_builds_compact_completed_profile(self):
+        recorder = AutonomousResearchTimingRecorder()
+        recorder.record(0.10, 12.0, "daily")
+        recorder.record(0.10, 13.0, "duplicate fraction")
+        recorder.record(0.50, 55.0, "intraday")
+        profile = recorder.finish(
+            120.0,
+            deep_strategies_attempted=3,
+            universe_sample_size=500,
+        )
+        self.assertEqual(profile["total_seconds"], 120.0)
+        self.assertEqual(profile["deep_strategies_attempted"], 3)
+        self.assertEqual(profile["universe_sample_size"], 500)
+        self.assertEqual(profile["samples"][-1]["fraction"], 1.0)
+        self.assertLessEqual(len(profile["samples"]), 3)
+
+    def test_no_completed_timing_history_returns_no_eta(self):
+        estimator = AutonomousResearchEtaEstimator.from_research_runs([])
+        self.assertIsNone(estimator.estimate_range(0.35, current_elapsed_seconds=30))
+
+    def test_one_completed_run_produces_wide_eta_range(self):
+        runs = [
+            {
+                "kind": "autonomous_research",
+                "timing_profile": {
+                    "total_seconds": 600.0,
+                    "samples": [
+                        {"fraction": 0.10, "elapsed_seconds": 60.0},
+                        {"fraction": 0.50, "elapsed_seconds": 240.0},
+                        {"fraction": 1.0, "elapsed_seconds": 600.0},
+                    ],
+                },
+            }
+        ]
+        estimator = AutonomousResearchEtaEstimator.from_research_runs(runs)
+        eta = estimator.estimate_range(0.50, current_elapsed_seconds=240.0)
+        self.assertIsNotNone(eta)
+        low, high = eta
+        self.assertLess(low, 360.0)
+        self.assertGreater(high, 360.0)
+        self.assertGreater(high - low, 100.0)
+
+    def test_multiple_completed_runs_tighten_eta_around_history(self):
+        runs = []
+        for total, half in ((540, 220), (600, 250), (660, 280), (630, 260)):
+            runs.append(
+                {
+                    "kind": "autonomous_research",
+                    "timing_profile": {
+                        "total_seconds": float(total),
+                        "samples": [
+                            {"fraction": 0.10, "elapsed_seconds": 60.0},
+                            {"fraction": 0.50, "elapsed_seconds": float(half)},
+                            {"fraction": 1.0, "elapsed_seconds": float(total)},
+                        ],
+                    },
+                }
+            )
+        estimator = AutonomousResearchEtaEstimator.from_research_runs(runs)
+        eta = estimator.estimate_range(0.50, current_elapsed_seconds=250.0)
+        self.assertIsNotNone(eta)
+        low, high = eta
+        self.assertGreater(low, 200.0)
+        self.assertLess(high, 500.0)
+        self.assertLess(high - low, 250.0)
+
+    def test_very_early_progress_waits_before_showing_eta(self):
+        runs = [
+            {
+                "kind": "autonomous_research",
+                "timing_profile": {
+                    "total_seconds": 600.0,
+                    "samples": [
+                        {"fraction": 0.10, "elapsed_seconds": 60.0},
+                        {"fraction": 1.0, "elapsed_seconds": 600.0},
+                    ],
+                },
+            }
+        ]
+        estimator = AutonomousResearchEtaEstimator.from_research_runs(runs)
+        self.assertIsNone(estimator.estimate_range(0.05, current_elapsed_seconds=10.0))
+
+    def test_eta_range_format_is_coarse_not_fake_precision(self):
+        self.assertIsNone(format_eta_range(None))
+        self.assertEqual(format_eta_range((20, 45)), "less than 1 min")
+        self.assertEqual(format_eta_range((95, 245)), "about 1 min–5 min")
+
+    def test_only_autonomous_runs_with_valid_profiles_are_used(self):
+        runs = [
+            {"kind": "manual", "timing_profile": {"total_seconds": 10, "samples": [{}, {}]}},
+            {"kind": "autonomous_research"},
+            {
+                "kind": "autonomous_research",
+                "timing_profile": {
+                    "total_seconds": 100,
+                    "samples": [
+                        {"fraction": 0.1, "elapsed_seconds": 10},
+                        {"fraction": 1.0, "elapsed_seconds": 100},
+                    ],
+                },
+            },
+        ]
+        self.assertEqual(len(autonomous_timing_profiles(runs)), 1)
 
 
 if __name__ == "__main__":
