@@ -383,7 +383,7 @@ def render_backtest_trade_chart(
     trades: list[dict[str, Any]],
     timeframe: str,
 ) -> None:
-    """Render interactive candles with exact simulated entry/exit locations."""
+    """Render a Robinhood-Legend-style interactive backtest chart."""
     frame = _backtest_chart_frame(bars)
     if frame.empty:
         st.info("Candle data for this completed backtest is unavailable. Run the backtest again to build the trade chart.")
@@ -391,10 +391,10 @@ def render_backtest_trade_chart(
 
     st.markdown("### Trades on price chart")
     st.caption(
-        f"{symbol} · {timeframe} candles · hover over any marker for the exact simulated entry, exit, P/L, and exit reason."
+        f"{symbol} · {timeframe} candles · use the large range and zoom controls below, then hover any marker for trade details."
     )
 
-    filter_col, sample_col, connector_col = st.columns([1.1, 1.1, 1.0])
+    filter_col, sample_col = st.columns(2)
     trade_filter = filter_col.selectbox(
         "Trades to show",
         ["All trades", "Winners only", "Losers only"],
@@ -404,11 +404,6 @@ def render_backtest_trade_chart(
         "Sample",
         ["Both", "In-sample only", "Holdout only"],
         key=f"backtest_trade_chart_sample_{symbol}",
-    )
-    show_connectors = connector_col.checkbox(
-        "Show entry → exit lines",
-        value=True,
-        key=f"backtest_trade_chart_connectors_{symbol}",
     )
 
     visible_trades: list[dict[str, Any]] = []
@@ -425,12 +420,155 @@ def render_backtest_trade_chart(
             continue
         visible_trades.append(trade)
 
+    frame_start = frame["timestamp"].iloc[0]
+    frame_end = frame["timestamp"].iloc[-1]
+
+    trade_times: list[pd.Timestamp] = []
+    for trade in visible_trades:
+        entry_time = safe_utc_timestamp(trade.get("entry_time"))
+        exit_time = safe_utc_timestamp(trade.get("exit_time"))
+        if entry_time is not None:
+            trade_times.append(entry_time)
+        if exit_time is not None:
+            trade_times.append(exit_time)
+
+    focus_start = min(trade_times) if trade_times else frame_start
+    focus_end = max(trade_times) if trade_times else frame_end
+    focus_span = max(
+        focus_end - focus_start,
+        pd.Timedelta(hours=2),
+    )
+    focus_padding = max(
+        focus_span * 0.18,
+        pd.Timedelta(minutes=30),
+    )
+    default_start = max(frame_start, focus_start - focus_padding)
+    default_end = min(frame_end, focus_end + focus_padding)
+    if default_end <= default_start:
+        default_start, default_end = frame_start, frame_end
+
+    range_key = f"backtest_trade_chart_range_{symbol}_{timeframe}"
+    stored_range = st.session_state.get(range_key)
+    try:
+        view_start = safe_utc_timestamp((stored_range or {}).get("start")) if isinstance(stored_range, dict) else None
+        view_end = safe_utc_timestamp((stored_range or {}).get("end")) if isinstance(stored_range, dict) else None
+    except Exception:
+        view_start = view_end = None
+    if (
+        view_start is None
+        or view_end is None
+        or view_end <= view_start
+        or view_end < frame_start
+        or view_start > frame_end
+    ):
+        view_start, view_end = default_start, default_end
+
+    def set_view(start_value: Any, end_value: Any) -> tuple[pd.Timestamp, pd.Timestamp]:
+        start_ts = safe_utc_timestamp(start_value) or frame_start
+        end_ts = safe_utc_timestamp(end_value) or frame_end
+        start_ts = max(frame_start, start_ts)
+        end_ts = min(frame_end, end_ts)
+        if end_ts <= start_ts:
+            start_ts, end_ts = frame_start, frame_end
+        st.session_state[range_key] = {"start": start_ts.isoformat(), "end": end_ts.isoformat()}
+        return start_ts, end_ts
+
+    # Large, explicit range controls replace Plotly's tiny toolbar as the primary UI.
+    st.markdown("**Chart range**")
+    range_cols = st.columns([1.25, 0.8, 0.8, 0.8, 0.8, 0.95, 0.7, 0.7])
+    if range_cols[0].button(
+        "🎯 Trade focus",
+        key=f"trade_chart_focus_{symbol}",
+        use_container_width=True,
+        help="Zoom to the area containing the selected trades.",
+    ):
+        view_start, view_end = set_view(default_start, default_end)
+
+    range_anchor = max(trade_times) if trade_times else frame_end
+    for column, label, days in (
+        (range_cols[1], "1D", 1),
+        (range_cols[2], "5D", 5),
+        (range_cols[3], "1M", 30),
+    ):
+        if column.button(label, key=f"trade_chart_{label}_{symbol}", use_container_width=True):
+            view_start, view_end = set_view(range_anchor - pd.Timedelta(days=days), range_anchor)
+
+    if range_cols[4].button("All", key=f"trade_chart_all_{symbol}", use_container_width=True):
+        view_start, view_end = set_view(frame_start, frame_end)
+
+    if range_cols[5].button(
+        "↺ Reset",
+        key=f"trade_chart_reset_{symbol}",
+        use_container_width=True,
+        help="Return to the automatic trade-focused view.",
+    ):
+        view_start, view_end = set_view(default_start, default_end)
+
+    current_span = max(view_end - view_start, pd.Timedelta(minutes=5))
+    current_midpoint = view_start + current_span / 2
+    if range_cols[6].button(
+        "−",
+        key=f"trade_chart_zoom_out_{symbol}",
+        use_container_width=True,
+        help="Zoom out",
+    ):
+        expanded = current_span * 1.6
+        view_start, view_end = set_view(current_midpoint - expanded / 2, current_midpoint + expanded / 2)
+    if range_cols[7].button(
+        "+",
+        key=f"trade_chart_zoom_in_{symbol}",
+        use_container_width=True,
+        help="Zoom in",
+    ):
+        contracted = max(current_span * 0.625, pd.Timedelta(minutes=10))
+        view_start, view_end = set_view(current_midpoint - contracted / 2, current_midpoint + contracted / 2)
+
+    display_cols = st.columns(5)
+    show_volume = display_cols[0].checkbox(
+        "Volume",
+        value=True,
+        key=f"backtest_trade_chart_volume_{symbol}",
+    )
+    show_entries = display_cols[1].checkbox(
+        "Entries",
+        value=True,
+        key=f"backtest_trade_chart_entries_{symbol}",
+    )
+    show_exits = display_cols[2].checkbox(
+        "Exits",
+        value=True,
+        key=f"backtest_trade_chart_exits_{symbol}",
+    )
+    show_outcomes = display_cols[3].checkbox(
+        "Win/loss rings",
+        value=True,
+        key=f"backtest_trade_chart_outcomes_{symbol}",
+    )
+    show_connectors = display_cols[4].checkbox(
+        "Entry → exit",
+        value=True,
+        key=f"backtest_trade_chart_connectors_{symbol}",
+    )
+
+    # Auto-scale the price axis to the visible candles so a large historic window
+    # never crushes the interesting move into a thin line.
+    visible_frame = frame[(frame["timestamp"] >= view_start) & (frame["timestamp"] <= view_end)]
+    if visible_frame.empty:
+        visible_frame = frame
+    visible_low = safe_float(visible_frame["low"].min())
+    visible_high = safe_float(visible_frame["high"].max())
+    if visible_low is not None and visible_high is not None and visible_high > visible_low:
+        price_pad = max((visible_high - visible_low) * 0.08, visible_high * 0.003)
+        price_range = [max(0.0, visible_low - price_pad), visible_high + price_pad]
+    else:
+        price_range = None
+
     figure = make_subplots(
-        rows=2,
+        rows=2 if show_volume else 1,
         cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.035,
-        row_heights=[0.80, 0.20],
+        vertical_spacing=0.035 if show_volume else 0.0,
+        row_heights=[0.80, 0.20] if show_volume else [1.0],
     )
     figure.add_trace(
         go.Candlestick(
@@ -450,7 +588,7 @@ def render_backtest_trade_chart(
         col=1,
     )
 
-    if "volume" in frame.columns:
+    if show_volume and "volume" in frame.columns:
         volume_colors = [
             "#35d597" if close >= open_price else "#ff7878"
             for close, open_price in zip(frame["close"], frame["open"])
@@ -461,7 +599,7 @@ def render_backtest_trade_chart(
                 y=frame["volume"].fillna(0),
                 name="Volume",
                 marker_color=volume_colors,
-                opacity=0.32,
+                opacity=0.28,
                 hovertemplate="%{x|%b %d, %Y %I:%M %p}<br>Volume: %{y:,.0f}<extra></extra>",
             ),
             row=2,
@@ -532,8 +670,8 @@ def render_backtest_trade_chart(
                 y=winner_connector_y,
                 mode="lines",
                 name="Winning trade",
-                line=dict(color="#35d597", width=1.4, dash="dot"),
-                opacity=0.75,
+                line=dict(color="#35d597", width=1.3, dash="dot"),
+                opacity=0.72,
                 hoverinfo="skip",
             ),
             row=1,
@@ -546,63 +684,63 @@ def render_backtest_trade_chart(
                 y=loser_connector_y,
                 mode="lines",
                 name="Losing trade",
-                line=dict(color="#ff7878", width=1.4, dash="dot"),
-                opacity=0.75,
+                line=dict(color="#ff7878", width=1.3, dash="dot"),
+                opacity=0.72,
                 hoverinfo="skip",
             ),
             row=1,
             col=1,
         )
 
-    if entry_x:
+    if show_entries and entry_x:
         figure.add_trace(
             go.Scatter(
                 x=entry_x,
                 y=entry_y,
                 mode="markers",
                 name="Entry",
-                marker=dict(symbol="triangle-up", size=12, color="#35d597", line=dict(color="#d8ffed", width=1)),
+                marker=dict(symbol="triangle-up", size=11, color="#35d597", line=dict(color="#d8ffed", width=1)),
                 text=entry_hover,
                 hovertemplate="%{text}<extra></extra>",
             ),
             row=1,
             col=1,
         )
-    if exit_x:
+    if show_exits and exit_x:
         figure.add_trace(
             go.Scatter(
                 x=exit_x,
                 y=exit_y,
                 mode="markers",
                 name="Exit",
-                marker=dict(symbol="triangle-down", size=12, color="#ff7878", line=dict(color="#ffd0d0", width=1)),
+                marker=dict(symbol="triangle-down", size=11, color="#ff7878", line=dict(color="#ffd0d0", width=1)),
                 text=exit_hover,
                 hovertemplate="%{text}<extra></extra>",
             ),
             row=1,
             col=1,
         )
-    if winner_x:
+    if show_outcomes and winner_x:
         figure.add_trace(
             go.Scatter(
                 x=winner_x,
                 y=winner_y,
                 mode="markers",
                 name="Winner",
-                marker=dict(symbol="circle-open", size=17, color="#35d597", line=dict(width=2)),
+                marker=dict(symbol="circle-open", size=16, color="#35d597", line=dict(width=2)),
                 hoverinfo="skip",
             ),
             row=1,
             col=1,
         )
-    if loser_x:
+    if show_outcomes and loser_x:
         figure.add_trace(
             go.Scatter(
                 x=loser_x,
                 y=loser_y,
                 mode="markers",
                 name="Loser",
-                marker=dict(symbol="circle-open", size=17, color="#ff7878", line=dict(width=2)),
+                marker=dict(symbol="circle-open", size=16, color="#ff7878", line=dict(width=2)),
                 hoverinfo="skip",
             ),
             row=1,
@@ -610,7 +748,7 @@ def render_backtest_trade_chart(
         )
 
     figure.update_layout(
-        height=690,
+        height=720 if show_volume else 610,
         margin=dict(l=8, r=8, t=34, b=8),
         paper_bgcolor="#090f1a",
         plot_bgcolor="#0c1422",
@@ -623,65 +761,74 @@ def render_backtest_trade_chart(
             x=0,
             bgcolor="rgba(0,0,0,0)",
         ),
-        hovermode="closest",
+        hovermode="x unified",
+        hoverdistance=80,
+        spikedistance=-1,
         xaxis_rangeslider_visible=False,
         showlegend=True,
+        dragmode="pan",
+        uirevision=f"{symbol}-{timeframe}",
     )
-    figure.update_xaxes(
+
+    xaxis_common = dict(
         gridcolor="rgba(105,135,170,0.13)",
         showgrid=True,
         rangeslider_visible=False,
+        range=[view_start, view_end],
         rangebreaks=[
             dict(bounds=["sat", "mon"]),
             dict(bounds=[20, 4], pattern="hour"),
         ],
-        row=1,
-        col=1,
+        showspikes=True,
+        spikemode="across",
+        spikesnap="cursor",
+        spikecolor="rgba(210,225,245,0.55)",
+        spikethickness=1,
     )
-    figure.update_xaxes(
-        gridcolor="rgba(105,135,170,0.13)",
-        showgrid=True,
-        rangebreaks=[
-            dict(bounds=["sat", "mon"]),
-            dict(bounds=[20, 4], pattern="hour"),
-        ],
-        row=2,
-        col=1,
-    )
+    figure.update_xaxes(**xaxis_common, row=1, col=1)
+    if show_volume:
+        figure.update_xaxes(**xaxis_common, row=2, col=1)
+
     figure.update_yaxes(
         title_text="Price",
         gridcolor="rgba(105,135,170,0.13)",
         zeroline=False,
+        range=price_range,
+        fixedrange=False,
         row=1,
         col=1,
     )
-    figure.update_yaxes(
-        title_text="Volume",
-        gridcolor="rgba(105,135,170,0.08)",
-        zeroline=False,
-        row=2,
-        col=1,
-    )
+    if show_volume:
+        figure.update_yaxes(
+            title_text="Volume",
+            gridcolor="rgba(105,135,170,0.08)",
+            zeroline=False,
+            fixedrange=False,
+            row=2,
+            col=1,
+        )
 
     if visible_trades:
         st.plotly_chart(
             figure,
             use_container_width=True,
+            key=f"backtest_trade_chart_{symbol}_{timeframe}",
             config={
                 "displaylogo": False,
                 "scrollZoom": True,
+                "doubleClick": "reset",
                 "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+                "modeBarButtonsToAdd": ["zoom2d", "pan2d", "zoomIn2d", "zoomOut2d", "autoScale2d", "resetScale2d"],
             },
         )
         winner_count = sum((safe_float(trade.get("pnl"), 0.0) or 0.0) > 0 for trade in visible_trades)
         loser_count = sum((safe_float(trade.get("pnl"), 0.0) or 0.0) < 0 for trade in visible_trades)
         st.caption(
             f"Showing {len(visible_trades)} trades · {winner_count} winners · {loser_count} losers. "
-            "Drag to zoom, double-click to reset, or use the Plotly controls in the upper-right."
+            "Use +/− above or your mouse wheel/trackpad to zoom. Drag to pan. Double-click the chart to reset."
         )
     else:
         st.info("No trades match the selected chart filters.")
-
 
 def analyzed_youtube_video_index(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Return canonical URLs for videos already represented in the saved library."""
