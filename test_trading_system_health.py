@@ -105,6 +105,17 @@ class TradingSystemHealthTests(unittest.TestCase):
         )
         self.assertEqual(state["state"], "FAIL")
 
+    def test_app_does_not_fake_online_status_or_reuse_backup_token(self):
+        from pathlib import Path
+
+        source = Path("trading_intelligence_app.py").read_text(encoding="utf-8")
+        self.assertNotIn("AI RESEARCH SYSTEM <strong>ONLINE</strong>", source)
+        self.assertNotIn(
+            '"GITHUB_ACTIONS_TOKEN",\n                setting("GITHUB_BACKUP_TOKEN")',
+            source,
+        )
+        self.assertIn('elif module == "System Health":', source)
+
 
 if __name__ == "__main__":
     unittest.main()
