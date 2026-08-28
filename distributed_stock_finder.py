@@ -190,19 +190,31 @@ class PrivateRunArtifactStore:
     def write_bytes(self, path: str, payload: bytes) -> None:
         helper = self._helper(path)
         helper._verify_private_repository()
-        current = helper._request(helper._contents_url(), missing_ok=True)
-        body: dict[str, Any] = {
-            "message": "Store distributed Stock Strategy Finder shard",
-            "content": base64.b64encode(payload).decode("ascii"),
-            "branch": helper.branch,
-        }
-        if current is not None:
-            body["sha"] = current.get("sha")
-        helper._request(
-            helper._contents_url(include_branch=False),
-            method="PUT",
-            payload=body,
-        )
+        encoded = base64.b64encode(payload).decode("ascii")
+        last_error: Exception | None = None
+        for attempt in range(8):
+            current = helper._request(helper._contents_url(), missing_ok=True)
+            body: dict[str, Any] = {
+                "message": "Store distributed Stock Strategy Finder shard",
+                "content": encoded,
+                "branch": helper.branch,
+            }
+            if current is not None:
+                body["sha"] = current.get("sha")
+            try:
+                helper._request(
+                    helper._contents_url(include_branch=False),
+                    method="PUT",
+                    payload=body,
+                )
+                return
+            except AppError as exc:
+                last_error = exc
+                if not _is_conflict(exc) or attempt >= 7:
+                    raise
+                time.sleep(min(8.0, 0.6 * (attempt + 1)))
+        if last_error:
+            raise last_error
 
     def read_bytes(self, path: str) -> bytes:
         helper = self._helper(path)
