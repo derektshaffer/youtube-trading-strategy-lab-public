@@ -1142,6 +1142,11 @@ def strategy_semantic_coverage(strategy: dict[str, Any]) -> dict[str, Any]:
 
     if re.search(r"stop[^\.]{0,80}below[^\.]{0,50}(?:\d{1,3}\s*)?ema", text):
         add("EMA-anchored structural stop", ("stop_below_fast_ema",))
+        if "slightly below" in text:
+            add(
+                "Objective buffer below the EMA for the structural stop",
+                ("stop_ema_buffer_pct",),
+            )
 
     total = len(requirements)
     modeled = sum(1 for item in requirements if item["modeled"])
