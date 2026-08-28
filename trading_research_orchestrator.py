@@ -21,6 +21,8 @@ import json
 import os
 import re
 from typing import Any
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from youtube_strategy_engine import (
     AppError,
@@ -386,6 +388,127 @@ def claim_next_research_job(
         updated_queue.append(item)
     data["research_queue"] = updated_queue
     return data, claimed
+
+
+def claim_research_job_by_id(
+    library: dict[str, Any],
+    worker_id: str,
+    job_id: str,
+    *,
+    now: datetime | None = None,
+    allowed_types: set[str] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Claim one specific queued/retry job when an instant workflow names it."""
+    current = (now or datetime.now(UTC)).astimezone(UTC)
+    data, _ = recover_stale_research_jobs(
+        library,
+        now=current,
+    )
+    chosen_id = str(job_id or "").strip()
+    if not chosen_id:
+        return data, None
+    now_text = current.isoformat().replace("+00:00", "Z")
+    claimed: dict[str, Any] | None = None
+    updated_queue: list[dict[str, Any]] = []
+    for raw in data["research_queue"]:
+        item = dict(raw)
+        if str(item.get("id") or "") != chosen_id:
+            updated_queue.append(item)
+            continue
+        status = str(item.get("status") or "")
+        next_at = _parse_iso(item.get("next_attempt_at"))
+        eligible = (
+            status in {"queued", "retry"}
+            and (allowed_types is None or str(item.get("type") or "") in allowed_types)
+            and (next_at is None or next_at <= current)
+        )
+        if eligible:
+            item["status"] = "running"
+            item["worker_id"] = str(worker_id or "cloud-worker")
+            item["started_at"] = now_text
+            item["updated_at"] = now_text
+            item["attempts"] = int(item.get("attempts") or 0) + 1
+            claimed = item
+        updated_queue.append(item)
+    data["research_queue"] = updated_queue
+    return data, claimed
+
+
+def dispatch_github_workflow(
+    repository: str,
+    token: str,
+    *,
+    workflow: str,
+    ref: str = "main",
+    inputs: dict[str, str] | None = None,
+    timeout: int = 15,
+) -> tuple[bool, str]:
+    """Dispatch a GitHub Actions workflow immediately.
+
+    Returns (success, detail). Failure is non-fatal because the scheduled queue
+    poller remains the recovery path.
+    """
+    repo = str(repository or "").strip()
+    auth = str(token or "").strip()
+    workflow_name = str(workflow or "").strip()
+    branch = str(ref or "main").strip() or "main"
+    if not repo or not auth or not workflow_name:
+        return False, "Immediate launch credentials are not configured."
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+        return False, "Immediate launch repository is invalid."
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", workflow_name):
+        return False, "Immediate launch workflow name is invalid."
+
+    url = (
+        f"https://api.github.com/repos/{repo}/actions/workflows/"
+        f"{workflow_name}/dispatches"
+    )
+    payload: dict[str, Any] = {"ref": branch}
+    cleaned_inputs = {
+        str(key): str(value)
+        for key, value in (inputs or {}).items()
+        if str(key).strip() and str(value).strip()
+    }
+    if cleaned_inputs:
+        payload["inputs"] = cleaned_inputs
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib_request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {auth}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "Content-Type": "application/json",
+            "User-Agent": "Trading-Intelligence-Lab",
+        },
+    )
+    try:
+        with urllib_request.urlopen(req, timeout=max(5, int(timeout))) as response:
+            status = int(getattr(response, "status", 0) or 0)
+        if status == 204:
+            return True, "Cloud workflow launch requested immediately."
+        return False, f"GitHub returned HTTP {status} while launching the worker."
+    except urllib_error.HTTPError as exc:
+        if exc.code in {401, 403}:
+            return (
+                False,
+                "GitHub token cannot launch Actions workflows. The scheduled worker will still pick up the job.",
+            )
+        if exc.code == 404:
+            return (
+                False,
+                "GitHub could not find the distributed workflow or repository. The scheduled worker remains the fallback.",
+            )
+        if exc.code == 422:
+            return (
+                False,
+                "GitHub rejected the workflow dispatch request. The scheduled worker remains the fallback.",
+            )
+        return False, f"Immediate cloud launch failed with GitHub HTTP {exc.code}; scheduled pickup remains active."
+    except (urllib_error.URLError, TimeoutError, OSError):
+        return False, "Immediate cloud launch could not reach GitHub; scheduled pickup remains active."
 
 
 def finish_research_job(
