@@ -148,3 +148,40 @@ Point-in-time limitation: historical membership is inferred from Alpaca's retain
 To try it as a separate Streamlit app, deploy the same repository again and set the main file path to
 `trading_intelligence_app.py`. It reuses the existing `GEMINI_API_KEY` and GitHub backup secrets.
 An optional `GEMINI_PAID_API_KEY` may point to a different Google project for quota fallback; never reuse the same key in both fields.
+
+
+## Continuous autonomous research worker
+
+The Trading Intelligence Lab now includes a persistent research queue that can be processed outside Streamlit by `cloud_research_worker.py`.
+
+Research roles are deliberately separated:
+
+- `gemini-3.7-flash` is the default high-throughput grounded-web research model.
+- `gemini-3.1-pro-preview` is the default specialist reasoning model for conflicting or high-value hypotheses.
+- Gemini models can propose and critique hypotheses, but they never mark a strategy validated.
+- Deterministic historical optimization, holdout, walk-forward, cost stress, stability, and cross-stock testing remain the promotion gate.
+
+The scheduled workflow `.github/workflows/continuous-trading-research.yml` checks the durable queue every hour. Because it runs in GitHub Actions rather than the Streamlit session, research can continue when the browser or user's computer is off.
+
+Required GitHub Actions repository secrets:
+
+- `GEMINI_API_KEY`
+- `GEMINI_PAID_API_KEY` (optional quota fallback)
+- `GITHUB_BACKUP_REPOSITORY`
+- `GITHUB_BACKUP_TOKEN`
+- `ALPACA_API_KEY`
+- `ALPACA_SECRET_KEY`
+
+Optional repository variables include `GEMINI_RESEARCH_BULK_MODEL`, `GEMINI_RESEARCH_SPECIALIST_MODEL`, `RESEARCH_JOBS_PER_RUN`, `RESEARCH_TOPICS_PER_CYCLE`, and validation batch/universe sizes.
+
+The worker follows this bounded loop:
+
+1. Seed a daily set of high-value research topics.
+2. Flash performs Google-grounded research and saves source-quality metadata.
+3. Each hypothesis is queued for Pro specialist review.
+4. Pro can reject it, request targeted follow-up research, or send a machine-testable version to deterministic validation.
+5. Promoted hypotheses are saved as **unvalidated research strategies** only.
+6. The existing Autonomous Research pipeline tests them against historical data and records failures as well as successes.
+7. Follow-up questions can create new research jobs, but the daily seeding and queue limits prevent an uncontrolled API loop.
+
+The **AI Research Autopilot** page is the control center for queue status, latest grounded research, model routing, worker activity, and deterministic validation results.
