@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import os
 import time
 from datetime import timedelta
@@ -692,6 +693,42 @@ WORKSPACE_PAGE_META = {
     },
 }
 
+WORKSPACE_NAV_GROUPS = [
+    ("RESEARCH", ["Overview", "Knowledge Sources", "AI Research Autopilot"]),
+    (
+        "STRATEGY DEVELOPMENT",
+        ["Strategy Library", "Strategy DNA", "Make Strategy Testable", "Strategy Lab", "Validation"],
+    ),
+    (
+        "MARKET RESEARCH",
+        ["Universe Research", "Market Discovery", "Catalyst Intelligence", "Stock Analyzer"],
+    ),
+    ("EXECUTION", ["Live / Paper"]),
+]
+
+WORKSPACE_NAV_ICONS = {
+    "Overview": "⌁",
+    "Knowledge Sources": "◇",
+    "AI Research Autopilot": "✦",
+    "Strategy Library": "▣",
+    "Strategy DNA": "⌘",
+    "Make Strategy Testable": "⚙",
+    "Strategy Lab": "⌬",
+    "Validation": "✓",
+    "Universe Research": "◎",
+    "Market Discovery": "⌖",
+    "Catalyst Intelligence": "⚡",
+    "Stock Analyzer": "⌕",
+    "Live / Paper": "↗",
+}
+
+
+def _nav_key(section: str) -> str:
+    return "til_nav_" + "".join(
+        char.lower() if char.isalnum() else "_"
+        for char in section
+    ).strip("_")
+
 
 def render_workspace_page_header(section: str) -> None:
     meta = WORKSPACE_PAGE_META.get(section) or {
@@ -708,6 +745,32 @@ def render_workspace_page_header(section: str) -> None:
             f'<div class="til-page-title">{meta["title"]}</div>'
             f'<div class="til-page-sub">{meta["subtitle"]}</div>'
             '</div>'
+            '<div class="til-market-mesh" aria-hidden="true">'
+            '<svg viewBox="0 0 620 150" preserveAspectRatio="none">'
+            '<defs>'
+            '<linearGradient id="meshLine" x1="0" y1="0" x2="1" y2="0">'
+            '<stop offset="0%" stop-color="#45d7ff" stop-opacity="0"/>'
+            '<stop offset="48%" stop-color="#45d7ff" stop-opacity=".85"/>'
+            '<stop offset="100%" stop-color="#43e087" stop-opacity=".55"/>'
+            '</linearGradient>'
+            '<linearGradient id="meshFill" x1="0" y1="0" x2="0" y2="1">'
+            '<stop offset="0%" stop-color="#36d5ff" stop-opacity=".14"/>'
+            '<stop offset="100%" stop-color="#32de84" stop-opacity="0"/>'
+            '</linearGradient>'
+            '</defs>'
+            '<path d="M0 111 L74 106 L132 91 L193 105 L260 65 L330 91 L395 45 L463 72 L522 37 L620 62 L620 150 L0 150 Z" fill="url(#meshFill)"/>'
+            '<polyline points="0,111 74,106 132,91 193,105 260,65 330,91 395,45 463,72 522,37 620,62" fill="none" stroke="url(#meshLine)" stroke-width="1.5"/>'
+            '<polyline points="35,126 105,116 169,121 232,88 302,108 370,71 438,95 501,59 572,76" fill="none" stroke="#45d7ff" stroke-opacity=".28" stroke-width="1"/>'
+            '<g fill="#6de7ff">'
+            '<circle cx="132" cy="91" r="2.2"/><circle cx="260" cy="65" r="2.5"/><circle cx="395" cy="45" r="2.7"/><circle cx="522" cy="37" r="2.4"/>'
+            '</g>'
+            '<g stroke="#42dca0" stroke-opacity=".22" stroke-width=".8">'
+            '<line x1="132" y1="91" x2="232" y2="88"/><line x1="232" y1="88" x2="330" y2="91"/>'
+            '<line x1="330" y1="91" x2="395" y2="45"/><line x1="395" y1="45" x2="501" y2="59"/>'
+            '<line x1="260" y1="65" x2="370" y2="71"/><line x1="370" y1="71" x2="463" y2="72"/>'
+            '</g>'
+            '</svg>'
+            '</div>'
             f'<div class="til-page-step">{meta["step"]}</div>'
             '</div>'
         ),
@@ -723,30 +786,73 @@ requested_workspace = WORKSPACE_DISPLAY_TO_INTERNAL.get(
 if requested_workspace in WORKSPACE_SECTIONS:
     st.session_state["til_workspace_section"] = requested_workspace
 
+module = str(st.session_state.get("til_workspace_section") or "Overview")
+if module not in WORKSPACE_SECTIONS:
+    module = "Overview"
+    st.session_state["til_workspace_section"] = module
+
 with st.sidebar:
     st.markdown(
         """
         <div class="til-sidebrand">
-          <div class="til-sidebrand-mark">◈</div>
+          <div class="til-sidebrand-mark">
+            <span class="til-logo-core"></span>
+            <span class="til-logo-orbit til-logo-orbit-a"></span>
+            <span class="til-logo-orbit til-logo-orbit-b"></span>
+          </div>
           <div>
             <div class="til-sidebrand-name">Trading Intelligence</div>
             <div class="til-sidebrand-sub">Research Workspace</div>
           </div>
         </div>
-        <div class="til-sideflow">13-step research workflow</div>
+        <div class="til-sideflow"><span>◈</span> 13-step research workflow</div>
         """,
         unsafe_allow_html=True,
     )
-    module = st.radio(
-        "Section",
-        WORKSPACE_SECTIONS,
-        format_func=lambda section: WORKSPACE_DISPLAY_LABELS.get(
-            section,
-            section,
-        ),
-        label_visibility="collapsed",
-        key="til_workspace_section",
+
+    for group_name, group_sections in WORKSPACE_NAV_GROUPS:
+        st.markdown(
+            f'<div class="til-nav-group">{group_name}</div>',
+            unsafe_allow_html=True,
+        )
+        for section in group_sections:
+            display = WORKSPACE_DISPLAY_LABELS.get(section, section)
+            number, _, label = display.partition(". ")
+            icon = WORKSPACE_NAV_ICONS.get(section, "◇")
+            is_active = section == module
+            clicked = st.button(
+                f"{icon}   {number.zfill(2)}   {label}",
+                use_container_width=True,
+                type="primary" if is_active else "secondary",
+                key=_nav_key(section),
+            )
+            if clicked and not is_active:
+                st.session_state["til_workspace_section"] = section
+                st.rerun()
+
+    st.markdown(
+        """
+        <div class="til-side-status">
+          <div class="til-side-status-row">
+            <div>
+              <div class="til-side-status-label">RESEARCH SYSTEM</div>
+              <div class="til-side-status-value"><span class="til-live-dot"></span> READY</div>
+            </div>
+            <svg class="til-mini-spark" viewBox="0 0 90 28" aria-hidden="true">
+              <polyline points="1,22 15,18 28,21 40,12 53,16 67,8 89,11" fill="none" stroke="#47dda0" stroke-width="2"/>
+              <polyline points="1,26 15,24 28,25 40,19 53,21 67,15 89,16" fill="none" stroke="#4bcfff" stroke-opacity=".35" stroke-width="1"/>
+            </svg>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
+
+    with st.expander("Other labs", expanded=False):
+        st.page_link("youtube_strategy_app.py", label="Home")
+        st.page_link("pages/Full_Trading_Lab.py", label="Full Trading Lab")
+        st.page_link("pages/Live_Strategy_Runner.py", label="Live Strategy Runner")
+        st.page_link("pages/Machine_Learning_Lab.py", label="Machine Learning Lab")
 
 try:
     library = load_library()
