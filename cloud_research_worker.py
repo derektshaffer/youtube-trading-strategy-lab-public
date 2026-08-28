@@ -490,7 +490,11 @@ def main() -> int:
     completed = 0
     for _ in range(jobs_per_run):
         data = store.load_latest()
-        data, job = claim_next_research_job(data, worker_id)
+        data, job = claim_next_research_job(
+            data,
+            worker_id,
+            allowed_types={"web_research", "specialist_review", "autonomous_validation"},
+        )
         if job is None:
             print("No research jobs are ready.", flush=True)
             break
