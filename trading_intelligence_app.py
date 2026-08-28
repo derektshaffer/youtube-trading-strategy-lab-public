@@ -50,6 +50,7 @@ from trading_intelligence_core import (
     DEFAULT_GEMINI_BOOK_SPECIALIST_MODEL,
     GeminiBookAnalyzer,
     GeminiRuleCompiler,
+    apply_compiler_suggestions,
     canonicalize_existing_strategy,
     effective_strategy_for_live,
     effective_strategy_for_research,
@@ -2041,7 +2042,10 @@ elif module == "Make Strategy Testable":
         }
         compiler_cols = st.columns(3)
         compiler_cols[0].metric("Rules from the source", len(explicit))
-        compiler_cols[1].metric("AI test assumptions", len(accepted_overrides))
+        compiler_cols[1].metric(
+            "AI assumptions queued",
+            len(compiler_strategy.get("ai_candidate_rule_options") or accepted_overrides),
+        )
         compiler_cols[2].metric(
             "Still vague / subjective",
             len(compiler_strategy.get("unresolved_rules") or []),
@@ -2105,12 +2109,49 @@ elif module == "Make Strategy Testable":
                     update_task_bar(
                         compiler_bar,
                         compiler_monitor,
-                        0.90,
-                        "AI suggestions received · preparing results",
+                        0.80,
+                        "AI suggestions received · queuing research hypotheses automatically",
+                    )
+
+                    # No manual assumption picking. High-confidence suggestions
+                    # become research-only seeds plus nearby optimizer candidates.
+                    # Explicit source rules are never overwritten.
+                    prepared_strategy = apply_compiler_suggestions(
+                        compiler_strategy,
+                        compiled,
+                        minimum_confidence=65.0,
+                    )
+                    data = load_library()
+                    for item in data.get("strategies") or []:
+                        if str(item.get("id") or "") != str(compiler_strategy.get("id") or ""):
+                            continue
+                        for field in (
+                            "research_rule_overrides",
+                            "ai_candidate_rule_options",
+                            "compiler_assumptions",
+                            "autopilot_preparation",
+                            "research_readiness",
+                            "validation_status",
+                            "optimization_status",
+                        ):
+                            if field in prepared_strategy:
+                                item[field] = prepared_strategy[field]
+                        item.pop("validated_rules", None)
+                        item.pop("validated_backtest_settings", None)
+                        item.pop("validated_at", None)
+                        break
+                    intelligence_store().save(data)
+
+                    update_task_bar(
+                        compiler_bar,
+                        compiler_monitor,
+                        0.95,
+                        "AI assumptions queued for optimizer, walk-forward, and holdout testing",
                     )
                     st.session_state["til_rule_compiler_result"] = {
                         "strategy_id": compiler_strategy.get("id"),
                         "result": compiled,
+                        "auto_queued": True,
                     }
                     status.update(label="Measurable test suggestions ready", state="complete", expanded=False)
                     complete_task_bar(
@@ -2133,84 +2174,76 @@ elif module == "Make Strategy Testable":
             if suggestions:
                 st.markdown("### AI suggestions for historical testing")
                 st.caption(
-                    "These suggestions turn vague source language into something the backtester can measure. "
-                    "Any numeric value the author did not explicitly provide remains labeled as an AI research assumption."
+                    "This is now an audit screen. You do not need to choose assumptions manually. "
+                    "High-confidence AI interpretations are automatically queued as research-only hypotheses; "
+                    "the optimizer tests the proposed value and nearby alternatives, then walk-forward/holdout "
+                    "validation decides whether the rule survives."
+                )
+
+                # Recompute the same deterministic queue preview so older
+                # in-session compiler results also display the automatic action.
+                prepared_preview = apply_compiler_suggestions(
+                    compiler_strategy,
+                    compiled,
+                    minimum_confidence=65.0,
+                )
+                ai_options = prepared_preview.get("ai_candidate_rule_options") or {}
+                explicit_rules = normalize_machine_rules(
+                    compiler_strategy.get("machine_rules")
                 )
                 suggestion_rows = []
-                labels = {}
+                auto_queued_count = 0
                 for number, suggestion in enumerate(suggestions, start=1):
-                    label = (
-                        f"{number}. "
-                        f"{friendly_rule_text(str(suggestion.get('target_rule') or ''), suggestion.get('parsed_value')).replace('**', '')} "
-                        f"· {safe_float(suggestion.get('confidence'), 0.0):.0f}% confidence"
-                    )
-                    labels[label] = suggestion
+                    target = str(suggestion.get("target_rule") or "")
+                    confidence = safe_float(suggestion.get("confidence"), 0.0) or 0.0
+                    source_protected = explicit_rules.get(target) is not None
+                    test_values = list(ai_options.get(target) or [])
+                    if source_protected:
+                        action = "Protected source rule"
+                        status_text = "AI cannot replace it"
+                    elif confidence < 65.0:
+                        action = "Skipped"
+                        status_text = "Low confidence"
+                    elif test_values:
+                        action = "Auto-test"
+                        status_text = "Optimizer → walk-forward → holdout"
+                        auto_queued_count += 1
+                    else:
+                        action = "Skipped"
+                        status_text = "Could not normalize safely"
+
                     suggestion_rows.append(
                         {
                             "#": number,
                             "What the source says": suggestion.get("source_requirement"),
-                            "How AI proposes to test it": friendly_rule_text(
-                                str(suggestion.get("target_rule") or ""),
+                            "AI research seed": friendly_rule_text(
+                                target,
                                 suggestion.get("parsed_value"),
                             ).replace("**", ""),
-                            "AI-added assumption": "Yes" if bool(suggestion.get("is_research_assumption")) else "No",
-                            "Confidence": safe_float(suggestion.get("confidence"), 0.0),
+                            "Values queued to test": " · ".join(
+                                str(value) for value in test_values
+                            ) if test_values else "—",
+                            "Action": action,
+                            "Confidence": confidence,
+                            "Validation path": status_text,
                             "Why": suggestion.get("rationale"),
                         }
                     )
-                st.dataframe(pd.DataFrame(suggestion_rows), use_container_width=True, hide_index=True)
-                chosen_labels = st.multiselect(
-                    "Choose AI test assumptions to use",
-                    list(labels),
-                    default=[],
-                    help=(
-                        "These are only used for research/backtesting. They stay separate from rules "
-                        "the source author actually specified."
-                    ),
-                )
-                save_compiler = st.button(
-                    "💾 Use selected assumptions for research",
+
+                st.dataframe(
+                    pd.DataFrame(suggestion_rows),
                     use_container_width=True,
-                    disabled=not chosen_labels,
+                    hide_index=True,
                 )
-                if save_compiler:
-                    data = load_library()
-                    for item in data.get("strategies") or []:
-                        if str(item.get("id") or "") != str(compiler_strategy.get("id") or ""):
-                            continue
-                        overrides = dict(item.get("research_rule_overrides") or {})
-                        assumption_log = list(item.get("compiler_assumptions") or [])
-                        for label in chosen_labels:
-                            suggestion = labels[label]
-                            target = str(suggestion.get("target_rule") or "")
-                            if normalize_machine_rules(item.get("machine_rules")).get(target) is not None:
-                                continue
-                            overrides[target] = suggestion.get("parsed_value")
-                            assumption_log.append(
-                                {
-                                    "target_rule": target,
-                                    "value": suggestion.get("parsed_value"),
-                                    "source_requirement": suggestion.get("source_requirement"),
-                                    "rationale": suggestion.get("rationale"),
-                                    "confidence": suggestion.get("confidence"),
-                                    "accepted_at": compiled.get("generated_at"),
-                                    "model": compiled.get("model"),
-                                }
-                            )
-                        item["research_rule_overrides"] = overrides
-                        item["compiler_assumptions"] = assumption_log[-100:]
-                        item["validation_status"] = "unvalidated"
-                        item.pop("validated_rules", None)
-                        item.pop("validated_backtest_settings", None)
-                        item.pop("validated_at", None)
-                        break
-                    intelligence_store().save(data)
+                if auto_queued_count:
                     st.success(
-                        "AI test assumptions saved. The strategy now has more measurable rules for research. "
-                        "Any earlier validation was cleared because the executable test rules changed."
+                        f"{auto_queued_count} AI assumption rule(s) are automatically queued for historical testing. "
+                        "No manual selection is required."
                     )
-                    st.session_state.pop("til_rule_compiler_result", None)
-                    st.rerun()
+                else:
+                    st.info(
+                        "No new AI assumptions met the automatic research gate. Source-authored rules remain unchanged."
+                    )
             else:
                 st.info(
                     "AI could not turn the remaining subjective language into a reliable measurable rule with the data the Lab currently supports."
@@ -2229,13 +2262,20 @@ elif module == "Make Strategy Testable":
             for item in data.get("strategies") or []:
                 if str(item.get("id") or "") == str(compiler_strategy.get("id") or ""):
                     item["research_rule_overrides"] = {}
+                    item["ai_candidate_rule_options"] = {}
+                    item["compiler_assumptions"] = []
+                    item["autopilot_preparation"] = {}
                     item["validation_status"] = "unvalidated"
+                    item["optimization_status"] = "not_run"
                     item.pop("validated_rules", None)
                     item.pop("validated_backtest_settings", None)
                     item.pop("validated_at", None)
                     break
             intelligence_store().save(data)
-            st.success("AI test assumptions removed. Rules that came directly from the source were left unchanged.")
+            st.success(
+                "AI test assumptions and their queued optimizer candidates were removed. "
+                "Rules that came directly from the source were left unchanged."
+            )
             st.rerun()
 
 
