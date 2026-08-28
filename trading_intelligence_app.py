@@ -80,6 +80,7 @@ from trading_auto_research import (
 from trading_research_orchestrator import (
     DEFAULT_GEMINI_BULK_RESEARCH_MODEL,
     DEFAULT_GEMINI_SPECIALIST_MODEL,
+    dispatch_github_workflow,
     enqueue_research_job,
     research_queue_status,
     seed_continuous_research_cycle,
@@ -1597,11 +1598,33 @@ if module == "Stock Strategy Finder":
 
         if queued_job:
             intelligence_store().save(queued_library)
-            st.success(
-                f"{finder_symbol} {finder_profile.name} research is queued for distributed cloud execution. "
-                "You can close your Mac or browser; the shards will run independently and the final result "
-                "will be saved back into the Finder when complete."
+            actions_token = setting(
+                "GITHUB_ACTIONS_TOKEN",
+                setting("GITHUB_BACKUP_TOKEN"),
             )
+            actions_repository = setting(
+                "GITHUB_ACTIONS_REPOSITORY",
+                "derektshaffer/youtube-trading-strategy-lab-public",
+            )
+            actions_ref = setting("GITHUB_ACTIONS_REF", "main")
+            launch_ok, launch_detail = dispatch_github_workflow(
+                actions_repository,
+                actions_token,
+                workflow="distributed-stock-finder.yml",
+                ref=actions_ref,
+                inputs={"job_id": str(queued_job.get("id") or "")},
+            )
+            if launch_ok:
+                st.success(
+                    f"{finder_symbol} {finder_profile.name} was queued **and the cloud worker was launched immediately**. "
+                    "You can close your Mac or browser; the shards will run independently and the final result "
+                    "will be saved back into the Finder when complete."
+                )
+            else:
+                st.warning(
+                    f"{finder_symbol} {finder_profile.name} is safely queued, but instant launch was not available. "
+                    f"{launch_detail} The automatic scheduled worker remains active as a fallback."
+                )
             st.rerun()
         else:
             st.info("That cloud Finder job is already queued or running.")
