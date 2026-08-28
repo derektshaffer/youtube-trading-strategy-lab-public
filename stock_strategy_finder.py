@@ -383,6 +383,7 @@ def complete_stock_strategy_finder_from_optimization(
     total_started: float | None = None,
     optimization_seconds: float | None = None,
     parallel_workers: int = 1,
+    strategies_considered_count: int | None = None,
 ) -> dict[str, Any]:
     stage_timings: dict[str, float] = {}
     if optimization_seconds is not None:
@@ -495,7 +496,11 @@ def complete_stock_strategy_finder_from_optimization(
                 "not largest optimized P/L"
             ),
         },
-        "strategies_considered": len(all_strategies),
+        "strategies_considered": (
+            int(strategies_considered_count)
+            if strategies_considered_count is not None
+            else len(all_strategies)
+        ),
         "strategies_tested": len(selected),
         "technical_skips": skipped,
         "estimated_work": estimate_search_work(profile, len(selected)),
