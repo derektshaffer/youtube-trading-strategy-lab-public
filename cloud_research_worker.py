@@ -219,12 +219,21 @@ def execute_job(
                     flush=True,
                 )
 
+        parallel_workers = max(
+            1,
+            min(8, int(env("RESEARCH_PARALLEL_WORKERS", "2") or 2)),
+        )
+        print(
+            f"[stock-finder] using {parallel_workers} CPU worker(s) across independent strategy families",
+            flush=True,
+        )
         report = run_stock_strategy_finder(
             rows,
             selected,
             symbol,
             profile_name=profile.name,
             progress=finder_progress,
+            parallel_workers=parallel_workers,
         )
         latest = store.load_latest()
         latest = merge_finder_report_into_library(latest, report)
