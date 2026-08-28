@@ -313,6 +313,17 @@ class EffectiveStrategyTests(unittest.TestCase):
         self.assertNotIn("min_relative_volume", prepared["research_rule_overrides"])
         self.assertEqual(prepared["research_rule_overrides"]["max_vwap_distance_pct"], 3.0)
         self.assertEqual(prepared["compiler_assumptions"][-1]["accepted_by"], "ai_autopilot")
+        self.assertNotIn("min_relative_volume", prepared.get("ai_candidate_rule_options") or {})
+        self.assertIn("max_vwap_distance_pct", prepared["ai_candidate_rule_options"])
+        self.assertIn(3.0, prepared["ai_candidate_rule_options"]["max_vwap_distance_pct"])
+        self.assertGreater(
+            len(prepared["ai_candidate_rule_options"]["max_vwap_distance_pct"]),
+            1,
+        )
+        self.assertEqual(
+            prepared["compiler_assumptions"][-1]["test_policy"],
+            "optimizer_then_walk_forward_holdout",
+        )
 
     def test_ai_autopilot_skips_low_confidence_proxy(self):
         strategy = {"source_type": "book_or_document", "machine_rules": {}}
@@ -330,6 +341,7 @@ class EffectiveStrategyTests(unittest.TestCase):
         }
         prepared = apply_compiler_suggestions(strategy, compiled, minimum_confidence=65)
         self.assertFalse(prepared.get("research_rule_overrides"))
+        self.assertFalse(prepared.get("ai_candidate_rule_options"))
         self.assertEqual(prepared["autopilot_preparation"]["skipped_low_confidence"], 1)
 
     def test_research_readiness_requires_objective_entry_rule(self):
