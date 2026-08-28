@@ -33,7 +33,7 @@ jobs:
       GITHUB_BACKUP_REPOSITORY: ${{ secrets.TRADING_LAB_BACKUP_REPOSITORY }}
       GITHUB_BACKUP_TOKEN: ${{ secrets.TRADING_LAB_BACKUP_TOKEN }}
       GITHUB_BACKUP_BRANCH: ${{ vars.GITHUB_BACKUP_BRANCH }}
-      GITHUB_BACKUP_PATH: ${{ vars.GITHUB_BACKUP_PATH || 'youtube-strategy-lab/strategy_library.json' }}
+      GITHUB_BACKUP_PATH: ${{ vars.TRADING_INTELLIGENCE_BACKUP_PATH || 'trading-intelligence-lab/intelligence_library.json' }}
       ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
       ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
       ALPACA_LIVE_FEED: ${{ vars.ALPACA_LIVE_FEED || 'iex' }}
@@ -97,6 +97,7 @@ jobs:
       GITHUB_BACKUP_REPOSITORY: ${{ secrets.TRADING_LAB_BACKUP_REPOSITORY }}
       GITHUB_BACKUP_TOKEN: ${{ secrets.TRADING_LAB_BACKUP_TOKEN }}
       GITHUB_BACKUP_BRANCH: ${{ vars.GITHUB_BACKUP_BRANCH }}
+      GITHUB_BACKUP_PATH: ${{ vars.TRADING_INTELLIGENCE_BACKUP_PATH || 'trading-intelligence-lab/intelligence_library.json' }}
       DISTRIBUTED_FINDER_LOCAL_WORKERS: ${{ vars.DISTRIBUTED_FINDER_LOCAL_WORKERS || '2' }}
 
     steps:
@@ -124,7 +125,7 @@ jobs:
       GITHUB_BACKUP_REPOSITORY: ${{ secrets.TRADING_LAB_BACKUP_REPOSITORY }}
       GITHUB_BACKUP_TOKEN: ${{ secrets.TRADING_LAB_BACKUP_TOKEN }}
       GITHUB_BACKUP_BRANCH: ${{ vars.GITHUB_BACKUP_BRANCH }}
-      GITHUB_BACKUP_PATH: ${{ vars.GITHUB_BACKUP_PATH || 'youtube-strategy-lab/strategy_library.json' }}
+      GITHUB_BACKUP_PATH: ${{ vars.TRADING_INTELLIGENCE_BACKUP_PATH || 'trading-intelligence-lab/intelligence_library.json' }}
 
     steps:
       - uses: actions/checkout@v4

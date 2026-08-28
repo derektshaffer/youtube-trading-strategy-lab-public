@@ -85,6 +85,16 @@ from trading_research_orchestrator import (
     research_queue_status,
     seed_continuous_research_cycle,
 )
+from trading_system_health import (
+    CLOUD_SMOKE_WORKFLOW,
+    cloud_job_display_state,
+    configuration_checks,
+    latest_workflow_run,
+    overall_system_state,
+    probe_github_workflow,
+    subsystem_ready,
+    workflow_run_display_state,
+)
 from trading_strategy_dna import (
     DNA_DIMENSIONS,
     DNA_LABELS,
@@ -801,6 +811,7 @@ WORKSPACE_SECTIONS = [
     "Catalyst Intelligence",
     "Stock Analyzer",
     "Live / Paper",
+    "System Health",
 ]
 
 WORKSPACE_DISPLAY_LABELS = {
@@ -818,6 +829,7 @@ WORKSPACE_DISPLAY_LABELS = {
     "Catalyst Intelligence": "11. Catalyst Intelligence",
     "Stock Analyzer": "12. Stock Analyzer",
     "Live / Paper": "13. Paper & Live Trading",
+    "System Health": "14. System Health",
 }
 WORKSPACE_DISPLAY_TO_INTERNAL = {
     label: internal
@@ -909,6 +921,12 @@ WORKSPACE_PAGE_META = {
         "title": "Paper & Live Trading",
         "subtitle": "Deploy validated rules into paper or live workflows while keeping research and execution clearly separated.",
     },
+    "System Health": {
+        "step": "14",
+        "group": "Operations",
+        "title": "System Health",
+        "subtitle": "Verify storage, market data, AI, GitHub Actions, and cloud workers before trusting a long-running research job.",
+    },
 }
 
 WORKSPACE_NAV_GROUPS = [
@@ -923,6 +941,7 @@ WORKSPACE_NAV_GROUPS = [
         ["Universe Research", "Market Discovery", "Catalyst Intelligence", "Stock Analyzer"],
     ),
     ("EXECUTION", ["Live / Paper"]),
+    ("OPERATIONS", ["System Health"]),
 ]
 
 WORKSPACE_NAV_ICONS = {
@@ -940,6 +959,7 @@ WORKSPACE_NAV_ICONS = {
     "Catalyst Intelligence": "ϟ",
     "Stock Analyzer": "⌕",
     "Live / Paper": "↗",
+    "System Health": "⚙",
 }
 
 
@@ -1012,6 +1032,32 @@ if module not in WORKSPACE_SECTIONS:
     module = "Overview"
     st.session_state["til_workspace_section"] = module
 
+system_config_checks = configuration_checks(
+    setting,
+    backup_repository=resolved_backup_repository(),
+)
+system_config_summary = overall_system_state(system_config_checks)
+stock_cloud_ready, stock_cloud_blockers = subsystem_ready(
+    system_config_checks,
+    "stock_finder",
+)
+actions_token_setting = setting("GITHUB_ACTIONS_TOKEN")
+actions_repository_setting = setting(
+    "GITHUB_ACTIONS_REPOSITORY",
+    "derektshaffer/youtube-trading-strategy-lab-public",
+)
+actions_ref_setting = setting("GITHUB_ACTIONS_REF", "main")
+system_status_word = str(system_config_summary.get("state") or "DEGRADED")
+persistence_snapshot = intelligence_store().persistence_status(verify=False)
+known_persistence_error = str(persistence_snapshot.get("last_error") or "").strip()
+if known_persistence_error:
+    system_status_word = "DEGRADED"
+    stock_cloud_ready = False
+    stock_cloud_blockers = [
+        *stock_cloud_blockers,
+        "Private durable storage has a recorded error: " + known_persistence_error,
+    ]
+
 with st.sidebar:
     st.markdown(
         """
@@ -1079,16 +1125,17 @@ with st.sidebar:
                 st.session_state["til_workspace_section"] = section
                 st.rerun()
 
+    system_status_color = "#47dda0" if system_status_word == "READY" else "#f3bd58"
     st.markdown(
-        """
+        f"""
         <div class="til-side-status">
           <div class="til-side-status-row">
             <div>
               <div class="til-side-status-label">RESEARCH SYSTEM</div>
-              <div class="til-side-status-value"><span class="til-live-dot"></span> READY</div>
+              <div class="til-side-status-value"><span class="til-live-dot" style="background:{system_status_color};"></span> {html.escape(system_status_word)}</div>
             </div>
             <svg class="til-mini-spark" viewBox="0 0 90 28" aria-hidden="true">
-              <polyline points="1,22 15,18 28,21 40,12 53,16 67,8 89,11" fill="none" stroke="#47dda0" stroke-width="2"/>
+              <polyline points="1,22 15,18 28,21 40,12 53,16 67,8 89,11" fill="none" stroke="{system_status_color}" stroke-width="2"/>
               <polyline points="1,26 15,24 28,25 40,19 53,21 67,15 89,16" fill="none" stroke="#4bcfff" stroke-opacity=".35" stroke-width="1"/>
             </svg>
           </div>
@@ -1116,9 +1163,10 @@ managed_strategies = canonical_strategies or source_strategies
 
 top_gap, top_search, top_actions = st.columns([2.55, 1.35, .72], vertical_alignment="center")
 with top_gap:
+    top_status_label = "ONLINE" if system_status_word == "READY" else "DEGRADED"
     st.markdown(
         '<div class="til-top-status"><span class="til-top-status-dot"></span>'
-        'AI RESEARCH SYSTEM <strong>ONLINE</strong></div>',
+        f'AI RESEARCH SYSTEM <strong>{html.escape(top_status_label)}</strong></div>',
         unsafe_allow_html=True,
     )
 with top_search:
@@ -1250,11 +1298,48 @@ if module == "Stock Strategy Finder":
             reverse=True,
         )
         st.markdown("### Active cloud research")
+        actions_configured = bool(actions_token_setting)
+
         for index, job in enumerate(active_jobs[:4]):
             payload = dict(job.get("payload") or {})
             symbol = str(payload.get("symbol") or "Stock").strip().upper()
             profile_name = str(payload.get("profile") or "Research").strip()
-            status = str(job.get("status") or "queued").replace("_", " ").upper()
+            durable_status = str(job.get("status") or "queued").replace("_", " ").upper()
+            job_id = str(job.get("id") or "")
+            is_waiting_for_worker = (
+                durable_status == "QUEUED"
+                and not payload.get("distributed_run_id")
+            )
+            auto_attempt_key = f"til_auto_cloud_launch_attempted_{job_id}"
+            auto_result_key = f"til_auto_cloud_launch_result_{job_id}"
+
+            if (
+                is_waiting_for_worker
+                and job_id
+                and actions_configured
+                and not st.session_state.get(auto_attempt_key)
+            ):
+                st.session_state[auto_attempt_key] = True
+                auto_ok, auto_detail = dispatch_github_workflow(
+                    actions_repository_setting,
+                    actions_token_setting,
+                    workflow="distributed-stock-finder.yml",
+                    ref=actions_ref_setting,
+                    inputs={"job_id": job_id},
+                )
+                st.session_state[auto_result_key] = {
+                    "ok": bool(auto_ok),
+                    "detail": str(auto_detail),
+                }
+
+            auto_result = st.session_state.get(auto_result_key) or {}
+            operational = cloud_job_display_state(
+                job,
+                actions_configured=actions_configured,
+                launch_result=auto_result,
+            )
+            operational_state = str(operational.get("state") or durable_status)
+            operational_detail = str(operational.get("detail") or "")
             total_shards = int(payload.get("distributed_shards_total") or 0)
             completed_shards = len(
                 {
@@ -1263,13 +1348,9 @@ if module == "Stock Strategy Finder":
                     if str(value).lstrip("-").isdigit()
                 }
             )
-            stage = str(payload.get("distributed_stage") or "queued").replace("_", " ").title()
+            stage = str(payload.get("distributed_stage") or operational_state).replace("_", " ").title()
             message = str(payload.get("distributed_message") or "").strip()
             progress_value = safe_float(payload.get("distributed_progress"), None)
-            is_waiting_for_worker = (
-                status == "QUEUED"
-                and not payload.get("distributed_run_id")
-            )
             if progress_value is None:
                 if is_waiting_for_worker:
                     progress_value = 0.0
@@ -1283,41 +1364,50 @@ if module == "Stock Strategy Finder":
                 if total_shards > 0
                 else ""
             )
+
+            if operational_state in {"RUNNING", "STARTING"}:
+                close_note = "SAFE TO CLOSE YOUR COMPUTER"
+            elif operational_state == "STALLED":
+                close_note = "ACTION REQUIRED"
+            else:
+                close_note = "CLOUD QUEUE SAVED"
+
             st.markdown(
                 (
                     '<div class="til-finder-notice til-finder-cloud-note">'
                     f'<div class="til-finder-notice-title">☁ {html.escape(symbol)} · {html.escape(profile_name)} '
-                    f'· CLOUD {html.escape(status)} · SAFE TO CLOSE YOUR COMPUTER</div>'
+                    f'· CLOUD {html.escape(operational_state)} · {html.escape(close_note)}</div>'
                     '<div class="til-finder-notice-body">'
                     'This cloud run is independent of the stock/search-depth controls below. '
-                    'Changing those controls or leaving this page does not stop it.'
+                    'Changing those controls or leaving this page does not delete the saved job.'
                     f'{html.escape(shard_text)}'
                     '</div></div>'
                 ),
                 unsafe_allow_html=True,
             )
+
             if is_waiting_for_worker:
-                progress_title = f"{symbol} {profile_name} · WAITING FOR CLOUD WORKER"
-                progress_detail = (
-                    "Queued successfully. No compute shard has started yet; the distributed worker "
-                    "will claim this job automatically."
-                )
+                progress_title = f"{symbol} {profile_name} · {operational_state}"
+                progress_detail = operational_detail
                 bar_html = '<div class="til-cloud-progress-queued"></div>'
+                progress_right = operational_state
             else:
                 progress_title = (
                     f"{symbol} {profile_name} · {progress_value * 100:.0f}% · {stage}{shard_text}"
                 )
-                progress_detail = message or "Cloud compute is active."
+                progress_detail = message or operational_detail or "Cloud compute is active."
                 bar_html = (
                     f'<div class="til-cloud-progress-fill" '
                     f'style="width:{progress_value * 100:.2f}%"></div>'
                 )
+                progress_right = f"{progress_value * 100:.0f}%"
+
             st.markdown(
                 (
                     '<div class="til-cloud-progress-wrap">'
                     '<div class="til-cloud-progress-meta">'
                     f'<span>{html.escape(progress_title)}</span>'
-                    f'<span>{"QUEUED" if is_waiting_for_worker else f"{progress_value * 100:.0f}%"}</span>'
+                    f'<span>{html.escape(progress_right)}</span>'
                     '</div>'
                     '<div class="til-cloud-progress-track">'
                     f'{bar_html}'
@@ -1328,72 +1418,34 @@ if module == "Stock Strategy Finder":
                 unsafe_allow_html=True,
             )
 
+            if operational_state == "STALLED":
+                st.error(operational_detail)
+            elif is_waiting_for_worker and auto_result and not auto_result.get("ok"):
+                st.warning(operational_detail)
+            elif is_waiting_for_worker and not actions_configured:
+                st.warning(
+                    "Immediate cloud launch is not configured. Open **14. System Health** before relying on this queued job."
+                )
+            elif is_waiting_for_worker and auto_result.get("ok"):
+                st.info(operational_detail)
+
             if is_waiting_for_worker:
-                job_id = str(job.get("id") or "")
-                auto_attempt_key = f"til_auto_cloud_launch_attempted_{job_id}"
-                auto_result_key = f"til_auto_cloud_launch_result_{job_id}"
-
-                # Existing queued jobs should not require the user to press a
-                # second button. Try one immediate dispatch automatically when
-                # this page sees the waiting job. If GitHub rejects it, keep the
-                # job queued and show the exact permission/setup issue.
-                if job_id and not st.session_state.get(auto_attempt_key):
-                    st.session_state[auto_attempt_key] = True
-                    actions_token = setting(
-                        "GITHUB_ACTIONS_TOKEN",
-                        setting("GITHUB_BACKUP_TOKEN"),
-                    )
-                    actions_repository = setting(
-                        "GITHUB_ACTIONS_REPOSITORY",
-                        "derektshaffer/youtube-trading-strategy-lab-public",
-                    )
-                    actions_ref = setting("GITHUB_ACTIONS_REF", "main")
-                    auto_ok, auto_detail = dispatch_github_workflow(
-                        actions_repository,
-                        actions_token,
-                        workflow="distributed-stock-finder.yml",
-                        ref=actions_ref,
-                        inputs={"job_id": job_id},
-                    )
-                    st.session_state[auto_result_key] = {
-                        "ok": bool(auto_ok),
-                        "detail": str(auto_detail),
-                    }
-
-                auto_result = st.session_state.get(auto_result_key) or {}
-                if auto_result:
-                    if auto_result.get("ok"):
-                        st.info(
-                            "Immediate cloud launch was requested automatically. "
-                            "GitHub should claim this queued job shortly."
-                        )
-                    else:
-                        st.warning(str(auto_result.get("detail") or ""))
-
                 launch_key = f"til_launch_cloud_now_{job_id}"
                 if st.button(
                     "☁ Retry cloud launch now",
                     key=launch_key,
                     use_container_width=True,
+                    disabled=not actions_configured,
                     help=(
                         "Retries the immediate GitHub Actions launch for this exact queued job. "
-                        "Use this after fixing token permissions or if GitHub had a transient error."
+                        "System Health must show the Actions launcher as configured."
                     ),
                 ):
-                    actions_token = setting(
-                        "GITHUB_ACTIONS_TOKEN",
-                        setting("GITHUB_BACKUP_TOKEN"),
-                    )
-                    actions_repository = setting(
-                        "GITHUB_ACTIONS_REPOSITORY",
-                        "derektshaffer/youtube-trading-strategy-lab-public",
-                    )
-                    actions_ref = setting("GITHUB_ACTIONS_REF", "main")
                     launch_ok, launch_detail = dispatch_github_workflow(
-                        actions_repository,
-                        actions_token,
+                        actions_repository_setting,
+                        actions_token_setting,
                         workflow="distributed-stock-finder.yml",
-                        ref=actions_ref,
+                        ref=actions_ref_setting,
                         inputs={"job_id": job_id},
                     )
                     st.session_state[auto_result_key] = {
@@ -1402,10 +1454,11 @@ if module == "Stock Strategy Finder":
                     }
                     if launch_ok:
                         st.success(
-                            "Immediate cloud launch requested. GitHub should move this job from QUEUED to RUNNING shortly."
+                            "Immediate cloud launch requested. The status monitor will confirm when a worker actually claims the job."
                         )
                     else:
                         st.warning(launch_detail)
+
             if index < min(3, len(active_jobs) - 1):
                 st.caption("")
 
@@ -1616,6 +1669,17 @@ if module == "Stock Strategy Finder":
             unsafe_allow_html=True,
         )
 
+    if stock_cloud_ready:
+        st.success(
+            "Cloud configuration preflight: **READY**. System Health can run a live end-to-end smoke test before a long job."
+        )
+    else:
+        st.warning(
+            "Cloud configuration preflight: **NOT READY**. "
+            + " ".join(stock_cloud_blockers)
+            + " Open **14. System Health** to verify the complete worker path."
+        )
+
     cloud_col, local_col = st.columns([1.0, 1.35])
     with cloud_col:
         queue_cloud_finder = st.button(
@@ -1625,6 +1689,7 @@ if module == "Stock Strategy Finder":
                 not bool(finder_symbol)
                 or not bool(finder_candidates)
                 or active_cloud_finder is not None
+                or not stock_cloud_ready
             ),
             key="til_queue_stock_strategy_finder_cloud",
             help=(
@@ -1677,10 +1742,7 @@ if module == "Stock Strategy Finder":
 
         if queued_job:
             intelligence_store().save(queued_library)
-            actions_token = setting(
-                "GITHUB_ACTIONS_TOKEN",
-                setting("GITHUB_BACKUP_TOKEN"),
-            )
+            actions_token = setting("GITHUB_ACTIONS_TOKEN")
             actions_repository = setting(
                 "GITHUB_ACTIONS_REPOSITORY",
                 "derektshaffer/youtube-trading-strategy-lab-public",
@@ -1702,7 +1764,8 @@ if module == "Stock Strategy Finder":
             else:
                 st.warning(
                     f"{finder_symbol} {finder_profile.name} is safely queued, but instant launch was not available. "
-                    f"{launch_detail} The automatic scheduled worker remains active as a fallback."
+                    f"{launch_detail} The scheduled worker is only a fallback; do not assume compute started "
+                    "until this job changes to STARTING/RUNNING or System Health confirms the worker path."
                 )
             st.rerun()
         else:
@@ -2188,6 +2251,181 @@ elif module == "Overview":
         "The normal workflow is AI-managed: upload books/videos, keep every extracted idea for provenance, "
         "automatically consolidate similar ideas into strategy families, let historical research optimize the "
         "rule variations, and surface only the families that need your attention or survive validation."
+    )
+
+
+elif module == "System Health":
+    st.caption(
+        "This page separates **configured** from **proven working**. A saved queue entry is not treated as proof that compute started."
+    )
+
+    summary_cols = st.columns(4)
+    summary_cols[0].metric(
+        "Configuration",
+        system_status_word,
+        f"{int(system_config_summary.get('ready') or 0)}/{int(system_config_summary.get('total') or 0)} required checks ready",
+        delta_color="off",
+    )
+    summary_cols[1].metric(
+        "Cloud launcher",
+        "CONFIGURED" if actions_token_setting else "MISSING",
+        "dedicated Actions token" if actions_token_setting else "GITHUB_ACTIONS_TOKEN",
+        delta_color="off",
+    )
+    research_system = dict(library.get("research_system") or {})
+    summary_cols[2].metric(
+        "Worker heartbeat",
+        "SEEN" if research_system.get("last_worker_at") else "NOT SEEN",
+        str(research_system.get("last_worker_at") or "No completed worker heartbeat saved"),
+        delta_color="off",
+    )
+    active_health_jobs = [
+        item
+        for item in library.get("research_queue") or []
+        if isinstance(item, dict)
+        and str(item.get("status") or "") in {"queued", "running", "retry"}
+    ]
+    summary_cols[3].metric(
+        "Active research jobs",
+        len(active_health_jobs),
+        "queued / running / retry",
+        delta_color="off",
+    )
+
+    st.markdown("### Configuration checks")
+    for check in system_config_checks:
+        status = str(check.get("status") or "blocked").upper()
+        detail = str(check.get("detail") or "")
+        if status == "READY":
+            st.success(f"**{check.get('name')} · READY** — {detail}")
+        else:
+            st.error(f"**{check.get('name')} · {status}** — {detail}")
+
+    st.markdown("### Durable storage live probe")
+    with st.spinner("Verifying private backup reachability…"):
+        persistence_live = intelligence_store().persistence_status(verify=True)
+    persistence_error = str(
+        persistence_live.get("verification_error")
+        or persistence_live.get("last_error")
+        or ""
+    ).strip()
+    if (
+        persistence_live.get("verified")
+        and persistence_live.get("write_verified")
+        and not persistence_error
+    ):
+        st.success(
+            "**Private durable storage · HEALTHY** — The Trading Intelligence backup is reachable "
+            "and this app has a recorded successful cloud write."
+        )
+    elif persistence_live.get("verified") and not persistence_error:
+        st.warning(
+            "**Private durable storage · REACHABLE** — The backup can be read, but this app has not "
+            "yet recorded a successful write in the current deployment. The end-to-end smoke test below "
+            "will prove write access from the cloud worker."
+        )
+    else:
+        st.error(
+            "**Private durable storage · BLOCKED** — "
+            + (persistence_error or "The private backup could not be verified.")
+        )
+    st.caption(
+        "Destination: "
+        + str(persistence_live.get("repository") or "not configured")
+        + " · "
+        + str(persistence_live.get("path") or "no path")
+        + " · Last successful write: "
+        + str(persistence_live.get("last_write_at") or "not recorded")
+    )
+
+    st.markdown("### GitHub Actions live probe")
+    if actions_token_setting:
+        with st.spinner("Checking workflow access…"):
+            workflow_probe = probe_github_workflow(
+                actions_repository_setting,
+                actions_token_setting,
+                workflow="distributed-stock-finder.yml",
+            )
+        probe_state = str(workflow_probe.get("state") or "UNKNOWN")
+        probe_detail = str(workflow_probe.get("detail") or "")
+        if probe_state == "READY":
+            st.success(f"**Actions workflow · READY** — {probe_detail}")
+        elif probe_state == "BLOCKED":
+            st.error(f"**Actions workflow · BLOCKED** — {probe_detail}")
+        else:
+            st.warning(f"**Actions workflow · {probe_state}** — {probe_detail}")
+    else:
+        st.error(
+            "**Actions workflow · BLOCKED** — Add the Streamlit secret GITHUB_ACTIONS_TOKEN "
+            "before cloud launches can be tested."
+        )
+
+    st.markdown("### End-to-end cloud smoke test")
+    st.write(
+        "This launches a tiny GitHub Actions diagnostic. It verifies the runner can start, "
+        "read **and write** the private backup, authenticate to Alpaca, and authenticate to Gemini. "
+        "It does not place a trade or run a strategy search."
+    )
+    smoke_clicked = st.button(
+        "☁ Run end-to-end cloud smoke test",
+        type="primary",
+        use_container_width=True,
+        disabled=not bool(actions_token_setting),
+        key="til_run_cloud_smoke_test",
+    )
+    if smoke_clicked:
+        smoke_ok, smoke_detail = dispatch_github_workflow(
+            actions_repository_setting,
+            actions_token_setting,
+            workflow=CLOUD_SMOKE_WORKFLOW,
+            ref=actions_ref_setting,
+            inputs={"requested_from": "streamlit-system-health"},
+        )
+        if smoke_ok:
+            st.session_state["til_cloud_smoke_requested"] = True
+            st.success(
+                "Smoke test launch accepted. The live status below refreshes automatically; "
+                "do not treat it as passed until it explicitly says PASS."
+            )
+        else:
+            st.error(smoke_detail)
+
+    @st.fragment(run_every="15s")
+    def render_smoke_status() -> None:
+        if not actions_token_setting:
+            return
+        latest = latest_workflow_run(
+            actions_repository_setting,
+            actions_token_setting,
+            workflow=CLOUD_SMOKE_WORKFLOW,
+        )
+        display = workflow_run_display_state(latest)
+        state = str(display.get("state") or "UNKNOWN")
+        detail = str(display.get("detail") or "")
+        if state == "PASS":
+            st.success(f"**Latest smoke test · PASS** — {detail}")
+        elif state == "FAIL":
+            st.error(f"**Latest smoke test · FAIL** — {detail}")
+        elif state in {"RUNNING", "QUEUED"}:
+            st.info(f"**Latest smoke test · {state}** — {detail}")
+        else:
+            st.warning(f"**Latest smoke test · {state}** — {detail}")
+        if latest and latest.get("html_url"):
+            st.link_button(
+                "Open smoke-test run details",
+                str(latest.get("html_url")),
+                use_container_width=True,
+            )
+
+    render_smoke_status()
+
+    st.markdown("### Reliability rules now enforced")
+    st.write(
+        "• The app no longer displays a hard-coded READY/ONLINE status.\n"
+        "• Distributed Finder jobs older than 15 minutes without a worker claim are labeled STALLED.\n"
+        "• New distributed jobs are disabled when required cloud configuration is missing.\n"
+        "• The cloud worker and distributed Finder use the Trading Intelligence durable queue, not the legacy library path.\n"
+        "• The live smoke test proves the external worker path instead of assuming it works."
     )
 
 

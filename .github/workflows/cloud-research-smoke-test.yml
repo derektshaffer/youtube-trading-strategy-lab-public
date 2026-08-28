@@ -1,39 +1,37 @@
-name: Continuous Trading Research
+name: Cloud Research Smoke Test
+
+run-name: Cloud research smoke test · ${{ inputs.requested_from || 'manual' }}
 
 on:
-  schedule:
-    - cron: "17 * * * *"
   workflow_dispatch:
+    inputs:
+      requested_from:
+        description: "Where the smoke test was requested from"
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: continuous-trading-research
+  group: cloud-research-smoke-test
   cancel-in-progress: false
 
 jobs:
-  research-worker:
+  smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 330
+    timeout-minutes: 10
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      GEMINI_PAID_API_KEY: ${{ secrets.GEMINI_PAID_API_KEY }}
-      GEMINI_RESEARCH_BULK_MODEL: ${{ vars.GEMINI_RESEARCH_BULK_MODEL || 'gemini-3.7-flash' }}
-      GEMINI_RESEARCH_SPECIALIST_MODEL: ${{ vars.GEMINI_RESEARCH_SPECIALIST_MODEL || 'gemini-3.1-pro-preview' }}
       GITHUB_BACKUP_REPOSITORY: ${{ secrets.TRADING_LAB_BACKUP_REPOSITORY }}
       GITHUB_BACKUP_TOKEN: ${{ secrets.TRADING_LAB_BACKUP_TOKEN }}
       GITHUB_BACKUP_BRANCH: ${{ vars.GITHUB_BACKUP_BRANCH }}
       GITHUB_BACKUP_PATH: ${{ vars.TRADING_INTELLIGENCE_BACKUP_PATH || 'trading-intelligence-lab/intelligence_library.json' }}
+      TRADING_SYSTEM_HEALTH_BACKUP_PATH: ${{ vars.TRADING_SYSTEM_HEALTH_BACKUP_PATH || 'trading-intelligence-lab/system_health.json' }}
       ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
       ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
       ALPACA_LIVE_FEED: ${{ vars.ALPACA_LIVE_FEED || 'iex' }}
       ALPACA_HISTORICAL_FEED: ${{ vars.ALPACA_HISTORICAL_FEED || 'sip' }}
-      RESEARCH_JOBS_PER_RUN: ${{ vars.RESEARCH_JOBS_PER_RUN || '4' }}
-      RESEARCH_TOPICS_PER_CYCLE: ${{ vars.RESEARCH_TOPICS_PER_CYCLE || '10' }}
-      RESEARCH_VALIDATION_BATCH_SIZE: ${{ vars.RESEARCH_VALIDATION_BATCH_SIZE || '3' }}
-      RESEARCH_VALIDATION_UNIVERSE_SIZE: ${{ vars.RESEARCH_VALIDATION_UNIVERSE_SIZE || '250' }}
-      RESEARCH_PARALLEL_WORKERS: ${{ vars.RESEARCH_PARALLEL_WORKERS || '4' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -59,5 +57,5 @@ jobs:
             exit 1
           fi
 
-      - name: Run persistent autonomous research worker
-        run: python cloud_research_worker.py
+      - name: Run end-to-end cloud smoke test
+        run: python cloud_research_smoke_test.py
