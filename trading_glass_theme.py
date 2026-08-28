@@ -11,25 +11,28 @@ def inject_research_glass_theme() -> None:
         """
         <style>
         :root {
-            --til-bg-0: #050d18;
-            --til-bg-1: #071524;
-            --til-bg-2: #0a1b2d;
-            --til-panel: rgba(10, 24, 40, .80);
-            --til-panel-strong: rgba(12, 29, 48, .94);
-            --til-inner: rgba(17, 38, 61, .58);
-            --til-line: rgba(105, 151, 197, .22);
-            --til-line-strong: rgba(105, 174, 226, .38);
-            --til-text: #f4f8ff;
-            --til-muted: #91a9c5;
-            --til-green: #37ef79;
-            --til-green-soft: rgba(55, 239, 121, .13);
-            --til-green-line: rgba(55, 239, 121, .46);
-            --til-blue: #63cfff;
-            --til-purple: #b85cff;
-            --til-red: #ff5368;
-            --til-amber: #ffc95a;
-            --til-radius: 14px;
-            --til-shadow: 0 14px 40px rgba(0, 0, 0, .22);
+            --til-bg-0: #050c15;
+            --til-bg-1: #07111d;
+            --til-bg-2: #0a1726;
+            --til-panel: rgba(10, 23, 38, .74);
+            --til-panel-strong: rgba(11, 27, 45, .92);
+            --til-inner: rgba(18, 38, 60, .42);
+            --til-line: rgba(112, 151, 190, .14);
+            --til-line-soft: rgba(112, 151, 190, .09);
+            --til-line-strong: rgba(112, 165, 211, .27);
+            --til-text: #f2f6fb;
+            --til-text-soft: #d7e1eb;
+            --til-muted: #8ea2b9;
+            --til-muted-2: #6f839b;
+            --til-green: #43d17d;
+            --til-green-soft: rgba(67, 209, 125, .09);
+            --til-green-line: rgba(67, 209, 125, .32);
+            --til-blue: #6ebbe6;
+            --til-purple: #a887d8;
+            --til-red: #e96775;
+            --til-amber: #dcb667;
+            --til-radius: 13px;
+            --til-shadow: 0 16px 42px rgba(0, 0, 0, .18);
         }
 
         html,
@@ -37,40 +40,39 @@ def inject_research_glass_theme() -> None:
         [data-testid="stAppViewContainer"],
         .stApp {
             background:
-                radial-gradient(circle at 80% -8%, rgba(38, 120, 180, .13), transparent 34%),
-                radial-gradient(circle at 16% 10%, rgba(40, 235, 128, .055), transparent 30%),
-                linear-gradient(180deg, var(--til-bg-0) 0%, var(--til-bg-1) 48%, #06101d 100%) !important;
+                radial-gradient(circle at 88% -12%, rgba(68, 116, 157, .08), transparent 34%),
+                linear-gradient(180deg, var(--til-bg-0) 0%, var(--til-bg-1) 52%, #06101a 100%) !important;
             color: var(--til-text) !important;
         }
 
         [data-testid="stHeader"] {
-            background: rgba(5, 13, 24, .70) !important;
-            backdrop-filter: blur(16px) !important;
-            -webkit-backdrop-filter: blur(16px) !important;
+            background: rgba(5, 12, 21, .64) !important;
+            backdrop-filter: blur(18px) !important;
+            -webkit-backdrop-filter: blur(18px) !important;
+            border-bottom: 1px solid rgba(112,151,190,.055) !important;
         }
 
         .block-container {
-            max-width: 1640px !important;
+            max-width: 1580px !important;
             padding-top: 1.15rem !important;
-            padding-left: 1.2rem !important;
-            padding-right: 1.2rem !important;
-            padding-bottom: 2.2rem !important;
+            padding-left: 1.45rem !important;
+            padding-right: 1.45rem !important;
+            padding-bottom: 2.8rem !important;
         }
 
-        /* ---------- Main hero ---------- */
+        /* ---------- Product header ---------- */
         .til-hero {
             position: relative;
             overflow: hidden;
-            padding: 22px 25px !important;
-            margin-bottom: 18px !important;
-            border: 1px solid var(--til-line) !important;
-            border-radius: 16px !important;
+            padding: 20px 22px 19px !important;
+            margin: 2px 0 24px !important;
+            border: 1px solid rgba(112,151,190,.13) !important;
+            border-radius: 15px !important;
             background:
-                radial-gradient(circle at 92% 0%, rgba(55,239,121,.08), transparent 30%),
-                linear-gradient(145deg, rgba(12,29,48,.91), rgba(7,19,33,.82)) !important;
+                linear-gradient(135deg, rgba(11,27,45,.82), rgba(7,18,31,.62)) !important;
             box-shadow:
-                inset 0 1px 0 rgba(255,255,255,.04),
-                0 14px 38px rgba(0,0,0,.18) !important;
+                inset 0 1px 0 rgba(255,255,255,.025),
+                0 10px 30px rgba(0,0,0,.11) !important;
             backdrop-filter: blur(18px) !important;
             -webkit-backdrop-filter: blur(18px) !important;
         }
@@ -78,97 +80,170 @@ def inject_research_glass_theme() -> None:
             content: "";
             position: absolute;
             left: 0;
-            top: 18px;
-            bottom: 18px;
-            width: 3px;
+            top: 19px;
+            bottom: 19px;
+            width: 2px;
             border-radius: 999px;
-            background: var(--til-green);
-            box-shadow: 0 0 18px rgba(55,239,121,.38);
+            background: rgba(67,209,125,.78);
+        }
+        .til-kicker {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 7px;
+            color: #7f94ab;
+            font-size: .68rem;
+            line-height: 1;
+            font-weight: 850;
+            letter-spacing: .13em;
+            text-transform: uppercase;
+        }
+        .til-brand-mark {
+            width: 20px;
+            height: 20px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            color: #7ae1a3;
+            border: 1px solid rgba(67,209,125,.20);
+            background: rgba(67,209,125,.055);
+            font-size: 11px;
+            letter-spacing: 0;
         }
         .til-title {
-            color: #f5f9ff !important;
-            font-size: 31px !important;
-            font-weight: 900 !important;
+            color: #f5f8fc !important;
+            font-size: 30px !important;
+            line-height: 1.12 !important;
+            font-weight: 820 !important;
             letter-spacing: -.035em !important;
-            text-shadow: 0 1px 18px rgba(100,190,255,.05);
+            text-shadow: none !important;
         }
         .til-sub {
             color: var(--til-muted) !important;
-            line-height: 1.58 !important;
+            font-size: .96rem !important;
+            line-height: 1.62 !important;
             margin-top: 7px !important;
-            max-width: 1080px !important;
+            max-width: 1040px !important;
+        }
+
+        /* ---------- Page hierarchy ---------- */
+        h1, h2, h3, h4, h5, h6 {
+            color: var(--til-text) !important;
+            letter-spacing: -.025em !important;
+        }
+        h1 {
+            font-weight: 820 !important;
+        }
+        h2 {
+            margin-top: 1.9rem !important;
+            margin-bottom: .85rem !important;
+            padding-bottom: .52rem !important;
+            border-bottom: 1px solid rgba(112,151,190,.095) !important;
+            font-size: 1.68rem !important;
+            font-weight: 790 !important;
+        }
+        h3 {
+            margin-top: 1.35rem !important;
+            font-size: 1.18rem !important;
+            font-weight: 760 !important;
+        }
+        p, li {
+            color: var(--til-text-soft);
+            line-height: 1.58;
+        }
+        [data-testid="stCaptionContainer"],
+        small {
+            color: var(--til-muted) !important;
+            line-height: 1.48 !important;
+        }
+        a {
+            color: var(--til-blue) !important;
+        }
+        hr {
+            border-color: rgba(112,151,190,.095) !important;
+            margin-top: 1.25rem !important;
+            margin-bottom: 1.25rem !important;
         }
 
         /* ---------- Sidebar ---------- */
         [data-testid="stSidebar"] {
             background:
-                radial-gradient(circle at 20% 0%, rgba(55,239,121,.045), transparent 30%),
-                linear-gradient(180deg, rgba(6,17,30,.98), rgba(5,14,25,.98)) !important;
-            border-right: 1px solid rgba(105,151,197,.18) !important;
+                linear-gradient(180deg, rgba(6,16,28,.99), rgba(5,13,23,.99)) !important;
+            border-right: 1px solid rgba(112,151,190,.11) !important;
         }
         [data-testid="stSidebar"] > div:first-child {
             background: transparent !important;
         }
         [data-testid="stSidebar"] .block-container {
-            padding-top: 1.05rem !important;
+            padding-top: 1.10rem !important;
+            padding-left: .90rem !important;
+            padding-right: .78rem !important;
         }
         [data-testid="stSidebar"] h3 {
-            color: #f3f8ff !important;
-            font-size: 1.28rem !important;
-            font-weight: 900 !important;
-            letter-spacing: -.025em !important;
-            margin-bottom: .4rem !important;
+            color: #eff4fa !important;
+            font-size: 1.20rem !important;
+            font-weight: 790 !important;
+            letter-spacing: -.027em !important;
+            margin: 0 0 .62rem !important;
         }
 
         .st-key-til_workspace_section div[role="radiogroup"] {
-            gap: .18rem !important;
+            gap: .08rem !important;
         }
         .st-key-til_workspace_section div[role="radiogroup"] > label {
             position: relative !important;
             display: flex !important;
             align-items: center !important;
-            min-height: 2.35rem !important;
-            padding: .30rem .58rem !important;
+            min-height: 2.34rem !important;
+            padding: .36rem .55rem .36rem .76rem !important;
             margin: 0 !important;
             border: 1px solid transparent !important;
-            border-radius: 9px !important;
+            border-radius: 8px !important;
             background: transparent !important;
+            box-shadow: none !important;
             transition:
                 background .14s ease,
                 border-color .14s ease,
-                box-shadow .14s ease !important;
+                color .14s ease !important;
+        }
+        .st-key-til_workspace_section div[role="radiogroup"] > label::after {
+            content: "";
+            position: absolute;
+            left: -1px;
+            top: 8px;
+            bottom: 8px;
+            width: 2px;
+            border-radius: 999px;
+            background: transparent;
+            transition: background .14s ease;
         }
         .st-key-til_workspace_section div[role="radiogroup"] > label:hover {
-            background: rgba(17,38,61,.48) !important;
-            border-color: rgba(99,207,255,.18) !important;
+            background: rgba(18,38,60,.30) !important;
+            border-color: rgba(112,151,190,.075) !important;
         }
         .st-key-til_workspace_section div[role="radiogroup"] > label:has(input:checked) {
             background:
-                linear-gradient(145deg, rgba(29,119,67,.34), rgba(12,58,35,.27)) !important;
-            border-color: var(--til-green-line) !important;
-            box-shadow:
-                inset 0 1px 0 rgba(255,255,255,.045),
-                0 0 18px rgba(55,239,121,.08) !important;
+                linear-gradient(90deg, rgba(67,209,125,.085), rgba(18,38,60,.18)) !important;
+            border-color: rgba(67,209,125,.12) !important;
+            box-shadow: none !important;
+        }
+        .st-key-til_workspace_section div[role="radiogroup"] > label:has(input:checked)::after {
+            background: var(--til-green);
         }
         .st-key-til_workspace_section div[role="radiogroup"] > label p {
-            color: #b8c8da !important;
-            font-size: .96rem !important;
-            font-weight: 680 !important;
-            letter-spacing: -.015em !important;
-            line-height: 1.1 !important;
+            color: #aab9ca !important;
+            font-size: .91rem !important;
+            font-weight: 620 !important;
+            letter-spacing: -.012em !important;
+            line-height: 1.12 !important;
         }
         .st-key-til_workspace_section div[role="radiogroup"] > label:has(input:checked) p {
-            color: #f7fbff !important;
+            color: #f0f5fa !important;
+            font-weight: 710 !important;
         }
 
-        /* Hide native radio circles; selected glass row is the state indicator. */
-        .st-key-til_workspace_section input[type="radio"] {
-            position: absolute !important;
-            opacity: 0 !important;
-            width: 1px !important;
-            height: 1px !important;
-            pointer-events: none !important;
-        }
+        .st-key-til_workspace_section input[type="radio"],
         .st-key-til_workspace_section div[role="radiogroup"] > label > div:first-child {
             position: absolute !important;
             opacity: 0 !important;
@@ -178,25 +253,24 @@ def inject_research_glass_theme() -> None:
             pointer-events: none !important;
         }
 
-        /* Preserve the workflow section labels, but match scanner typography. */
         .st-key-til_workspace_section div[role="radiogroup"] > label:nth-child(1)::before,
         .st-key-til_workspace_section div[role="radiogroup"] > label:nth-child(4)::before,
         .st-key-til_workspace_section div[role="radiogroup"] > label:nth-child(9)::before,
         .st-key-til_workspace_section div[role="radiogroup"] > label:nth-child(13)::before {
-            color: #718aa8 !important;
-            font-size: .64rem !important;
-            font-weight: 900 !important;
-            letter-spacing: .13em !important;
+            color: #637991 !important;
+            font-size: .61rem !important;
+            font-weight: 850 !important;
+            letter-spacing: .14em !important;
         }
 
         [data-testid="stSidebar"] hr {
-            border-color: rgba(105,151,197,.13) !important;
+            border-color: rgba(112,151,190,.075) !important;
         }
         [data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
-            color: #7088a4 !important;
+            color: #657a91 !important;
         }
 
-        /* ---------- Cards / surfaces ---------- */
+        /* ---------- Surfaces ---------- */
         .til-card,
         [data-testid="stExpander"] details,
         div[data-testid="stDataFrame"],
@@ -205,104 +279,112 @@ def inject_research_glass_theme() -> None:
         [data-testid="stStatusWidget"] {
             border-color: var(--til-line) !important;
             background:
-                linear-gradient(145deg, rgba(12,29,48,.84), rgba(8,20,34,.72)) !important;
+                linear-gradient(145deg, rgba(11,27,45,.70), rgba(8,20,34,.56)) !important;
             box-shadow:
-                inset 0 1px 0 rgba(255,255,255,.03),
-                0 10px 30px rgba(0,0,0,.13) !important;
-            backdrop-filter: blur(14px) !important;
-            -webkit-backdrop-filter: blur(14px) !important;
+                inset 0 1px 0 rgba(255,255,255,.018),
+                0 8px 26px rgba(0,0,0,.085) !important;
+            backdrop-filter: blur(13px) !important;
+            -webkit-backdrop-filter: blur(13px) !important;
         }
 
         .til-card {
-            min-height: 132px !important;
-            padding: 16px 17px !important;
-            margin-bottom: 10px !important;
+            min-height: 124px !important;
+            padding: 17px 18px !important;
+            margin-bottom: 12px !important;
             border: 1px solid var(--til-line) !important;
-            border-radius: 13px !important;
-            transition: border-color .14s ease, transform .14s ease !important;
+            border-radius: 12px !important;
+            transition:
+                border-color .14s ease,
+                background .14s ease !important;
         }
         .til-card:hover {
-            border-color: rgba(99,207,255,.31) !important;
-            transform: translateY(-1px);
+            border-color: rgba(112,165,211,.20) !important;
+            background:
+                linear-gradient(145deg, rgba(12,30,49,.76), rgba(8,20,34,.58)) !important;
+            transform: none !important;
         }
         .til-card strong {
-            color: #eef6ff !important;
+            color: #edf3f9 !important;
+            font-weight: 740 !important;
         }
         .muted {
             color: var(--til-muted) !important;
         }
 
         [data-testid="stExpander"] details {
-            border: 1px solid var(--til-line) !important;
-            border-radius: 11px !important;
+            border: 1px solid rgba(112,151,190,.13) !important;
+            border-radius: 10px !important;
             overflow: hidden !important;
+            box-shadow: none !important;
         }
         [data-testid="stExpander"] summary {
-            color: #eaf3fc !important;
-            font-weight: 720 !important;
+            min-height: 44px !important;
+            color: #dce6f0 !important;
+            font-weight: 650 !important;
+        }
+        [data-testid="stExpander"] details[open] {
+            border-color: rgba(112,165,211,.20) !important;
         }
 
         div[data-testid="stDataFrame"],
         div[data-testid="stTable"] {
-            border: 1px solid var(--til-line) !important;
-            border-radius: 11px !important;
+            border: 1px solid rgba(112,151,190,.12) !important;
+            border-radius: 10px !important;
             overflow: hidden !important;
-        }
-
-        /* ---------- Typography ---------- */
-        h1, h2, h3, h4, h5, h6 {
-            color: #f3f8ff !important;
-        }
-        p, li {
-            color: #d8e3ef;
-        }
-        [data-testid="stCaptionContainer"],
-        small {
-            color: var(--til-muted) !important;
-        }
-        a {
-            color: var(--til-blue) !important;
-        }
-        hr {
-            border-color: rgba(105,151,197,.14) !important;
+            box-shadow: none !important;
         }
 
         /* ---------- Metrics ---------- */
         [data-testid="stMetric"] {
-            padding: .75rem .85rem !important;
-            border: 1px solid rgba(105,151,197,.18) !important;
+            min-height: 106px !important;
+            padding: .88rem .95rem !important;
+            border: 1px solid rgba(112,151,190,.12) !important;
             border-radius: 11px !important;
             background:
-                linear-gradient(145deg, rgba(17,38,61,.57), rgba(10,26,43,.55)) !important;
-            box-shadow: inset 0 1px 0 rgba(255,255,255,.02) !important;
+                linear-gradient(145deg, rgba(15,33,52,.46), rgba(9,23,38,.40)) !important;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.014) !important;
         }
         [data-testid="stMetricLabel"] {
-            color: #879fba !important;
+            color: #8499b0 !important;
+            font-size: .83rem !important;
+            font-weight: 620 !important;
         }
         [data-testid="stMetricValue"] {
-            color: #f4f8ff !important;
+            color: #eef4fa !important;
+            font-weight: 670 !important;
+            letter-spacing: -.03em !important;
+        }
+        [data-testid="stMetricDelta"] {
+            font-size: .78rem !important;
         }
 
         /* ---------- Tabs ---------- */
         [data-baseweb="tab-list"] {
-            gap: 5px !important;
-            padding: 4px !important;
-            border: 1px solid var(--til-line) !important;
-            border-radius: 11px !important;
-            background: rgba(8,21,35,.66) !important;
+            gap: 1px !important;
+            padding: 0 0 4px !important;
+            border: 0 !important;
+            border-bottom: 1px solid rgba(112,151,190,.095) !important;
+            border-radius: 0 !important;
+            background: transparent !important;
         }
         [data-baseweb="tab"] {
-            border-radius: 8px !important;
-            color: #aebfd2 !important;
-            font-weight: 720 !important;
+            min-height: 38px !important;
+            padding-left: 12px !important;
+            padding-right: 12px !important;
+            border-radius: 7px 7px 0 0 !important;
+            color: #8fa3b8 !important;
+            font-size: .90rem !important;
+            font-weight: 650 !important;
+            background: transparent !important;
         }
         [aria-selected="true"][data-baseweb="tab"] {
-            color: #f7fbff !important;
-            background: rgba(55,239,121,.11) !important;
-            box-shadow: inset 0 0 0 1px rgba(55,239,121,.27) !important;
+            color: #eef5fa !important;
+            background: rgba(18,38,60,.28) !important;
+            box-shadow: none !important;
         }
         [data-baseweb="tab-highlight"] {
-            background-color: var(--til-green) !important;
+            height: 2px !important;
+            background-color: rgba(67,209,125,.82) !important;
         }
 
         /* ---------- Inputs ---------- */
@@ -310,25 +392,35 @@ def inject_research_glass_theme() -> None:
         [data-testid="stTextInput"] input,
         [data-testid="stNumberInput"] input,
         [data-testid="stTextArea"] textarea {
-            color: #eef6ff !important;
-            border-color: rgba(105,151,197,.26) !important;
-            background: rgba(10,25,42,.78) !important;
-            box-shadow: inset 0 1px 0 rgba(255,255,255,.02) !important;
+            color: #eaf1f8 !important;
+            min-height: 40px !important;
+            border-color: rgba(112,151,190,.16) !important;
+            border-radius: 9px !important;
+            background: rgba(9,23,38,.68) !important;
+            box-shadow: none !important;
         }
         div[data-baseweb="select"] > div:hover,
         [data-testid="stTextInput"] input:hover,
         [data-testid="stTextArea"] textarea:hover {
-            border-color: rgba(99,207,255,.38) !important;
+            border-color: rgba(112,165,211,.27) !important;
+        }
+        div[data-baseweb="select"] > div:focus-within,
+        [data-testid="stTextInput"] input:focus,
+        [data-testid="stNumberInput"] input:focus,
+        [data-testid="stTextArea"] textarea:focus {
+            border-color: rgba(67,209,125,.34) !important;
+            box-shadow: 0 0 0 2px rgba(67,209,125,.055) !important;
         }
 
         [data-testid="stFileUploader"] {
-            border: 1px solid var(--til-line) !important;
-            border-radius: 11px !important;
-            padding: .45rem !important;
+            border: 1px solid rgba(112,151,190,.12) !important;
+            border-radius: 10px !important;
+            padding: .42rem !important;
         }
         [data-testid="stFileUploaderDropzone"] {
-            background: rgba(10,25,42,.60) !important;
-            border-color: rgba(105,151,197,.24) !important;
+            background: rgba(9,23,38,.52) !important;
+            border-color: rgba(112,151,190,.14) !important;
+            border-radius: 9px !important;
         }
 
         /* ---------- Buttons ---------- */
@@ -336,129 +428,137 @@ def inject_research_glass_theme() -> None:
         div[data-testid="stDownloadButton"] button {
             min-height: 2.42rem !important;
             border-radius: 9px !important;
-            font-weight: 760 !important;
+            font-size: .91rem !important;
+            font-weight: 680 !important;
+            letter-spacing: -.01em !important;
+            box-shadow: none !important;
             transition:
                 border-color .14s ease,
                 background .14s ease,
-                box-shadow .14s ease,
-                transform .14s ease !important;
+                color .14s ease !important;
         }
 
         div[data-testid="stButton"] button[kind="primary"],
         div[data-testid="stDownloadButton"] button[kind="primary"] {
-            color: #f7fff9 !important;
-            border: 1px solid rgba(55,239,121,.52) !important;
+            color: #f2fbf6 !important;
+            border: 1px solid rgba(67,209,125,.35) !important;
             background:
-                linear-gradient(145deg, rgba(28,138,74,.94), rgba(13,82,45,.94)) !important;
-            box-shadow:
-                inset 0 1px 0 rgba(255,255,255,.08),
-                0 0 20px rgba(55,239,121,.09) !important;
+                linear-gradient(145deg, rgba(34,130,73,.82), rgba(20,88,52,.86)) !important;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.045) !important;
         }
         div[data-testid="stButton"] button[kind="primary"]:hover:not(:disabled),
         div[data-testid="stDownloadButton"] button[kind="primary"]:hover:not(:disabled) {
-            border-color: rgba(91,255,146,.78) !important;
+            border-color: rgba(86,222,142,.52) !important;
             background:
-                linear-gradient(145deg, rgba(35,162,88,.97), rgba(16,96,53,.97)) !important;
-            box-shadow:
-                inset 0 1px 0 rgba(255,255,255,.10),
-                0 0 25px rgba(55,239,121,.15) !important;
-            transform: translateY(-1px);
+                linear-gradient(145deg, rgba(39,145,81,.88), rgba(22,98,57,.90)) !important;
+            transform: none !important;
         }
 
         div[data-testid="stButton"] button[kind="secondary"],
         div[data-testid="stDownloadButton"] button[kind="secondary"] {
-            color: #eaf3fc !important;
-            border: 1px solid rgba(105,151,197,.28) !important;
-            background: rgba(12,29,48,.66) !important;
-            box-shadow: inset 0 1px 0 rgba(255,255,255,.025) !important;
+            color: #dce6f0 !important;
+            border: 1px solid rgba(112,151,190,.15) !important;
+            background: rgba(10,25,42,.46) !important;
         }
         div[data-testid="stButton"] button[kind="secondary"]:hover:not(:disabled),
         div[data-testid="stDownloadButton"] button[kind="secondary"]:hover:not(:disabled) {
-            border-color: rgba(99,207,255,.38) !important;
-            background: rgba(16,42,67,.76) !important;
+            color: #eef4fa !important;
+            border-color: rgba(112,165,211,.25) !important;
+            background: rgba(16,35,55,.56) !important;
         }
 
         div[data-testid="stButton"] button:disabled,
         div[data-testid="stDownloadButton"] button:disabled {
-            opacity: .66 !important;
-            color: #8398b0 !important;
-            background: rgba(13,27,43,.68) !important;
-            border-color: rgba(105,151,197,.14) !important;
+            opacity: .62 !important;
+            color: #76899f !important;
+            background: rgba(11,25,40,.48) !important;
+            border-color: rgba(112,151,190,.08) !important;
             box-shadow: none !important;
         }
 
         /* ---------- Alerts / status ---------- */
         div[data-testid="stAlert"] {
             border-radius: 10px !important;
-            border: 1px solid rgba(105,151,197,.20) !important;
-            background: rgba(12,29,48,.72) !important;
+            border: 1px solid rgba(112,151,190,.12) !important;
+            background: rgba(10,24,40,.56) !important;
+            box-shadow: none !important;
         }
         [data-testid="stStatusWidget"] {
-            border: 1px solid var(--til-line) !important;
-            border-radius: 11px !important;
+            border: 1px solid rgba(112,151,190,.13) !important;
+            border-radius: 10px !important;
             overflow: hidden !important;
+            box-shadow: none !important;
         }
 
         /* ---------- Progress ---------- */
-        /* Keep progress copy on a dark glass surface. The old selector was too
-           broad and painted Streamlit's text container bright green. */
         [data-testid="stProgress"] {
-            color: #eaf3fc !important;
+            color: #dce6ef !important;
+            margin-top: .25rem !important;
         }
         [data-testid="stProgress"] > div {
             background: transparent !important;
         }
         [data-testid="stProgress"] > div > div {
-            color: #eaf3fc !important;
-            background: rgba(10,25,42,.84) !important;
+            color: #dce6ef !important;
+            background: rgba(8,21,35,.58) !important;
             box-shadow: none !important;
         }
         [data-testid="stProgress"] p,
         [data-testid="stProgress"] span {
-            color: #eaf3fc !important;
+            color: #dce6ef !important;
             background: transparent !important;
             text-shadow: none !important;
         }
-
-        /* Actual progress track/fill only. */
         [data-testid="stProgress"] [role="progressbar"] {
-            min-height: 10px !important;
+            min-height: 8px !important;
             overflow: hidden !important;
-            border: 1px solid rgba(105,151,197,.20) !important;
+            border: 1px solid rgba(112,151,190,.12) !important;
             border-radius: 999px !important;
-            background: rgba(17,38,61,.72) !important;
-            box-shadow: inset 0 1px 2px rgba(0,0,0,.22) !important;
+            background: rgba(17,38,61,.48) !important;
+            box-shadow: inset 0 1px 2px rgba(0,0,0,.18) !important;
         }
         [data-testid="stProgress"] [role="progressbar"] > div {
             border-radius: 999px !important;
             background:
-                linear-gradient(90deg, #218d57 0%, #2fb66a 100%) !important;
-            box-shadow: 0 0 10px rgba(47,182,106,.16) !important;
+                linear-gradient(90deg, #2c8656 0%, #3eaf70 100%) !important;
+            box-shadow: none !important;
         }
 
         /* ---------- Checkboxes / toggles ---------- */
         [data-baseweb="checkbox"] [aria-checked="true"],
         [data-testid="stToggle"] [aria-checked="true"] {
-            background-color: var(--til-green) !important;
-            border-color: var(--til-green) !important;
+            background-color: #35b86b !important;
+            border-color: #35b86b !important;
         }
 
         /* ---------- Popovers / menus ---------- */
         [data-baseweb="popover"],
         [data-baseweb="menu"] {
-            background: rgba(7,20,34,.98) !important;
-            border-color: var(--til-line) !important;
+            background: rgba(7,18,31,.985) !important;
+            border-color: rgba(112,151,190,.15) !important;
             box-shadow: var(--til-shadow) !important;
         }
 
-        /* Keep the sidebar compact on smaller screens. */
+        /* ---------- Polished spacing ---------- */
+        [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] {
+            margin-bottom: .05rem;
+        }
+        [data-testid="stForm"] {
+            border-color: rgba(112,151,190,.11) !important;
+            border-radius: 12px !important;
+            background: rgba(9,22,36,.28) !important;
+        }
+
         @media (max-width: 900px) {
             .block-container {
-                padding-left: .8rem !important;
-                padding-right: .8rem !important;
+                padding-left: .85rem !important;
+                padding-right: .85rem !important;
             }
             .til-title {
-                font-size: 27px !important;
+                font-size: 26px !important;
+            }
+            .til-hero {
+                padding: 17px 18px !important;
             }
         }
         </style>
