@@ -5371,6 +5371,54 @@ def optimize_stock_strategies(
             progress(min(completed_steps, total_steps), total_steps, message)
 
     ranked: list[dict[str, Any]] = []
+    configuration_history: list[dict[str, Any]] = []
+    configuration_index: dict[str, int] = {}
+
+    def remember_configuration(
+        source_strategy: dict[str, Any],
+        phase: str,
+        rules: dict[str, Any],
+        chosen_settings: BacktestSettings,
+        metrics: dict[str, Any],
+    ) -> None:
+        normalized_rules = normalize_machine_rules(rules)
+        settings_payload = asdict(chosen_settings)
+        signature_payload = {
+            "strategy_id": str(source_strategy.get("id") or ""),
+            "rules": normalized_rules,
+            "settings": settings_payload,
+        }
+        signature = hashlib.sha256(
+            json.dumps(signature_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()[:24]
+        existing_index = configuration_index.get(signature)
+        if existing_index is not None:
+            existing = configuration_history[existing_index]
+            phases = list(existing.get("phases") or [])
+            if phase not in phases:
+                phases.append(phase)
+                existing["phases"] = phases
+            return
+        configuration_index[signature] = len(configuration_history)
+        configuration_history.append(
+            {
+                "signature": signature,
+                "strategy_id": str(source_strategy.get("id") or ""),
+                "strategy_name": str(source_strategy.get("name") or "Unnamed strategy"),
+                "phases": [phase],
+                "rules": normalized_rules,
+                "settings": settings_payload,
+                "metrics": {
+                    "trade_count": int(safe_float(metrics.get("trade_count"), 0) or 0),
+                    "net_pnl": safe_float(metrics.get("net_pnl"), 0.0) or 0.0,
+                    "return_pct": safe_float(metrics.get("return_pct"), 0.0) or 0.0,
+                    "win_rate_pct": safe_float(metrics.get("win_rate_pct"), 0.0) or 0.0,
+                    "profit_factor": metrics.get("profit_factor"),
+                    "max_drawdown_pct": safe_float(metrics.get("max_drawdown_pct"), 0.0) or 0.0,
+                },
+            }
+        )
+
     for source_strategy, variants in search_plan:
         name = str(source_strategy.get("name") or "Unnamed strategy")
         original = normalize_machine_rules(source_strategy.get("machine_rules"))
