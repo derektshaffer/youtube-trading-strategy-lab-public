@@ -265,6 +265,22 @@ class EmaRuleTests(unittest.TestCase):
             any(item["pullback_touch_tolerance_pct"] != 0.75 for item in variants)
         )
 
+    def test_optimizer_prioritizes_ai_assumption_candidate_values(self):
+        strategy = simple_strategy(max_vwap_distance_pct=3.0)
+        strategy["research_rule_overrides"] = {
+            "max_vwap_distance_pct": 3.0,
+        }
+        strategy["ai_candidate_rule_options"] = {
+            "max_vwap_distance_pct": [2.4, 3.0, 3.6],
+        }
+        variants = engine.generate_strategy_variants(strategy, maximum=36)
+        self.assertTrue(
+            any(item["max_vwap_distance_pct"] == 2.4 for item in variants)
+        )
+        self.assertTrue(
+            any(item["max_vwap_distance_pct"] == 3.6 for item in variants)
+        )
+
 
 class RuleTests(unittest.TestCase):
     def test_numeric_rules_are_cleaned(self):
