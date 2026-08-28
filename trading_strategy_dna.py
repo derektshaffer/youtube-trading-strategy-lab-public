@@ -866,6 +866,10 @@ def build_canonical_family_strategies(
         previous = existing_by_family.get(str(family.get("id") or ""))
         if previous and str(previous.get("canonical_research_signature") or "") == signature:
             for field in (
+                "research_rule_overrides",
+                "compiler_assumptions",
+                "autopilot_preparation",
+                "research_readiness",
                 "validation_status",
                 "optimization_status",
                 "last_autonomous_research",
