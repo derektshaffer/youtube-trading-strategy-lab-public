@@ -352,7 +352,10 @@ def execute_job(
 
     if job_type == "web_research":
         topic = str(payload.get("topic") or "").strip()
-        research = router.grounded_research(topic)
+        research = router.grounded_research(
+            topic,
+            existing_context=str(payload.get("existing_context") or ""),
+        )
         latest = store.load_latest()
         latest, run_id, hypothesis_ids = merge_grounded_research(
             latest,
