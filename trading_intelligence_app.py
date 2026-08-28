@@ -1196,6 +1196,11 @@ if module == "Stock Strategy Finder":
             f"{checkpoint_family_passes:,} strategy-family/timeframe passes are already complete. "
             "Resume will reuse them instead of starting those tests over."
         )
+    elif checkpoint_status in {"running", "interrupted"}:
+        st.warning(
+            f"The previous {finder_symbol} {finder_profile.name} run did not finish before its first "
+            "reusable optimizer checkpoint. The next Research click will restart that run from the beginning."
+        )
     elif checkpoint_status == "failed":
         last_error = str((saved_finder_checkpoint or {}).get("last_error") or "").strip()
         st.error(
