@@ -3405,6 +3405,8 @@ def run_backtest(
     pullback_required = (
         bool(settings.require_pullback_breakout_for_pullback_strategies)
         and strategy_uses_pullback_breakout(strategy)
+        and rules.get("require_fast_ema_pullback") is not True
+        and rules.get("require_pullback_breakout") is None
     )
 
     max_price = safe_float(rules.get("max_price"))
