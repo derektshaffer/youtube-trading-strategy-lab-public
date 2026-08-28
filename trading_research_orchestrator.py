@@ -260,7 +260,7 @@ def enqueue_research_job(
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     data = ensure_research_collections(library)
     kind = str(job_type or "").strip()
-    if kind not in {"web_research", "specialist_review", "autonomous_validation"}:
+    if kind not in {"web_research", "specialist_review", "autonomous_validation", "stock_finder"}:
         raise AppError(f"Unsupported research job type: {kind or 'blank'}")
     dedupe = str(dedupe_key or "").strip()
     if dedupe:
