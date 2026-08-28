@@ -9,11 +9,22 @@ from __future__ import annotations
 import os
 import socket
 import sys
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from trading_auto_research import (
     merge_autonomous_research_into_library,
     run_autonomous_research,
+)
+from stock_strategy_finder import (
+    merge_finder_report_into_library,
+    run_stock_strategy_finder,
+    search_profile,
+    selected_strategies_for_profile,
+)
+from trading_catalyst_core import (
+    enrich_bars_with_point_in_time_catalysts,
+    historical_news,
 )
 from trading_research_orchestrator import (
     DEFAULT_GEMINI_BULK_FALLBACK_MODEL,
@@ -39,6 +50,7 @@ from youtube_strategy_engine import (
     DEFAULT_GITHUB_BACKUP_PATH,
     GitHubCloudBackup,
     StrategyStore,
+    normalize_machine_rules,
 )
 
 
@@ -128,6 +140,116 @@ def execute_job(
 ) -> str:
     job_type = str(job.get("type") or "")
     payload = dict(job.get("payload") or {})
+
+    if job_type == "stock_finder":
+        symbol = str(payload.get("symbol") or "").strip().upper()
+        profile_name = str(payload.get("profile") or "Deep").strip()
+        if not symbol:
+            raise AppError("Cloud Stock Strategy Finder job is missing a symbol.")
+        profile = search_profile(profile_name)
+
+        latest = store.load_latest()
+        strategies = [
+            dict(item)
+            for item in latest.get("strategies") or []
+            if isinstance(item, dict)
+        ]
+        selected, skipped = selected_strategies_for_profile(
+            strategies,
+            symbol,
+            profile,
+        )
+        if not selected:
+            raise AppError(
+                f"No machine-testable long strategy families are available for {symbol}."
+            )
+
+        market = build_market()
+        end = datetime.now(timezone.utc)
+        if market.historical_feed == "sip" and market.live_feed != "sip":
+            end -= timedelta(minutes=16)
+        start = end - timedelta(days=profile.history_days)
+
+        def history_progress(page: int) -> None:
+            if page == 1 or page % 10 == 0:
+                print(
+                    f"[stock-finder] {symbol} history page {page}",
+                    flush=True,
+                )
+
+        rows_by_symbol = market.bars(
+            [symbol],
+            start=start,
+            end=end,
+            timeframe="1Min",
+            max_pages=300,
+            progress=history_progress,
+        )
+        rows = list(rows_by_symbol.get(symbol) or [])
+        if not rows:
+            raise AppError(f"No historical bars were returned for {symbol}.")
+
+        needs_catalyst_history = any(
+            bool(normalize_machine_rules(item.get("machine_rules")).get("catalyst_required"))
+            for item in selected
+        )
+        if needs_catalyst_history:
+            print(
+                f"[stock-finder] loading point-in-time catalyst history for {symbol}",
+                flush=True,
+            )
+            articles = historical_news(
+                market,
+                [symbol],
+                start=start - timedelta(hours=24),
+                end=end,
+                max_pages=100,
+            )
+            rows, _ = enrich_bars_with_point_in_time_catalysts(
+                rows,
+                articles,
+                lookback_hours=24.0,
+            )
+
+        def finder_progress(completed: int, total: int, message: str) -> None:
+            if completed == total or completed % max(1, total // 100) == 0:
+                pct = completed / max(1, total) * 100.0
+                print(
+                    f"[stock-finder] {symbol} {profile.name} {pct:.1f}% · {message}",
+                    flush=True,
+                )
+
+        report = run_stock_strategy_finder(
+            rows,
+            selected,
+            symbol,
+            profile_name=profile.name,
+            progress=finder_progress,
+        )
+        latest = store.load_latest()
+        latest = merge_finder_report_into_library(latest, report)
+        result_ref = (
+            f"finder:{symbol}:{profile.name}:"
+            f"{report.get('generated_at') or datetime.now(timezone.utc).isoformat()}"
+        )
+        latest = finish_research_job(
+            latest,
+            str(job.get("id") or ""),
+            result_ref=result_ref,
+        )
+        latest = record_worker_run(
+            latest,
+            worker_id=worker_id,
+            job_id=str(job.get("id") or ""),
+            job_type=job_type,
+            status="complete",
+            detail=(
+                f"{symbol} {profile.name} Finder completed with "
+                f"{int(report.get('unique_configurations_tested') or 0):,} unique configurations."
+            ),
+        )
+        store.save(latest)
+        return result_ref
 
     if job_type == "web_research":
         topic = str(payload.get("topic") or "").strip()
