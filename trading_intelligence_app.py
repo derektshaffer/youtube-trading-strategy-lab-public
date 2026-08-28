@@ -215,6 +215,10 @@ def load_library() -> dict[str, Any]:
         source_and_other,
         existing=existing_canonical,
     )
+    canonical_families = [
+        upgrade_native_strategy_rules(item)
+        for item in canonical_families
+    ]
     for item in canonical_families:
         item["research_readiness"] = research_readiness(item)
 
