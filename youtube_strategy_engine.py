@@ -3754,9 +3754,17 @@ def generate_strategy_variants(
             if field_name not in baseline or not isinstance(raw_values, list):
                 continue
             for raw_value in raw_values:
-                parsed = normalize_machine_rules({field_name: raw_value}).get(field_name)
-                if parsed is None or parsed == baseline.get(field_name):
-                    continue
+                # A missing rule is a legitimate family variant when some source strategies
+                # require the rule and others omit it. Test "not required" directly instead of
+                # forcing that disagreement into a separate strategy record.
+                if raw_value is None:
+                    if baseline.get(field_name) is None:
+                        continue
+                    parsed = None
+                else:
+                    parsed = normalize_machine_rules({field_name: raw_value}).get(field_name)
+                    if parsed is None or parsed == baseline.get(field_name):
+                        continue
                 update = {field_name: parsed}
                 if update not in source_seed_updates:
                     source_seed_updates.append(update)
