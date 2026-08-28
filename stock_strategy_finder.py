@@ -177,6 +177,25 @@ def selected_strategies_for_profile(
     return ordered, skipped
 
 
+def stock_finder_optimizer_settings(profile: StockSearchProfile) -> OptimizationSettings:
+    return OptimizationSettings(
+        max_variants_per_strategy=profile.max_variants_per_strategy,
+        finalists_per_strategy=profile.finalists_per_strategy,
+        minimum_training_trades=5,
+        minimum_validation_trades=2,
+        enforce_historical_minimum_trades=True,
+        minimum_historical_trades=8,
+        training_fraction=0.60,
+        validation_fraction=0.20,
+        stress_cost_multiplier=1.75,
+        optimize_position_sizing=True,
+        automatic_slippage=True,
+        max_execution_variants_per_finalist=profile.execution_variants_per_finalist,
+        maximum_drawdown_pct=20.0,
+        selection_mode="validated",
+    )
+
+
 def estimate_search_work(profile: StockSearchProfile, family_count: int) -> dict[str, int]:
     """Conservative estimate of the number of deterministic simulations.
 
