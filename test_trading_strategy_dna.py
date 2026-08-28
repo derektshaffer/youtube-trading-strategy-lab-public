@@ -284,5 +284,49 @@ class CanonicalFamilyManagerTests(unittest.TestCase):
         self.assertTrue(any(item.get("above_vwap") is None for item in variants))
 
 
+    def test_long_and_short_variations_do_not_collapse_into_same_family(self):
+        long_setup = self._strategy("long-a", "book-1", rvol=5.0)
+        short_setup = self._strategy("short-a", "book-2", rvol=5.0)
+        short_setup["direction"] = "short"
+
+        canonical, families = build_canonical_family_strategies([long_setup, short_setup])
+
+        self.assertEqual(len(families), 2)
+        self.assertEqual(len(canonical), 2)
+        self.assertEqual({item["direction"] for item in canonical}, {"long", "short"})
+
+    def test_avwap_reclaim_does_not_absorb_handoff_or_ipo_mechanism(self):
+        reclaim = {
+            **self._strategy("reclaim", "book-1"),
+            "name": "Rising AVWAP Pullback / Support Reclaim",
+            "summary": "Buy a pullback when price reclaims a rising Anchored VWAP.",
+            "entry_conditions": ["Price pulls back and crosses back above the AVWAP."],
+            "machine_rules": {"above_vwap": True, "vwap_reclaim": True},
+        }
+        handoff = {
+            **self._strategy("handoff", "book-1"),
+            "name": "AVWAP Handoff (Uptrend Layering)",
+            "summary": "Anchor a new AVWAP at the higher-low handoff point and buy the pullback.",
+            "entry_conditions": ["Use the new AVWAP handoff after trend acceleration."],
+            "machine_rules": {"above_vwap": True},
+        }
+        ipo = {
+            **self._strategy("ipo", "book-1"),
+            "name": "IPO Day-One AVWAP",
+            "summary": "On the first trading day of an IPO anchor AVWAP to the second minute.",
+            "entry_conditions": ["First day of an IPO; buy the bounce from second-minute AVWAP."],
+            "machine_rules": {"above_vwap": True},
+        }
+
+        canonical, families = build_canonical_family_strategies([reclaim, handoff, ipo])
+
+        self.assertEqual(len(families), 3)
+        self.assertEqual(len(canonical), 3)
+        names = {item["name"] for item in canonical}
+        self.assertTrue(any("Reclaim" in name for name in names))
+        self.assertTrue(any("Handoff" in name for name in names))
+        self.assertTrue(any("IPO Day-One" in name for name in names))
+
+
 if __name__ == "__main__":
     unittest.main()
