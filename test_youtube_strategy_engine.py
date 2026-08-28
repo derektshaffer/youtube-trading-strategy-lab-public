@@ -1120,7 +1120,7 @@ class ProviderTests(unittest.TestCase):
         self.assertTrue(analyzer.model_fallback_used)
         self.assertEqual(analyzer.model, "gemini-3.6-flash")
 
-    def test_gemini_overload_can_advance_through_multiple_backup_models(self):
+    def test_gemini_overload_can_advance_through_supported_backup_models(self):
         analyzer = engine.GeminiVideoAnalyzer(
             "secret",
             model="gemini-3.7-flash",
@@ -1133,9 +1133,50 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(analyzer.model, "gemini-3.6-flash")
         self.assertTrue(analyzer._activate_model_fallback(overload))
         self.assertEqual(analyzer.model, "gemini-3.5-flash")
-        self.assertTrue(analyzer._activate_model_fallback(overload))
-        self.assertEqual(analyzer.model, "gemini-2.5-flash")
         self.assertFalse(analyzer._activate_model_fallback(overload))
+        self.assertNotIn("gemini-2.5-flash", analyzer.fallback_models)
+
+    def test_retired_gemini_model_is_detected_and_skipped_immediately(self):
+        analyzer = engine.GeminiVideoAnalyzer(
+            "secret",
+            model="gemini-3.6-flash",
+            fallback_model="gemini-3.5-flash",
+        )
+        retired = engine.AppError(
+            "Provider request failed (404): This model models/gemini-3.6-flash is no longer available "
+            "to new users. Please update your code to use models/gemini-3.5-flash."
+        )
+        self.assertTrue(engine.provider_model_unavailable(retired))
+        self.assertTrue(analyzer._activate_model_fallback(retired))
+        self.assertEqual(analyzer.model, "gemini-3.5-flash")
+
+    def test_whole_video_retired_model_switches_without_sleeping(self):
+        analyzer = engine.GeminiVideoAnalyzer(
+            "secret",
+            model="gemini-3.6-flash",
+            fallback_model="gemini-3.5-flash",
+        )
+        retired = engine.AppError(
+            "Provider request failed (404): This model models/gemini-3.6-flash is no longer available "
+            "to new users. Please update your code to use models/gemini-3.5-flash."
+        )
+        with (
+            patch.object(
+                analyzer,
+                "_analyze_whole_video",
+                side_effect=[retired, {"video_title": "Recovered"}],
+            ) as mocked,
+            patch.object(engine, "sleep") as mocked_sleep,
+        ):
+            result = analyzer._analyze_whole_video_with_transient_retries(
+                "https://www.youtube.com/watch?v=abcDEF12_-3",
+                "prompt",
+                None,
+            )
+        self.assertEqual(result["video_title"], "Recovered")
+        self.assertEqual(mocked.call_count, 2)
+        mocked_sleep.assert_not_called()
+        self.assertEqual(analyzer.model, "gemini-3.5-flash")
 
     def test_alpaca_pagination_is_followed(self):
         market = engine.AlpacaMarketData("key", "secret")
