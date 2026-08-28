@@ -254,8 +254,25 @@ def infer_strategy_dna(strategy: dict[str, Any]) -> dict[str, list[str]]:
     return {dimension: _unique(dna[dimension]) for dimension in DNA_DIMENSIONS}
 
 
+GENERATED_STRATEGY_SOURCE_TYPES = {
+    "cross_source_synthesis",
+    "canonical_family",
+}
+
+
 def is_synthetic_strategy(strategy: dict[str, Any]) -> bool:
-    return str(strategy.get("source_type") or "").strip().lower() == "cross_source_synthesis"
+    return str(strategy.get("source_type") or "").strip().lower() in GENERATED_STRATEGY_SOURCE_TYPES
+
+
+def is_family_source_strategy(strategy: dict[str, Any]) -> bool:
+    """Return True only for original learned ideas that should define strategy families."""
+    if not isinstance(strategy, dict) or is_synthetic_strategy(strategy):
+        return False
+    if strategy.get("optimized_for_symbol") or strategy.get("parent_strategy_id"):
+        return False
+    if strategy.get("is_master_strategy"):
+        return False
+    return bool(strategy.get("id") or strategy.get("name"))
 
 
 def source_identity(strategy: dict[str, Any]) -> str:
@@ -448,14 +465,17 @@ def _family_summary(strategies: list[dict[str, Any]], family_id: int) -> dict[st
     ]
 
     concept_sources: dict[tuple[str, str], set[str]] = defaultdict(set)
+    concept_members: dict[tuple[str, str], set[str]] = defaultdict(set)
     concept_labels: dict[tuple[str, str], str] = {}
-    for strategy in strategies:
+    for index, strategy in enumerate(strategies):
         source_id = source_identity(strategy)
+        member_id = str(strategy.get("id") or f"member-{index}")
         dna = infer_strategy_dna(strategy)
         for dimension in DNA_DIMENSIONS:
             for concept in dna.get(dimension) or []:
                 key = (dimension, concept.casefold())
                 concept_sources[key].add(source_id)
+                concept_members[key].add(member_id)
                 concept_labels[key] = concept
 
     common = [
@@ -464,22 +484,60 @@ def _family_summary(strategies: list[dict[str, Any]], family_id: int) -> dict[st
             "dimension_label": DNA_LABELS[key[0]],
             "concept": concept_labels[key],
             "source_count": len(sources),
+            "member_count": len(concept_members[key]),
         }
         for key, sources in concept_sources.items()
         if len(sources) >= 2
     ]
-    common.sort(key=lambda item: (-int(item["source_count"]), DNA_DIMENSIONS.index(item["dimension"]), item["concept"]))
+    common.sort(
+        key=lambda item: (
+            -int(item["source_count"]),
+            -int(item["member_count"]),
+            DNA_DIMENSIONS.index(item["dimension"]),
+            item["concept"],
+        )
+    )
+
+    member_threshold = 1 if len(strategies) == 1 else max(2, int(len(strategies) * 0.60 + 0.999))
+    core = [
+        {
+            "dimension": key[0],
+            "dimension_label": DNA_LABELS[key[0]],
+            "concept": concept_labels[key],
+            "member_count": len(members),
+            "source_count": len(concept_sources[key]),
+        }
+        for key, members in concept_members.items()
+        if len(members) >= member_threshold
+    ]
+    core.sort(
+        key=lambda item: (
+            -int(item["member_count"]),
+            -int(item["source_count"]),
+            DNA_DIMENSIONS.index(item["dimension"]),
+            item["concept"],
+        )
+    )
 
     directions = _unique([str(item.get("direction") or "unclear").lower() for item in strategies])
-    structures = [
-        item["concept"]
-        for item in common
-        if item["dimension"] == "structure"
-    ]
+    structures = [item["concept"] for item in core if item["dimension"] == "structure"]
     categories = _unique([str(item.get("category") or "Uncategorized") for item in strategies])
     label_seed = structures[0] if structures else (categories[0] if categories else "Strategy")
     direction_signature = directions[0] if len(directions) == 1 else "mixed"
-    family_material = f"{direction_signature}|{label_seed.strip().casefold()}"
+
+    # The ID represents the stable blueprint, not the individual source count. New books can
+    # join a family without creating a second family record as long as the core mechanism stays the same.
+    signature_concepts = [
+        f"{item['dimension']}:{str(item['concept']).casefold()}"
+        for item in core
+        if item["dimension"] in {"catalyst", "momentum", "structure", "context", "market_regime"}
+    ]
+    if not signature_concepts:
+        signature_concepts = [
+            re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
+            for value in categories[:2]
+        ]
+    family_material = "|".join([direction_signature, *sorted(signature_concepts)])
     stable_family_id = "dna-family-" + hashlib.sha256(
         family_material.encode("utf-8", errors="ignore")
     ).hexdigest()[:16]
@@ -494,6 +552,7 @@ def _family_summary(strategies: list[dict[str, Any]], family_id: int) -> dict[st
         "validated_source_count": len({source_identity(item) for item in validated}),
         "strategies": strategies,
         "common_concepts": common,
+        "core_concepts": core,
         "rule_consensus": _rule_consensus(strategies),
     }
 
@@ -504,11 +563,17 @@ def build_strategy_families(
     similarity_threshold: float = 0.28,
 ) -> list[dict[str, Any]]:
     """Greedily cluster related strategies using reusable DNA rather than strategy names."""
-    items = [
-        dict(item)
-        for item in strategies
-        if isinstance(item, dict) and not is_synthetic_strategy(item)
-    ]
+    items = sorted(
+        [
+            dict(item)
+            for item in strategies
+            if is_family_source_strategy(item)
+        ],
+        key=lambda item: (
+            str(item.get("direction") or ""),
+            str(item.get("id") or item.get("name") or ""),
+        ),
+    )
     families: list[list[dict[str, Any]]] = []
 
     for strategy in items:
@@ -634,6 +699,203 @@ def build_candidate_blueprints(
     )
     return candidates
 
+
+
+
+def _canonical_family_name(family: dict[str, Any], core_dna: dict[str, list[str]]) -> str:
+    structure = {str(value).casefold() for value in core_dna.get("structure") or []}
+    momentum = {str(value).casefold() for value in core_dna.get("momentum") or []}
+
+    if "opening-range breakout" in structure:
+        base = "Opening Range Breakout"
+    elif "vwap reclaim" in structure and "pullback" in structure:
+        base = "VWAP Reclaim Pullback"
+    elif "vwap reclaim" in structure:
+        base = "VWAP Reclaim"
+    elif "ema pullback" in structure and "breakout" in structure:
+        base = "EMA Pullback Breakout"
+    elif "ema pullback" in structure:
+        base = "EMA Pullback"
+    elif "flag continuation" in structure:
+        base = "Flag / Pullback Continuation"
+    elif "pullback" in structure and "breakout" in structure:
+        base = "Pullback Breakout"
+    elif "breakout" in structure and "high relative volume" in momentum:
+        base = "High-RVOL Momentum Breakout"
+    elif "breakout" in structure:
+        base = "Momentum Breakout"
+    elif "pullback" in structure:
+        base = "Momentum Pullback"
+    else:
+        base = str(family.get("name") or "Strategy family").replace(" family", "").strip()
+
+    direction = str(family.get("direction") or "").lower()
+    if direction == "short":
+        return f"{base} — Short"
+    return base
+
+
+def _canonical_blueprint_from_family(family: dict[str, Any]) -> dict[str, Any]:
+    members = [item for item in family.get("strategies") or [] if isinstance(item, dict)]
+    core_concepts = list(family.get("core_concepts") or [])
+    core_by_dimension = {
+        dimension: [
+            item["concept"]
+            for item in core_concepts
+            if item.get("dimension") == dimension
+        ]
+        for dimension in DNA_DIMENSIONS
+    }
+
+    consensus = dict(family.get("rule_consensus") or {})
+    consistent_rules = {
+        name: details.get("consensus_value")
+        for name, details in consensus.items()
+        if not details.get("conflict") and details.get("consensus_value") is not None
+    }
+    conflicting_rules = [
+        name for name, details in consensus.items() if bool(details.get("conflict"))
+    ]
+
+    return {
+        "id": "canonical-" + str(family.get("id") or "family"),
+        "name": _canonical_family_name(family, core_by_dimension),
+        "family_id": family.get("id"),
+        "direction": family.get("direction"),
+        "research_priority_score": min(
+            100.0,
+            45.0
+            + int(family.get("independent_source_count") or 0) * 8.0
+            + min(25.0, int(family.get("strategy_count") or 0) * 2.0)
+            + int(family.get("validated_source_count") or 0) * 8.0,
+        ),
+        "supporting_source_count": int(family.get("independent_source_count") or 0),
+        "supporting_sources": list(family.get("source_titles") or []),
+        "supporting_strategy_count": int(family.get("strategy_count") or 0),
+        "contributing_strategy_ids": [
+            str(item.get("id") or "")
+            for item in members
+            if item.get("id")
+        ],
+        "validated_source_count": int(family.get("validated_source_count") or 0),
+        "core_dna": core_by_dimension,
+        "consistent_explicit_rules": consistent_rules,
+        "conflicting_explicit_rules": conflicting_rules,
+        "rule_consensus": consensus,
+        "status": "ai_managed_family",
+        "backtest_supported": str(family.get("direction") or "").lower() in {"long", "both"},
+        "requires_rule_compilation": bool(conflicting_rules) or not bool(consistent_rules),
+    }
+
+
+def _family_research_signature(strategy: dict[str, Any]) -> str:
+    material = {
+        "machine_rules": normalize_machine_rules(strategy.get("machine_rules")),
+        "research_rule_overrides": normalize_machine_rules(strategy.get("research_rule_overrides")),
+        "candidate_rule_options": strategy.get("candidate_rule_options") or {},
+        "strategy_dna": normalize_strategy_dna(strategy.get("strategy_dna")),
+        "direction": str(strategy.get("direction") or ""),
+    }
+    return hashlib.sha256(
+        repr(material).encode("utf-8", errors="ignore")
+    ).hexdigest()[:24]
+
+
+def build_canonical_family_strategies(
+    strategies: list[dict[str, Any]],
+    *,
+    existing: list[dict[str, Any]] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Collapse learned source ideas into AI-managed canonical research families.
+
+    Raw source strategies remain untouched for provenance. The canonical record is the one
+    meant for optimization, validation, market discovery, and user-facing management.
+    """
+    families = build_strategy_families(strategies)
+    existing_by_family = {
+        str(item.get("family_id") or ""): dict(item)
+        for item in (existing or strategies or [])
+        if isinstance(item, dict)
+        and str(item.get("source_type") or "").lower() == "canonical_family"
+        and item.get("family_id")
+    }
+
+    canonical: list[dict[str, Any]] = []
+    for family in families:
+        blueprint = _canonical_blueprint_from_family(family)
+        compiled = compile_candidate_blueprint(blueprint)
+        compiled["id"] = "canonical-" + str(family.get("id") or "")
+        compiled["name"] = str(blueprint.get("name") or family.get("name") or "Strategy family")
+        compiled["category"] = "AI-managed strategy family"
+        compiled["source_type"] = "canonical_family"
+        compiled["source_id"] = "canonical:" + str(family.get("id") or "")
+        compiled["source_title"] = (
+            f"AI-consolidated family · {int(family.get('strategy_count') or 0)} source variation(s)"
+        )
+        compiled["source_author"] = ""
+        compiled["family_id"] = family.get("id")
+        compiled["raw_strategy_count"] = int(family.get("strategy_count") or 0)
+        compiled["supporting_source_count"] = int(family.get("independent_source_count") or 0)
+        compiled["supporting_sources"] = list(family.get("source_titles") or [])
+        compiled["source_strategy_ids"] = list(blueprint.get("contributing_strategy_ids") or [])
+        compiled["ai_managed"] = True
+        compiled["family_core_concepts"] = list(family.get("core_concepts") or [])
+
+        # If a rule appears in only some family members, "not required" is itself a legitimate
+        # family variant. Let the optimizer test that option rather than creating another strategy.
+        options = {
+            str(name): list(values)
+            for name, values in (compiled.get("candidate_rule_options") or {}).items()
+            if isinstance(values, list)
+        }
+        member_count = max(1, int(family.get("strategy_count") or 0))
+        for rule_name, details in (family.get("rule_consensus") or {}).items():
+            observations = int((details or {}).get("observations") or 0)
+            if observations <= 0 or observations >= member_count:
+                continue
+            values = options.setdefault(str(rule_name), [])
+            current = normalize_machine_rules(compiled.get("machine_rules")).get(str(rule_name))
+            if current is not None and current not in values:
+                values.insert(0, current)
+            if None not in values:
+                values.append(None)
+        compiled["candidate_rule_options"] = options
+
+        signature = _family_research_signature(compiled)
+        compiled["canonical_research_signature"] = signature
+        previous = existing_by_family.get(str(family.get("id") or ""))
+        if previous and str(previous.get("canonical_research_signature") or "") == signature:
+            for field in (
+                "validation_status",
+                "optimization_status",
+                "last_autonomous_research",
+                "validated_rules",
+                "validated_backtest_settings",
+                "validated_at",
+                "last_backtest",
+                "backtest_run_history",
+            ):
+                if field in previous:
+                    compiled[field] = previous[field]
+        else:
+            compiled["validation_status"] = "unvalidated"
+            compiled["optimization_status"] = "not_run"
+            compiled.pop("validated_rules", None)
+            compiled.pop("validated_backtest_settings", None)
+            compiled.pop("validated_at", None)
+            if previous:
+                compiled["previous_family_validation_superseded"] = True
+
+        canonical.append(compiled)
+
+    canonical.sort(
+        key=lambda item: (
+            -int(item.get("supporting_source_count") or 0),
+            -int(item.get("raw_strategy_count") or 0),
+            str(item.get("name") or ""),
+        )
+    )
+    return canonical, families
 
 
 def _coerce_rule_option(rule_name: str, value: Any) -> Any:
