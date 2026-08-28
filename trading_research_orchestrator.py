@@ -343,6 +343,7 @@ def claim_next_research_job(
     worker_id: str,
     *,
     now: datetime | None = None,
+    allowed_types: set[str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     current = (now or datetime.now(UTC)).astimezone(UTC)
     data, _ = recover_stale_research_jobs(
@@ -352,6 +353,8 @@ def claim_next_research_job(
     eligible: list[dict[str, Any]] = []
     for job in data["research_queue"]:
         if str(job.get("status") or "") not in {"queued", "retry"}:
+            continue
+        if allowed_types is not None and str(job.get("type") or "") not in allowed_types:
             continue
         next_at = _parse_iso(job.get("next_attempt_at"))
         if next_at and next_at > current:
