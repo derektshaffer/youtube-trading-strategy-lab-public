@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import socket
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -17,6 +18,8 @@ from trading_auto_research import (
     run_autonomous_research,
 )
 from stock_strategy_finder import (
+    latest_finder_checkpoint,
+    merge_finder_checkpoint_into_library,
     merge_finder_report_into_library,
     run_stock_strategy_finder,
     search_profile,
@@ -165,10 +168,72 @@ def execute_job(
             )
 
         market = build_market()
-        end = datetime.now(timezone.utc)
-        if market.historical_feed == "sip" and market.live_feed != "sip":
-            end -= timedelta(minutes=16)
-        start = end - timedelta(days=profile.history_days)
+        previous_checkpoint = latest_finder_checkpoint(
+            latest,
+            symbol,
+            profile.name,
+        )
+        previous_engine_state = dict((previous_checkpoint or {}).get("engine_state") or {})
+        resumable = bool(
+            previous_engine_state.get("timeframes")
+            and str((previous_checkpoint or {}).get("status") or "").lower()
+            in {"running", "failed", "interrupted"}
+        )
+        saved_start = str((previous_checkpoint or {}).get("research_start") or "").strip()
+        saved_end = str((previous_checkpoint or {}).get("research_end") or "").strip()
+        if resumable and saved_start and saved_end:
+            try:
+                start = datetime.fromisoformat(saved_start.replace("Z", "+00:00"))
+                end = datetime.fromisoformat(saved_end.replace("Z", "+00:00"))
+            except ValueError:
+                resumable = False
+        if not resumable:
+            end = datetime.now(timezone.utc)
+            if market.historical_feed == "sip" and market.live_feed != "sip":
+                end -= timedelta(minutes=16)
+            start = end - timedelta(days=profile.history_days)
+
+        now_text = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        checkpoint_record = {
+            "id": (
+                str((previous_checkpoint or {}).get("id") or "")
+                if resumable
+                else "cloud-finder-" + str(job.get("id") or "")
+            ),
+            "symbol": symbol,
+            "profile": profile.name,
+            "status": "running",
+            "started_at": (
+                str((previous_checkpoint or {}).get("started_at") or now_text)
+                if resumable else now_text
+            ),
+            "updated_at": now_text,
+            "progress": float((previous_checkpoint or {}).get("progress") or 0.0),
+            "message": (
+                f"Cloud worker resuming {symbol} {profile.name} research"
+                if resumable
+                else f"Cloud worker starting {symbol} {profile.name} research"
+            ),
+            "research_start": start.isoformat(),
+            "research_end": end.isoformat(),
+            "engine_state": previous_engine_state if resumable else {},
+            "last_error": None,
+        }
+        latest = merge_finder_checkpoint_into_library(latest, checkpoint_record)
+        store.save(latest)
+        checkpoint_counter = [0]
+        checkpoint_last_save = [time.monotonic()]
+
+        def persist_checkpoint(*, force: bool = False) -> None:
+            if not force:
+                checkpoint_counter[0] += 1
+                if checkpoint_counter[0] % 4 != 0 and time.monotonic() - checkpoint_last_save[0] < 90:
+                    return
+            checkpoint_record["updated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            current = store.load_latest()
+            current = merge_finder_checkpoint_into_library(current, checkpoint_record)
+            store.save(current)
+            checkpoint_last_save[0] = time.monotonic()
 
         def history_progress(page: int) -> None:
             if page == 1 or page % 10 == 0:
@@ -212,19 +277,33 @@ def execute_job(
             )
 
         def finder_progress(completed: int, total: int, message: str) -> None:
+            portion = completed / max(1, total)
+            checkpoint_record["progress"] = max(
+                float(checkpoint_record.get("progress") or 0.0),
+                min(0.99, portion),
+            )
+            checkpoint_record["message"] = message
             if completed == total or completed % max(1, total // 100) == 0:
-                pct = completed / max(1, total) * 100.0
+                pct = portion * 100.0
                 print(
                     f"[stock-finder] {symbol} {profile.name} {pct:.1f}% · {message}",
                     flush=True,
                 )
 
+        def finder_checkpoint(engine_state: dict[str, Any]) -> None:
+            checkpoint_record["engine_state"] = engine_state
+            persist_checkpoint()
+
         parallel_workers = max(
             1,
             min(8, int(env("RESEARCH_PARALLEL_WORKERS", "2") or 2)),
         )
+        # Resume uses the sequential checkpoint-aware path. A fresh cloud run can
+        # spread independent strategy families across CPU cores.
+        workers_for_run = 1 if resumable else parallel_workers
         print(
-            f"[stock-finder] using {parallel_workers} CPU worker(s) across independent strategy families",
+            f"[stock-finder] using {workers_for_run} CPU worker(s) across independent strategy families"
+            + (" (checkpoint resume mode)" if resumable else ""),
             flush=True,
         )
         report = run_stock_strategy_finder(
@@ -233,8 +312,19 @@ def execute_job(
             symbol,
             profile_name=profile.name,
             progress=finder_progress,
-            parallel_workers=parallel_workers,
+            resume_state=previous_engine_state if resumable else None,
+            checkpoint=finder_checkpoint,
+            parallel_workers=workers_for_run,
         )
+        checkpoint_record["status"] = "complete"
+        checkpoint_record["progress"] = 1.0
+        checkpoint_record["message"] = f"{symbol} {profile.name} cloud research complete"
+        checkpoint_record["completed_at"] = str(
+            report.get("generated_at")
+            or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        )
+        checkpoint_record["last_error"] = None
+        persist_checkpoint(force=True)
         latest = store.load_latest()
         latest = merge_finder_report_into_library(latest, report)
         result_ref = (
