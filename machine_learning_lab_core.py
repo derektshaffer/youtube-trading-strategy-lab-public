@@ -23,6 +23,7 @@ from sklearn.metrics import (
 )
 from sklearn.pipeline import Pipeline
 
+from app_access import require_app_access
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -50,6 +51,14 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+require_app_access(st)
+
+with st.sidebar:
+    st.divider()
+    if st.button("← Trading Dashboard", key="ml_back_dashboard", width="stretch"):
+        st.switch_page("youtube_strategy_app.py")
+    if st.button("Open Full Trading Lab", key="ml_open_full_lab", width="stretch"):
+        st.switch_page("pages/Full_Trading_Lab.py")
 
 
 FEATURE_LABELS = {
@@ -390,7 +399,10 @@ market_ready = bool(setting("ALPACA_API_KEY") and setting("ALPACA_SECRET_KEY"))
 
 with st.sidebar:
     st.markdown("### ML Lab connection")
-    st.success("Alpaca market data connected") if market_ready else st.error("Alpaca credentials needed")
+    if market_ready:
+        st.success("Alpaca market data connected")
+    else:
+        st.error("Alpaca credentials needed")
     st.caption("Training uses historical bars only. No brokerage order endpoint is called.")
     st.divider()
     st.markdown("### What the score means")
@@ -473,7 +485,7 @@ ml_button_slot = st.empty()
 run = ml_button_slot.button(
     "🧠 Train + walk-forward test",
     type="primary",
-    use_container_width=True,
+    width="stretch",
     key="ml_train_walk_forward",
 )
 
@@ -481,7 +493,7 @@ if run:
     ml_button_slot.button(
         "🧠 Training…",
         type="primary",
-        use_container_width=True,
+        width="stretch",
         disabled=True,
         key="ml_train_walk_forward_busy",
     )
@@ -651,7 +663,7 @@ if run:
                 fold_table["ROC AUC"] = fold_table["ROC AUC"].round(3)
             if "Brier" in fold_table:
                 fold_table["Brier"] = fold_table["Brier"].round(3)
-            st.dataframe(fold_table, use_container_width=True, hide_index=True)
+            st.dataframe(fold_table, width="stretch", hide_index=True)
 
         st.markdown("## Latest historical setup")
         latest_cols = st.columns(3)
@@ -681,7 +693,7 @@ if run:
         st.markdown("## What the model learned")
         st.dataframe(
             importance.head(12).assign(Importance=lambda df: (df["Importance"] * 100.0).round(2)),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -695,7 +707,7 @@ if run:
                 preview[
                     ["timestamp", "session", "ML score", "Actual profitable", "Strategy trigger", "Outcome return %", "fold"]
                 ].rename(columns={"timestamp": "Timestamp", "session": "Session", "fold": "Fold"}),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
 

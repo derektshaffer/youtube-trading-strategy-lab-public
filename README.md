@@ -9,13 +9,11 @@ This is a **separate application**. Do not replace the existing stock scanner or
 single-stock analyzer. Deploy this project from a new GitHub repository and it
 will have its own Streamlit URL, secrets, and saved strategy library.
 
-## Upload these three files to a new GitHub repository
+## Deploy the complete repository
 
-1. `youtube_strategy_app.py`
-2. `youtube_strategy_engine.py`
-3. `requirements.txt`
-
-The `README.md`, `secrets.example.toml`, and test file are optional.
+The dashboard now depends on the modules in the repository root and the
+Streamlit pages in `pages/`. Deploy or clone the complete repository; selecting
+only the original three files will produce a broken application.
 
 Suggested repository name: `youtube-trading-strategy-lab`.
 
@@ -32,6 +30,7 @@ Suggested repository name: `youtube-trading-strategy-lab`.
 ALPACA_API_KEY = "your-existing-alpaca-api-key"
 ALPACA_SECRET_KEY = "your-existing-alpaca-secret-key"
 GEMINI_API_KEY = "your-new-google-gemini-api-key"
+APP_ACCESS_PASSWORD = "a-long-unique-password-used-only-for-this-app"
 
 ALPACA_LIVE_FEED = "iex"
 ALPACA_HISTORICAL_FEED = "sip"
@@ -46,6 +45,10 @@ Gemini API key is new. Create one at https://aistudio.google.com/apikey.
 Never put real API keys in a GitHub file. Add them only to Streamlit Secrets or
 local environment variables.
 
+`APP_ACCESS_PASSWORD` is mandatory. The app fails closed when it is missing and
+asks for it before rendering any dashboard or lab. Keep Streamlit's deployment
+private as an additional layer when your hosting plan supports access controls.
+
 ## Run locally on a Mac
 
 ```bash
@@ -53,6 +56,7 @@ python3 -m pip install -r requirements.txt
 export ALPACA_API_KEY="your-existing-alpaca-api-key"
 export ALPACA_SECRET_KEY="your-existing-alpaca-secret-key"
 export GEMINI_API_KEY="your-google-gemini-api-key"
+export APP_ACCESS_PASSWORD="a-long-unique-password-used-only-for-this-app"
 streamlit run youtube_strategy_app.py
 ```
 
@@ -74,7 +78,11 @@ streamlit run youtube_strategy_app.py
 
 ## Honest limitations
 
-- The app does not place real or simulated brokerage orders.
+- The app never uses Alpaca's live-trading endpoint. When explicitly approved
+  and armed, the dashboard and Live Strategy Runner can submit simulated bracket
+  orders to Alpaca's paper endpoint. Paper entry fails closed unless both the
+  latest quote and trade have valid timezone-aware timestamps no more than 90
+  seconds old.
 - Video extraction is a research tool. A creator showing winning examples does
   not establish that the method makes money.
 - Small chart text, quickly changing visuals, and subjective tape-reading rules
@@ -91,10 +99,10 @@ streamlit run youtube_strategy_app.py
 - Streamlit Cloud's local filesystem can reset when an app restarts or is
   redeployed. Use the built-in backup export/import feature to retain records.
 
-## Optional test command
+## Test command
 
 ```bash
-python3 -m unittest test_youtube_strategy_engine.py -v
+python3 -m unittest discover -v
 ```
 
 ## Trading Intelligence Lab (new platform foundation)
