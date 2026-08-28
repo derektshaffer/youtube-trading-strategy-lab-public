@@ -494,12 +494,12 @@ def dispatch_github_workflow(
         if exc.code in {401, 403}:
             return (
                 False,
-                "GitHub token cannot launch Actions workflows. The scheduled worker will still pick up the job.",
+                "The GitHub token cannot launch Actions workflows. Add a Streamlit secret named GITHUB_ACTIONS_TOKEN using a fine-grained GitHub token with Actions: Read and write access to youtube-trading-strategy-lab-public. The queued job is safe.",
             )
         if exc.code == 404:
             return (
                 False,
-                "GitHub could not find the distributed workflow or repository. The scheduled worker remains the fallback.",
+                "GitHub could not access the distributed workflow with this token. The token is probably not authorized for youtube-trading-strategy-lab-public. Add GITHUB_ACTIONS_TOKEN in Streamlit Secrets with Actions: Read and write access to that repository. The queued job is safe.",
             )
         if exc.code == 422:
             return (
