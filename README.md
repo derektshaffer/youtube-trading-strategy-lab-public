@@ -167,8 +167,8 @@ Required GitHub Actions repository secrets:
 
 - `GEMINI_API_KEY`
 - `GEMINI_PAID_API_KEY` (optional quota fallback)
-- `GITHUB_BACKUP_REPOSITORY`
-- `GITHUB_BACKUP_TOKEN`
+- `TRADING_LAB_BACKUP_REPOSITORY` — use the same value as Streamlit `GITHUB_BACKUP_REPOSITORY`
+- `TRADING_LAB_BACKUP_TOKEN` — use the same value as Streamlit `GITHUB_BACKUP_TOKEN`
 - `ALPACA_API_KEY`
 - `ALPACA_SECRET_KEY`
 
