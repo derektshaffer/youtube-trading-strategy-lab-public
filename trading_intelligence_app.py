@@ -1048,6 +1048,15 @@ actions_repository_setting = setting(
 )
 actions_ref_setting = setting("GITHUB_ACTIONS_REF", "main")
 system_status_word = str(system_config_summary.get("state") or "DEGRADED")
+persistence_snapshot = intelligence_store().persistence_status(verify=False)
+known_persistence_error = str(persistence_snapshot.get("last_error") or "").strip()
+if known_persistence_error:
+    system_status_word = "DEGRADED"
+    stock_cloud_ready = False
+    stock_cloud_blockers = [
+        *stock_cloud_blockers,
+        "Private durable storage has a recorded error: " + known_persistence_error,
+    ]
 
 with st.sidebar:
     st.markdown(
@@ -2291,6 +2300,43 @@ elif module == "System Health":
             st.success(f"**{check.get('name')} · READY** — {detail}")
         else:
             st.error(f"**{check.get('name')} · {status}** — {detail}")
+
+    st.markdown("### Durable storage live probe")
+    with st.spinner("Verifying private backup reachability…"):
+        persistence_live = intelligence_store().persistence_status(verify=True)
+    persistence_error = str(
+        persistence_live.get("verification_error")
+        or persistence_live.get("last_error")
+        or ""
+    ).strip()
+    if (
+        persistence_live.get("verified")
+        and persistence_live.get("write_verified")
+        and not persistence_error
+    ):
+        st.success(
+            "**Private durable storage · HEALTHY** — The Trading Intelligence backup is reachable "
+            "and this app has a recorded successful cloud write."
+        )
+    elif persistence_live.get("verified") and not persistence_error:
+        st.warning(
+            "**Private durable storage · REACHABLE** — The backup can be read, but this app has not "
+            "yet recorded a successful write in the current deployment. The end-to-end smoke test below "
+            "will prove write access from the cloud worker."
+        )
+    else:
+        st.error(
+            "**Private durable storage · BLOCKED** — "
+            + (persistence_error or "The private backup could not be verified.")
+        )
+    st.caption(
+        "Destination: "
+        + str(persistence_live.get("repository") or "not configured")
+        + " · "
+        + str(persistence_live.get("path") or "no path")
+        + " · Last successful write: "
+        + str(persistence_live.get("last_write_at") or "not recorded")
+    )
 
     st.markdown("### GitHub Actions live probe")
     if actions_token_setting:
