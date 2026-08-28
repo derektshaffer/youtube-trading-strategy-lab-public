@@ -40,6 +40,7 @@ from trading_strategy_dna import (
     build_strategy_families,
     compile_candidate_blueprint,
     infer_strategy_dna,
+    is_family_source_strategy,
     is_synthetic_strategy,
     source_identity,
 )
@@ -524,20 +525,28 @@ except AppError as exc:
 
 strategies = list(library.get("strategies") or [])
 sources = list(library.get("knowledge_sources") or [])
+source_strategies = [item for item in strategies if is_family_source_strategy(item)]
+canonical_strategies = [
+    item
+    for item in strategies
+    if str(item.get("source_type") or "").lower() == "canonical_family"
+]
+managed_strategies = canonical_strategies or source_strategies
 
 
 if module == "Overview":
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Knowledge sources", len(sources))
-    c2.metric("Strategies", len(strategies))
+    c2.metric("AI strategy families", len(canonical_strategies))
     c3.metric(
-        "Validated",
-        sum(1 for s in strategies if str(s.get("validation_status")) == "validated"),
+        "Validated families",
+        sum(
+            1
+            for s in canonical_strategies
+            if str(s.get("validation_status") or "").lower() == "validated"
+        ),
     )
-    c4.metric(
-        "Approved for live/paper",
-        sum(1 for s in strategies if bool(s.get("approved"))),
-    )
+    c4.metric("Raw source ideas", len(source_strategies))
 
     st.markdown("### Platform pipeline")
     cols = st.columns(4)
@@ -561,9 +570,9 @@ if module == "Overview":
         "research, market discovery, and the unified strategy library are all connected."
     )
     st.info(
-        "The normal workflow is now AI-first: upload a source once, let the AI extract and prepare "
-        "its strategies, then use deterministic market data and validation to decide what survives. "
-        "Manual review tools remain available when you want them, but they are no longer required for preparation."
+        "The normal workflow is AI-managed: upload books/videos, keep every extracted idea for provenance, "
+        "automatically consolidate similar ideas into strategy families, let historical research optimize the "
+        "rule variations, and surface only the families that need your attention or survive validation."
     )
 
 
