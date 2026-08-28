@@ -2,7 +2,9 @@ name: Distributed Stock Finder
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # Avoid the heavily loaded quarter-hour boundaries. GitHub notes scheduled
+    # workflows can be delayed during peak cron periods.
+    - cron: "7,17,27,37,47,57 * * * *"
   workflow_dispatch:
 
 permissions:
