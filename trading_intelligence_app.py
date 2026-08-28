@@ -77,6 +77,12 @@ from trading_auto_research import (
     merge_autonomous_research_into_library,
     run_autonomous_research,
 )
+from trading_research_orchestrator import (
+    DEFAULT_GEMINI_BULK_RESEARCH_MODEL,
+    DEFAULT_GEMINI_SPECIALIST_MODEL,
+    research_queue_status,
+    seed_continuous_research_cycle,
+)
 from trading_strategy_dna import (
     DNA_DIMENSIONS,
     DNA_LABELS,
@@ -3369,11 +3375,115 @@ elif module == "Make Strategy Testable":
 
 elif module == "AI Research Autopilot":
     st.caption(
-        "This is the AI research manager. It works on consolidated strategy families—not every raw book/video "
-        "variation. It prepares vague rules when possible, builds its own historical stock universe, optimizes "
-        "family rule variations, runs untouched holdout and walk-forward checks, tests across multiple stocks, "
-        "and saves the strongest robust rules automatically."
+        "This is the AI research manager. It now combines your curated books/videos with a persistent grounded-web "
+        "research queue. Gemini Flash handles high-volume research, Gemini Pro reviews difficult or conflicting "
+        "hypotheses, and deterministic historical validation—not AI opinion—decides what advances."
     )
+
+    cloud_queue = research_queue_status(library)
+    research_system = dict(library.get("research_system") or {})
+    grounded_runs = list(library.get("external_research_runs") or [])
+    research_hypotheses = list(library.get("research_hypotheses") or [])
+    worker_runs = list(library.get("research_worker_runs") or [])
+
+    st.markdown("### Continuous Research System")
+    continuous_metrics = st.columns(4)
+    continuous_metrics[0].metric("Research queue", int(cloud_queue.get("active") or 0))
+    continuous_metrics[1].metric("Grounded web runs", len(grounded_runs))
+    continuous_metrics[2].metric(
+        "Hypotheses",
+        len(research_hypotheses),
+        delta=(
+            f"{sum(1 for item in research_hypotheses if str(item.get('status') or '') == 'queued_for_validation')} queued for validation"
+        ),
+        delta_color="off",
+    )
+    continuous_metrics[3].metric(
+        "Cloud worker",
+        "ACTIVE" if research_system.get("last_worker_at") else "READY TO CONNECT",
+        delta=str(research_system.get("last_worker_at") or "No cloud worker run saved yet"),
+        delta_color="off",
+    )
+
+    bulk_model = setting("GEMINI_RESEARCH_BULK_MODEL", DEFAULT_GEMINI_BULK_RESEARCH_MODEL)
+    specialist_model = setting("GEMINI_RESEARCH_SPECIALIST_MODEL", DEFAULT_GEMINI_SPECIALIST_MODEL)
+    st.info(
+        f"Model routing: **{bulk_model}** handles broad grounded research → "
+        f"**{specialist_model}** handles adversarial specialist review → "
+        "**Trading Lab validation** handles historical proof. "
+        "The cloud worker is separate from Streamlit, so once its GitHub Actions secrets are connected, "
+        "this queue can continue while your Mac is off."
+    )
+
+    queue_cycle_col, queue_refresh_col = st.columns([1.4, 1.0])
+    with queue_cycle_col:
+        if st.button(
+            "Queue today's continuous research cycle",
+            type="primary",
+            use_container_width=True,
+            key="til_seed_continuous_research",
+        ):
+            queued_library, added_jobs = seed_continuous_research_cycle(load_library())
+            if added_jobs:
+                intelligence_store().save(queued_library)
+                st.success(
+                    f"Queued {added_jobs} grounded research topics for the cloud worker. "
+                    "Flash will research them first; Pro reviews the resulting hypotheses."
+                )
+                st.rerun()
+            else:
+                st.info("Today's continuous research cycle is already queued.")
+    with queue_refresh_col:
+        st.caption(
+            "The scheduled cloud worker checks the durable queue independently of this browser session."
+        )
+
+    recent_queue = [
+        item for item in library.get("research_queue") or []
+        if isinstance(item, dict)
+    ][:12]
+    if recent_queue:
+        with st.expander("Recent cloud research jobs", expanded=False):
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "Type": str(item.get("type") or "").replace("_", " ").title(),
+                            "Status": str(item.get("status") or "").replace("_", " ").title(),
+                            "Priority": item.get("priority"),
+                            "Attempts": item.get("attempts"),
+                            "Updated": item.get("updated_at"),
+                            "Result": item.get("result_ref") or "",
+                        }
+                        for item in recent_queue
+                    ]
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    recent_external = grounded_runs[:3]
+    if recent_external:
+        with st.expander("Latest grounded research", expanded=False):
+            for run in recent_external:
+                st.markdown(
+                    f"**{run.get('title') or run.get('topic') or 'Grounded research'}**  "
+                    f"· {run.get('model') or 'Gemini'}"
+                )
+                st.write(str(run.get("summary") or "")[:1400])
+                sources = [
+                    item for item in run.get("sources") or []
+                    if isinstance(item, dict)
+                ]
+                if sources:
+                    st.caption(
+                        "Source quality: "
+                        + " · ".join(
+                            f"{str(item.get('source_type') or 'unknown').replace('_', ' ')} "
+                            f"{int(item.get('source_quality_score') or 0)}/100"
+                            for item in sources[:5]
+                        )
+                    )
 
     ready_strategies = [
         item
