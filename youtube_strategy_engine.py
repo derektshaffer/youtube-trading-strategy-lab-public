@@ -6310,6 +6310,115 @@ def finalize_stock_optimization(
     return report
 
 
+def combine_stock_timeframe_reports(
+    one_minute_rows: list[dict[str, Any]],
+    strategies: list[dict[str, Any]],
+    symbol: str,
+    reports_by_interval: dict[str, dict[str, Any]],
+    requested_timeframes: list[str] | tuple[str, ...],
+) -> dict[str, Any]:
+    """Combine independently optimized timeframe reports, then touch holdout once.
+
+    This is intentionally the same selection logic used by the normal Finder. It
+    lets distributed cloud shards optimize different strategy-family/timeframe
+    slices independently without changing how the final winner is selected.
+    """
+    requested = list(dict.fromkeys(str(item) for item in requested_timeframes))
+    if not requested:
+        raise AppError("Distributed optimization did not provide any timeframes.")
+    missing = [interval for interval in requested if interval not in reports_by_interval]
+    if missing:
+        raise AppError(
+            "Distributed optimization is incomplete; missing timeframe report(s): "
+            + ", ".join(missing)
+        )
+
+    by_interval: list[tuple[str, list[dict[str, Any]], dict[str, Any]]] = []
+    for interval in requested:
+        report = dict(reports_by_interval[interval] or {})
+        rankings = [
+            dict(item)
+            for item in report.get("rankings") or []
+            if isinstance(item, dict)
+        ]
+        if not rankings:
+            raise AppError(f"Distributed {interval} optimization returned no ranked candidates.")
+        report["timeframe"] = interval
+        for candidate in rankings:
+            candidate["timeframe"] = interval
+        report["rankings"] = rankings
+        for record in report.get("configuration_history") or []:
+            if isinstance(record, dict):
+                record["timeframe"] = interval
+        interval_rows = resample_intraday_bars(
+            one_minute_rows,
+            interval,
+            include_extended_hours=True,
+        )
+        by_interval.append((interval, interval_rows, report))
+
+    candidates = [
+        candidate
+        for _, _, report in by_interval
+        for candidate in report["rankings"]
+    ]
+    candidates.sort(
+        key=lambda item: (
+            item["status"] == "VALIDATED",
+            item["adequate_sample"],
+            item["validation_metrics"]["net_pnl"] > 0,
+            item["score"],
+        ),
+        reverse=True,
+    )
+    winner = candidates[0]
+    chosen_interval, chosen_rows, chosen_report = next(
+        item for item in by_interval if item[0] == winner["timeframe"]
+    )
+    combined = {
+        **chosen_report,
+        "timeframe": chosen_interval,
+        "timeframes_tested": requested,
+        "strategies_tested": len({item["source_strategy_id"] for item in candidates}),
+        "variants_tested": sum(int(item[2].get("variants_tested") or 0) for item in by_interval),
+        "rule_variants_tested": sum(int(item[2].get("rule_variants_tested") or 0) for item in by_interval),
+        "execution_variants_tested": sum(int(item[2].get("execution_variants_tested") or 0) for item in by_interval),
+        "adaptive_refinement_tests": sum(int(item[2].get("adaptive_refinement_tests") or 0) for item in by_interval),
+        "unique_configurations_tested": sum(
+            int(item[2].get("unique_configurations_tested") or 0)
+            for item in by_interval
+        ),
+        "configuration_history": [
+            record
+            for _, _, interval_report in by_interval
+            for record in interval_report.get("configuration_history") or []
+            if isinstance(record, dict)
+        ],
+        "rankings": candidates,
+        "winner": winner,
+        "timeframe_comparison": [
+            {
+                "timeframe": interval,
+                "strategy_name": report["winner"]["strategy_name"],
+                "validation_metrics": report["winner"]["validation_metrics"],
+                "score": report["winner"]["score"],
+                "status": report["winner"]["status"],
+                "variants_tested": report["variants_tested"],
+            }
+            for interval, _, report in by_interval
+        ],
+        "warnings": list(
+            dict.fromkeys(
+                note
+                for _, _, report in by_interval
+                for note in report.get("warnings") or []
+            )
+        ),
+    }
+    finalize_stock_optimization(combined, chosen_rows, strategies)
+    return combined
+
+
 def optimize_stock_timeframes(
     one_minute_rows: list[dict[str, Any]],
     strategies: list[dict[str, Any]],
@@ -6392,57 +6501,24 @@ def optimize_stock_timeframes(
             record["timeframe"] = interval
         by_interval.append((interval, interval_rows, report))
 
-    candidates = [candidate for _, _, report in by_interval for candidate in report["rankings"]]
-    candidates.sort(
-        key=lambda item: (
-            item["status"] == "VALIDATED",
-            item["adequate_sample"],
-            item["validation_metrics"]["net_pnl"] > 0,
-            item["score"],
-        ),
-        reverse=True,
-    )
-    winner = candidates[0]
-    chosen_interval, chosen_rows, chosen_report = next(
-        item for item in by_interval if item[0] == winner["timeframe"]
-    )
-    combined = {
-        **chosen_report,
-        "timeframe": chosen_interval,
-        "timeframes_tested": requested,
-        "strategies_tested": len({item["source_strategy_id"] for item in candidates}),
-        "variants_tested": sum(item[2]["variants_tested"] for item in by_interval),
-        "rule_variants_tested": sum(item[2]["rule_variants_tested"] for item in by_interval),
-        "execution_variants_tested": sum(item[2]["execution_variants_tested"] for item in by_interval),
-        "unique_configurations_tested": sum(
-            int(item[2].get("unique_configurations_tested") or 0)
-            for item in by_interval
-        ),
-        "configuration_history": [
-            record
-            for _, _, interval_report in by_interval
-            for record in interval_report.get("configuration_history") or []
-        ],
-        "rankings": candidates,
-        "winner": winner,
-        "timeframe_comparison": [
-            {
-                "timeframe": interval,
-                "strategy_name": report["winner"]["strategy_name"],
-                "validation_metrics": report["winner"]["validation_metrics"],
-                "score": report["winner"]["score"],
-                "status": report["winner"]["status"],
-                "variants_tested": report["variants_tested"],
-            }
-            for interval, _, report in by_interval
-        ],
-        "warnings": list(dict.fromkeys(note for _, _, report in by_interval for note in report.get("warnings") or [])),
+    reports_by_interval = {
+        interval: report
+        for interval, _, report in by_interval
     }
-    finalize_stock_optimization(combined, chosen_rows, strategies)
+    combined = combine_stock_timeframe_reports(
+        one_minute_rows,
+        strategies,
+        symbol,
+        reports_by_interval,
+        requested,
+    )
     if progress:
-        progress(len(requested) * 1000 + 1, len(requested) * 1000 + 1, f"Final untouched holdout: {chosen_interval}")
+        progress(
+            len(requested) * 1000 + 1,
+            len(requested) * 1000 + 1,
+            f"Final untouched holdout: {combined.get('timeframe') or '?'}",
+        )
     return combined
-
 
 def session_progress(now: datetime | None = None) -> float:
     local = (now or utc_now()).astimezone(ET)
