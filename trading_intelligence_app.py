@@ -2123,10 +2123,10 @@ elif module == "Make Strategy Testable":
 elif module == "AI Research Autopilot":
     st.markdown("## AI Research Autopilot")
     st.caption(
-        "No ticker selection is required. The Lab builds a broad stock universe, finds historical "
-        "opportunity candidates from information available at the time, deep-tests the best strategy/stock "
-        "families, runs untouched holdout and walk-forward checks, freezes finalist rules, tests them across "
-        "multiple stocks, and saves the outcome automatically."
+        "This is the AI research manager. It works on consolidated strategy families—not every raw book/video "
+        "variation. It prepares vague rules when possible, builds its own historical stock universe, optimizes "
+        "family rule variations, runs untouched holdout and walk-forward checks, tests across multiple stocks, "
+        "and saves the strongest robust rules automatically."
     )
 
     ready_strategies = [
@@ -2135,7 +2135,12 @@ elif module == "AI Research Autopilot":
         if (item.get("research_readiness") or research_readiness(item)).get("label") == "ready_for_backtest"
     ]
     auto_metrics = st.columns(4)
-    auto_metrics[0].metric("Strategies ready", len(ready_strategies))
+    auto_metrics[0].metric(
+        "Families ready now",
+        len(ready_strategies),
+        delta=f"{len(managed_strategies)} total managed",
+        delta_color="off",
+    )
     auto_metrics[1].metric(
         "Already validated",
         sum(1 for item in managed_strategies if str(item.get("validation_status") or "") == "validated"),
@@ -2161,7 +2166,7 @@ elif module == "AI Research Autopilot":
         "🤖 Run full autonomous research now",
         type="primary",
         use_container_width=True,
-        disabled=not ready_strategies,
+        disabled=not managed_strategies,
         key="til_run_full_autonomous_research",
     )
     if run_auto:
@@ -2240,9 +2245,61 @@ elif module == "AI Research Autopilot":
         update_auto_activity("Starting autonomous research funnel…")
 
         try:
+            research_candidates = [dict(item) for item in managed_strategies]
+            needs_preparation = [
+                item
+                for item in research_candidates
+                if (item.get("research_readiness") or research_readiness(item)).get("label")
+                != "ready_for_backtest"
+            ]
+            if needs_preparation:
+                update_auto_activity(
+                    f"AI is preparing {len(needs_preparation)} strategy family/families with qualitative gaps…"
+                )
+                compiler = GeminiRuleCompiler(
+                    setting("GEMINI_API_KEY"),
+                    setting("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
+                    fallback_api_key=setting("GEMINI_PAID_API_KEY", ""),
+                )
+
+                def on_family_prepare(index: int, total: int, strategy_name: str) -> None:
+                    update_auto_activity(
+                        f"Preparing family {index}/{total}: {strategy_name}"
+                    )
+
+                research_candidates = prepare_strategies_with_ai(
+                    research_candidates,
+                    compiler,
+                    minimum_confidence=65.0,
+                    progress_callback=on_family_prepare,
+                )
+                prepared_library = load_library()
+                for prepared_family in research_candidates:
+                    prepared_family["research_readiness"] = research_readiness(prepared_family)
+                    prepared_library = upsert_strategy_record(
+                        prepared_library,
+                        prepared_family,
+                    )
+                intelligence_store().save(prepared_library)
+
+            ready_for_run = [
+                item
+                for item in research_candidates
+                if (item.get("research_readiness") or research_readiness(item)).get("label")
+                == "ready_for_backtest"
+            ]
+            if not ready_for_run:
+                raise AppError(
+                    "AI could not yet translate any strategy family into enough objective rules for "
+                    "historical testing. The families remain saved and can improve as more sources are added."
+                )
+
+            update_auto_activity(
+                f"{len(ready_for_run)} consolidated strategy family/families are ready for historical research…"
+            )
             report = run_autonomous_research(
                 market_client(),
-                ready_strategies,
+                ready_for_run,
                 progress=update_auto_activity,
             )
             update_auto_activity("Saving autonomous research results…")
