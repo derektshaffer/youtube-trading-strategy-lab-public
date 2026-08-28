@@ -2091,14 +2091,14 @@ elif module == "AI Research Autopilot":
 
     ready_strategies = [
         item
-        for item in strategies
+        for item in managed_strategies
         if (item.get("research_readiness") or research_readiness(item)).get("label") == "ready_for_backtest"
     ]
     auto_metrics = st.columns(4)
     auto_metrics[0].metric("Strategies ready", len(ready_strategies))
     auto_metrics[1].metric(
         "Already validated",
-        sum(1 for item in strategies if str(item.get("validation_status") or "") == "validated"),
+        sum(1 for item in managed_strategies if str(item.get("validation_status") or "") == "validated"),
     )
     auto_metrics[2].metric(
         "Autopilot runs",
@@ -2463,11 +2463,11 @@ elif module == "Strategy Lab":
         "earlier sessions, then evaluate separate validation and untouched holdout periods."
     )
 
-    if not strategies:
+    if not managed_strategies:
         st.info("Add or import at least one strategy before running the Strategy Lab.")
     else:
         strategy_labels: dict[str, dict[str, Any]] = {}
-        for item in strategies:
+        for item in managed_strategies:
             label = f"{item.get('name') or 'Unnamed strategy'} · {source_label(item)}"
             if label in strategy_labels:
                 label += f" · {str(item.get('id') or '')[:7]}"
@@ -2494,7 +2494,7 @@ elif module == "Strategy Lab":
             ),
         )
         candidates = (
-            [effective_strategy_for_research(item) for item in strategies]
+            [effective_strategy_for_research(item) for item in managed_strategies]
             if compare_all
             else [effective_strategy_for_research(selected_strategy)]
         )
@@ -2897,12 +2897,12 @@ elif module == "Universe Research":
         "overfitting: a strategy that only works on one symbol should look narrow here."
     )
 
-    if not strategies:
+    if not managed_strategies:
         st.info("Add or import a strategy before running cross-stock research.")
     else:
         universe_choices = {}
         for item in sorted(
-            strategies,
+            managed_strategies,
             key=lambda value: (
                 str(value.get("validation_status") or "").lower() != "validated",
                 str(value.get("name") or ""),
@@ -3293,7 +3293,7 @@ elif module == "Market Discovery":
     )
 
     validated_strategies = [
-        item for item in strategies
+        item for item in managed_strategies
         if str(item.get("validation_status") or "").lower() == "validated"
     ]
     include_research = st.checkbox(
@@ -3307,7 +3307,7 @@ elif module == "Market Discovery":
         key="til_market_discovery_include_research",
         help="Unvalidated strategies can be explored here but should not be treated as proven live edges.",
     )
-    discovery_strategies = strategies if include_research else validated_strategies
+    discovery_strategies = managed_strategies if include_research else validated_strategies
 
     if not discovery_strategies:
         st.info("No validated strategies are available yet. Validate a strategy or include research strategies.")
@@ -3496,8 +3496,8 @@ elif module == "Stock Analyzer":
         "which validated setup currently fits best."
     )
 
-    if not strategies:
-        st.info("No strategies are available yet.")
+    if not managed_strategies:
+        st.info("No strategy families are available yet.")
     else:
         analyzer_cols = st.columns([1.2, 1.0, 2.0])
         analyzer_ticker = analyzer_cols[0].text_input(
@@ -3516,7 +3516,7 @@ elif module == "Stock Analyzer":
         )
 
         analyzer_strategies = [
-            item for item in strategies
+            item for item in managed_strategies
             if not validated_only
             or str(item.get("validation_status") or "").lower() == "validated"
         ]
