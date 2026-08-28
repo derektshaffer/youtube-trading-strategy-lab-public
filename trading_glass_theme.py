@@ -660,6 +660,394 @@ def inject_research_glass_theme() -> None:
             box-shadow: var(--til-shadow) !important;
         }
 
+        /* ---------- Sharp / energetic terminal pass ---------- */
+        /* This layer intentionally adds more contrast and energy than the
+           restrained base theme while keeping the same data and app logic. */
+        html,
+        body,
+        [data-testid="stAppViewContainer"],
+        .stApp {
+            background:
+                radial-gradient(circle at 82% -8%, rgba(37, 166, 238, .12), transparent 31%),
+                radial-gradient(circle at 7% 20%, rgba(40, 215, 127, .055), transparent 25%),
+                linear-gradient(180deg, #030a12 0%, #06111d 45%, #040d17 100%) !important;
+        }
+
+        [data-testid="stHeader"] {
+            border-bottom: 1px solid rgba(91,199,255,.12) !important;
+            box-shadow: 0 8px 26px rgba(0,0,0,.13) !important;
+        }
+
+        .til-hero {
+            border-color: rgba(91,199,255,.18) !important;
+            border-radius: 9px !important;
+            background:
+                linear-gradient(110deg, rgba(9,29,48,.88), rgba(5,16,28,.72)) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255,255,255,.028),
+                0 0 0 1px rgba(31,109,154,.04),
+                0 10px 34px rgba(0,0,0,.15) !important;
+        }
+        .til-hero::after {
+            width: 3px !important;
+            background:
+                linear-gradient(180deg, #52d8ff 0%, #3be27e 100%) !important;
+            box-shadow: 0 0 14px rgba(82,216,255,.24) !important;
+        }
+        .til-brand-mark,
+        .til-sidebrand-mark {
+            color: #61e69b !important;
+            border-color: rgba(80,225,149,.35) !important;
+            background:
+                linear-gradient(145deg, rgba(42,170,103,.16), rgba(18,96,147,.10)) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255,255,255,.045),
+                0 0 16px rgba(48,207,126,.08) !important;
+        }
+        .til-title {
+            color: #f8fbff !important;
+        }
+
+        .til-pagehead {
+            border-color: rgba(91,199,255,.24) !important;
+            border-radius: 9px !important;
+            background:
+                linear-gradient(110deg, rgba(8,30,50,.96), rgba(5,17,29,.84) 72%),
+                radial-gradient(circle at 94% 15%, rgba(52,217,134,.16), transparent 32%) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255,255,255,.035),
+                0 0 0 1px rgba(91,199,255,.025),
+                0 16px 38px rgba(0,0,0,.17) !important;
+        }
+        .til-pagehead::before {
+            width: 3px !important;
+            top: 0 !important;
+            bottom: 0 !important;
+            border-radius: 0 !important;
+            background:
+                linear-gradient(180deg, #57d5ff 0%, #38e17d 100%) !important;
+            box-shadow:
+                0 0 18px rgba(82,216,255,.28),
+                0 0 24px rgba(56,225,125,.12) !important;
+        }
+        .til-pagehead::after {
+            content: "";
+            position: absolute;
+            right: 0;
+            top: 0;
+            width: 220px;
+            height: 2px;
+            background:
+                linear-gradient(90deg, transparent, rgba(82,216,255,.58), rgba(60,226,129,.45)) !important;
+        }
+        .til-page-eyebrow {
+            color: #77bad9 !important;
+            font-weight: 900 !important;
+        }
+        .til-page-eyebrow span {
+            color: #4de08a !important;
+        }
+        .til-page-title {
+            color: #f8fbff !important;
+            font-size: 2.10rem !important;
+            font-weight: 850 !important;
+            text-shadow: 0 0 24px rgba(98,201,255,.055) !important;
+        }
+        .til-page-sub {
+            color: #a6b9cc !important;
+        }
+        .til-page-step {
+            color: rgba(92,201,255,.11) !important;
+            text-shadow: 0 0 28px rgba(73,210,255,.05) !important;
+        }
+
+        /* Sidebar: more product-like and less default Streamlit. */
+        [data-testid="stSidebar"] {
+            background:
+                radial-gradient(circle at 25% 1%, rgba(31,115,170,.09), transparent 24%),
+                linear-gradient(180deg, #04101b 0%, #030b13 100%) !important;
+            border-right: 1px solid rgba(91,199,255,.17) !important;
+            box-shadow: 10px 0 34px rgba(0,0,0,.12) !important;
+        }
+        .til-sidebrand {
+            padding-bottom: 12px !important;
+        }
+        .til-sidebrand-name {
+            color: #f7fbff !important;
+            font-size: .95rem !important;
+        }
+        .til-sidebrand-sub {
+            color: #78a4c3 !important;
+        }
+        .til-sideflow {
+            border-color: rgba(91,199,255,.13) !important;
+            border-radius: 7px !important;
+            color: #7da2bd !important;
+            background:
+                linear-gradient(90deg, rgba(16,56,84,.25), rgba(11,29,46,.20)) !important;
+        }
+
+        .st-key-til_workspace_section div[role="radiogroup"] {
+            gap: .14rem !important;
+        }
+        .st-key-til_workspace_section div[role="radiogroup"] > label {
+            min-height: 2.38rem !important;
+            border-radius: 7px !important;
+            padding-left: .70rem !important;
+        }
+        .st-key-til_workspace_section div[role="radiogroup"] > label:hover {
+            background:
+                linear-gradient(90deg, rgba(28,92,130,.28), rgba(13,38,59,.18)) !important;
+            border-color: rgba(91,199,255,.18) !important;
+        }
+        .st-key-til_workspace_section div[role="radiogroup"] > label:has(input:checked) {
+            background:
+                linear-gradient(90deg, rgba(24,99,116,.44), rgba(20,71,58,.25)) !important;
+            border-color: rgba(75,221,139,.34) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255,255,255,.035),
+                0 0 18px rgba(55,216,128,.07) !important;
+        }
+        .st-key-til_workspace_section div[role="radiogroup"] > label:has(input:checked)::after {
+            width: 3px !important;
+            top: 5px !important;
+            bottom: 5px !important;
+            background:
+                linear-gradient(180deg, #55d7ff, #3de483) !important;
+            box-shadow:
+                0 0 10px rgba(71,224,139,.28) !important;
+        }
+        .st-key-til_workspace_section div[role="radiogroup"] > label p {
+            color: #afc1d3 !important;
+            font-weight: 650 !important;
+        }
+        .st-key-til_workspace_section div[role="radiogroup"] > label:has(input:checked) p {
+            color: #f8fbff !important;
+            font-weight: 780 !important;
+        }
+
+        /* BaseWeb can nest the native radio marker several levels deep. */
+        .st-key-til_workspace_section input[type="radio"],
+        .st-key-til_workspace_section [data-baseweb="radio"] > div:first-child,
+        .st-key-til_workspace_section label div:has(> input[type="radio"]),
+        .st-key-til_workspace_section label span:has(> input[type="radio"]),
+        .st-key-til_workspace_section [data-baseweb="radio"] div:has(input[type="radio"]) {
+            position: absolute !important;
+            opacity: 0 !important;
+            width: 1px !important;
+            height: 1px !important;
+            min-width: 1px !important;
+            min-height: 1px !important;
+            overflow: hidden !important;
+            pointer-events: none !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+
+        /* Tone the native Streamlit multipage navigation into a compact tool rail. */
+        [data-testid="stSidebarNav"] {
+            padding-bottom: .75rem !important;
+            margin-bottom: .75rem !important;
+            border-bottom: 1px solid rgba(91,199,255,.14) !important;
+        }
+        [data-testid="stSidebarNav"] a {
+            border-radius: 6px !important;
+            color: #9cb0c5 !important;
+            transition: background .14s ease, color .14s ease !important;
+        }
+        [data-testid="stSidebarNav"] a:hover {
+            color: #ecf8ff !important;
+            background: rgba(27,86,122,.26) !important;
+        }
+        [data-testid="stSidebarNav"] a[aria-current="page"] {
+            color: #f6fbff !important;
+            background:
+                linear-gradient(90deg, rgba(36,104,145,.54), rgba(23,56,78,.32)) !important;
+            box-shadow: inset 2px 0 0 #55d5ff !important;
+        }
+
+        /* Sharper surfaces with subtle cyan energy. */
+        .til-card,
+        [data-testid="stExpander"] details,
+        div[data-testid="stDataFrame"],
+        div[data-testid="stTable"],
+        [data-testid="stFileUploader"],
+        [data-testid="stStatusWidget"],
+        [data-testid="stForm"] {
+            border-radius: 8px !important;
+            border-color: rgba(91,199,255,.17) !important;
+            background:
+                linear-gradient(145deg, rgba(8,28,46,.80), rgba(5,17,29,.70)) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255,255,255,.025),
+                0 11px 28px rgba(0,0,0,.12) !important;
+        }
+        .til-card {
+            position: relative !important;
+            overflow: hidden !important;
+        }
+        .til-card::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 16px;
+            right: 52%;
+            height: 1px;
+            background:
+                linear-gradient(90deg, #55d4ff, rgba(55,224,131,.30), transparent) !important;
+        }
+        .til-card:hover {
+            border-color: rgba(91,199,255,.30) !important;
+            background:
+                linear-gradient(145deg, rgba(10,35,57,.88), rgba(5,18,30,.74)) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255,255,255,.035),
+                0 14px 34px rgba(0,0,0,.14) !important;
+        }
+
+        [data-testid="stMetric"] {
+            position: relative !important;
+            overflow: hidden !important;
+            min-height: 108px !important;
+            border-radius: 8px !important;
+            border-color: rgba(91,199,255,.19) !important;
+            background:
+                linear-gradient(145deg, rgba(10,33,53,.75), rgba(6,19,31,.63)) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255,255,255,.026),
+                0 9px 26px rgba(0,0,0,.10) !important;
+        }
+        [data-testid="stMetric"]::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 36%;
+            height: 2px;
+            background:
+                linear-gradient(90deg, #54d5ff, #42df86, transparent) !important;
+        }
+        [data-testid="stMetricLabel"] {
+            color: #8fb0c8 !important;
+            font-weight: 720 !important;
+        }
+        [data-testid="stMetricValue"] {
+            color: #f7fbff !important;
+            font-weight: 790 !important;
+        }
+
+        /* Inputs should feel crisp and responsive. */
+        div[data-baseweb="select"] > div,
+        [data-testid="stTextInput"] input,
+        [data-testid="stNumberInput"] input,
+        [data-testid="stTextArea"] textarea {
+            border-radius: 7px !important;
+            border-color: rgba(91,199,255,.20) !important;
+            background:
+                linear-gradient(180deg, rgba(9,30,49,.86), rgba(7,22,37,.88)) !important;
+        }
+        div[data-baseweb="select"] > div:hover,
+        [data-testid="stTextInput"] input:hover,
+        [data-testid="stTextArea"] textarea:hover {
+            border-color: rgba(91,199,255,.42) !important;
+        }
+        div[data-baseweb="select"] > div:focus-within,
+        [data-testid="stTextInput"] input:focus,
+        [data-testid="stNumberInput"] input:focus,
+        [data-testid="stTextArea"] textarea:focus {
+            border-color: #54ceff !important;
+            box-shadow:
+                0 0 0 2px rgba(84,206,255,.08),
+                0 0 18px rgba(61,194,255,.07) !important;
+        }
+        [data-testid="stFileUploaderDropzone"] {
+            border-radius: 7px !important;
+            border: 1px dashed rgba(91,199,255,.28) !important;
+            background:
+                linear-gradient(135deg, rgba(9,32,53,.66), rgba(7,22,37,.48)) !important;
+        }
+
+        /* Primary actions should finally look like primary actions. */
+        div[data-testid="stButton"] button,
+        div[data-testid="stDownloadButton"] button {
+            border-radius: 7px !important;
+            font-weight: 740 !important;
+        }
+        div[data-testid="stButton"] button[kind="primary"],
+        div[data-testid="stDownloadButton"] button[kind="primary"] {
+            color: #04120a !important;
+            border-color: rgba(81,235,144,.72) !important;
+            background:
+                linear-gradient(100deg, #39c974 0%, #55e394 58%, #42d4b6 100%) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255,255,255,.34),
+                0 0 20px rgba(69,223,135,.13) !important;
+        }
+        div[data-testid="stButton"] button[kind="primary"]:hover:not(:disabled),
+        div[data-testid="stDownloadButton"] button[kind="primary"]:hover:not(:disabled) {
+            color: #031008 !important;
+            border-color: rgba(119,255,173,.90) !important;
+            background:
+                linear-gradient(100deg, #45d883 0%, #68eca4 58%, #51dfc1 100%) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255,255,255,.42),
+                0 0 26px rgba(69,223,135,.20) !important;
+        }
+        div[data-testid="stButton"] button[kind="secondary"],
+        div[data-testid="stDownloadButton"] button[kind="secondary"] {
+            border-color: rgba(91,199,255,.22) !important;
+            background:
+                linear-gradient(180deg, rgba(13,40,64,.72), rgba(8,25,42,.70)) !important;
+        }
+        div[data-testid="stButton"] button[kind="secondary"]:hover:not(:disabled),
+        div[data-testid="stDownloadButton"] button[kind="secondary"]:hover:not(:disabled) {
+            border-color: rgba(91,199,255,.46) !important;
+            background:
+                linear-gradient(180deg, rgba(17,52,82,.82), rgba(10,31,51,.78)) !important;
+            box-shadow: 0 0 18px rgba(75,195,255,.06) !important;
+        }
+
+        [data-baseweb="tab-list"] {
+            border-bottom-color: rgba(91,199,255,.17) !important;
+        }
+        [data-baseweb="tab"] {
+            border-radius: 6px 6px 0 0 !important;
+        }
+        [aria-selected="true"][data-baseweb="tab"] {
+            color: #f7fbff !important;
+            background:
+                linear-gradient(180deg, rgba(30,105,145,.24), rgba(13,39,61,.30)) !important;
+        }
+        [data-baseweb="tab-highlight"] {
+            background:
+                linear-gradient(90deg, #54d5ff, #3fe283) !important;
+            box-shadow: 0 0 10px rgba(74,213,255,.18) !important;
+        }
+
+        /* Success/status should be rich, not a flat green slab. */
+        div[data-testid="stAlert"] {
+            border-radius: 8px !important;
+            border-color: rgba(91,199,255,.17) !important;
+            background:
+                linear-gradient(110deg, rgba(9,32,49,.76), rgba(7,23,37,.66)) !important;
+        }
+        div[data-testid="stAlert"]:has([data-testid="stAlertContentSuccess"]),
+        div[data-testid="stAlert"][data-baseweb="notification"][kind="positive"] {
+            border-color: rgba(68,224,132,.28) !important;
+            background:
+                linear-gradient(110deg, rgba(14,67,47,.68), rgba(7,33,31,.62)) !important;
+        }
+
+        [data-testid="stProgress"] [role="progressbar"] {
+            border-color: rgba(91,199,255,.18) !important;
+            background: rgba(11,34,54,.72) !important;
+        }
+        [data-testid="stProgress"] [role="progressbar"] > div {
+            background:
+                linear-gradient(90deg, #39a9dc 0%, #45d98b 100%) !important;
+            box-shadow: 0 0 12px rgba(72,215,145,.14) !important;
+        }
+
         /* ---------- Polished spacing ---------- */
         [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] {
             margin-bottom: .05rem;
