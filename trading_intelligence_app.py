@@ -3446,6 +3446,29 @@ elif module == "AI Research Autopilot":
         "this queue can continue while your Mac is off."
     )
 
+    if not research_system.get("last_worker_at"):
+        with st.expander("Finish cloud worker connection", expanded=False):
+            st.write(
+                "The worker code and hourly schedule are already installed. GitHub Actions still needs "
+                "its own copies of the credentials that currently live in Streamlit Secrets."
+            )
+            st.code(
+                "\n".join(
+                    (
+                        "GEMINI_API_KEY",
+                        "GEMINI_PAID_API_KEY   # optional fallback",
+                        "GITHUB_BACKUP_REPOSITORY",
+                        "GITHUB_BACKUP_TOKEN",
+                        "ALPACA_API_KEY",
+                        "ALPACA_SECRET_KEY",
+                    )
+                ),
+                language="text",
+            )
+            st.caption(
+                "Add these as GitHub repository Actions secrets. Never paste the actual secret values into app code."
+            )
+
     queue_cycle_col, queue_refresh_col = st.columns([1.4, 1.0])
     with queue_cycle_col:
         if st.button(
