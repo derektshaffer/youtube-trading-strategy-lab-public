@@ -1310,6 +1310,7 @@ elif module == "Strategy Library":
                 key="til_library_find_matches",
             ):
                 st.session_state["til_selected_strategy_id"] = str(selected.get("id") or "")
+                st.session_state["til_market_discovery_include_research"] = validation_status != "validated"
                 st.session_state["til_navigate_to"] = "Market Discovery"
                 st.rerun()
 
@@ -1328,7 +1329,6 @@ elif module == "Strategy Library":
                     use_container_width=True,
                     key="til_library_live_paper",
                 ):
-                    st.session_state["til_selected_strategy_id"] = str(selected.get("id") or "")
                     st.session_state["til_navigate_to"] = "Live / Paper"
                     st.rerun()
 
@@ -3282,7 +3282,13 @@ elif module == "Market Discovery":
     ]
     include_research = st.checkbox(
         "Include unvalidated research strategies",
-        value=not bool(validated_strategies),
+        value=bool(
+            st.session_state.get(
+                "til_market_discovery_include_research",
+                not bool(validated_strategies),
+            )
+        ),
+        key="til_market_discovery_include_research",
         help="Unvalidated strategies can be explored here but should not be treated as proven live edges.",
     )
     discovery_strategies = strategies if include_research else validated_strategies
