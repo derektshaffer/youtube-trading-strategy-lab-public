@@ -357,5 +357,20 @@ class CanonicalFamilyManagerTests(unittest.TestCase):
         self.assertEqual(len(canonical), 3)
 
 
+    def test_generic_momentum_squeeze_language_is_not_mislabeled_as_avwap_pinch(self):
+        strategy = {
+            **self._strategy("micro", "video-1"),
+            "name": "Micro Pullback / Bull Flag Pattern",
+            "summary": "A strong stock is squeezing higher, then forms a micro pullback before continuation.",
+            "entry_conditions": ["Enter on the first candle making a new high after the pullback."],
+            "indicators": ["VWAP", "9 EMA"],
+            "machine_rules": {"above_vwap": True, "fast_ema_period": 9},
+        }
+
+        dna = infer_strategy_dna(strategy)
+
+        self.assertNotIn("Compression / pinch", dna["structure"])
+
+
 if __name__ == "__main__":
     unittest.main()
