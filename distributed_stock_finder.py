@@ -473,7 +473,7 @@ def command_prepare() -> int:
             "research_start": start.isoformat(),
             "research_end": end.isoformat(),
             "created_at": isoformat_utc(utc_now()),
-            "all_strategies": strategies,
+            "strategies_considered_count": len(strategies),
             "selected_strategies": selected,
             "technical_skips": skipped,
             "one_minute_rows": rows,
@@ -644,11 +644,9 @@ def command_aggregate(run_id: str) -> int:
             for item in plan.get("selected_strategies") or []
             if isinstance(item, dict)
         ]
-        all_strategies = [
-            dict(item)
-            for item in plan.get("all_strategies") or []
-            if isinstance(item, dict)
-        ]
+        strategies_considered_count = int(
+            plan.get("strategies_considered_count") or len(selected)
+        )
         one_minute_rows = list(plan.get("one_minute_rows") or [])
         symbol = str(plan.get("symbol") or "").strip().upper()
         profile = search_profile(str(plan.get("profile_name") or "Deep"))
@@ -711,7 +709,7 @@ def command_aggregate(run_id: str) -> int:
 
         report = complete_stock_strategy_finder_from_optimization(
             one_minute_rows,
-            all_strategies,
+            selected,
             selected,
             list(plan.get("technical_skips") or []),
             symbol,
@@ -721,6 +719,7 @@ def command_aggregate(run_id: str) -> int:
             optimization,
             optimization_seconds=slowest_shard_seconds,
             parallel_workers=len(shard_payloads),
+            strategies_considered_count=strategies_considered_count,
         )
         report["distributed"] = {
             "enabled": True,
