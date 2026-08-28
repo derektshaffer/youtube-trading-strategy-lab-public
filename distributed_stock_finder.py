@@ -45,6 +45,7 @@ from trading_catalyst_core import (
 )
 from trading_research_orchestrator import (
     claim_next_research_job,
+    claim_research_job_by_id,
     fail_research_job,
     finish_research_job,
     record_worker_run,
@@ -275,15 +276,26 @@ def shard_path(run_id: str, index: int) -> str:
     return f"{run_root(run_id)}/shard-{int(index):03d}.json.gz"
 
 
-def _claim_stock_finder_job(worker_id: str) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+def _claim_stock_finder_job(
+    worker_id: str,
+    preferred_job_id: str = "",
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     holder: dict[str, Any] = {}
 
     def mutation(data: dict[str, Any]) -> dict[str, Any] | None:
-        updated, job = claim_next_research_job(
-            data,
-            worker_id,
-            allowed_types={"stock_finder"},
-        )
+        if str(preferred_job_id or "").strip():
+            updated, job = claim_research_job_by_id(
+                data,
+                worker_id,
+                str(preferred_job_id).strip(),
+                allowed_types={"stock_finder"},
+            )
+        else:
+            updated, job = claim_next_research_job(
+                data,
+                worker_id,
+                allowed_types={"stock_finder"},
+            )
         holder["job"] = job
         if job is None:
             return None
@@ -412,9 +424,12 @@ def _balanced_family_groups(
     return [group for group in groups if group]
 
 
-def command_prepare() -> int:
+def command_prepare(preferred_job_id: str = "") -> int:
     worker_id = f"distributed-prepare:{os.getpid()}"
-    job, library = _claim_stock_finder_job(worker_id)
+    job, library = _claim_stock_finder_job(
+        worker_id,
+        preferred_job_id=preferred_job_id,
+    )
     if job is None:
         Path("distributed_meta.json").write_text(
             json.dumps({"has_job": False}, separators=(",", ":")),
@@ -920,10 +935,11 @@ def main() -> int:
     )
     parser.add_argument("--run-id", default="")
     parser.add_argument("--index", type=int, default=-1)
+    parser.add_argument("--job-id", default="")
     args = parser.parse_args()
 
     if args.command == "prepare":
-        return command_prepare()
+        return command_prepare(args.job_id)
     if args.command == "shard":
         if not args.run_id or args.index < 0:
             raise AppError("Shard mode requires --run-id and --index.")
