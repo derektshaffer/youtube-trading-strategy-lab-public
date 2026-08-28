@@ -403,13 +403,13 @@ class ProgressiveCheckpointMergeTests(unittest.TestCase):
 
 
 class BookModelRoutingTests(unittest.TestCase):
-    def test_book_defaults_to_36_with_37_as_specialist(self):
+    def test_book_defaults_to_flash_with_pro_as_specialist(self):
         analyzer = GeminiBookAnalyzer("key")
         self.assertEqual(analyzer.primary_model, DEFAULT_GEMINI_BOOK_MODEL)
         self.assertEqual(analyzer.primary_model, "gemini-3.6-flash")
         self.assertEqual(analyzer.specialist_model, DEFAULT_GEMINI_BOOK_SPECIALIST_MODEL)
-        self.assertEqual(analyzer.specialist_model, "gemini-3.7-flash")
-        self.assertNotIn("gemini-3.7-flash", analyzer.fallback_models)
+        self.assertEqual(analyzer.specialist_model, "gemini-3.1-pro-preview")
+        self.assertNotIn("gemini-3.1-pro-preview", analyzer.fallback_models)
 
     def test_clear_high_confidence_section_does_not_escalate(self):
         analysis = {
@@ -433,7 +433,7 @@ class BookModelRoutingTests(unittest.TestCase):
         self.assertFalse(needs)
         self.assertEqual(reasons, [])
 
-    def test_ambiguous_low_confidence_section_escalates_to_37(self):
+    def test_ambiguous_low_confidence_section_escalates_to_pro(self):
         analyzer = GeminiBookAnalyzer("key")
         primary = {
             "source_summary": "Ambiguous setup",
@@ -478,7 +478,7 @@ class BookModelRoutingTests(unittest.TestCase):
         self.assertEqual(analyzer.model, analyzer.primary_model)
         self.assertIn("Ambiguous setup", result["source_summary"])
         self.assertIn("Clarified setup", result["source_summary"])
-        self.assertTrue(any("gemini-3.7-flash" in message for message in progress))
+        self.assertTrue(any("gemini-3.1-pro-preview" in message for message in progress))
 
 
 class BookIngestionEfficiencyTests(unittest.TestCase):
