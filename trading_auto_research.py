@@ -548,19 +548,58 @@ def _daily_rows(rows: list[dict[str, Any]]) -> list[dict[str, float | str]]:
     for raw in rows:
         close = safe_float(raw.get("c"))
         high = safe_float(raw.get("h"), close)
+        low = safe_float(raw.get("l"), close)
         volume = safe_float(raw.get("v"))
-        if close is None or close <= 0 or high is None or high <= 0 or volume is None or volume < 0:
+        if (
+            close is None or close <= 0
+            or high is None or high <= 0
+            or low is None or low <= 0
+            or volume is None or volume < 0
+        ):
             continue
         normalized.append(
             {
                 "timestamp": str(raw.get("t") or ""),
                 "close": close,
                 "high": high,
+                "low": low,
                 "volume": volume,
             }
         )
     normalized.sort(key=lambda item: str(item["timestamp"]))
     return normalized
+
+
+def _causal_ema(values: list[float], period: int | None) -> list[float | None]:
+    """Causal EMA values with no future information and a minimum period warmup."""
+    if period is None or int(period) < 2:
+        return [None] * len(values)
+    span = int(period)
+    alpha = 2.0 / (span + 1.0)
+    ema: float | None = None
+    output: list[float | None] = []
+    for index, value in enumerate(values):
+        ema = float(value) if ema is None else alpha * float(value) + (1.0 - alpha) * ema
+        output.append(ema if index + 1 >= span else None)
+    return output
+
+
+def _ema_daily_proxy_rules(rules: dict[str, Any]) -> list[str]:
+    names = []
+    for name in (
+        "fast_ema_period",
+        "slow_ema_period",
+        "trend_ema_period",
+        "require_price_above_fast_ema",
+        "require_price_above_slow_ema",
+        "require_price_above_trend_ema",
+        "require_fast_ema_rising",
+        "require_fast_ema_pullback",
+        "max_fast_ema_distance_pct",
+    ):
+        if rules.get(name) is not None:
+            names.append(name)
+    return names
 
 
 def score_historical_opportunities(
@@ -574,6 +613,16 @@ def score_historical_opportunities(
     series = _daily_rows(rows)
     rules = normalize_machine_rules(effective_strategy_for_research(strategy).get("machine_rules"))
     direction = str(strategy.get("direction") or "long").lower()
+
+    closes = [float(item["close"]) for item in series]
+    fast_ema_values = _causal_ema(closes, rules.get("fast_ema_period"))
+    slow_ema_values = _causal_ema(closes, rules.get("slow_ema_period"))
+    trend_ema_values = _causal_ema(closes, rules.get("trend_ema_period"))
+    ema_proxy_rules = _ema_daily_proxy_rules(rules)
+    ema_pullback_proxy = bool(
+        rules.get("require_fast_ema_pullback")
+        and rules.get("fast_ema_period") is not None
+    )
 
     price_rule_names = ("min_price", "max_price")
     opportunity_rule_names = (
@@ -595,11 +644,13 @@ def score_historical_opportunities(
     ] + structural_opportunity_rules
     explicit_opportunity_rules = [
         name for name in opportunity_rule_names if rules.get(name) is not None
-    ] + structural_opportunity_rules
+    ] + structural_opportunity_rules + ema_proxy_rules
 
     events: list[dict[str, Any]] = []
+    outlier_events: list[dict[str, Any]] = []
     all_moves: list[float] = []
     all_rvol: list[float] = []
+    ranking_rvol: list[float] = []
     all_dollar_volume: list[float] = []
 
     for index in range(1, len(series)):
@@ -614,6 +665,43 @@ def score_historical_opportunities(
         average_volume = sum(prior_volumes) / len(prior_volumes) if prior_volumes else 0.0
         rvol = float(row["volume"]) / average_volume if average_volume > 0 else 0.0
         dollar_volume = close * float(row["volume"])
+        baseline_dollar_volume = average_volume * previous_close if average_volume > 0 else 0.0
+        liquidity_regime_outlier = bool(
+            len(prior_volumes) >= 5
+            and rvol >= 20.0
+            and baseline_dollar_volume < 250_000.0
+        )
+
+        fast_ema = fast_ema_values[index] if index < len(fast_ema_values) else None
+        slow_ema = slow_ema_values[index] if index < len(slow_ema_values) else None
+        trend_ema = trend_ema_values[index] if index < len(trend_ema_values) else None
+        fast_ema_prior = (
+            fast_ema_values[max(0, index - 3)]
+            if fast_ema_values and index >= 3
+            else None
+        )
+        fast_ema_rising = bool(
+            fast_ema is not None
+            and fast_ema_prior is not None
+            and float(fast_ema) > float(fast_ema_prior)
+        )
+        fast_ema_distance_pct = (
+            abs(close / float(fast_ema) - 1.0) * 100.0
+            if fast_ema is not None and float(fast_ema) > 0
+            else None
+        )
+        fast_ema_touch_distance_pct = None
+        if fast_ema is not None and float(fast_ema) > 0:
+            ema_value = float(fast_ema)
+            high = float(row.get("high") or close)
+            low = float(row.get("low") or close)
+            if low <= ema_value <= high:
+                fast_ema_touch_distance_pct = 0.0
+            else:
+                fast_ema_touch_distance_pct = min(
+                    abs(low / ema_value - 1.0) * 100.0,
+                    abs(high / ema_value - 1.0) * 100.0,
+                )
 
         previous_day_change = None
         if index >= 2:
@@ -636,6 +724,8 @@ def score_historical_opportunities(
         previous_day_high_broken = current_high > previous_day_high
         all_moves.append(change)
         all_rvol.append(rvol)
+        if not liquidity_regime_outlier:
+            ranking_rvol.append(rvol)
         all_dollar_volume.append(dollar_volume)
 
         checks: list[bool] = []
@@ -673,6 +763,35 @@ def score_historical_opportunities(
         if rules.get("previous_day_high_breakout"):
             checks.append(previous_day_high_broken)
 
+        if ema_proxy_rules:
+            if rules.get("fast_ema_period") is not None:
+                checks.append(fast_ema is not None)
+            if rules.get("slow_ema_period") is not None:
+                checks.append(slow_ema is not None)
+            if rules.get("trend_ema_period") is not None:
+                checks.append(trend_ema is not None)
+            if rules.get("require_price_above_fast_ema") is True:
+                checks.append(fast_ema is not None and close > float(fast_ema))
+            if rules.get("require_price_above_slow_ema") is True:
+                checks.append(slow_ema is not None and close > float(slow_ema))
+            if rules.get("require_price_above_trend_ema") is True:
+                checks.append(trend_ema is not None and close > float(trend_ema))
+            if rules.get("require_fast_ema_rising") is True:
+                checks.append(fast_ema_rising)
+            if rules.get("require_fast_ema_pullback") is True:
+                tolerance = safe_float(rules.get("pullback_touch_tolerance_pct"), 0.0) or 0.0
+                checks.append(
+                    fast_ema_touch_distance_pct is not None
+                    and fast_ema_touch_distance_pct <= float(tolerance)
+                    and fast_ema is not None
+                    and close >= float(fast_ema)
+                )
+            if rules.get("max_fast_ema_distance_pct") is not None:
+                checks.append(
+                    fast_ema_distance_pct is not None
+                    and fast_ema_distance_pct <= float(rules["max_fast_ema_distance_pct"])
+                )
+
         if explicit_opportunity_rules:
             qualifies = all(checks) if checks else False
         else:
@@ -693,39 +812,61 @@ def score_historical_opportunities(
             )
 
         if qualifies:
-            events.append(
-                {
-                    "date": str(row["timestamp"])[:10],
-                    "close": round(close, 4),
-                    "day_change_pct": round(change, 2),
-                    "relative_volume": round(rvol, 2),
-                    "dollar_volume": round(dollar_volume, 2),
-                    "previous_day_high": round(previous_day_high, 4),
-                    "previous_day_high_broken": bool(previous_day_high_broken),
-                    "previous_day_volume_ratio": (
-                        round(previous_day_volume_ratio, 2)
-                        if previous_day_volume_ratio is not None
-                        else None
-                    ),
-                    "previous_day_change_pct": (
-                        round(previous_day_change, 2)
-                        if previous_day_change is not None
-                        else None
-                    ),
-                }
-            )
+            event = {
+                "date": str(row["timestamp"])[:10],
+                "close": round(close, 4),
+                "day_change_pct": round(change, 2),
+                "relative_volume": round(rvol, 2),
+                "dollar_volume": round(dollar_volume, 2),
+                "baseline_dollar_volume": round(baseline_dollar_volume, 2),
+                "liquidity_regime_outlier": liquidity_regime_outlier,
+                "previous_day_high": round(previous_day_high, 4),
+                "previous_day_high_broken": bool(previous_day_high_broken),
+                "previous_day_volume_ratio": (
+                    round(previous_day_volume_ratio, 2)
+                    if previous_day_volume_ratio is not None
+                    else None
+                ),
+                "previous_day_change_pct": (
+                    round(previous_day_change, 2)
+                    if previous_day_change is not None
+                    else None
+                ),
+                "fast_ema": round(float(fast_ema), 4) if fast_ema is not None else None,
+                "slow_ema": round(float(slow_ema), 4) if slow_ema is not None else None,
+                "trend_ema": round(float(trend_ema), 4) if trend_ema is not None else None,
+                "fast_ema_rising": fast_ema_rising if fast_ema is not None else None,
+                "fast_ema_distance_pct": (
+                    round(fast_ema_distance_pct, 3)
+                    if fast_ema_distance_pct is not None
+                    else None
+                ),
+                "fast_ema_touch_distance_pct": (
+                    round(fast_ema_touch_distance_pct, 3)
+                    if fast_ema_touch_distance_pct is not None
+                    else None
+                ),
+            }
+            # A transition from a nearly dormant baseline to enormous activity is real,
+            # but it is poor evidence of a repeatable "normal RVOL" environment. Preserve
+            # it for audit/display without allowing it to win an anchor by adding an event.
+            if liquidity_regime_outlier:
+                outlier_events.append(event)
+            else:
+                events.append(event)
 
     peak_move = max(
         [(-value if direction == "short" else abs(value) if direction == "both" else value) for value in all_moves]
         or [0.0]
     )
     peak_rvol = max(all_rvol or [0.0])
+    peak_rvol_for_ranking = max(ranking_rvol or [0.0])
     median_dollar_volume = median(all_dollar_volume) if all_dollar_volume else 0.0
     # Event count dominates. Other components only break ties among similarly eligible symbols.
     score = (
         len(events) * 20.0
         + min(25.0, max(0.0, peak_move))
-        + min(20.0, max(0.0, peak_rvol) * 4.0)
+        + min(20.0, max(0.0, peak_rvol_for_ranking) * 4.0)
         + min(15.0, math.log10(max(1.0, median_dollar_volume)) * 2.0)
     )
     return {
@@ -734,13 +875,22 @@ def score_historical_opportunities(
         "explicit_daily_rule_count": len(explicit_daily_rules),
         "explicit_opportunity_rule_count": len(explicit_opportunity_rules),
         "candidate_selection_mode": (
-            "strategy_daily_rules"
+            "strategy_ema_pullback_daily_proxy"
+            if ema_pullback_proxy
+            else "strategy_daily_rules"
             if explicit_opportunity_rules
             else "generic_momentum_proxy_with_price_filters"
         ),
         "peak_directional_move_pct": round(peak_move, 2),
         "peak_relative_volume": round(peak_rvol, 2),
+        "peak_relative_volume_for_ranking": round(peak_rvol_for_ranking, 2),
+        "liquidity_regime_outlier_count": len(outlier_events),
         "median_dollar_volume": round(median_dollar_volume, 2),
+        "outlier_events": sorted(
+            outlier_events,
+            key=lambda item: (item["relative_volume"], abs(item["day_change_pct"])),
+            reverse=True,
+        )[:12],
         "events": sorted(
             events,
             key=lambda item: (item["relative_volume"], abs(item["day_change_pct"])),
