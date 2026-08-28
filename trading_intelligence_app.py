@@ -321,6 +321,20 @@ RULE_FRIENDLY_LABELS = {
     "above_vwap": "Price above VWAP",
     "vwap_reclaim": "VWAP reclaim",
     "max_vwap_distance_pct": "Maximum distance from VWAP",
+    "fast_ema_period": "Fast EMA period",
+    "slow_ema_period": "Secondary EMA period",
+    "trend_ema_period": "Long-term EMA period",
+    "require_price_above_fast_ema": "Price above fast EMA",
+    "require_price_above_slow_ema": "Price above secondary EMA",
+    "require_price_above_trend_ema": "Price above long-term EMA",
+    "require_fast_ema_rising": "Fast EMA rising",
+    "require_fast_ema_pullback": "Pullback to fast EMA",
+    "max_fast_ema_distance_pct": "Maximum distance from fast EMA",
+    "pullback_touch_tolerance_pct": "EMA pullback tolerance",
+    "max_pullback_number": "Latest allowed pullback number",
+    "require_pullback_breakout": "Pullback breakout confirmation",
+    "stop_below_fast_ema": "Stop below fast EMA",
+    "stop_ema_buffer_pct": "EMA stop buffer",
     "breakout_lookback_bars": "Breakout lookback",
     "opening_range_minutes": "Opening-range breakout",
     "volume_surge_ratio": "Volume surge",
@@ -368,6 +382,13 @@ def friendly_rule_text(rule_name: str, value: Any) -> str:
         ),
         "max_spread_pct": f"Reject stocks with a bid/ask spread wider than **{number}%**.",
         "max_vwap_distance_pct": f"Keep price within **{number}% of VWAP**.",
+        "fast_ema_period": f"Use a **{number}-period EMA** as the fast/pullback average.",
+        "slow_ema_period": f"Use a **{number}-period EMA** as the secondary trend average.",
+        "trend_ema_period": f"Use a **{number}-period EMA** as the long-term trend average.",
+        "max_fast_ema_distance_pct": f"Keep price within **{number}% of the fast EMA**.",
+        "pullback_touch_tolerance_pct": f"Count a pullback as touching/near the fast EMA within **{number}%**.",
+        "max_pullback_number": f"Only allow the first **{number} EMA pullback(s)** in the sequence.",
+        "stop_ema_buffer_pct": f"Place the structural stop **{number}% below the fast EMA**.",
         "breakout_lookback_bars": f"Require a breakout above the prior **{number} candles**.",
         "opening_range_minutes": f"Use the first **{number} minutes** to define the opening range.",
         "volume_surge_ratio": f"Require a volume surge of at least **{number}× normal**.",
@@ -385,6 +406,13 @@ def friendly_rule_text(rule_name: str, value: Any) -> str:
         ),
         "above_vwap": "Require price to be **above VWAP**.",
         "vwap_reclaim": "Require price to **reclaim VWAP from below**.",
+        "require_price_above_fast_ema": "Require price to be **above the fast EMA**.",
+        "require_price_above_slow_ema": "Require price to be **above the secondary EMA**.",
+        "require_price_above_trend_ema": "Require price to be **above the long-term EMA**.",
+        "require_fast_ema_rising": "Require the **fast EMA to be rising**.",
+        "require_fast_ema_pullback": "Require a **recent pullback to the fast EMA**.",
+        "require_pullback_breakout": "Require **breakout confirmation after the pullback**.",
+        "stop_below_fast_ema": "Use a **structural stop below the fast EMA**.",
         "catalyst_required": "Require a **qualifying news catalyst**.",
     }
     if key in boolean_templates:
@@ -1103,6 +1131,11 @@ elif module == "Strategy Library":
                     "Direction": s.get("direction"),
                     "Source": source_label(s),
                     "Measurable rules": sum(v is not None for v in rules.values()),
+                    "Setup modeled": (
+                        f"{safe_float(readiness.get('semantic_coverage_pct'), 100.0):.0f}%"
+                        if int(readiness.get("semantic_requirement_count") or 0) > 0
+                        else "—"
+                    ),
                     "AI readiness": str(readiness.get("label") or "unknown").replace("_", " ").title(),
                     "Confidence / support": s.get("confidence"),
                     "Validation": s.get("validation_status") or "unvalidated",
@@ -1130,6 +1163,25 @@ elif module == "Strategy Library":
             x3.metric("Validation", selected.get("validation_status") or "unvalidated")
             x4.metric("Optimization", selected.get("optimization_status") or "not_run")
             st.caption(str(readiness.get("note") or ""))
+            if int(readiness.get("semantic_requirement_count") or 0) > 0:
+                semantic_pct = safe_float(readiness.get("semantic_coverage_pct"), 0.0) or 0.0
+                gate_pct = safe_float(readiness.get("semantic_coverage_gate_pct"), 90.0) or 90.0
+                st.markdown(f"#### Setup coverage · {semantic_pct:.0f}% modeled")
+                st.progress(
+                    max(0.0, min(1.0, semantic_pct / 100.0)),
+                    text=f"Core setup modeled: {semantic_pct:.0f}% · deep-research gate: {gate_pct:.0f}%",
+                )
+                modeled = list(readiness.get("semantic_modeled_requirements") or [])
+                missing = list(readiness.get("semantic_missing_requirements") or [])
+                if modeled:
+                    with st.expander("Modeled parts of the setup", expanded=False):
+                        for item in modeled:
+                            st.write("✓ " + str(item))
+                if missing:
+                    st.warning(
+                        "Deep autonomous validation is blocked until more of the defining setup is "
+                        "represented. Missing: " + " · ".join(str(item) for item in missing)
+                    )
             st.markdown("#### Source-extracted machine rules")
             active_rules = {
                 key: value for key, value in normalize_machine_rules(selected.get("machine_rules")).items()
@@ -2227,6 +2279,8 @@ elif module == "AI Research Autopilot":
                                     "Discovery score": item.get("score"),
                                     "Peak move %": item.get("peak_directional_move_pct"),
                                     "Peak RVOL": item.get("peak_relative_volume"),
+                                    "RVOL used for rank": item.get("peak_relative_volume_for_ranking", item.get("peak_relative_volume")),
+                                    "RVOL regime outliers": item.get("liquidity_regime_outlier_count", 0),
                                     "Observed from": ((result.get("symbol_lifecycles") or {}).get(item.get("symbol")) or {}).get("first_observed_date"),
                                     "Observed through": ((result.get("symbol_lifecycles") or {}).get(item.get("symbol")) or {}).get("last_observed_date"),
                                     "Research window": (
@@ -2241,6 +2295,15 @@ elif module == "AI Research Autopilot":
                         use_container_width=True,
                         hide_index=True,
                     )
+                    outlier_total = sum(
+                        int(item.get("liquidity_regime_outlier_count") or 0)
+                        for item in opportunities
+                    )
+                    if outlier_total:
+                        st.caption(
+                            f"{outlier_total} extreme RVOL liquidity-regime transition event(s) were "
+                            "preserved for audit but excluded from opportunity counts and anchor ranking."
+                        )
                 if result.get("gate_reasons"):
                     st.markdown("**Why it did not pass every autonomous gate:**")
                     for reason in result.get("gate_reasons") or []:
