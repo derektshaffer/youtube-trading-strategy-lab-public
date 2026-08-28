@@ -939,7 +939,85 @@ canonical_strategies = [
 ]
 managed_strategies = canonical_strategies or source_strategies
 
+tool_spacer, tool_search = st.columns([3.55, 1.15], vertical_alignment="center")
+with tool_spacer:
+    st.markdown(
+        '<div class="til-top-status"><span class="til-top-status-dot"></span>'
+        'AI RESEARCH SYSTEM <strong>ONLINE</strong></div>',
+        unsafe_allow_html=True,
+    )
+with tool_search:
+    workspace_search_query = st.text_input(
+        "Search workspace",
+        placeholder="⌕  Search workspace…",
+        label_visibility="collapsed",
+        key="til_workspace_search",
+    ).strip()
+
 render_workspace_page_header(module)
+
+if workspace_search_query:
+    query = workspace_search_query.casefold()
+    page_matches = [
+        section
+        for section in WORKSPACE_SECTIONS
+        if query in WORKSPACE_DISPLAY_LABELS.get(section, section).casefold()
+        or query in str((WORKSPACE_PAGE_META.get(section) or {}).get("subtitle") or "").casefold()
+    ]
+    source_matches = [
+        item
+        for item in sources
+        if query in str(item.get("title") or "").casefold()
+        or query in str(item.get("author") or "").casefold()
+        or query in str(item.get("summary") or "").casefold()
+    ][:5]
+    strategy_matches = [
+        item
+        for item in managed_strategies
+        if query in str(item.get("name") or "").casefold()
+        or query in str(item.get("summary") or "").casefold()
+    ][:5]
+    match_count = len(page_matches) + len(source_matches) + len(strategy_matches)
+
+    with st.expander(f"⌕ Search results · {match_count}", expanded=True):
+        if page_matches:
+            st.caption("WORKSPACE")
+            cols = st.columns(min(4, len(page_matches)))
+            for index, section in enumerate(page_matches):
+                if cols[index % len(cols)].button(
+                    WORKSPACE_DISPLAY_LABELS.get(section, section),
+                    key=f"til_search_page_{_nav_key(section)}",
+                    use_container_width=True,
+                ):
+                    st.session_state["til_workspace_section"] = section
+                    st.session_state["til_workspace_search"] = ""
+                    st.rerun()
+        if source_matches:
+            st.caption("SOURCES")
+            for item in source_matches:
+                if st.button(
+                    f"◇ {item.get('title') or 'Untitled source'}"
+                    + (f" · {item.get('author')}" if item.get("author") else ""),
+                    key=f"til_search_source_{str(item.get('id') or item.get('ingest_id') or '')}",
+                    use_container_width=True,
+                ):
+                    st.session_state["til_workspace_section"] = "Knowledge Sources"
+                    st.session_state["til_workspace_search"] = ""
+                    st.rerun()
+        if strategy_matches:
+            st.caption("STRATEGY FAMILIES")
+            for item in strategy_matches:
+                if st.button(
+                    f"✦ {item.get('name') or 'Unnamed strategy'}",
+                    key=f"til_search_strategy_{str(item.get('id') or '')}",
+                    use_container_width=True,
+                ):
+                    st.session_state["til_workspace_section"] = "Strategy Library"
+                    st.session_state["til_selected_strategy_id"] = str(item.get("id") or "")
+                    st.session_state["til_workspace_search"] = ""
+                    st.rerun()
+        if not match_count:
+            st.caption("No workspace pages, sources, or strategy families match that search.")
 
 
 if module == "Overview":
