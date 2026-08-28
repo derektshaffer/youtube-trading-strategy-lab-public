@@ -456,7 +456,7 @@ def chunk_source_text(
     return chunks
 
 
-NATIVE_RULE_SCHEMA_VERSION = 2
+NATIVE_RULE_SCHEMA_VERSION = 3
 
 
 def upgrade_native_strategy_rules(strategy: dict[str, Any]) -> dict[str, Any]:
@@ -551,6 +551,116 @@ def upgrade_native_strategy_rules(strategy: dict[str, Any]) -> dict[str, Any]:
                 }
             )
         item["compiler_assumptions"] = assumptions[-150:]
+        changed = True
+
+    # Backfill moving-average structure from saved source text now that the
+    # deterministic engine can actually represent it. Only explicit periods/structure
+    # are migrated into source rules; vague distances remain unresolved for the compiler.
+    ema_periods = sorted(
+        {
+            int(match)
+            for match in re.findall(r"\b(\d{1,3})\s*(?:-\s*)?ema\b", text, flags=re.IGNORECASE)
+            if 2 <= int(match) <= 500
+        }
+    )
+    pullback_language = any(
+        phrase in text
+        for phrase in ("pullback", "pull back", "consolidates back", "tap the", "trade close to")
+    )
+    if ema_periods and pullback_language:
+        fast_period = ema_periods[0]
+        if rules.get("fast_ema_period") is None:
+            rules["fast_ema_period"] = fast_period
+            explicit_migrations.append({
+                "rule": "fast_ema_period",
+                "value": fast_period,
+                "basis": f"Saved source text explicitly names the {fast_period} EMA in the pullback setup.",
+            })
+            changed = True
+        if rules.get("require_fast_ema_pullback") is None:
+            rules["require_fast_ema_pullback"] = True
+            explicit_migrations.append({
+                "rule": "require_fast_ema_pullback",
+                "value": True,
+                "basis": "Saved source text explicitly describes a pullback/tap toward the fast EMA.",
+            })
+            changed = True
+
+    if len(ema_periods) >= 2:
+        slow_period = next((value for value in ema_periods if value > ema_periods[0]), None)
+        if slow_period is not None and rules.get("slow_ema_period") is None:
+            rules["slow_ema_period"] = slow_period
+            explicit_migrations.append({
+                "rule": "slow_ema_period",
+                "value": slow_period,
+                "basis": f"Saved source text explicitly names the {slow_period} EMA as a secondary trend average.",
+            })
+            changed = True
+
+    trend_period = next((value for value in reversed(ema_periods) if value >= 100), None)
+    if trend_period is not None and rules.get("trend_ema_period") is None:
+        rules["trend_ema_period"] = trend_period
+        explicit_migrations.append({
+            "rule": "trend_ema_period",
+            "value": trend_period,
+            "basis": f"Saved source text explicitly names the {trend_period} EMA as a long-term trend reference.",
+        })
+        changed = True
+
+    above_moving_averages = any(
+        phrase in text
+        for phrase in (
+            "above its moving averages",
+            "above the moving averages",
+            "trading above its moving averages",
+            "trading above the 9 ema",
+            "trading above the 20 ema",
+        )
+    )
+    if rules.get("slow_ema_period") is not None and above_moving_averages and rules.get("require_price_above_slow_ema") is None:
+        rules["require_price_above_slow_ema"] = True
+        explicit_migrations.append({
+            "rule": "require_price_above_slow_ema",
+            "value": True,
+            "basis": "Saved source text explicitly requires the trend to remain above its moving averages.",
+        })
+        changed = True
+
+    long_below_trend_avoid = bool(
+        re.search(r"(?:avoid|rarely|do not|don't)[^\.]{0,80}(?:long|buy)[^\.]{0,80}below[^\.]{0,40}(?:200\s*ema|moving average)", text)
+        or "avoid buying long when price is below the 200 ema" in text
+    )
+    if rules.get("trend_ema_period") is not None and (above_moving_averages or long_below_trend_avoid) and rules.get("require_price_above_trend_ema") is None:
+        rules["require_price_above_trend_ema"] = True
+        explicit_migrations.append({
+            "rule": "require_price_above_trend_ema",
+            "value": True,
+            "basis": "Saved source text explicitly avoids long entries below the long-term EMA / requires trend alignment above it.",
+        })
+        changed = True
+
+    first_second_pullback = bool(
+        re.search(r"(?:first|1st)[^\.]{0,30}(?:second|2nd)[^\.]{0,30}pullback|(?:first|1st)\s+(?:or|and)\s+(?:second|2nd)\s+pullback", text)
+    )
+    if first_second_pullback and rules.get("max_pullback_number") is None:
+        rules["max_pullback_number"] = 2
+        explicit_migrations.append({
+            "rule": "max_pullback_number",
+            "value": 2,
+            "basis": "Saved source text explicitly prefers the first and second moving-average pullbacks.",
+        })
+        changed = True
+
+    stop_below_ema_language = bool(
+        re.search(r"stop[^\.]{0,80}below[^\.]{0,50}(?:\d{1,3}\s*)?ema", text)
+    )
+    if stop_below_ema_language and rules.get("stop_below_fast_ema") is None:
+        rules["stop_below_fast_ema"] = True
+        explicit_migrations.append({
+            "rule": "stop_below_fast_ema",
+            "value": True,
+            "basis": "Saved source text explicitly places the stop below the fast EMA support area.",
+        })
         changed = True
 
     item["machine_rules"] = rules
@@ -696,6 +806,16 @@ Strict rules:
   Do not imply the chosen multiple came from the author.
 - A qualitative "strong prior-day move" can map to min_previous_day_change_pct only as a
   RESEARCH ASSUMPTION when the context clearly refers to price appreciation.
+- For EMA/moving-average setups, preserve explicit source periods in fast_ema_period,
+  slow_ema_period, or trend_ema_period; never change an author-stated period into a different period.
+- "Pull back near/to the EMA" can map to require_fast_ema_pullback=true. If the source did not
+  state an exact distance, a pullback_touch_tolerance_pct value is a RESEARCH ASSUMPTION.
+- "Rising EMA" can map to require_fast_ema_rising=true only when the source actually requires
+  a rising/sloping-up fast average.
+- "Stop slightly below the EMA" can map to stop_below_fast_ema=true; any numeric
+  stop_ema_buffer_pct is a RESEARCH ASSUMPTION unless the source gave the exact buffer.
+- Do not add require_pullback_breakout unless the source explicitly requires breakout/confirmation
+  after the pullback.
 - Keep tape-reading, Level 2, float, borrow, proprietary indicators, subjective catalyst quality,
   and other unsupported concepts in unmapped_requirements unless an existing rule is a defensible proxy.
 - High-confidence suggestions may be auto-applied by AI Autopilot as clearly labeled research
@@ -934,9 +1054,113 @@ class GeminiRuleCompiler:
         return parsed
 
 
+SEMANTIC_BACKTEST_COVERAGE_GATE = 85.0
+
+
+def strategy_semantic_coverage(strategy: dict[str, Any]) -> dict[str, Any]:
+    """Measure whether executable rules represent the setup's defining source concepts.
+
+    This is deliberately conservative: one generic filter such as above-VWAP should not
+    make a multi-part EMA pullback strategy look fully modeled.
+    """
+    effective = effective_strategy_for_research(strategy)
+    rules = normalize_machine_rules(effective.get("machine_rules"))
+    pieces = [
+        strategy.get("name"),
+        strategy.get("category"),
+        strategy.get("summary"),
+        *(strategy.get("indicators") or []),
+        *(strategy.get("entry_conditions") or []),
+        *(strategy.get("risk_rules") or []),
+        *(strategy.get("avoid_conditions") or []),
+        *(strategy.get("market_context") or []),
+        *(strategy.get("stock_selection") or []),
+    ]
+    text = " ".join(str(value or "") for value in pieces).casefold()
+    requirements: list[dict[str, Any]] = []
+
+    def add(label: str, keys: tuple[str, ...], *, any_key: bool = False) -> None:
+        values = [rules.get(key) for key in keys]
+        modeled = (
+            any(value is not None for value in values)
+            if any_key
+            else all(value is not None for value in values)
+        )
+        requirements.append({
+            "label": label,
+            "rule_keys": list(keys),
+            "modeled": bool(modeled),
+        })
+
+    if "vwap" in text and any(
+        phrase in text for phrase in ("above vwap", "above its moving averages", "and vwap")
+    ):
+        add("Price / trend relationship to VWAP", ("above_vwap",), any_key=True)
+
+    ema_mentions = sorted({
+        int(match)
+        for match in re.findall(r"\b(\d{1,3})\s*(?:-\s*)?ema\b", text, flags=re.IGNORECASE)
+        if 2 <= int(match) <= 500
+    })
+    pullback_setup = bool(ema_mentions) and any(
+        phrase in text
+        for phrase in ("pullback", "pull back", "consolidates back", "tap the", "trade close to")
+    )
+    if pullback_setup:
+        add(
+            f"Pullback to the {ema_mentions[0]} EMA",
+            ("fast_ema_period", "require_fast_ema_pullback"),
+        )
+        if any(phrase in text for phrase in ("close to", "near the", "near its", "around the")):
+            add(
+                "Objective proximity/tolerance for the EMA pullback",
+                ("pullback_touch_tolerance_pct",),
+            )
+
+    if len(ema_mentions) >= 2 and any(
+        phrase in text
+        for phrase in ("above its moving averages", "above the moving averages", "trading above")
+    ):
+        add(
+            f"Secondary EMA trend alignment ({ema_mentions[1]} EMA)",
+            ("slow_ema_period", "require_price_above_slow_ema"),
+        )
+
+    trend_period = next((value for value in reversed(ema_mentions) if value >= 100), None)
+    if trend_period is not None and (
+        "below the 200 ema" in text
+        or "above its moving averages" in text
+        or "long-term" in text
+    ):
+        add(
+            f"Long-term EMA trend filter ({trend_period} EMA)",
+            ("trend_ema_period", "require_price_above_trend_ema"),
+        )
+
+    if re.search(r"(?:first|1st)[^\.]{0,30}(?:second|2nd)[^\.]{0,30}pullback", text):
+        add("First/second pullback preference", ("max_pullback_number",))
+
+    if re.search(r"stop[^\.]{0,80}below[^\.]{0,50}(?:\d{1,3}\s*)?ema", text):
+        add("EMA-anchored structural stop", ("stop_below_fast_ema",))
+
+    total = len(requirements)
+    modeled = sum(1 for item in requirements if item["modeled"])
+    coverage = 100.0 if total == 0 else round(modeled / total * 100.0, 1)
+    return {
+        "coverage_pct": coverage,
+        "requirement_count": total,
+        "modeled_count": modeled,
+        "modeled_requirements": [item["label"] for item in requirements if item["modeled"]],
+        "missing_requirements": [item["label"] for item in requirements if not item["modeled"]],
+        "requirements": requirements,
+        "gate_pct": SEMANTIC_BACKTEST_COVERAGE_GATE,
+    }
+
+
 def research_readiness(strategy: dict[str, Any]) -> dict[str, Any]:
     """Describe whether a strategy is mechanically testable without implying that it has edge."""
     effective = effective_strategy_for_research(strategy)
+    semantic = strategy_semantic_coverage(strategy)
     rules = {
         key: value
         for key, value in normalize_machine_rules(effective.get("machine_rules")).items()
@@ -974,6 +1198,8 @@ def research_readiness(strategy: dict[str, Any]) -> dict[str, Any]:
     if assumption_count:
         score += min(10.0, assumption_count * 2.0)
     score -= min(25.0, unresolved_count * 2.5)
+    if semantic["requirement_count"]:
+        score = score * 0.65 + semantic["coverage_pct"] * 0.35
     score = round(max(0.0, min(100.0, score)), 1)
 
     if not entry_rules:
@@ -982,12 +1208,24 @@ def research_readiness(strategy: dict[str, Any]) -> dict[str, Any]:
     elif evidence_count == 0 and str(strategy.get("source_type") or "").lower() == "book_or_document":
         label = "needs_evidence_review"
         note = "Machine rules exist, but no source evidence reference was retained for this document strategy."
+    elif (
+        semantic["requirement_count"]
+        and semantic["coverage_pct"] < SEMANTIC_BACKTEST_COVERAGE_GATE
+    ):
+        label = "partially_modeled"
+        note = (
+            "The backtester can enforce some rules, but too much of the setup's defining logic "
+            "is still missing from the executable model."
+        )
     elif unresolved_count > max(6, len(entry_rules) * 3):
         label = "partially_testable"
         note = "The strategy can be backtested, but many source requirements remain qualitative or unavailable."
     else:
         label = "ready_for_backtest"
-        note = "The strategy has at least one objective entry/filter rule that the backtester can enforce."
+        note = (
+            "The strategy has objective entry/filter rules and enough of its defining setup "
+            "is represented by the deterministic backtester."
+        )
 
     return {
         "label": label,
@@ -997,6 +1235,12 @@ def research_readiness(strategy: dict[str, Any]) -> dict[str, Any]:
         "research_assumption_count": assumption_count,
         "evidence_count": evidence_count,
         "unresolved_count": unresolved_count,
+        "semantic_coverage_pct": semantic["coverage_pct"],
+        "semantic_requirement_count": semantic["requirement_count"],
+        "semantic_modeled_count": semantic["modeled_count"],
+        "semantic_modeled_requirements": semantic["modeled_requirements"],
+        "semantic_missing_requirements": semantic["missing_requirements"],
+        "semantic_coverage_gate_pct": semantic["gate_pct"],
         "note": note,
     }
 
