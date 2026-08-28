@@ -3457,8 +3457,8 @@ elif module == "AI Research Autopilot":
                     (
                         "GEMINI_API_KEY",
                         "GEMINI_PAID_API_KEY   # optional fallback",
-                        "GITHUB_BACKUP_REPOSITORY",
-                        "GITHUB_BACKUP_TOKEN",
+                        "TRADING_LAB_BACKUP_REPOSITORY   # same value as Streamlit GITHUB_BACKUP_REPOSITORY",
+                        "TRADING_LAB_BACKUP_TOKEN        # same value as Streamlit GITHUB_BACKUP_TOKEN",
                         "ALPACA_API_KEY",
                         "ALPACA_SECRET_KEY",
                     )
