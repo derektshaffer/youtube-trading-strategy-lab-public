@@ -792,8 +792,9 @@ WORKSPACE_NAV_ICONS = {
 }
 
 
-def _nav_key(section: str) -> str:
-    return "til_nav_" + "".join(
+def _nav_key(section: str, *, active: bool = False) -> str:
+    prefix = "til_nav_active_" if active else "til_nav_"
+    return prefix + "".join(
         char.lower() if char.isalnum() else "_"
         for char in section
     ).strip("_")
@@ -892,8 +893,8 @@ with st.sidebar:
             clicked = st.button(
                 f"{icon}   {number.zfill(2)}   {label}",
                 use_container_width=True,
-                type="primary" if is_active else "secondary",
-                key=_nav_key(section),
+                type="secondary",
+                key=_nav_key(section, active=is_active),
             )
             if clicked and not is_active:
                 st.session_state["til_workspace_section"] = section
