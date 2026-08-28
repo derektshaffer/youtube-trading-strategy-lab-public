@@ -7,6 +7,7 @@ on:
       - "trading_intelligence_app.py"
       - "trading_glass_theme.py"
       - "trading_intelligence_core.py"
+      - "stock_strategy_finder.py"
       - "trading_progress_ui.py"
       - "pages/Full_Trading_Lab.py"
       - "youtube_strategy_app_core.py"
@@ -25,6 +26,7 @@ on:
       - "test_trading_validation_core.py"
       - "test_trading_catalyst_core.py"
       - "test_trading_intelligence_core.py"
+      - "test_stock_strategy_finder.py"
       - "test_trading_strategy_dna.py"
       - "test_trading_auto_research.py"
       - "test_trading_universe_research.py"
@@ -46,6 +48,8 @@ on:
       - "trading_auto_research.py"
       - "trading_validation_core.py"
       - "youtube_strategy_engine.py"
+      - "stock_strategy_finder.py"
+      - "test_stock_strategy_finder.py"
       - "test_trading_auto_research.py"
       - "test_trading_progress_ui.py"
       - "test_full_lab_patch_targets.py"
@@ -69,6 +73,7 @@ jobs:
           python -m py_compile trading_intelligence_app.py
           python -m py_compile trading_glass_theme.py
           python -m py_compile trading_intelligence_core.py
+          python -m py_compile stock_strategy_finder.py
           python -m py_compile trading_progress_ui.py
           python -m py_compile machine_learning_lab_core.py
           python -m py_compile simple_dashboard_core.py
@@ -83,4 +88,4 @@ jobs:
           python -m py_compile trading_universe_research.py
           python -m py_compile youtube_strategy_engine.py
       - name: Run Trading Intelligence tests
-        run: python -m unittest test_youtube_strategy_engine.py test_trading_validation_core.py test_trading_catalyst_core.py test_trading_intelligence_core.py test_trading_strategy_dna.py test_trading_universe_research.py test_trading_auto_research.py test_trading_progress_ui.py test_full_lab_patch_targets.py -q
+        run: python -m unittest test_youtube_strategy_engine.py test_stock_strategy_finder.py test_trading_validation_core.py test_trading_catalyst_core.py test_trading_intelligence_core.py test_trading_strategy_dna.py test_trading_universe_research.py test_trading_auto_research.py test_trading_progress_ui.py test_full_lab_patch_targets.py -q
