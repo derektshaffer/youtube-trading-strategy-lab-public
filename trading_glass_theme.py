@@ -1048,6 +1048,302 @@ def inject_research_glass_theme() -> None:
             box-shadow: 0 0 12px rgba(72,215,145,.14) !important;
         }
 
+        /* ---------- Concept-match layout overrides ---------- */
+        /* Remove Streamlit Cloud chrome so the app can use its own product shell. */
+        [data-testid="stHeader"] {
+            height: 0 !important;
+            min-height: 0 !important;
+            background: transparent !important;
+            border: 0 !important;
+            box-shadow: none !important;
+        }
+        [data-testid="stToolbar"],
+        [data-testid="stAppDeployButton"],
+        [data-testid="stDecoration"],
+        #MainMenu {
+            display: none !important;
+            visibility: hidden !important;
+        }
+        .stApp > header {
+            height: 0 !important;
+            min-height: 0 !important;
+        }
+
+        /* Match the mockup proportions more closely. */
+        [data-testid="stSidebar"] {
+            width: 294px !important;
+            min-width: 294px !important;
+            max-width: 294px !important;
+        }
+        [data-testid="stSidebar"] > div:first-child {
+            width: 294px !important;
+        }
+        [data-testid="stSidebar"] .block-container {
+            padding: 1.35rem 1.08rem 1rem !important;
+        }
+        .block-container {
+            max-width: 1640px !important;
+            padding-top: .85rem !important;
+            padding-left: 1.75rem !important;
+            padding-right: 1.6rem !important;
+            padding-bottom: 2.4rem !important;
+        }
+
+        /* Larger crystalline logo / brand, matching the concept. */
+        .til-sidebrand {
+            position: relative;
+            align-items: flex-start !important;
+            gap: 13px !important;
+            padding: 0 4px 17px !important;
+            margin-bottom: 6px !important;
+            border-bottom: 1px solid rgba(75,184,229,.11);
+        }
+        .til-crystal-logo {
+            flex: 0 0 58px !important;
+            width: 58px !important;
+            height: 64px !important;
+            border-radius: 0 !important;
+            background: transparent !important;
+            box-shadow: none !important;
+        }
+        .til-crystal-logo svg {
+            width: 58px;
+            height: 64px;
+            overflow: visible;
+            filter:
+                drop-shadow(0 0 8px rgba(72,214,255,.16))
+                drop-shadow(0 0 12px rgba(61,230,159,.07));
+        }
+        .til-sidebrand-name {
+            margin-top: 7px !important;
+            color: #f7fbff !important;
+            font-size: .91rem !important;
+            line-height: 1.14 !important;
+            font-weight: 820 !important;
+            letter-spacing: .055em !important;
+        }
+        .til-side-collapse {
+            position: absolute;
+            right: 2px;
+            top: 5px;
+            color: #65bce8;
+            font-size: 1.04rem;
+            font-weight: 700;
+            letter-spacing: -.18em;
+            opacity: .88;
+        }
+        .til-workspace-label {
+            margin: 8px 5px 7px;
+            color: #3fd1fa;
+            font-size: .61rem;
+            font-weight: 900;
+            letter-spacing: .17em;
+        }
+
+        /* Dashboard home tile above workflow groups. */
+        .st-key-til_dashboard,
+        .st-key-til_dashboard_active {
+            margin: 0 0 .80rem !important;
+        }
+        [data-testid="stSidebar"] .st-key-til_dashboard div[data-testid="stButton"] button[kind="secondary"],
+        [data-testid="stSidebar"] .st-key-til_dashboard_active div[data-testid="stButton"] button[kind="secondary"] {
+            position: relative !important;
+            min-height: 55px !important;
+            justify-content: flex-start !important;
+            padding: .48rem .68rem .48rem .82rem !important;
+            border: 1px solid rgba(67,187,239,.18) !important;
+            border-radius: 8px !important;
+            color: #d9ecf8 !important;
+            background:
+                linear-gradient(100deg, rgba(9,36,57,.88), rgba(7,24,39,.72)) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255,255,255,.025),
+                0 8px 22px rgba(0,0,0,.10) !important;
+            white-space: pre-line !important;
+        }
+        [data-testid="stSidebar"] .st-key-til_dashboard_active div[data-testid="stButton"] button[kind="secondary"] {
+            border-color: rgba(72,210,255,.32) !important;
+            background:
+                linear-gradient(90deg, rgba(12,69,96,.72), rgba(8,35,55,.80)) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255,255,255,.04),
+                0 0 18px rgba(55,205,255,.07) !important;
+        }
+        [data-testid="stSidebar"] .st-key-til_dashboard_active div[data-testid="stButton"] button[kind="secondary"]::after {
+            content: "›";
+            position: absolute;
+            right: 11px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #4ed7ff;
+            font-size: 1.2rem;
+            text-shadow: 0 0 10px rgba(78,215,255,.30);
+        }
+        [data-testid="stSidebar"] .st-key-til_dashboard div[data-testid="stButton"] button p,
+        [data-testid="stSidebar"] .st-key-til_dashboard_active div[data-testid="stButton"] button p {
+            width: 100% !important;
+            text-align: left !important;
+            font-size: .76rem !important;
+            line-height: 1.34 !important;
+            font-weight: 760 !important;
+            color: inherit !important;
+        }
+
+        /* Sidebar workflow rows should read like a terminal nav, not cards. */
+        .til-nav-group {
+            margin: .90rem .32rem .38rem !important;
+            color: #399bc8 !important;
+            font-size: .58rem !important;
+            letter-spacing: .18em !important;
+        }
+        [data-testid="stSidebar"] [class*="st-key-til_nav_"] div[data-testid="stButton"] button[kind="secondary"] {
+            min-height: 2.05rem !important;
+            padding-top: .22rem !important;
+            padding-bottom: .22rem !important;
+            border-radius: 6px !important;
+            font-size: .77rem !important;
+            color: #aebfd0 !important;
+        }
+        [data-testid="stSidebar"] [class*="st-key-til_nav_active_"] div[data-testid="stButton"] button[kind="secondary"] {
+            color: #fbfdff !important;
+            border-color: rgba(64,226,149,.42) !important;
+            background:
+                linear-gradient(90deg, rgba(10,100,114,.74), rgba(10,57,50,.42) 72%, rgba(6,22,34,.24)) !important;
+        }
+
+        /* Utility bar sits where the mockup's search / icons live. */
+        .til-top-actions {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 10px;
+            min-height: 38px;
+        }
+        .til-top-icon {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            color: #d8ebf6;
+            border: 1px solid rgba(76,188,235,.14);
+            border-radius: 50%;
+            background: rgba(7,24,39,.52);
+            font-size: .74rem;
+            font-weight: 850;
+        }
+        .til-notify span {
+            position: absolute;
+            right: 0;
+            top: -1px;
+            width: 6px;
+            height: 6px;
+            border: 1px solid #06101a;
+            border-radius: 50%;
+            background: #4bf091;
+            box-shadow: 0 0 8px rgba(75,240,145,.55);
+        }
+        .til-avatar {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 31px;
+            height: 31px;
+            border: 1px solid rgba(62,230,159,.48);
+            border-radius: 50%;
+            color: #dffcf1;
+            background:
+                radial-gradient(circle, rgba(23,117,91,.42), rgba(8,33,43,.68));
+            box-shadow: 0 0 14px rgba(56,226,158,.10);
+            font-size: .68rem;
+            font-weight: 850;
+        }
+        .til-top-chevron {
+            color: #66a5c6;
+            font-size: .84rem;
+        }
+
+        /* Make header mesh denser and more like the rendered concept. */
+        .til-pagehead {
+            min-height: 148px !important;
+            padding: 24px 24px 21px !important;
+            border-radius: 0 !important;
+            border-left: 0 !important;
+            border-right: 0 !important;
+            border-top-color: rgba(68,192,234,.12) !important;
+            border-bottom-color: rgba(65,223,194,.18) !important;
+            background:
+                linear-gradient(90deg, rgba(4,19,31,.98), rgba(5,29,43,.86) 72%, rgba(5,65,64,.42)) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255,255,255,.02),
+                0 10px 34px rgba(0,0,0,.13) !important;
+        }
+        .til-pagehead::before {
+            left: -1px !important;
+            width: 2px !important;
+            background: linear-gradient(180deg, #48d9ff, #43eca0) !important;
+        }
+        .til-pagehead::after {
+            width: 45% !important;
+            height: 1px !important;
+            background: linear-gradient(90deg, transparent, rgba(69,213,255,.36), rgba(62,230,158,.44)) !important;
+        }
+        .til-page-title {
+            font-size: 2.12rem !important;
+            margin-top: 3px !important;
+        }
+        .til-page-sub {
+            max-width: 760px !important;
+            font-size: .88rem !important;
+        }
+        .til-market-mesh {
+            right: 0 !important;
+            bottom: -2px !important;
+            width: 54% !important;
+            opacity: 1 !important;
+        }
+        .til-market-mesh svg {
+            filter:
+                drop-shadow(0 0 4px rgba(73,212,255,.15))
+                drop-shadow(0 0 10px rgba(57,226,161,.06)) !important;
+        }
+        .til-page-step {
+            position: absolute !important;
+            z-index: 2 !important;
+            right: 20px !important;
+            top: 36px !important;
+            color: rgba(39,157,174,.18) !important;
+            font-size: 5.5rem !important;
+        }
+
+        /* KPI cards more compact and icon-heavy, like the concept. */
+        .til-kpi-grid {
+            gap: 17px !important;
+            margin-top: 18px !important;
+            margin-bottom: 16px !important;
+        }
+        .til-kpi {
+            min-height: 105px !important;
+            padding: 15px 17px !important;
+            border-radius: 8px !important;
+            border-color: rgba(72,175,221,.18) !important;
+            background:
+                linear-gradient(145deg, rgba(8,27,43,.94), rgba(6,18,30,.90)) !important;
+        }
+        .til-kpi-icon {
+            flex-basis: 48px !important;
+            width: 48px !important;
+            height: 48px !important;
+            font-size: 1.18rem !important;
+        }
+        .til-kpi-label {
+            font-size: .53rem !important;
+        }
+        .til-kpi-value {
+            font-size: 1.70rem !important;
+        }
+
         /* ---------- Top utility rail ---------- */
         .til-top-status {
             display: inline-flex;
