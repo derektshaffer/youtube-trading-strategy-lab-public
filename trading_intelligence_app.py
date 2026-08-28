@@ -190,7 +190,7 @@ def load_library() -> dict[str, Any]:
     # The user should not have to remember to import them before the family manager can use them.
     legacy_changed = False
     try:
-        legacy_data = build_legacy_store().load_latest()
+        legacy_data = build_legacy_store().load()
         existing_ids = {
             str(item.get("id") or "")
             for item in data.get("strategies") or []
