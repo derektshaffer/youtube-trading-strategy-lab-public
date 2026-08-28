@@ -134,6 +134,58 @@ class KnowledgeSourceReconciliationTests(unittest.TestCase):
         self.assertEqual(first["knowledge_sources"], second["knowledge_sources"])
 
 
+class EmaSemanticCoverageTests(unittest.TestCase):
+    def _strategy(self):
+        return {
+            "id": "ema-pullback",
+            "source_type": "book_or_document",
+            "name": "Moving Average Trend Pullback (9 EMA)",
+            "summary": "Trend-following long setup that buys moving average pullbacks near the 9 EMA.",
+            "indicators": ["9 EMA", "20 EMA", "200 EMA", "VWAP"],
+            "entry_conditions": [
+                "Price consolidates back to tap or trade close to the 9 EMA support.",
+                "Preferably enter on the 1st or 2nd moving average pullback.",
+            ],
+            "risk_rules": ["Place a conservative stop slightly below the 9 EMA support level."],
+            "avoid_conditions": ["Avoid buying long when price is below the 200 EMA."],
+            "market_context": [
+                "Stock is in an active uptrend trading above its moving averages (9 EMA, 20 EMA, 200 EMA) and VWAP."
+            ],
+            "machine_rules": {"above_vwap": True},
+            "evidence": [
+                {"location": "p.54", "description": "EMA pullback", "source_excerpt": "short"},
+                {"location": "p.57", "description": "200 EMA", "source_excerpt": "short"},
+            ],
+            "unresolved_rules": ["Discretionary evaluation of trend strength and tape."],
+        }
+
+    def test_native_upgrade_backfills_explicit_ema_structure(self):
+        upgraded = upgrade_native_strategy_rules(self._strategy())
+        rules = upgraded["machine_rules"]
+        self.assertEqual(rules["fast_ema_period"], 9)
+        self.assertEqual(rules["slow_ema_period"], 20)
+        self.assertEqual(rules["trend_ema_period"], 200)
+        self.assertTrue(rules["require_fast_ema_pullback"])
+        self.assertTrue(rules["require_price_above_slow_ema"])
+        self.assertTrue(rules["require_price_above_trend_ema"])
+        self.assertEqual(rules["max_pullback_number"], 2)
+        self.assertTrue(rules["stop_below_fast_ema"])
+
+    def test_semantic_gate_blocks_backtest_until_near_ema_is_measurable(self):
+        upgraded = upgrade_native_strategy_rules(self._strategy())
+        readiness = research_readiness(upgraded)
+        self.assertEqual(readiness["label"], "partially_modeled")
+        self.assertLess(readiness["semantic_coverage_pct"], readiness["semantic_coverage_gate_pct"])
+        self.assertTrue(
+            any("proximity" in item.lower() for item in readiness["semantic_missing_requirements"])
+        )
+
+        upgraded["research_rule_overrides"] = {"pullback_touch_tolerance_pct": 0.75}
+        ready = research_readiness(upgraded)
+        self.assertEqual(ready["label"], "ready_for_backtest")
+        self.assertEqual(ready["semantic_coverage_pct"], 100.0)
+
+
 class NativeRuleUpgradeTests(unittest.TestCase):
     def test_existing_continuation_breakout_is_upgraded_without_inventing_author_number(self):
         strategy = {
