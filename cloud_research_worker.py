@@ -31,6 +31,7 @@ from trading_research_orchestrator import (
     record_worker_run,
     research_queue_status,
     seed_continuous_research_cycle,
+    sync_hypothesis_validation_results,
 )
 from youtube_strategy_engine import (
     AlpacaMarketData,
@@ -218,6 +219,7 @@ def execute_job(
         )
         latest = store.load_latest()
         latest = merge_autonomous_research_into_library(latest, report)
+        latest = sync_hypothesis_validation_results(latest, report)
         result_ref = f"autonomous:{report.get('generated_at')}"
         latest = finish_research_job(
             latest,
