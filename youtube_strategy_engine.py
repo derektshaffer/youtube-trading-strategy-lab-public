@@ -3094,7 +3094,13 @@ def backtest_limitations(strategy: dict[str, Any]) -> list[str]:
         limitations.append("Historical bid/ask quotes are unavailable; the spread limit is estimated through configured trading costs.")
     if str(strategy.get("direction", "long")).lower() not in {"long", "both"}:
         limitations.append("This release evaluates long trades only; short-only strategies cannot be backtested.")
-    if rules.get("stop_loss_pct") is None:
+    if rules.get("stop_below_fast_ema") is True:
+        if rules.get("stop_ema_buffer_pct") is None:
+            limitations.append(
+                "The source uses a stop below the fast EMA but did not specify an exact buffer; "
+                "deep research should translate that distance before treating the setup as fully modeled."
+            )
+    elif rules.get("stop_loss_pct") is None:
         limitations.append("The video did not specify an exact stop; the editable default stop is a research assumption.")
     if rules.get("reward_risk") is None:
         limitations.append("The video did not specify an exact target; the editable reward/risk setting is a research assumption.")
@@ -3625,7 +3631,18 @@ def _valid_optimizer_rules(candidate: dict[str, Any]) -> bool:
             return False
     min_price = safe_float(candidate.get("min_price"))
     max_price = safe_float(candidate.get("max_price"))
-    return not (min_price is not None and max_price is not None and min_price >= max_price)
+    if min_price is not None and max_price is not None and min_price >= max_price:
+        return False
+    fast = safe_float(candidate.get("fast_ema_period"))
+    slow = safe_float(candidate.get("slow_ema_period"))
+    trend = safe_float(candidate.get("trend_ema_period"))
+    if fast is not None and slow is not None and fast >= slow:
+        return False
+    if slow is not None and trend is not None and slow >= trend:
+        return False
+    if fast is not None and trend is not None and fast >= trend:
+        return False
+    return True
 
 
 def _neighbor_values(
@@ -5814,6 +5831,26 @@ def match_strategy(metrics: dict[str, Any], strategy: dict[str, Any]) -> dict[st
             actual = price_value > float(ema_value)
             status = "pass" if actual == bool(required) else "fail"
         checks.append({"label": label, "actual": actual, "required": bool(required), "status": status})
+
+    if rules.get("max_fast_ema_distance_pct") is not None:
+        fast_ema_value = safe_float(chart_checks.get("fast_ema"))
+        price_value = safe_float(metrics.get("price"))
+        if fast_ema_value is None or fast_ema_value <= 0 or price_value is None:
+            actual_distance = None
+            distance_status = "unknown"
+        else:
+            actual_distance = abs(price_value / fast_ema_value - 1.0) * 100.0
+            distance_status = (
+                "pass"
+                if actual_distance <= float(rules["max_fast_ema_distance_pct"])
+                else "fail"
+            )
+        checks.append({
+            "label": "Distance from fast EMA",
+            "actual": round(actual_distance, 3) if actual_distance is not None else None,
+            "required": f"≤ {rules['max_fast_ema_distance_pct']}%",
+            "status": distance_status,
+        })
 
     if rules.get("require_fast_ema_rising") is True:
         observed = chart_checks.get("fast_ema_rising")
