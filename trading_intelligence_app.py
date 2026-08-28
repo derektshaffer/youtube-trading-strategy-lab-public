@@ -186,6 +186,32 @@ def load_library() -> dict[str, Any]:
     data.setdefault("research_runs", [])
     data.setdefault("validation_runs", [])
 
+    # Automatically pull newly analyzed YouTube strategies from the original Trading Lab.
+    # The user should not have to remember to import them before the family manager can use them.
+    legacy_changed = False
+    try:
+        legacy_data = build_legacy_store().load_latest()
+        existing_ids = {
+            str(item.get("id") or "")
+            for item in data.get("strategies") or []
+            if isinstance(item, dict) and item.get("id")
+        }
+        legacy_additions = [
+            canonicalize_existing_strategy(item)
+            for item in legacy_data.get("strategies") or []
+            if isinstance(item, dict)
+            and str(item.get("id") or "") not in existing_ids
+        ]
+        if legacy_additions:
+            data["strategies"] = merge_strategies(
+                list(data.get("strategies") or []),
+                legacy_additions,
+            )
+            legacy_changed = True
+    except AppError:
+        # The unified library remains usable even if the older YouTube library is temporarily unavailable.
+        pass
+
     upgraded_strategies: list[dict[str, Any]] = []
     for raw in data.get("strategies") or []:
         if not isinstance(raw, dict):
@@ -225,7 +251,7 @@ def load_library() -> dict[str, Any]:
     canonical_changed = canonical_families != existing_canonical
     data["strategies"] = [*source_and_other, *canonical_families]
 
-    if sources_changed or canonical_changed:
+    if legacy_changed or sources_changed or canonical_changed:
         try:
             store.save(data)
         except AppError:
