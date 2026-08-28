@@ -383,6 +383,20 @@ MACHINE_RULE_SCHEMA: dict[str, Any] = {
         "above_vwap": NULLABLE_BOOLEAN,
         "vwap_reclaim": NULLABLE_BOOLEAN,
         "max_vwap_distance_pct": NULLABLE_NUMBER,
+        "fast_ema_period": NULLABLE_INTEGER,
+        "slow_ema_period": NULLABLE_INTEGER,
+        "trend_ema_period": NULLABLE_INTEGER,
+        "require_price_above_fast_ema": NULLABLE_BOOLEAN,
+        "require_price_above_slow_ema": NULLABLE_BOOLEAN,
+        "require_price_above_trend_ema": NULLABLE_BOOLEAN,
+        "require_fast_ema_rising": NULLABLE_BOOLEAN,
+        "require_fast_ema_pullback": NULLABLE_BOOLEAN,
+        "max_fast_ema_distance_pct": NULLABLE_NUMBER,
+        "pullback_touch_tolerance_pct": NULLABLE_NUMBER,
+        "max_pullback_number": NULLABLE_INTEGER,
+        "require_pullback_breakout": NULLABLE_BOOLEAN,
+        "stop_below_fast_ema": NULLABLE_BOOLEAN,
+        "stop_ema_buffer_pct": NULLABLE_NUMBER,
         "breakout_lookback_bars": NULLABLE_INTEGER,
         "opening_range_minutes": NULLABLE_INTEGER,
         "volume_surge_ratio": NULLABLE_NUMBER,
@@ -522,6 +536,14 @@ For each setup:
 - Capture the stock universe, price range, liquidity, relative volume, VWAP, breakout level,
   opening range, prior-day/session conditions, trend, entry trigger, stop, target, reward/risk,
   session time, news catalyst, and explicit reasons to avoid the setup whenever the presenter gives them.
+- Preserve explicitly named EMA periods. For moving-average setups, use fast_ema_period,
+  slow_ema_period, and trend_ema_period when the source gives those periods; use
+  require_price_above_*_ema, require_fast_ema_rising, require_fast_ema_pullback,
+  max_pullback_number, require_pullback_breakout, and stop_below_fast_ema only when the
+  source text clearly states those structural requirements.
+- If the source says price should pull back "near", "to", or "slightly through" an EMA without
+  an exact distance, leave pullback_touch_tolerance_pct null so the research compiler can label
+  any numeric tolerance as an assumption rather than pretending the author supplied it.
 - If the presenter explicitly requires a breakout through the previous trading day's high,
   encode previous_day_high_breakout=true even when no numeric threshold is needed.
 - Use min_previous_day_volume_ratio only when the source explicitly gives a numeric prior-session
@@ -612,9 +634,19 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
         "min_price", "max_price", "min_day_change_pct", "min_relative_volume", "min_dollar_volume",
         "min_previous_day_volume_ratio", "min_previous_day_change_pct",
         "max_spread_pct", "max_vwap_distance_pct", "volume_surge_ratio", "stop_loss_pct", "reward_risk",
+        "max_fast_ema_distance_pct", "pullback_touch_tolerance_pct", "stop_ema_buffer_pct",
     }
-    integer_fields = {"breakout_lookback_bars", "opening_range_minutes", "minimum_green_bars", "max_hold_minutes"}
-    boolean_fields = {"above_vwap", "vwap_reclaim", "catalyst_required", "previous_day_high_breakout"}
+    integer_fields = {
+        "breakout_lookback_bars", "opening_range_minutes", "minimum_green_bars", "max_hold_minutes",
+        "fast_ema_period", "slow_ema_period", "trend_ema_period", "max_pullback_number",
+    }
+    boolean_fields = {
+        "above_vwap", "vwap_reclaim", "catalyst_required", "previous_day_high_breakout",
+        "require_price_above_fast_ema", "require_price_above_slow_ema",
+        "require_price_above_trend_ema", "require_fast_ema_rising",
+        "require_fast_ema_pullback", "require_pullback_breakout",
+        "stop_below_fast_ema",
+    }
     for name in MACHINE_RULE_SCHEMA["properties"]:
         value = raw_rules.get(name)
         if name in number_fields:
@@ -632,6 +664,7 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
         "min_price", "max_price", "min_relative_volume", "min_dollar_volume",
         "min_previous_day_volume_ratio", "max_spread_pct", "max_vwap_distance_pct",
         "volume_surge_ratio", "stop_loss_pct", "reward_risk",
+        "max_fast_ema_distance_pct", "pullback_touch_tolerance_pct", "stop_ema_buffer_pct",
     }:
         if result[name] is not None and result[name] < 0:
             result[name] = None
@@ -639,6 +672,17 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
         result["stop_loss_pct"] = None
     if result["reward_risk"] is not None and result["reward_risk"] <= 0:
         result["reward_risk"] = None
+    for name in ("fast_ema_period", "slow_ema_period", "trend_ema_period"):
+        if result.get(name) is not None and not 2 <= int(result[name]) <= 500:
+            result[name] = None
+    if result.get("max_pullback_number") is not None and not 1 <= int(result["max_pullback_number"]) <= 20:
+        result["max_pullback_number"] = None
+    if result.get("pullback_touch_tolerance_pct") is not None and result["pullback_touch_tolerance_pct"] > 20:
+        result["pullback_touch_tolerance_pct"] = None
+    if result.get("max_fast_ema_distance_pct") is not None and result["max_fast_ema_distance_pct"] > 100:
+        result["max_fast_ema_distance_pct"] = None
+    if result.get("stop_ema_buffer_pct") is not None and result["stop_ema_buffer_pct"] > 20:
+        result["stop_ema_buffer_pct"] = None
     if result["min_price"] is not None and result["max_price"] is not None and result["min_price"] > result["max_price"]:
         result["min_price"], result["max_price"] = result["max_price"], result["min_price"]
     return result
@@ -2963,6 +3007,58 @@ def add_indicators(frame: pd.DataFrame, strategy: dict[str, Any]) -> pd.DataFram
     run_lengths = green.groupby([data["session"], (green == 0).cumsum()]).cumsum()
     data["green_streak"] = run_lengths
 
+    # Moving-average primitives are intentionally generic. The same deterministic
+    # fields can model 9 EMA pullbacks, 20 EMA pullbacks, longer trend filters, and
+    # future cross-book strategies without hard-coding one author's setup.
+    for role, field_name in (
+        ("fast", "fast_ema_period"),
+        ("slow", "slow_ema_period"),
+        ("trend", "trend_ema_period"),
+    ):
+        period = rules.get(field_name)
+        column = f"{role}_ema"
+        if period is not None:
+            period = int(period)
+            data[column] = data["close"].ewm(
+                span=period,
+                adjust=False,
+                min_periods=period,
+            ).mean()
+        else:
+            data[column] = float("nan")
+
+    data["fast_ema_distance_pct"] = (
+        (data["close"].div(data["fast_ema"]) - 1.0).abs() * 100.0
+    )
+    fast_ema = data["fast_ema"]
+    below_distance = ((data["low"] - fast_ema).abs().div(fast_ema) * 100.0)
+    above_distance = ((data["high"] - fast_ema).abs().div(fast_ema) * 100.0)
+    crosses_ema = (data["low"] <= fast_ema) & (data["high"] >= fast_ema)
+    data["fast_ema_touch_distance_pct"] = pd.concat(
+        [below_distance, above_distance], axis=1
+    ).min(axis=1)
+    data.loc[crosses_ema, "fast_ema_touch_distance_pct"] = 0.0
+
+    tolerance = safe_float(rules.get("pullback_touch_tolerance_pct"), 0.5) or 0.5
+    fast_touch = (
+        data["fast_ema"].notna()
+        & data["fast_ema_touch_distance_pct"].notna()
+        & (data["fast_ema_touch_distance_pct"] <= float(tolerance))
+    )
+    prior_touch = fast_touch.groupby(data["session"], sort=False).shift(1).fillna(False)
+    touch_start = fast_touch & ~prior_touch
+    data["fast_ema_pullback_number"] = (
+        touch_start.astype(int).groupby(data["session"], sort=False).cumsum()
+    )
+    data["fast_ema_pullback_recent"] = fast_touch.groupby(
+        data["session"], sort=False
+    ).transform(lambda series: series.rolling(4, min_periods=1).max()).fillna(False).astype(bool)
+    data["fast_ema_rising"] = (
+        data["fast_ema"].notna()
+        & data["fast_ema"].shift(3).notna()
+        & (data["fast_ema"] > data["fast_ema"].shift(3))
+    )
+
     # Generic, look-ahead-safe pullback -> breakout confirmation used for strategies
     # whose lesson/name explicitly calls for a micro pullback or bull flag.
     lower_close = data["close"] < data["previous_close"]
@@ -3040,6 +3136,7 @@ def evaluate_signal(
         ("min_previous_day_volume_ratio", "previous_day_volume_ratio", lambda actual, target: actual >= target),
         ("min_previous_day_change_pct", "previous_day_change_pct", lambda actual, target: actual >= target),
         ("max_vwap_distance_pct", "vwap_distance_pct", lambda actual, target: actual <= target),
+        ("max_fast_ema_distance_pct", "fast_ema_distance_pct", lambda actual, target: actual <= target),
         ("volume_surge_ratio", "volume_surge", lambda actual, target: actual >= target),
         ("minimum_green_bars", "green_streak", lambda actual, target: actual >= target),
     ]
@@ -3064,6 +3161,33 @@ def evaluate_signal(
             return False
         if not (float(row["previous_close"]) <= float(row["previous_vwap"]) and close > float(row["vwap"])):
             return False
+
+    for rule_name, field_name in (
+        ("require_price_above_fast_ema", "fast_ema"),
+        ("require_price_above_slow_ema", "slow_ema"),
+        ("require_price_above_trend_ema", "trend_ema"),
+    ):
+        required = rules.get(rule_name)
+        if required is None:
+            continue
+        if not has_number(field_name):
+            return False
+        actual = close > float(row[field_name])
+        if bool(required) != actual:
+            return False
+
+    if rules.get("require_fast_ema_rising") is True and not bool(row.get("fast_ema_rising")):
+        return False
+    if rules.get("require_fast_ema_pullback") is True:
+        if not bool(row.get("fast_ema_pullback_recent")):
+            return False
+        max_number = rules.get("max_pullback_number")
+        if max_number is not None:
+            number = safe_float(row.get("fast_ema_pullback_number"))
+            if number is None or int(number) > int(max_number):
+                return False
+    if rules.get("require_pullback_breakout") is True and not bool(row.get("pullback_breakout")):
+        return False
     if rules.get("previous_day_high_breakout"):
         if not all(has_number(name) for name in ("previous_bar_close", "previous_daily_high")):
             return False
@@ -3361,6 +3485,13 @@ def run_backtest(
             entry = float(current["open"]) * (1.0 + execution_friction)
             if entry > 0 and cash > 0:
                 stop_price = entry * (1.0 - stop_pct / 100.0)
+                if rules.get("stop_below_fast_ema") is True:
+                    signal_ema = safe_float(previous.get("fast_ema"))
+                    if signal_ema is not None and signal_ema > 0:
+                        ema_buffer = max(0.0, safe_float(rules.get("stop_ema_buffer_pct"), 0.0) or 0.0)
+                        structural_stop = signal_ema * (1.0 - ema_buffer / 100.0)
+                        if 0 < structural_stop < entry:
+                            stop_price = structural_stop
                 risk_per_share = entry - stop_price
                 if risk_per_share > 0:
                     max_positions = max(1, int(settings.max_concurrent_positions))
@@ -3617,6 +3748,13 @@ def generate_strategy_variants(
         ("min_dollar_volume", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 100.0, 2_000_000_000.0, False),
         ("max_spread_pct", (0.60, 0.80, 1.25, 1.60), 0.01, 50.0, False),
         ("max_vwap_distance_pct", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 0.05, 100.0, False),
+        ("fast_ema_period", (0.70, 0.85, 1.15, 1.30, 1.60), 2.0, 80.0, True),
+        ("slow_ema_period", (0.70, 0.85, 1.15, 1.30, 1.60), 3.0, 200.0, True),
+        ("trend_ema_period", (0.70, 0.85, 1.15, 1.30), 10.0, 500.0, True),
+        ("max_fast_ema_distance_pct", (0.50, 0.75, 1.25, 1.50, 2.0), 0.05, 20.0, False),
+        ("pullback_touch_tolerance_pct", (0.50, 0.75, 1.25, 1.50, 2.0), 0.05, 10.0, False),
+        ("max_pullback_number", (0.50, 0.75, 1.25, 1.50, 2.0), 1.0, 10.0, True),
+        ("stop_ema_buffer_pct", (0.50, 0.75, 1.25, 1.50, 2.0), 0.0, 10.0, False),
         ("breakout_lookback_bars", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 1.0, 150.0, True),
         ("opening_range_minutes", (0.50, 0.75, 1.25, 1.50, 2.0), 1.0, 180.0, True),
         ("volume_surge_ratio", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 0.10, 50.0, False),
@@ -3751,6 +3889,13 @@ def generate_local_strategy_refinements(
         "min_dollar_volume": ((500_000.0, 250_000.0, 100_000.0, 50_000.0), 100.0, 2_000_000_000.0, False),
         "max_spread_pct": ((0.50, 0.25, 0.10), 0.01, 50.0, False),
         "max_vwap_distance_pct": ((2.0, 1.0, 0.5, 0.25), 0.05, 100.0, False),
+        "fast_ema_period": ((4.0, 2.0, 1.0), 2.0, 80.0, True),
+        "slow_ema_period": ((10.0, 5.0, 2.0, 1.0), 3.0, 200.0, True),
+        "trend_ema_period": ((50.0, 25.0, 10.0, 5.0), 10.0, 500.0, True),
+        "max_fast_ema_distance_pct": ((1.0, 0.5, 0.25, 0.10), 0.05, 20.0, False),
+        "pullback_touch_tolerance_pct": ((0.75, 0.50, 0.25, 0.10), 0.05, 10.0, False),
+        "max_pullback_number": ((2.0, 1.0), 1.0, 10.0, True),
+        "stop_ema_buffer_pct": ((0.50, 0.25, 0.10, 0.05), 0.0, 10.0, False),
         "breakout_lookback_bars": ((10.0, 5.0, 2.0, 1.0), 1.0, 150.0, True),
         "opening_range_minutes": ((15.0, 10.0, 5.0, 2.0), 1.0, 180.0, True),
         "volume_surge_ratio": ((1.0, 0.5, 0.25, 0.10), 0.10, 50.0, False),
@@ -3769,6 +3914,13 @@ def generate_local_strategy_refinements(
         "min_dollar_volume": ((100_000.0, 50_000.0, 25_000.0), 100.0, 2_000_000_000.0, False),
         "max_spread_pct": ((0.10, 0.05, 0.02), 0.01, 50.0, False),
         "max_vwap_distance_pct": ((0.50, 0.25, 0.10), 0.05, 100.0, False),
+        "fast_ema_period": ((2.0, 1.0), 2.0, 80.0, True),
+        "slow_ema_period": ((5.0, 2.0, 1.0), 3.0, 200.0, True),
+        "trend_ema_period": ((20.0, 10.0, 5.0), 10.0, 500.0, True),
+        "max_fast_ema_distance_pct": ((0.25, 0.10, 0.05), 0.05, 20.0, False),
+        "pullback_touch_tolerance_pct": ((0.25, 0.10, 0.05), 0.05, 10.0, False),
+        "max_pullback_number": ((1.0,), 1.0, 10.0, True),
+        "stop_ema_buffer_pct": ((0.20, 0.10, 0.05), 0.0, 10.0, False),
         "breakout_lookback_bars": ((2.0, 1.0), 1.0, 150.0, True),
         "opening_range_minutes": ((5.0, 2.0, 1.0), 1.0, 180.0, True),
         "volume_surge_ratio": ((0.25, 0.10, 0.05), 0.10, 50.0, False),
@@ -5643,6 +5795,58 @@ def match_strategy(metrics: dict[str, Any], strategy: dict[str, Any]) -> dict[st
         actual = bool(metrics.get("above_vwap")) if metrics.get("vwap") is not None else None
         status = "unknown" if actual is None else ("pass" if actual is required else "fail")
         checks.append({"label": "Price above VWAP", "actual": actual, "required": required, "status": status})
+    for rule_name, chart_field, label in (
+        ("require_price_above_fast_ema", "fast_ema", "Price above fast EMA"),
+        ("require_price_above_slow_ema", "slow_ema", "Price above slow EMA"),
+        ("require_price_above_trend_ema", "trend_ema", "Price above trend EMA"),
+    ):
+        required = rules.get(rule_name)
+        if required is None:
+            continue
+        ema_value = chart_checks.get(chart_field)
+        price_value = safe_float(metrics.get("price"))
+        if ema_value is None or price_value is None:
+            status = "unknown"
+            actual = None
+        else:
+            actual = price_value > float(ema_value)
+            status = "pass" if actual == bool(required) else "fail"
+        checks.append({"label": label, "actual": actual, "required": bool(required), "status": status})
+
+    if rules.get("require_fast_ema_rising") is True:
+        observed = chart_checks.get("fast_ema_rising")
+        checks.append({
+            "label": "Fast EMA rising",
+            "actual": observed,
+            "required": True,
+            "status": "unknown" if observed is None else ("pass" if bool(observed) else "fail"),
+        })
+    if rules.get("require_fast_ema_pullback") is True:
+        observed = chart_checks.get("fast_ema_pullback_recent")
+        checks.append({
+            "label": "Recent pullback to fast EMA",
+            "actual": observed,
+            "required": True,
+            "status": "unknown" if observed is None else ("pass" if bool(observed) else "fail"),
+        })
+        max_number = rules.get("max_pullback_number")
+        if max_number is not None:
+            number = chart_checks.get("fast_ema_pullback_number")
+            checks.append({
+                "label": "Pullback number",
+                "actual": number,
+                "required": f"≤ {int(max_number)}",
+                "status": "unknown" if number is None else ("pass" if float(number) <= float(max_number) else "fail"),
+            })
+    if rules.get("require_pullback_breakout") is True:
+        observed = chart_checks.get("pullback_breakout")
+        checks.append({
+            "label": "Pullback breakout confirmation",
+            "actual": observed,
+            "required": True,
+            "status": "unknown" if observed is None else ("pass" if bool(observed) else "fail"),
+        })
+
     if rules.get("catalyst_required"):
         catalyst_value = metrics.get("has_catalyst")
         catalyst_status = "unknown" if catalyst_value is None else ("pass" if bool(catalyst_value) else "fail")
@@ -5742,6 +5946,8 @@ def chart_trigger_checks(rows: list[dict[str, Any]], strategy: dict[str, Any]) -
         "vwap_reclaim", "previous_day_high_breakout", "breakout_lookback_bars",
         "opening_range_minutes", "volume_surge_ratio", "minimum_green_bars",
         "previous_day_volume_ratio", "previous_day_change_pct",
+        "fast_ema", "slow_ema", "trend_ema", "fast_ema_rising",
+        "fast_ema_pullback_recent", "fast_ema_pullback_number", "pullback_breakout",
     )
     outcome: dict[str, Any] = {name: None for name in fields}
     frame = bars_to_frame(rows)
@@ -5755,6 +5961,13 @@ def chart_trigger_checks(rows: list[dict[str, Any]], strategy: dict[str, Any]) -
         outcome["previous_day_volume_ratio"] = float(last["previous_day_volume_ratio"])
     if pd.notna(last.get("previous_day_change_pct")):
         outcome["previous_day_change_pct"] = float(last["previous_day_change_pct"])
+    for field_name in ("fast_ema", "slow_ema", "trend_ema", "fast_ema_pullback_number"):
+        if pd.notna(last.get(field_name)):
+            outcome[field_name] = float(last[field_name])
+    for field_name in ("fast_ema_rising", "fast_ema_pullback_recent", "pullback_breakout"):
+        value = last.get(field_name)
+        if value is not None and pd.notna(value):
+            outcome[field_name] = bool(value)
 
     if rules.get("vwap_reclaim"):
         recent = enriched.tail(3)
