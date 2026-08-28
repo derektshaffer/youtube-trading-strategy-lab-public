@@ -1167,7 +1167,7 @@ def inject_research_glass_theme() -> None:
         [class*="st-key-til_nav_"] {
             margin: 0 0 3px !important;
         }
-        [class*="st-key-til_nav_"] button {
+        [data-testid="stSidebar"] [class*="st-key-til_nav_"] div[data-testid="stButton"] button[kind="secondary"] {
             position: relative !important;
             justify-content: flex-start !important;
             min-height: 2.34rem !important;
@@ -1183,21 +1183,21 @@ def inject_research_glass_theme() -> None:
             text-align: left !important;
             overflow: hidden !important;
         }
-        [class*="st-key-til_nav_"] button p {
+        [data-testid="stSidebar"] [class*="st-key-til_nav_"] div[data-testid="stButton"] button[kind="secondary"] p {
             width: 100% !important;
             text-align: left !important;
             color: inherit !important;
             white-space: nowrap !important;
         }
-        [class*="st-key-til_nav_"] button:hover {
+        [data-testid="stSidebar"] [class*="st-key-til_nav_"] div[data-testid="stButton"] button[kind="secondary"]:hover {
             color: #eef8ff !important;
             border-color: rgba(75,201,255,.18) !important;
             background:
                 linear-gradient(90deg, rgba(27,92,132,.30), rgba(12,35,55,.12)) !important;
         }
-        [class*="st-key-til_nav_"] button[kind="primary"] {
+        [data-testid="stSidebar"] [class*="st-key-til_nav_active_"] div[data-testid="stButton"] button[kind="secondary"] {
             color: #fbfdff !important;
-            padding-left: 1.03rem !important;
+            padding-left: 1.18rem !important;
             border-color: rgba(69,226,145,.40) !important;
             background:
                 linear-gradient(90deg, rgba(11,102,115,.62), rgba(12,69,55,.34) 68%, rgba(12,31,47,.20)) !important;
@@ -1205,10 +1205,10 @@ def inject_research_glass_theme() -> None:
                 inset 0 1px 0 rgba(255,255,255,.05),
                 0 0 22px rgba(47,222,146,.08) !important;
         }
-        [class*="st-key-til_nav_"] button[kind="primary"]::before {
+        [data-testid="stSidebar"] [class*="st-key-til_nav_active_"] div[data-testid="stButton"] button[kind="secondary"]::before {
             content: "";
             position: absolute;
-            left: 7px;
+            left: 8px;
             top: 50%;
             width: 8px;
             height: 8px;
@@ -1220,7 +1220,7 @@ def inject_research_glass_theme() -> None:
                 0 0 8px rgba(91,221,255,.48),
                 0 0 14px rgba(73,236,160,.28);
         }
-        [class*="st-key-til_nav_"] button[kind="primary"]::after {
+        [data-testid="stSidebar"] [class*="st-key-til_nav_active_"] div[data-testid="stButton"] button[kind="secondary"]::after {
             content: "";
             position: absolute;
             left: 0;
@@ -1231,6 +1231,15 @@ def inject_research_glass_theme() -> None:
             background:
                 linear-gradient(180deg, #57d9ff 0%, #42e88d 100%);
             box-shadow: 0 0 12px rgba(72,225,174,.38);
+        }
+
+        .til-side-labs-note {
+            margin: .45rem .3rem 0;
+            color: #4f7087;
+            font-size: .56rem;
+            font-weight: 700;
+            letter-spacing: .05em;
+            text-transform: uppercase;
         }
 
         .til-side-status {
