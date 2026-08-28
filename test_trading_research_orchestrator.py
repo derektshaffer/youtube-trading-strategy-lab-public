@@ -7,6 +7,16 @@ import trading_research_orchestrator as research
 
 
 class ResearchQueueTests(unittest.TestCase):
+    def test_stock_finder_is_a_supported_durable_job_type(self):
+        library, job = research.enqueue_research_job(
+            {},
+            "stock_finder",
+            {"symbol": "SDOT", "profile": "Very Deep"},
+        )
+        self.assertIn("stock_finder", research.SUPPORTED_RESEARCH_JOB_TYPES)
+        self.assertEqual(job["type"], "stock_finder")
+        self.assertEqual(library["research_queue"][0]["status"], "queued")
+
     def test_seed_cycle_is_deduplicated_per_day(self):
         library = {"strategies": []}
         library, first = research.seed_continuous_research_cycle(
@@ -112,6 +122,39 @@ class ResearchQueueTests(unittest.TestCase):
         library = research.fail_research_job(library, claimed["id"], "boom")
         failed = next(item for item in library["research_queue"] if item["id"] == claimed["id"])
         self.assertEqual(failed["status"], "failed")
+
+    def test_failure_records_the_exact_step_and_completion_clears_it(self):
+        library, job = research.enqueue_research_job(
+            {},
+            "stock_finder",
+            {"symbol": "SDOT", "profile": "Very Deep"},
+            max_attempts=2,
+        )
+        library, claimed = research.claim_research_job_by_id(
+            library,
+            "finder-worker",
+            job["id"],
+        )
+        library = research.fail_research_job(
+            library,
+            claimed["id"],
+            "stability worker stopped",
+            failure_step="parameter_stability",
+            retry_delay_minutes=1,
+        )
+        saved = library["research_queue"][0]
+        self.assertEqual(saved["status"], "retry")
+        self.assertEqual(saved["failure_step"], "parameter_stability")
+        self.assertIn("Parameter Stability failed", saved["status_message"])
+        library = research.finish_research_job(
+            library,
+            claimed["id"],
+            result_ref="distributed-finder:SDOT:Very Deep:done",
+        )
+        saved = library["research_queue"][0]
+        self.assertEqual(saved["status"], "complete")
+        self.assertIsNone(saved["failure_step"])
+        self.assertIsNone(saved["last_error"])
 
 
 class SourceQualityTests(unittest.TestCase):

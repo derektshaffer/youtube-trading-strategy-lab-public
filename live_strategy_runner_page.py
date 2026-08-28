@@ -7,7 +7,6 @@ restricted to strategies the user explicitly approved in the main Trading Lab.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-import os
 import re
 from typing import Any
 
@@ -15,6 +14,7 @@ import pandas as pd
 import streamlit as st
 
 from app_access import require_app_access
+from trading_app_runtime import market_client, setting
 from trading_progress_ui import LongTaskMonitor, session_task_profiles
 from alpaca_paper_trader import (
     AlpacaPaperTrader,
@@ -25,7 +25,6 @@ from alpaca_paper_trader import (
 from youtube_strategy_engine import (
     DEFAULT_GITHUB_BACKUP_PATH,
     ET,
-    AlpacaMarketData,
     AppError,
     GitHubCloudBackup,
     StrategyStore,
@@ -43,15 +42,6 @@ from youtube_strategy_engine import (
 
 MAX_MARKET_DATA_AGE_SECONDS = 90.0
 MAX_MARKET_DATA_FUTURE_SKEW_SECONDS = 15.0
-
-
-def setting(name: str, default: str = "") -> str:
-    try:
-        if name in st.secrets and str(st.secrets[name]).strip():
-            return str(st.secrets[name]).strip()
-    except (FileNotFoundError, KeyError, RuntimeError, AttributeError):
-        pass
-    return str(os.environ.get(name, default)).strip()
 
 
 def money(value: Any, decimals: int = 2) -> str:
@@ -88,15 +78,6 @@ def build_store() -> StrategyStore:
             path=setting("GITHUB_BACKUP_PATH", DEFAULT_GITHUB_BACKUP_PATH),
         )
     return StrategyStore(cloud_backup=cloud_backup)
-
-
-def market_client() -> AlpacaMarketData:
-    return AlpacaMarketData(
-        setting("ALPACA_API_KEY"),
-        setting("ALPACA_SECRET_KEY"),
-        setting("ALPACA_LIVE_FEED", "iex"),
-        setting("ALPACA_HISTORICAL_FEED", "sip"),
-    )
 
 
 def paper_client() -> AlpacaPaperTrader:

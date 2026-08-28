@@ -44,6 +44,18 @@ DEFAULT_GEMINI_BULK_FALLBACK_MODEL = "gemini-3.6-flash"
 DEFAULT_GEMINI_SPECIALIST_MODEL = "gemini-3.1-pro-preview"
 DEFAULT_GEMINI_SPECIALIST_FALLBACK_MODEL = "gemini-2.5-pro"
 
+# Keep the durable queue contract in one place. Executors can intentionally
+# claim only a subset (the distributed Finder owns stock_finder jobs), but every
+# producer/consumer must agree that these are valid persisted job types.
+SUPPORTED_RESEARCH_JOB_TYPES = frozenset(
+    {
+        "web_research",
+        "specialist_review",
+        "autonomous_validation",
+        "stock_finder",
+    }
+)
+
 DEFAULT_RESEARCH_TOPICS = (
     "Small-cap momentum: relative volume, liquidity, float, and continuation behavior",
     "Catalyst momentum: news type, timing, volume response, and intraday follow-through",
@@ -262,7 +274,7 @@ def enqueue_research_job(
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     data = ensure_research_collections(library)
     kind = str(job_type or "").strip()
-    if kind not in {"web_research", "specialist_review", "autonomous_validation", "stock_finder"}:
+    if kind not in SUPPORTED_RESEARCH_JOB_TYPES:
         raise AppError(f"Unsupported research job type: {kind or 'blank'}")
     dedupe = str(dedupe_key or "").strip()
     if dedupe:
@@ -289,6 +301,8 @@ def enqueue_research_job(
         "completed_at": None,
         "next_attempt_at": None,
         "last_error": None,
+        "failure_step": None,
+        "status_message": "Waiting for a compatible research worker.",
         "result_ref": None,
     }
     data["research_queue"] = [job, *data["research_queue"]][:300]
@@ -334,6 +348,8 @@ def recover_stale_research_jobs(
             "Previous cloud worker stopped or timed out before completing this job. "
             + ("Retrying from durable state." if retry else "Maximum attempts reached.")
         )
+        item["failure_step"] = "worker_heartbeat"
+        item["status_message"] = item["last_error"]
         recovered += 1
         queue.append(item)
     data["research_queue"] = queue
@@ -384,6 +400,8 @@ def claim_next_research_job(
             item["started_at"] = now_text
             item["updated_at"] = now_text
             item["attempts"] = int(item.get("attempts") or 0) + 1
+            item["next_attempt_at"] = None
+            item["status_message"] = "Claimed by a research worker."
             claimed = item
         updated_queue.append(item)
     data["research_queue"] = updated_queue
@@ -428,6 +446,8 @@ def claim_research_job_by_id(
             item["started_at"] = now_text
             item["updated_at"] = now_text
             item["attempts"] = int(item.get("attempts") or 0) + 1
+            item["next_attempt_at"] = None
+            item["status_message"] = "Claimed by a research worker."
             claimed = item
         updated_queue.append(item)
     data["research_queue"] = updated_queue
@@ -525,7 +545,11 @@ def finish_research_job(
             "status": "complete",
             "updated_at": now,
             "completed_at": now,
+            "worker_id": None,
+            "next_attempt_at": None,
             "last_error": None,
+            "failure_step": None,
+            "status_message": "Research job completed.",
             "result_ref": str(result_ref or "") or None,
         }
         if str(item.get("id") or "") == str(job_id or "")
@@ -541,6 +565,7 @@ def fail_research_job(
     error: Exception | str,
     *,
     retry_delay_minutes: int = 30,
+    failure_step: str = "",
 ) -> dict[str, Any]:
     data = ensure_research_collections(library)
     now = datetime.now(UTC)
@@ -556,7 +581,14 @@ def fail_research_job(
         retry = attempts < max_attempts
         item["status"] = "retry" if retry else "failed"
         item["updated_at"] = now.isoformat().replace("+00:00", "Z")
+        item["worker_id"] = None
         item["last_error"] = message
+        item["failure_step"] = str(failure_step or "") or None
+        item["status_message"] = (
+            f"{str(failure_step).replace('_', ' ').strip().title()} failed: {message}"
+            if str(failure_step or "").strip()
+            else f"Research job failed: {message}"
+        )[:2000]
         item["next_attempt_at"] = (
             (now + timedelta(minutes=max(1, int(retry_delay_minutes)))).isoformat().replace("+00:00", "Z")
             if retry else None

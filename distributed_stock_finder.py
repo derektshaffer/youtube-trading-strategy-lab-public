@@ -67,6 +67,7 @@ from youtube_strategy_engine import (
 )
 
 UTC = timezone.utc
+MAX_FINALIZATION_RECOVERIES = 3
 
 
 def env(name: str, default: str = "") -> str:
@@ -280,6 +281,239 @@ def shard_path(run_id: str, index: int) -> str:
     return f"{run_root(run_id)}/shard-{int(index):03d}.json.gz"
 
 
+def _completed_shard_numbers(payload: dict[str, Any]) -> set[int]:
+    return {
+        int(value)
+        for value in payload.get("distributed_shards_completed") or []
+        if str(value).lstrip("-").isdigit()
+    }
+
+
+def _resumable_plan_for_job(
+    artifacts: PrivateRunArtifactStore,
+    job: dict[str, Any],
+) -> tuple[dict[str, Any], set[int]] | None:
+    """Return an existing private plan and the shard artifacts that really exist.
+
+    Queue progress is useful for display, but the private artifacts are the
+    source of truth for recovery. A job that says shards completed must never
+    silently create a new run if its saved plan cannot be read.
+    """
+    payload = dict(job.get("payload") or {})
+    run_id = str(payload.get("distributed_run_id") or "").strip()
+    if not run_id:
+        return None
+    try:
+        plan = artifacts.read_json_gz(plan_path(run_id))
+    except FileNotFoundError:
+        if _completed_shard_numbers(payload):
+            raise AppError(
+                f"Saved distributed run {run_id} reports completed shards, but its "
+                "private run plan is missing. Refusing to start over or discard the checkpoint."
+            )
+        return None
+
+    job_id = str(job.get("id") or "")
+    if str(plan.get("run_id") or "") != run_id:
+        raise AppError(f"Saved distributed run {run_id} has a mismatched plan id.")
+    if str(plan.get("parent_job_id") or "") != job_id:
+        raise AppError(f"Saved distributed run {run_id} belongs to a different queue job.")
+    symbol = str(payload.get("symbol") or "").strip().upper()
+    profile_name = str(payload.get("profile") or "Deep").strip()
+    if str(plan.get("symbol") or "").strip().upper() != symbol:
+        raise AppError(f"Saved distributed run {run_id} belongs to a different stock.")
+    if str(plan.get("profile_name") or "").strip() != profile_name:
+        raise AppError(f"Saved distributed run {run_id} belongs to a different search profile.")
+
+    specs = [item for item in plan.get("shards") or [] if isinstance(item, dict)]
+    if not specs:
+        raise AppError(f"Saved distributed run {run_id} does not contain a shard plan.")
+    completed = {
+        int(spec.get("index") or 0)
+        for spec in specs
+        if artifacts.exists(shard_path(run_id, int(spec.get("index") or 0)))
+    }
+    return plan, completed
+
+
+def _write_public_run_metadata(
+    plan: dict[str, Any],
+    pending_specs: list[dict[str, Any]],
+    *,
+    resumed: bool,
+) -> None:
+    # GitHub still parses the matrix for a skipped job. Keep one harmless
+    # placeholder when recovery can go directly to aggregate/finalization.
+    public_specs = pending_specs or [{"index": 0, "label": "finalization-only"}]
+    Path("distributed_matrix.json").write_text(
+        json.dumps(
+            {
+                "include": [
+                    {
+                        "index": int(item.get("index") or 0),
+                        "label": str(item.get("label") or "shard"),
+                    }
+                    for item in public_specs
+                ]
+            },
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+    Path("distributed_meta.json").write_text(
+        json.dumps(
+            {
+                "has_job": True,
+                "run_id": str(plan.get("run_id") or ""),
+                "parent_job_id": str(plan.get("parent_job_id") or ""),
+                "symbol": str(plan.get("symbol") or ""),
+                "profile": str(plan.get("profile_name") or ""),
+                "shard_count": len(plan.get("shards") or []),
+                "pending_shard_count": len(pending_specs),
+                "needs_shards": bool(pending_specs),
+                "resumed": bool(resumed),
+            },
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+
+
+def _restore_parent_distribution(
+    job_id: str,
+    plan: dict[str, Any],
+    completed: set[int],
+) -> None:
+    run_id = str(plan.get("run_id") or "")
+    total = max(1, len(plan.get("shards") or []))
+    complete_count = min(total, len(completed))
+
+    def mutation(data: dict[str, Any]) -> dict[str, Any]:
+        queue: list[dict[str, Any]] = []
+        now_text = isoformat_utc(utc_now())
+        for raw in data.get("research_queue") or []:
+            item = dict(raw)
+            if str(item.get("id") or "") != job_id:
+                queue.append(item)
+                continue
+            payload = dict(item.get("payload") or {})
+            previous_progress = float(payload.get("distributed_progress") or 0.0)
+            all_complete = complete_count == total
+            base_progress = 0.88 if all_complete else 0.10 + 0.75 * (complete_count / total)
+            stage = "finalization_retry" if all_complete else "distributed_optimization_resume"
+            message = (
+                f"Recovered all {total} saved shard artifacts; resuming final validation without recomputing shards."
+                if all_complete
+                else f"Recovered {complete_count} of {total} saved shard artifacts; only missing shards will run."
+            )
+            payload.update(
+                {
+                    "distributed_run_id": run_id,
+                    "distributed_shards_total": total,
+                    "distributed_mode": True,
+                    "distributed_stage": stage,
+                    "distributed_progress": max(base_progress, min(0.98, previous_progress)),
+                    "distributed_message": message,
+                    "distributed_shards_completed": sorted(completed),
+                    "distributed_last_update": now_text,
+                    "distributed_resumed_at": now_text,
+                }
+            )
+            item["payload"] = payload
+            item["updated_at"] = now_text
+            item["status_message"] = message
+            queue.append(item)
+        data["research_queue"] = queue
+        return data
+
+    mutate_remote_library(mutation)
+
+
+def _requeue_completed_finder_for_finalization(
+    artifacts: PrivateRunArtifactStore,
+    *,
+    preferred_job_id: str = "",
+) -> str:
+    """Give a terminal Finder job a bounded finalization-only recovery budget."""
+    library = read_remote_library()
+    candidates = [
+        dict(item)
+        for item in library.get("research_queue") or []
+        if isinstance(item, dict)
+        and str(item.get("type") or "") == "stock_finder"
+        and str(item.get("status") or "") == "failed"
+        and (
+            not str(preferred_job_id or "").strip()
+            or str(item.get("id") or "") == str(preferred_job_id).strip()
+        )
+    ]
+    candidates.sort(
+        key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""),
+        reverse=True,
+    )
+    chosen: dict[str, Any] | None = None
+    for item in candidates:
+        payload = dict(item.get("payload") or {})
+        recoveries = int(payload.get("distributed_finalization_recoveries") or 0)
+        total = int(payload.get("distributed_shards_total") or 0)
+        if recoveries >= MAX_FINALIZATION_RECOVERIES or total <= 0:
+            continue
+        try:
+            recovered = _resumable_plan_for_job(artifacts, item)
+        except (AppError, OSError):
+            continue
+        if recovered is None:
+            continue
+        plan, completed = recovered
+        if len(completed) != len(plan.get("shards") or []):
+            continue
+        chosen = item
+        break
+    if chosen is None:
+        return ""
+
+    chosen_id = str(chosen.get("id") or "")
+
+    def mutation(data: dict[str, Any]) -> dict[str, Any] | None:
+        changed = False
+        queue: list[dict[str, Any]] = []
+        now_text = isoformat_utc(utc_now())
+        for raw in data.get("research_queue") or []:
+            item = dict(raw)
+            if str(item.get("id") or "") != chosen_id or str(item.get("status") or "") != "failed":
+                queue.append(item)
+                continue
+            payload = dict(item.get("payload") or {})
+            recoveries = int(payload.get("distributed_finalization_recoveries") or 0)
+            if recoveries >= MAX_FINALIZATION_RECOVERIES:
+                queue.append(item)
+                continue
+            payload["distributed_finalization_recoveries"] = recoveries + 1
+            payload["distributed_stage"] = "finalization_retry"
+            payload["distributed_message"] = (
+                "Saved shard artifacts are intact; reopening this job for finalization only."
+            )
+            item["payload"] = payload
+            item["status"] = "retry"
+            item["worker_id"] = None
+            item["next_attempt_at"] = None
+            item["updated_at"] = now_text
+            item["max_attempts"] = max(
+                int(item.get("max_attempts") or 0),
+                int(item.get("attempts") or 0) + 1,
+            )
+            item["status_message"] = str(payload["distributed_message"])
+            queue.append(item)
+            changed = True
+        if not changed:
+            return None
+        data["research_queue"] = queue
+        return data
+
+    mutate_remote_library(mutation)
+    return chosen_id
+
+
 def _claim_stock_finder_job(
     worker_id: str,
     preferred_job_id: str = "",
@@ -309,14 +543,28 @@ def _claim_stock_finder_job(
     return holder.get("job"), updated
 
 
-def _mark_parent_failed(job_id: str, message: str) -> None:
+def _mark_parent_failed(job_id: str, message: str, *, stage: str) -> None:
     def mutation(data: dict[str, Any]) -> dict[str, Any]:
         failed = fail_research_job(
             data,
             job_id,
             message,
             retry_delay_minutes=15,
+            failure_step=stage,
         )
+        now_text = isoformat_utc(utc_now())
+        for item in failed.get("research_queue") or []:
+            if str(item.get("id") or "") != job_id:
+                continue
+            payload = dict(item.get("payload") or {})
+            payload["distributed_failed_stage"] = str(stage)
+            payload["distributed_last_error"] = str(message)[:1800]
+            payload["distributed_stage"] = f"{stage}_retry"
+            payload["distributed_message"] = (
+                f"{str(stage).replace('_', ' ').title()} failed: {message}"
+            )[:500]
+            payload["distributed_last_update"] = now_text
+            item["payload"] = payload
         return record_worker_run(
             failed,
             worker_id="distributed-finder",
@@ -327,6 +575,40 @@ def _mark_parent_failed(job_id: str, message: str) -> None:
         )
 
     mutate_remote_library(mutation)
+
+
+def _record_parent_step_failure(job_id: str, *, stage: str, message: str) -> None:
+    """Record a shard/step error while leaving aggregate to decide job retry state."""
+    def mutation(data: dict[str, Any]) -> dict[str, Any]:
+        now_text = isoformat_utc(utc_now())
+        for item in data.get("research_queue") or []:
+            if str(item.get("id") or "") != job_id:
+                continue
+            payload = dict(item.get("payload") or {})
+            payload["distributed_failed_stage"] = str(stage)
+            payload["distributed_last_error"] = str(message)[:1800]
+            payload["distributed_message"] = (
+                f"{str(stage).replace('_', ' ').title()} failed: {message}"
+            )[:500]
+            payload["distributed_last_update"] = now_text
+            item["payload"] = payload
+            item["updated_at"] = now_text
+            item["failure_step"] = str(stage)
+            item["status_message"] = str(payload["distributed_message"])
+        return data
+
+    mutate_remote_library(mutation)
+
+
+def _parent_job_id_for_run(run_id: str) -> str:
+    library = read_remote_library()
+    for item in library.get("research_queue") or []:
+        if not isinstance(item, dict):
+            continue
+        payload = dict(item.get("payload") or {})
+        if str(payload.get("distributed_run_id") or "") == str(run_id or ""):
+            return str(item.get("id") or "")
+    return ""
 
 
 def _update_parent_distribution(
@@ -406,10 +688,14 @@ def _update_parent_cloud_progress(
                     "distributed_last_update": now_text,
                 }
             )
+            payload.pop("distributed_failed_stage", None)
+            payload.pop("distributed_last_error", None)
             if shard_label:
                 payload["distributed_last_shard"] = str(shard_label)
             item["payload"] = payload
             item["updated_at"] = now_text
+            item["failure_step"] = None
+            item["status_message"] = str(message)[:2000]
             queue.append(item)
         data["research_queue"] = queue
         return data
@@ -434,6 +720,17 @@ def command_prepare(preferred_job_id: str = "") -> int:
         worker_id,
         preferred_job_id=preferred_job_id,
     )
+    artifacts = PrivateRunArtifactStore()
+    if job is None:
+        recovered_job_id = _requeue_completed_finder_for_finalization(
+            artifacts,
+            preferred_job_id=preferred_job_id,
+        )
+        if recovered_job_id:
+            job, library = _claim_stock_finder_job(
+                worker_id,
+                preferred_job_id=recovered_job_id,
+            )
     if job is None:
         Path("distributed_meta.json").write_text(
             json.dumps({"has_job": False}, separators=(",", ":")),
@@ -450,11 +747,38 @@ def command_prepare(preferred_job_id: str = "") -> int:
     payload = dict(job.get("payload") or {})
     symbol = str(payload.get("symbol") or "").strip().upper()
     profile = search_profile(str(payload.get("profile") or "Deep"))
-    run_id = "dist-" + hashlib.sha256(
-        f"{job_id}|{job.get('attempts')}|{isoformat_utc(utc_now())}".encode("utf-8")
-    ).hexdigest()[:20]
 
     try:
+        resumed = _resumable_plan_for_job(artifacts, job)
+        if resumed is not None:
+            plan, completed = resumed
+            specs = [item for item in plan.get("shards") or [] if isinstance(item, dict)]
+            pending = [
+                item
+                for item in specs
+                if int(item.get("index") or 0) not in completed
+            ]
+            _restore_parent_distribution(job_id, plan, completed)
+            _write_public_run_metadata(plan, pending, resumed=True)
+            if pending:
+                print(
+                    f"Recovered {symbol} {profile.name} run {plan.get('run_id')}: "
+                    f"{len(completed)}/{len(specs)} saved shards; launching only "
+                    f"the {len(pending)} missing shard(s).",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"Recovered {symbol} {profile.name} run {plan.get('run_id')}: "
+                    f"all {len(specs)} shard artifacts are intact; skipping optimization "
+                    "and resuming final validation.",
+                    flush=True,
+                )
+            return 0
+
+        run_id = "dist-" + hashlib.sha256(
+            f"{job_id}|{job.get('attempts')}|{isoformat_utc(utc_now())}".encode("utf-8")
+        ).hexdigest()[:20]
         strategies = [
             dict(item)
             for item in library.get("strategies") or []
@@ -557,7 +881,6 @@ def command_prepare(preferred_job_id: str = "") -> int:
             ),
             "shards": matrix,
         }
-        artifacts = PrivateRunArtifactStore()
         artifacts.write_json_gz(plan_path(run_id), plan)
         _update_parent_distribution(
             job_id,
@@ -567,33 +890,7 @@ def command_prepare(preferred_job_id: str = "") -> int:
             end=end,
         )
 
-        public_matrix = {
-            "include": [
-                {
-                    "index": item["index"],
-                    "label": item["label"],
-                }
-                for item in matrix
-            ]
-        }
-        Path("distributed_matrix.json").write_text(
-            json.dumps(public_matrix, separators=(",", ":")),
-            encoding="utf-8",
-        )
-        Path("distributed_meta.json").write_text(
-            json.dumps(
-                {
-                    "has_job": True,
-                    "run_id": run_id,
-                    "parent_job_id": job_id,
-                    "symbol": symbol,
-                    "profile": profile.name,
-                    "shard_count": len(matrix),
-                },
-                separators=(",", ":"),
-            ),
-            encoding="utf-8",
-        )
+        _write_public_run_metadata(plan, matrix, resumed=False)
         print(
             f"Prepared {symbol} {profile.name}: {len(selected)} families, "
             f"{len(profile.timeframes)} timeframes, {len(matrix)} distributed shards.",
@@ -601,11 +898,15 @@ def command_prepare(preferred_job_id: str = "") -> int:
         )
         return 0
     except Exception as exc:
-        _mark_parent_failed(job_id, f"Distributed Finder prepare failed: {exc}")
+        _mark_parent_failed(
+            job_id,
+            f"Distributed Finder prepare failed: {exc}",
+            stage="prepare_or_recovery",
+        )
         raise
 
 
-def command_shard(run_id: str, index: int) -> int:
+def _command_shard(run_id: str, index: int) -> int:
     artifacts = PrivateRunArtifactStore()
     plan = artifacts.read_json_gz(plan_path(run_id))
     specs = [
@@ -726,11 +1027,50 @@ def command_shard(run_id: str, index: int) -> int:
     return 0
 
 
+def command_shard(run_id: str, index: int) -> int:
+    try:
+        return _command_shard(run_id, index)
+    except Exception as exc:
+        # The matrix uses fail-fast=false, so make the exact failed shard visible
+        # while the remaining shards finish. Aggregate will perform the durable
+        # retry transition after it sees which artifacts are missing.
+        try:
+            plan = PrivateRunArtifactStore().read_json_gz(plan_path(run_id))
+            job_id = str(plan.get("parent_job_id") or "")
+            if job_id:
+                _record_parent_step_failure(
+                    job_id,
+                    stage=f"shard_{int(index)}",
+                    message=str(exc),
+                )
+        except Exception:
+            pass
+        raise
+
+
 def command_aggregate(run_id: str) -> int:
     artifacts = PrivateRunArtifactStore()
-    plan = artifacts.read_json_gz(plan_path(run_id))
+    try:
+        plan = artifacts.read_json_gz(plan_path(run_id))
+    except Exception as exc:
+        print(
+            f"[aggregate] Could not load saved plan for {run_id}: {exc}",
+            flush=True,
+        )
+        try:
+            job_id = _parent_job_id_for_run(run_id)
+            if job_id:
+                _mark_parent_failed(
+                    job_id,
+                    f"Distributed Finder could not load saved plan {run_id}: {exc}",
+                    stage="loading_saved_plan",
+                )
+        except Exception:
+            pass
+        raise
     job_id = str(plan.get("parent_job_id") or "")
     specs = [item for item in plan.get("shards") or [] if isinstance(item, dict)]
+    finalization_stage = ["loading_saved_shards"]
     try:
         if job_id:
             _update_parent_cloud_progress(
@@ -756,6 +1096,7 @@ def command_aggregate(run_id: str) -> int:
                 + ", ".join(str(value) for value in missing)
             )
 
+        finalization_stage[0] = "combining_saved_shards"
         selected = [
             dict(item)
             for item in plan.get("selected_strategies") or []
@@ -796,13 +1137,6 @@ def command_aggregate(run_id: str) -> int:
             merged["timeframe"] = timeframe
             reports_by_interval[timeframe] = merged
 
-        optimization_started = min(
-            (
-                float((payload.get("report") or {}).get("distributed_elapsed_seconds") or 0.0)
-                for payload in shard_payloads
-            ),
-            default=0.0,
-        )
         optimization = combine_stock_timeframe_reports(
             one_minute_rows,
             selected,
@@ -836,6 +1170,7 @@ def command_aggregate(run_id: str) -> int:
             else:
                 stage = "final_validation"
                 fraction = 0.91
+            finalization_stage[0] = stage
             _update_parent_cloud_progress(
                 job_id,
                 run_id=run_id,
@@ -844,6 +1179,7 @@ def command_aggregate(run_id: str) -> int:
                 message=message,
             )
 
+        finalization_stage[0] = "final_holdout"
         report = complete_stock_strategy_finder_from_optimization(
             one_minute_rows,
             selected,
@@ -877,6 +1213,7 @@ def command_aggregate(run_id: str) -> int:
         }
         report["parallel_workers"] = len(shard_payloads)
         report["parallelized_by"] = "distributed_strategy_family_timeframe"
+        finalization_stage[0] = "saving_completed_report"
 
         def save_result(data: dict[str, Any]) -> dict[str, Any]:
             data = merge_finder_report_into_library(data, report)
@@ -926,7 +1263,11 @@ def command_aggregate(run_id: str) -> int:
         if job_id:
             _mark_parent_failed(
                 job_id,
-                f"Distributed Finder aggregate failed: {exc}",
+                (
+                    "Distributed Finder finalization failed during "
+                    f"{finalization_stage[0]}: {exc}"
+                ),
+                stage=finalization_stage[0],
             )
         raise
 

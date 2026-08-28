@@ -34,6 +34,7 @@ from trading_research_orchestrator import (
     DEFAULT_GEMINI_BULK_RESEARCH_MODEL,
     DEFAULT_GEMINI_SPECIALIST_FALLBACK_MODEL,
     DEFAULT_GEMINI_SPECIALIST_MODEL,
+    SUPPORTED_RESEARCH_JOB_TYPES,
     GeminiResearchRouter,
     apply_specialist_review,
     claim_next_research_job,
@@ -55,6 +56,11 @@ from youtube_strategy_engine import (
     StrategyStore,
     normalize_machine_rules,
 )
+
+
+# stock_finder is executable here for direct/dedicated deployments, while the
+# continuous worker deliberately leaves it for the distributed Finder workflow.
+CONTINUOUS_WORKER_JOB_TYPES = SUPPORTED_RESEARCH_JOB_TYPES - {"stock_finder"}
 
 
 def env(name: str, default: str = "") -> str:
@@ -143,6 +149,8 @@ def execute_job(
 ) -> str:
     job_type = str(job.get("type") or "")
     payload = dict(job.get("payload") or {})
+    if job_type not in SUPPORTED_RESEARCH_JOB_TYPES:
+        raise AppError(f"Unknown cloud research job type: {job_type or 'blank'}")
 
     if job_type == "stock_finder":
         symbol = str(payload.get("symbol") or "").strip().upper()
@@ -493,7 +501,7 @@ def main() -> int:
         data, job = claim_next_research_job(
             data,
             worker_id,
-            allowed_types={"web_research", "specialist_review", "autonomous_validation"},
+            allowed_types=set(CONTINUOUS_WORKER_JOB_TYPES),
         )
         if job is None:
             print("No research jobs are ready.", flush=True)
@@ -508,7 +516,32 @@ def main() -> int:
             print(f"Completed {job_id}: {result_ref}", flush=True)
         except Exception as exc:
             latest = store.load_latest()
-            latest = fail_research_job(latest, job_id, exc)
+            failure_step = "job_execution"
+            if job_type == "stock_finder":
+                finder_payload = dict(job.get("payload") or {})
+                finder_symbol = str(finder_payload.get("symbol") or "").strip().upper()
+                finder_profile = str(finder_payload.get("profile") or "Deep").strip()
+                checkpoint = latest_finder_checkpoint(
+                    latest,
+                    finder_symbol,
+                    finder_profile,
+                )
+                if checkpoint:
+                    checkpoint = dict(checkpoint)
+                    checkpoint["status"] = "failed"
+                    checkpoint["updated_at"] = datetime.now(timezone.utc).isoformat().replace(
+                        "+00:00", "Z"
+                    )
+                    checkpoint["last_error"] = str(exc)[:1800]
+                    checkpoint["message"] = f"Cloud Finder failed: {exc}"
+                    latest = merge_finder_checkpoint_into_library(latest, checkpoint)
+                    failure_step = "stock_finder_execution"
+            latest = fail_research_job(
+                latest,
+                job_id,
+                exc,
+                failure_step=failure_step,
+            )
             latest = record_worker_run(
                 latest,
                 worker_id=worker_id,

@@ -16,6 +16,10 @@ from statistics import median
 from time import perf_counter
 from typing import Any, Callable
 
+from finder_report_persistence import (
+    finder_summary_to_report,
+    latest_completed_finder_report,
+)
 from trading_validation_core import validation_strength, walk_forward_validate
 from youtube_strategy_engine import (
     AppError,
@@ -745,62 +749,6 @@ def merge_finder_checkpoint_into_library(
         additions.append(compact)
     result["stock_strategy_configuration_ledger"] = [*additions, *existing_records][:50000]
     return result
-
-
-def finder_summary_to_report(summary: dict[str, Any]) -> dict[str, Any]:
-    """Rebuild the compact UI report saved after a completed Finder run."""
-    winner = {
-        "status": summary.get("optimizer_status"),
-        "optimized_rules": summary.get("optimized_rules") or {},
-        "optimized_backtest_settings": summary.get("optimized_backtest_settings") or {},
-        "training_metrics": summary.get("training_metrics") or {},
-        "validation_metrics": summary.get("validation_metrics") or {},
-        "holdout_metrics": summary.get("holdout_metrics") or {},
-        "stress_metrics": summary.get("stress_metrics") or {},
-    }
-    return {
-        "version": "stock-strategy-finder-v1-restored",
-        "generated_at": summary.get("generated_at"),
-        "symbol": str(summary.get("symbol") or "").upper(),
-        "profile": summary.get("profile_details") or {"name": summary.get("profile")},
-        "search_policy": summary.get("search_policy") or {},
-        "strategies_considered": summary.get("strategies_considered"),
-        "strategies_tested": summary.get("strategies_tested"),
-        "technical_skips": summary.get("technical_skips") or [],
-        "estimated_work": summary.get("estimated_work") or {},
-        "stage_timings_seconds": summary.get("stage_timings_seconds") or {},
-        "parallel_workers": int(summary.get("parallel_workers") or 1),
-        "parallelized_by": summary.get("parallelized_by") or "none",
-        "distributed": summary.get("distributed") or {},
-        "optimization": {"winner": winner},
-        "walk_forward": {"summary": summary.get("walk_forward_summary") or {}},
-        "robustness": summary.get("robustness") or {},
-        "parameter_stability": summary.get("parameter_stability") or {},
-        "verdict": summary.get("verdict") or {},
-        "winner_source_strategy_id": summary.get("winner_source_strategy_id"),
-        "winner_strategy_name": summary.get("winner_strategy_name"),
-        "timeframe": summary.get("timeframe"),
-        "unique_configurations_tested": int(summary.get("unique_configurations_tested") or 0),
-        "restored_from_library": True,
-    }
-
-
-def latest_completed_finder_report(
-    data: dict[str, Any],
-    symbol: str,
-    profile_name: str | None = None,
-) -> dict[str, Any]:
-    target_symbol = str(symbol or "").strip().upper()
-    target_profile = str(profile_name or "").strip()
-    for summary in data.get("stock_strategy_finder_runs") or []:
-        if not isinstance(summary, dict):
-            continue
-        if str(summary.get("symbol") or "").strip().upper() != target_symbol:
-            continue
-        if target_profile and str(summary.get("profile") or "").strip() != target_profile:
-            continue
-        return finder_summary_to_report(summary)
-    return {}
 
 
 def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
