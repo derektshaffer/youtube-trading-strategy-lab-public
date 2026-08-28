@@ -2091,6 +2091,108 @@ def inject_research_glass_theme() -> None:
             }
         }
 
+        /* ---------- Stock Strategy Finder ---------- */
+        .til-finder-intro {
+            display: grid;
+            grid-template-columns: 48px 1fr auto;
+            gap: 14px;
+            align-items: center;
+            margin: 0 0 16px;
+            padding: 15px 16px;
+            border: 1px solid rgba(74,205,255,.20);
+            border-radius: 8px;
+            background:
+                radial-gradient(circle at 90% 10%, rgba(65,229,151,.08), transparent 28%),
+                linear-gradient(110deg, rgba(7,31,50,.90), rgba(5,19,32,.84));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.025), 0 10px 28px rgba(0,0,0,.11);
+        }
+        .til-finder-intro-icon {
+            display:flex;align-items:center;justify-content:center;
+            width:42px;height:42px;
+            transform: rotate(45deg);
+            border:1px solid rgba(76,224,174,.48);
+            color:#61e9b2;
+            background:rgba(22,98,92,.22);
+            box-shadow:0 0 20px rgba(69,222,179,.10);
+            font-size:.85rem;
+        }
+        .til-finder-intro-icon::first-letter { transform: rotate(-45deg); }
+        .til-finder-intro-title {
+            color:#f5fbff;font-size:1.02rem;font-weight:820;letter-spacing:-.02em;
+        }
+        .til-finder-intro-copy {
+            margin-top:4px;color:#88a5ba;font-size:.74rem;line-height:1.48;max-width:980px;
+        }
+        .til-finder-policy {
+            padding:8px 11px;border:1px solid rgba(71,230,148,.38);border-radius:6px;
+            background:rgba(10,72,47,.25);text-align:center;min-width:90px;
+        }
+        .til-finder-policy span {
+            display:block;color:#719687;font-size:.49rem;font-weight:900;letter-spacing:.12em;
+        }
+        .til-finder-policy strong {
+            display:block;margin-top:3px;color:#54eba0;font-size:.78rem;letter-spacing:.08em;
+            text-shadow:0 0 10px rgba(84,235,160,.18);
+        }
+        .til-finder-stats {
+            display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:12px 0 10px;
+        }
+        .til-finder-stats > div {
+            position:relative;overflow:hidden;padding:12px 13px;border:1px solid rgba(73,185,236,.17);
+            border-radius:7px;background:linear-gradient(145deg,rgba(8,27,44,.82),rgba(5,18,30,.72));
+        }
+        .til-finder-stats > div::before {
+            content:"";position:absolute;left:0;top:0;width:42%;height:1px;
+            background:linear-gradient(90deg,#4fd5ff,#49e894,transparent);
+        }
+        .til-finder-stats span {
+            display:block;color:#708da3;font-size:.51rem;font-weight:900;letter-spacing:.11em;
+        }
+        .til-finder-stats strong {
+            display:block;margin-top:6px;color:#f3f9fd;font-size:1.24rem;font-weight:850;letter-spacing:-.035em;
+        }
+        .til-finder-stats em {
+            display:block;margin-top:4px;color:#5d9fba;font-size:.57rem;font-style:normal;
+        }
+        .til-finder-verdict {
+            display:flex;align-items:center;justify-content:space-between;gap:20px;
+            margin:18px 0 14px;padding:16px 18px;border-radius:8px;
+            border:1px solid rgba(72,192,237,.20);
+            background:linear-gradient(110deg,rgba(7,30,48,.90),rgba(5,20,32,.84));
+        }
+        .til-finder-verdict.ready {
+            border-color:rgba(67,231,143,.42);
+            background:linear-gradient(110deg,rgba(7,55,43,.86),rgba(5,24,34,.86));
+        }
+        .til-finder-verdict.promising {
+            border-color:rgba(232,190,87,.34);
+            background:linear-gradient(110deg,rgba(65,48,12,.46),rgba(6,24,36,.86));
+        }
+        .til-finder-verdict.reject {
+            border-color:rgba(233,100,119,.34);
+            background:linear-gradient(110deg,rgba(67,20,30,.46),rgba(6,22,34,.86));
+        }
+        .til-finder-verdict span {
+            display:block;color:#7290a6;font-size:.52rem;font-weight:900;letter-spacing:.13em;
+        }
+        .til-finder-verdict strong {
+            display:block;margin-top:5px;color:#f6fbff;font-size:1.15rem;font-weight:850;
+        }
+        .til-finder-verdict p {
+            margin:5px 0 0;color:#91a9bb;font-size:.70rem;line-height:1.42;
+        }
+        .til-finder-score {
+            flex:0 0 auto;color:#5ee6a2;font-size:2.2rem;font-weight:900;letter-spacing:-.06em;
+        }
+        .til-finder-score small {
+            margin-left:3px;color:#7391a4;font-size:.68rem;font-weight:700;letter-spacing:0;
+        }
+        @media (max-width: 1000px) {
+            .til-finder-stats {grid-template-columns:repeat(2,minmax(0,1fr));}
+            .til-finder-intro {grid-template-columns:40px 1fr;}
+            .til-finder-policy {grid-column:1 / -1;}
+        }
+
         /* ---------- Polished spacing ---------- */
         [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] {
             margin-bottom: .05rem;
