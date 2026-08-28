@@ -1307,18 +1307,40 @@ if module == "Stock Strategy Finder":
         )
 
     if queue_cloud_finder and finder_symbol:
-        queued_library, queued_job = enqueue_research_job(
-            load_library(),
-            "stock_finder",
-            {
-                "symbol": finder_symbol,
-                "profile": finder_profile.name,
-                "requested_from": "Stock Strategy Finder",
-            },
-            priority=90 if finder_profile.name == "Very Deep" else 75,
-            dedupe_key=f"stock-finder:{finder_symbol}:{finder_profile.name}",
-            max_attempts=2,
-        )
+        queue_payload = {
+            "symbol": finder_symbol,
+            "profile": finder_profile.name,
+            "requested_from": "Stock Strategy Finder",
+        }
+        try:
+            queued_library, queued_job = enqueue_research_job(
+                load_library(),
+                "stock_finder",
+                queue_payload,
+                priority=90 if finder_profile.name == "Very Deep" else 75,
+                dedupe_key=f"stock-finder:{finder_symbol}:{finder_profile.name}",
+                max_attempts=2,
+            )
+        except AppError as exc:
+            # Streamlit can hot-reload this page while keeping an older imported
+            # helper module in memory. If that stale module predates stock_finder
+            # queue support, reload the helper once and retry instead of crashing
+            # the whole page with an "Unsupported research job type" traceback.
+            if "Unsupported research job type" not in str(exc):
+                raise
+            import importlib
+            import trading_research_orchestrator as _research_orchestrator
+
+            _research_orchestrator = importlib.reload(_research_orchestrator)
+            queued_library, queued_job = _research_orchestrator.enqueue_research_job(
+                load_library(),
+                "stock_finder",
+                queue_payload,
+                priority=90 if finder_profile.name == "Very Deep" else 75,
+                dedupe_key=f"stock-finder:{finder_symbol}:{finder_profile.name}",
+                max_attempts=2,
+            )
+
         if queued_job:
             intelligence_store().save(queued_library)
             st.success(
