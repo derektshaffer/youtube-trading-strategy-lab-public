@@ -185,3 +185,21 @@ The worker follows this bounded loop:
 7. Follow-up questions can create new research jobs, but the daily seeding and queue limits prevent an uncontrolled API loop.
 
 The **AI Research Autopilot** page is the control center for queue status, latest grounded research, model routing, worker activity, and deterministic validation results.
+
+
+## System Health and cloud preflight
+
+The Trading Intelligence Lab includes a **14. System Health** page. It deliberately separates "configured" from "proven working" so a saved queue entry is never treated as evidence that cloud compute actually started.
+
+Streamlit needs a dedicated `GITHUB_ACTIONS_TOKEN` with **Actions: Read and write** access to `youtube-trading-strategy-lab-public`. Do not silently reuse the private-backup token for workflow dispatch.
+
+The cloud worker workflows use the Trading Intelligence durable queue at `trading-intelligence-lab/intelligence_library.json`. The legacy `youtube-strategy-lab/strategy_library.json` path remains for the older YouTube strategy library and must not be used by the Trading Intelligence background queue.
+
+The System Health page can launch `.github/workflows/cloud-research-smoke-test.yml`, which verifies the external runner can:
+
+1. start through GitHub Actions,
+2. read and write the private backup repository,
+3. authenticate to Alpaca market data, and
+4. authenticate to Gemini without running a paid generation.
+
+Distributed Finder jobs that remain unclaimed for 15 minutes are shown as **STALLED**, not merely "queued". New distributed jobs are disabled when the required cloud-launch configuration is missing.
