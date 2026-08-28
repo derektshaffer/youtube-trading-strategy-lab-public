@@ -111,6 +111,12 @@ class KnowledgeSourceReconciliationTests(unittest.TestCase):
         self.assertEqual(source["strategy_count"], 2)
         self.assertTrue(source["recovered_from_strategies"])
         self.assertEqual(source["analysis_stage"], "complete")
+        self.assertEqual(source["source_claim_status"], "unverified_source_claim")
+        self.assertEqual(source["source_role"], "hypothesis_generator")
+        for strategy in reconciled["strategies"]:
+            if strategy.get("source_id") == "yt-abc":
+                self.assertEqual(strategy["source_claim_status"], "unverified_source_claim")
+                self.assertEqual(strategy["source_role"], "hypothesis_generator")
 
     def test_reconciliation_is_stable_after_first_migration(self):
         library = {
