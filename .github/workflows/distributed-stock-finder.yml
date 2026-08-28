@@ -6,6 +6,11 @@ on:
     # workflows can be delayed during peak cron periods.
     - cron: "7,17,27,37,47,57 * * * *"
   workflow_dispatch:
+    inputs:
+      job_id:
+        description: "Exact queued Stock Finder job to claim immediately"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -60,7 +65,9 @@ jobs:
           fi
 
       - name: Prepare private distributed run
-        run: python distributed_stock_finder.py prepare
+        run: >-
+          python distributed_stock_finder.py prepare
+          --job-id "${{ inputs.job_id }}"
 
       - name: Publish safe matrix metadata
         id: meta
