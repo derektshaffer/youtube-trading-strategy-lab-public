@@ -400,12 +400,40 @@ def inject_research_glass_theme() -> None:
         }
 
         /* ---------- Progress ---------- */
-        [data-testid="stProgress"] > div > div {
-            background-color: var(--til-green) !important;
-            box-shadow: 0 0 12px rgba(55,239,121,.20) !important;
+        /* Keep progress copy on a dark glass surface. The old selector was too
+           broad and painted Streamlit's text container bright green. */
+        [data-testid="stProgress"] {
+            color: #eaf3fc !important;
         }
         [data-testid="stProgress"] > div {
-            background: rgba(17,38,61,.65) !important;
+            background: transparent !important;
+        }
+        [data-testid="stProgress"] > div > div {
+            color: #eaf3fc !important;
+            background: rgba(10,25,42,.84) !important;
+            box-shadow: none !important;
+        }
+        [data-testid="stProgress"] p,
+        [data-testid="stProgress"] span {
+            color: #eaf3fc !important;
+            background: transparent !important;
+            text-shadow: none !important;
+        }
+
+        /* Actual progress track/fill only. */
+        [data-testid="stProgress"] [role="progressbar"] {
+            min-height: 10px !important;
+            overflow: hidden !important;
+            border: 1px solid rgba(105,151,197,.20) !important;
+            border-radius: 999px !important;
+            background: rgba(17,38,61,.72) !important;
+            box-shadow: inset 0 1px 2px rgba(0,0,0,.22) !important;
+        }
+        [data-testid="stProgress"] [role="progressbar"] > div {
+            border-radius: 999px !important;
+            background:
+                linear-gradient(90deg, #218d57 0%, #2fb66a 100%) !important;
+            box-shadow: 0 0 10px rgba(47,182,106,.16) !important;
         }
 
         /* ---------- Checkboxes / toggles ---------- */
