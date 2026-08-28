@@ -15,6 +15,14 @@ import streamlit as st
 
 from trading_glass_theme import inject_research_glass_theme
 from live_strategy_runner_page import market_client, setting
+from stock_strategy_finder import (
+    SEARCH_PROFILES,
+    estimate_search_work,
+    merge_finder_report_into_library,
+    run_stock_strategy_finder,
+    search_profile,
+    selected_strategies_for_profile,
+)
 from trading_catalyst_core import (
     classify_catalyst,
     enrich_bars_with_point_in_time_catalysts,
@@ -646,6 +654,7 @@ def upsert_strategy_record(
 # session state, and page logic continue to work. Only the visible navigation
 # order/names are changed.
 WORKSPACE_SECTIONS = [
+    "Stock Strategy Finder",
     "Overview",
     "Knowledge Sources",
     "AI Research Autopilot",
@@ -662,6 +671,7 @@ WORKSPACE_SECTIONS = [
 ]
 
 WORKSPACE_DISPLAY_LABELS = {
+    "Stock Strategy Finder": "0. Find Strategy",
     "Overview": "1. Overview",
     "Knowledge Sources": "2. Knowledge Sources",
     "AI Research Autopilot": "3. AI Research Autopilot",
@@ -682,6 +692,12 @@ WORKSPACE_DISPLAY_TO_INTERNAL = {
 }
 
 WORKSPACE_PAGE_META = {
+    "Stock Strategy Finder": {
+        "step": "00",
+        "group": "Stock-Specific Edge",
+        "title": "Find the Best Strategy for a Stock",
+        "subtitle": "Enter a ticker. AI searches broadly, tests unusual combinations instead of vetoing them, then tries to disprove the strongest result on unseen data.",
+    },
     "Overview": {
         "step": "01",
         "group": "Research",
@@ -763,6 +779,7 @@ WORKSPACE_PAGE_META = {
 }
 
 WORKSPACE_NAV_GROUPS = [
+    ("START HERE", ["Stock Strategy Finder"]),
     ("RESEARCH", ["Overview", "Knowledge Sources", "AI Research Autopilot"]),
     (
         "STRATEGY DEVELOPMENT",
@@ -776,6 +793,7 @@ WORKSPACE_NAV_GROUPS = [
 ]
 
 WORKSPACE_NAV_ICONS = {
+    "Stock Strategy Finder": "◆",
     "Overview": "⌁",
     "Knowledge Sources": "◇",
     "AI Research Autopilot": "✦",
