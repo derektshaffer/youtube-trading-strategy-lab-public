@@ -165,7 +165,13 @@ def infer_strategy_dna(strategy: dict[str, Any]) -> dict[str, list[str]]:
         _add(dna, "structure", "Anchored VWAP")
     if _contains(text, "mean reversion", "mean-reversion", "extreme reversal", "counter-trend reversal"):
         _add(dna, "structure", "Mean-reversion reversal")
-    if _contains(text, "avwap pinch", "pinch strategy", "compression", "squeeze between"):
+    if (
+        _contains(text, "avwap pinch", "pinch strategy")
+        or (
+            _contains(text, "compression", "squeeze between")
+            and _contains(text, "avwap", "anchored vwap")
+        )
+    ):
         _add(dna, "structure", "Compression / pinch")
     if _contains(text, "avwap handoff", "handoff"):
         _add(dna, "structure", "AVWAP handoff")
