@@ -1054,7 +1054,7 @@ class GeminiRuleCompiler:
         return parsed
 
 
-SEMANTIC_BACKTEST_COVERAGE_GATE = 85.0
+SEMANTIC_BACKTEST_COVERAGE_GATE = 90.0
 
 
 def strategy_semantic_coverage(strategy: dict[str, Any]) -> dict[str, Any]:
