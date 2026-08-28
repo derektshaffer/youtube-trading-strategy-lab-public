@@ -328,5 +328,34 @@ class CanonicalFamilyManagerTests(unittest.TestCase):
         self.assertTrue(any("IPO Day-One" in name for name in names))
 
 
+    def test_special_avwap_contexts_do_not_disappear_into_generic_reclaim_family(self):
+        generic = {
+            **self._strategy("generic", "book-1"),
+            "name": "AVWAP Cross Purchase",
+            "summary": "Buy when price crosses back above Anchored VWAP after a dip.",
+            "entry_conditions": ["Cross back above AVWAP."],
+            "machine_rules": {"above_vwap": True, "vwap_reclaim": True},
+        }
+        squeeze = {
+            **self._strategy("squeeze", "book-1"),
+            "name": "Structural Short Squeeze",
+            "summary": "Buy a heavily shorted stock when it reclaims AVWAP and shorts are trapped.",
+            "entry_conditions": ["Short Interest Ratio is elevated and price reclaims AVWAP."],
+            "machine_rules": {"above_vwap": True, "vwap_reclaim": True},
+        }
+        day_two = {
+            **self._strategy("day-two", "book-1"),
+            "name": "Multi-Day AVWAP Day Two Follow-Through",
+            "summary": "On Day 2 of an AVWAP momentum campaign buy the current VWAP reclaim.",
+            "entry_conditions": ["Day 2 holds prior AVWAP and reclaims current VWAP."],
+            "machine_rules": {"above_vwap": True, "vwap_reclaim": True},
+        }
+
+        canonical, families = build_canonical_family_strategies([generic, squeeze, day_two])
+
+        self.assertEqual(len(families), 3)
+        self.assertEqual(len(canonical), 3)
+
+
 if __name__ == "__main__":
     unittest.main()
