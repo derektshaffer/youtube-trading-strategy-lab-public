@@ -1599,6 +1599,37 @@ if module == "Stock Strategy Finder":
             )
             st.caption(str(stability.get("note") or ""))
 
+        stage_timings = dict(finder_result.get("stage_timings_seconds") or {})
+        if stage_timings:
+            with st.expander("Research speed profile", expanded=False):
+                timing_rows = []
+                total_timing = safe_float(stage_timings.get("total"), 0.0) or 0.0
+                for stage_key, stage_label in (
+                    ("optimization", "Strategy optimization"),
+                    ("walk_forward", "Walk-forward validation"),
+                    ("parameter_stability", "Parameter stability"),
+                ):
+                    seconds = safe_float(stage_timings.get(stage_key), 0.0) or 0.0
+                    timing_rows.append(
+                        {
+                            "Stage": stage_label,
+                            "Minutes": round(seconds / 60.0, 2),
+                            "Share of measured runtime": (
+                                round(seconds / total_timing * 100.0, 1)
+                                if total_timing > 0 else 0.0
+                            ),
+                        }
+                    )
+                st.dataframe(
+                    pd.DataFrame(timing_rows),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                st.caption(
+                    f"Measured Finder runtime: {total_timing / 60.0:.1f} minutes. "
+                    "This profile helps us target the real bottleneck instead of reducing search breadth."
+                )
+
         st.success(
             f"The exact configuration ledger for this run was saved to the research library, including losing combinations. "
             f"That ledger contains {int(finder_result.get('unique_configurations_tested') or 0):,} unique tested configurations."
