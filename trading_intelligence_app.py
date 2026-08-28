@@ -1074,7 +1074,336 @@ if workspace_search_query:
             st.caption("No workspace pages, sources, or strategy families match that search.")
 
 
-if module == "Overview":
+if module == "Stock Strategy Finder":
+    st.markdown(
+        """
+        <div class="til-finder-intro">
+          <div class="til-finder-intro-icon">◆</div>
+          <div>
+            <div class="til-finder-intro-title">Stock-specific edge first</div>
+            <div class="til-finder-intro-copy">
+              Pick a stock. The Finder searches the strategy library broadly, explores unusual rule combinations,
+              optimizes the strongest regions, then tries to break the winner with unseen holdout, walk-forward,
+              higher-cost, and parameter-stability tests.
+            </div>
+          </div>
+          <div class="til-finder-policy"><span>AI VETO</span><strong>OFF</strong></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    finder_a, finder_b = st.columns([1.15, 1.0])
+    with finder_a:
+        finder_symbol = st.text_input(
+            "Stock to research",
+            value=str(st.session_state.get("til_finder_symbol") or "SDOT"),
+            placeholder="SDOT",
+            max_chars=10,
+            key="til_finder_symbol",
+            help="Enter one stock. The strategy search is optimized and validated specifically for this ticker.",
+        ).strip().upper()
+    with finder_b:
+        finder_profile_name = st.selectbox(
+            "Search depth",
+            list(SEARCH_PROFILES),
+            index=1,
+            key="til_finder_profile",
+            help="Deep is the recommended default. Very Deep can take substantially longer.",
+        )
+
+    finder_profile = search_profile(finder_profile_name)
+    finder_candidates, finder_skips = selected_strategies_for_profile(
+        strategies,
+        finder_symbol or "UNKNOWN",
+        finder_profile,
+    )
+    finder_work = estimate_search_work(finder_profile, len(finder_candidates))
+
+    st.markdown(
+        (
+            '<div class="til-finder-stats">'
+            f'<div><span>STRATEGY FAMILIES</span><strong>{len(finder_candidates):,}</strong><em>{"all eligible" if finder_profile.quick_family_limit is None else "diversity sample"}</em></div>'
+            f'<div><span>TIMEFRAMES</span><strong>{len(finder_profile.timeframes)}</strong><em>{" · ".join(finder_profile.timeframes)}</em></div>'
+            f'<div><span>MIN. SEARCH SIMULATIONS</span><strong>{int(finder_work.get("minimum_estimated_simulations") or 0):,}</strong><em>before walk-forward + stability</em></div>'
+            f'<div><span>HISTORY</span><strong>{finder_profile.history_days}</strong><em>calendar days</em></div>'
+            '</div>'
+        ),
+        unsafe_allow_html=True,
+    )
+    st.caption(finder_profile.description)
+    if finder_profile.quick_family_limit is None:
+        st.success(
+            "Deep-mode search policy: every technically executable long strategy family is included. "
+            "AI may prioritize search order, but it cannot reject a valid family or combination because it looks unconventional."
+        )
+    else:
+        st.info(
+            "Quick mode deliberately limits the number of strategy families for speed, but chooses them round-robin "
+            "across different behavior buckets. Use Deep when you do not want that family cap."
+        )
+
+    with st.expander("What gets tested", expanded=False):
+        st.write(
+            "Rule thresholds, VWAP/EMA behavior, pullback and breakout conditions, volume requirements, "
+            "session timing, stops, reward/risk, holding time, execution behavior, position sizing, extended-hours "
+            "behavior, source-supported alternatives, AI research assumptions, and local refinements around promising regions."
+        )
+        st.write(
+            "**Only technical impossibilities are skipped** — for example short-only rules in the current long-only "
+            "backtester, a strategy explicitly locked to another ticker, or a strategy with no machine-testable rules."
+        )
+        if finder_skips:
+            st.caption(f"{len(finder_skips)} technically ineligible library record(s) will be skipped.")
+
+    finder_slot = st.empty()
+    run_finder = finder_slot.button(
+        f"◆ Research {finder_symbol or 'Stock'} — {finder_profile.name}",
+        type="primary",
+        use_container_width=True,
+        disabled=not bool(finder_symbol) or not bool(finder_candidates),
+        key="til_run_stock_strategy_finder",
+    )
+
+    if run_finder and finder_symbol:
+        finder_slot.button(
+            f"◆ Researching {finder_symbol}…",
+            type="primary",
+            use_container_width=True,
+            disabled=True,
+            key="til_run_stock_strategy_finder_busy",
+        )
+        finder_monitor = long_task_monitor("stock_strategy_finder")
+        finder_bar = st.progress(
+            0.01,
+            text=finder_monitor.text(0.01, f"Preparing {finder_symbol} stock-specific research…"),
+        )
+        finder_status = st.status(
+            f"Building {finder_symbol} historical research set…",
+            expanded=True,
+        )
+        try:
+            market = market_client()
+            finder_end = utc_now()
+            if market.historical_feed == "sip" and market.live_feed != "sip":
+                finder_end -= timedelta(minutes=16)
+            finder_start = finder_end - timedelta(days=finder_profile.history_days)
+
+            def finder_history_progress(page: int) -> None:
+                fraction = 0.03 + 0.12 * min(1.0, page / 100.0)
+                update_task_bar(
+                    finder_bar,
+                    finder_monitor,
+                    fraction,
+                    f"Downloading {finder_symbol} 1-minute history · page {page}",
+                )
+
+            rows_by_symbol = market.bars(
+                [finder_symbol],
+                start=finder_start,
+                end=finder_end,
+                timeframe="1Min",
+                max_pages=300,
+                progress=finder_history_progress,
+            )
+            finder_rows = list(rows_by_symbol.get(finder_symbol) or [])
+            if not finder_rows:
+                raise AppError(f"No usable historical bars were returned for {finder_symbol}.")
+
+            finder_status.write(
+                f"Historical bars ready · {len(finder_rows):,} one-minute candles · "
+                f"{len(finder_candidates)} strategy families queued"
+            )
+            update_task_bar(
+                finder_bar,
+                finder_monitor,
+                0.16,
+                f"Historical bars ready · {len(finder_rows):,} candles",
+            )
+
+            needs_catalyst_history = any(
+                bool(normalize_machine_rules(item.get("machine_rules")).get("catalyst_required"))
+                for item in finder_candidates
+            )
+            if needs_catalyst_history:
+                finder_status.write("Loading point-in-time catalyst history for catalyst-aware strategies…")
+                articles = historical_news(
+                    market,
+                    [finder_symbol],
+                    start=finder_start - timedelta(hours=24),
+                    end=finder_end,
+                    max_pages=100,
+                )
+                finder_rows, catalyst_summary = enrich_bars_with_point_in_time_catalysts(
+                    finder_rows,
+                    articles,
+                    lookback_hours=24.0,
+                )
+                finder_status.write(
+                    f"Catalyst history attached · {len(articles):,} timestamped news item(s)"
+                )
+
+            def on_finder_progress(completed: int, total: int, message: str) -> None:
+                portion = min(1.0, max(0.0, completed / max(1, total)))
+                update_task_bar(
+                    finder_bar,
+                    finder_monitor,
+                    0.18 + 0.79 * portion,
+                    message,
+                )
+                if message and (
+                    "Walk-forward" in message
+                    or "Parameter stability" in message
+                    or "search:" in message
+                ):
+                    finder_status.write(message)
+
+            finder_report = run_stock_strategy_finder(
+                finder_rows,
+                strategies,
+                finder_symbol,
+                profile_name=finder_profile.name,
+                progress=on_finder_progress,
+            )
+            data = load_library()
+            data = merge_finder_report_into_library(data, finder_report)
+            intelligence_store().save(data)
+
+            ui_report = dict(finder_report)
+            ui_report["configuration_history"] = []
+            if isinstance(ui_report.get("optimization"), dict):
+                ui_report["optimization"] = dict(ui_report["optimization"])
+                ui_report["optimization"]["configuration_history"] = []
+            st.session_state["til_stock_strategy_finder_result"] = ui_report
+
+            complete_task_bar(
+                finder_bar,
+                finder_monitor,
+                f"{finder_symbol} strategy research complete",
+            )
+            verdict = finder_report.get("verdict") or {}
+            finder_status.update(
+                label=(
+                    f"{finder_symbol} · {verdict.get('label') or 'Research complete'} · "
+                    f"{int(finder_report.get('unique_configurations_tested') or 0):,} unique configurations tested"
+                ),
+                state="complete",
+                expanded=False,
+            )
+            st.rerun()
+        except AppError as exc:
+            finder_status.update(label="Stock Strategy Finder stopped safely", state="error", expanded=False)
+            st.error(str(exc))
+        except Exception as exc:
+            finder_status.update(label="Stock Strategy Finder encountered an error", state="error", expanded=False)
+            st.error(f"Stock Strategy Finder failed: {exc}")
+
+    finder_result = st.session_state.get("til_stock_strategy_finder_result") or {}
+    if finder_result and str(finder_result.get("symbol") or "").upper() == finder_symbol:
+        verdict = finder_result.get("verdict") or {}
+        robustness = finder_result.get("robustness") or {}
+        stability = finder_result.get("parameter_stability") or {}
+        walk = (finder_result.get("walk_forward") or {}).get("summary") or {}
+        optimization = finder_result.get("optimization") or {}
+        winner = optimization.get("winner") or {}
+        holdout = winner.get("holdout_metrics") or {}
+
+        verdict_class = {
+            "ready_for_paper": "ready",
+            "promising": "promising",
+            "no_robust_strategy": "reject",
+        }.get(str(verdict.get("code") or ""), "promising")
+        st.markdown(
+            (
+                f'<div class="til-finder-verdict {verdict_class}">'
+                '<div><span>STOCK-SPECIFIC RESEARCH VERDICT</span>'
+                f'<strong>{html.escape(str(verdict.get("label") or "Research complete"))}</strong>'
+                f'<p>{html.escape(str(verdict.get("reason") or ""))}</p></div>'
+                f'<div class="til-finder-score">{safe_float(robustness.get("score"), 0.0):.0f}<small>/100</small></div>'
+                '</div>'
+            ),
+            unsafe_allow_html=True,
+        )
+
+        result_cols = st.columns(6)
+        result_cols[0].metric(
+            "Configurations tested",
+            f"{int(finder_result.get('unique_configurations_tested') or 0):,}",
+        )
+        result_cols[1].metric("Winning family", str(finder_result.get("winner_strategy_name") or "—"))
+        result_cols[2].metric("Timeframe", str(finder_result.get("timeframe") or "—"))
+        result_cols[3].metric("Holdout P/L", f"${safe_float(holdout.get('net_pnl'), 0.0):,.2f}")
+        result_cols[4].metric("Walk-forward profitable", f"{safe_float(walk.get('profitable_fold_pct'), 0.0):.0f}%")
+        result_cols[5].metric("Nearby settings profitable", f"{safe_float(stability.get('positive_pct'), 0.0):.0f}%")
+
+        st.markdown("### Evidence by period")
+        evidence_rows = []
+        for period_name, metrics in (
+            ("Training", winner.get("training_metrics") or {}),
+            ("Validation", winner.get("validation_metrics") or {}),
+            ("Untouched holdout", holdout),
+            ("Higher-cost stress", winner.get("stress_metrics") or {}),
+        ):
+            evidence_rows.append(
+                {
+                    "Period": period_name,
+                    "Trades": int(safe_float(metrics.get("trade_count"), 0) or 0),
+                    "Net P/L": safe_float(metrics.get("net_pnl"), 0.0) or 0.0,
+                    "Return %": safe_float(metrics.get("return_pct"), 0.0) or 0.0,
+                    "Win rate %": safe_float(metrics.get("win_rate_pct"), 0.0) or 0.0,
+                    "Profit factor": metrics.get("profit_factor"),
+                    "Max drawdown %": safe_float(metrics.get("max_drawdown_pct"), 0.0) or 0.0,
+                }
+            )
+        st.dataframe(pd.DataFrame(evidence_rows), use_container_width=True, hide_index=True)
+
+        with st.expander("Winning optimized rules", expanded=False):
+            st.json(winner.get("optimized_rules") or {})
+        with st.expander("Walk-forward + parameter-stability details", expanded=False):
+            st.write(
+                f"Walk-forward score: **{safe_float(walk.get('score'), 0.0):.1f}/100** · "
+                f"profitable active folds: **{safe_float(walk.get('profitable_fold_pct'), 0.0):.1f}%**"
+            )
+            st.write(
+                f"Nearby holdout variants: **{int(stability.get('active') or 0)} active** · "
+                f"**{safe_float(stability.get('positive_pct'), 0.0):.1f}% profitable** · "
+                f"median P/L **${safe_float(stability.get('median_net_pnl'), 0.0):,.2f}**"
+            )
+            st.caption(str(stability.get("note") or ""))
+
+        st.success(
+            f"The exact configuration ledger for this run was saved to the research library, including losing combinations. "
+            f"That ledger contains {int(finder_result.get('unique_configurations_tested') or 0):,} unique tested configurations."
+        )
+
+        actions = st.columns(3)
+        if actions[0].button(
+            "↗ Open Paper & Live Trading",
+            use_container_width=True,
+            disabled=str(verdict.get("code") or "") != "ready_for_paper",
+            key="til_finder_open_paper",
+        ):
+            st.session_state["til_navigate_to"] = "Live / Paper"
+            st.rerun()
+        if actions[1].button(
+            "⌖ Scan market for this setup",
+            use_container_width=True,
+            key="til_finder_open_discovery",
+        ):
+            st.session_state["til_selected_strategy_id"] = str(finder_result.get("winner_source_strategy_id") or "")
+            st.session_state["til_navigate_to"] = "Market Discovery"
+            st.rerun()
+        if actions[2].button(
+            "⌬ Open advanced Strategy Lab",
+            use_container_width=True,
+            key="til_finder_open_lab",
+        ):
+            st.session_state["til_selected_strategy_id"] = str(finder_result.get("winner_source_strategy_id") or "")
+            st.session_state["til_navigate_to"] = "Strategy Lab"
+            st.rerun()
+
+
+elif module == "Overview":
     overview_validated = sum(
         1
         for item in canonical_strategies
