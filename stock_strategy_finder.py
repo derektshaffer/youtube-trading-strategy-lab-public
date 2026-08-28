@@ -368,6 +368,159 @@ def _verdict(
     }
 
 
+def complete_stock_strategy_finder_from_optimization(
+    one_minute_rows: list[dict[str, Any]],
+    all_strategies: list[dict[str, Any]],
+    selected: list[dict[str, Any]],
+    skipped: list[str],
+    symbol: str,
+    profile: StockSearchProfile,
+    settings: BacktestSettings,
+    optimizer: OptimizationSettings,
+    optimization: dict[str, Any],
+    *,
+    progress: Callable[[int, int, str], None] | None = None,
+    total_started: float | None = None,
+    optimization_seconds: float | None = None,
+    parallel_workers: int = 1,
+) -> dict[str, Any]:
+    stage_timings: dict[str, float] = {}
+    if optimization_seconds is not None:
+        stage_timings["optimization"] = round(float(optimization_seconds), 3)
+
+    distinct_ids = _top_distinct_strategy_ids(
+        optimization,
+        profile.walk_forward_family_limit,
+    )
+    wanted = set(distinct_ids)
+    walk_strategies = [
+        item for item in selected
+        if str(item.get("id") or "") in wanted
+    ]
+    chosen_timeframe = str(optimization.get("timeframe") or "5Min")
+    chosen_rows = resample_intraday_bars(
+        one_minute_rows,
+        chosen_timeframe,
+        include_extended_hours=True,
+    )
+
+    if progress:
+        progress(
+            910,
+            1000,
+            f"Walk-forward: trying to disprove the top {len(walk_strategies)} family candidates…",
+        )
+
+    walk_optimizer = replace(
+        optimizer,
+        max_variants_per_strategy=min(
+            profile.max_variants_per_strategy,
+            140 if profile.name == "Quick" else 180,
+        ),
+        finalists_per_strategy=min(profile.finalists_per_strategy, 8),
+    )
+    walk_started = perf_counter()
+    walk = walk_forward_validate(
+        chosen_rows,
+        walk_strategies,
+        symbol,
+        settings,
+        walk_optimizer,
+        minimum_history_sessions=8,
+        test_sessions_per_fold=2,
+        max_folds=profile.walk_forward_folds,
+    )
+    stage_timings["walk_forward"] = round(
+        perf_counter() - walk_started,
+        3,
+    )
+    robustness = validation_strength(optimization, walk)
+
+    winner = optimization.get("winner") or {}
+    source_id = str(winner.get("source_strategy_id") or "")
+    winner_source = next(
+        (
+            item for item in selected
+            if str(item.get("id") or "") == source_id
+        ),
+        None,
+    )
+    if winner_source is None:
+        raise AppError(
+            "The winning strategy family could not be resolved after optimization."
+        )
+
+    if progress:
+        progress(
+            965,
+            1000,
+            "Parameter stability: perturbing the winning rules on untouched holdout data…",
+        )
+
+    stability_started = perf_counter()
+    stability = parameter_stability_test(
+        one_minute_rows,
+        winner_source,
+        optimization,
+        maximum=profile.stability_variants,
+    )
+    stage_timings["parameter_stability"] = round(
+        perf_counter() - stability_started,
+        3,
+    )
+    verdict = _verdict(robustness, stability, walk)
+    if total_started is not None:
+        stage_timings["total"] = round(
+            perf_counter() - total_started,
+            3,
+        )
+    else:
+        stage_timings["total"] = round(
+            sum(stage_timings.values()),
+            3,
+        )
+
+    return {
+        "version": "stock-strategy-finder-v1",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "symbol": str(symbol or "").strip().upper(),
+        "profile": asdict(profile),
+        "search_policy": {
+            "ai_may_prioritize": True,
+            "ai_may_veto_valid_combinations": False,
+            "deep_modes_test_all_technically_eligible_families": True,
+            "diversity_scheduling": "round_robin_behavior_buckets",
+            "selection_basis": (
+                "historical evidence + independent validation, "
+                "not largest optimized P/L"
+            ),
+        },
+        "strategies_considered": len(all_strategies),
+        "strategies_tested": len(selected),
+        "technical_skips": skipped,
+        "estimated_work": estimate_search_work(profile, len(selected)),
+        "optimization": optimization,
+        "walk_forward": walk,
+        "robustness": robustness,
+        "parameter_stability": stability,
+        "verdict": verdict,
+        "winner_source_strategy_id": source_id,
+        "winner_strategy_name": winner.get("strategy_name"),
+        "timeframe": chosen_timeframe,
+        "unique_configurations_tested": int(
+            optimization.get("unique_configurations_tested") or 0
+        ),
+        "configuration_history": list(
+            optimization.get("configuration_history") or []
+        ),
+        "stage_timings_seconds": stage_timings,
+        "parallel_workers": int(
+            optimization.get("parallel_workers") or parallel_workers or 1
+        ),
+        "parallelized_by": optimization.get("parallelized_by") or "none",
+    }
+
+
 def run_stock_strategy_finder(
     one_minute_rows: list[dict[str, Any]],
     strategies: list[dict[str, Any]],
