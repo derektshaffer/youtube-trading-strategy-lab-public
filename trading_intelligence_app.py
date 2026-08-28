@@ -460,26 +460,33 @@ def upsert_strategy_record(
     return result
 
 
+WORKSPACE_SECTIONS = [
+    "Overview",
+    "Knowledge Sources",
+    "Strategy Library",
+    "Strategy DNA",
+    "Make Strategy Testable",
+    "AI Research Autopilot",
+    "Strategy Lab",
+    "Universe Research",
+    "Validation",
+    "Catalyst Intelligence",
+    "Market Discovery",
+    "Stock Analyzer",
+    "Live / Paper",
+]
+
+requested_workspace = st.session_state.pop("til_navigate_to", None)
+if requested_workspace in WORKSPACE_SECTIONS:
+    st.session_state["til_workspace_section"] = requested_workspace
+
 with st.sidebar:
     st.markdown("### Research workspace")
     module = st.radio(
         "Section",
-        [
-            "Overview",
-            "Knowledge Sources",
-            "Strategy Library",
-            "Strategy DNA",
-            "Make Strategy Testable",
-            "AI Research Autopilot",
-            "Strategy Lab",
-            "Universe Research",
-            "Validation",
-            "Catalyst Intelligence",
-            "Market Discovery",
-            "Stock Analyzer",
-            "Live / Paper",
-        ],
+        WORKSPACE_SECTIONS,
         label_visibility="collapsed",
+        key="til_workspace_section",
     )
     st.divider()
     st.caption(
@@ -1079,10 +1086,11 @@ elif module == "Knowledge Sources":
 
 
 elif module == "Strategy Library":
-    st.markdown("## Unified Strategy Library")
-    st.caption(
-        "This library uses one strategy representation regardless of whether the idea came from "
-        "a book, YouTube video, or a future AI/human research source."
+    st.markdown("## Strategy Library")
+    st.info(
+        "**What this page is for:** this is the collection of trading strategies the AI has learned "
+        "from your books and YouTube videos. Pick a strategy, see what it means in plain English, "
+        "then choose what you want the Lab to do with it. **You do not need to read or understand code here.**"
     )
 
     try:
@@ -1094,138 +1102,235 @@ elif module == "Strategy Library":
     if legacy_strategies:
         already = {str(item.get("id")) for item in strategies}
         importable = [item for item in legacy_strategies if str(item.get("id")) not in already]
-        c1, c2 = st.columns([1.2, 3])
-        c1.metric("Existing YouTube-lab strategies available", len(legacy_strategies))
-        if c2.button(
-            f"Import {len(importable)} new strategy record(s)",
-            disabled=not importable,
-            use_container_width=True,
-        ):
-            data = load_library()
-            additions = [canonicalize_existing_strategy(item) for item in importable]
-            data["strategies"] = merge_strategies(list(data.get("strategies") or []), additions)
-            intelligence_store().save(data)
-            st.success(f"Imported {len(additions)} strategies into Trading Intelligence Lab.")
-            st.rerun()
+        if importable:
+            if st.button(
+                f"Import {len(importable)} older YouTube strategy record(s)",
+                use_container_width=True,
+            ):
+                data = load_library()
+                additions = [canonicalize_existing_strategy(item) for item in importable]
+                data["strategies"] = merge_strategies(list(data.get("strategies") or []), additions)
+                intelligence_store().save(data)
+                st.success(f"Imported {len(additions)} strategies into the Strategy Library.")
+                st.rerun()
 
     if not strategies:
-        st.info("The unified library is empty. Analyze a source or import the existing Trading Lab library.")
+        st.info("No strategies are saved yet. Analyze a book, document, or YouTube video first.")
     else:
-        search = st.text_input("Filter strategies", placeholder="pullback, VWAP, breakout, catalyst…").strip().casefold()
-        filtered = [
-            s for s in strategies
-            if not search
-            or search in str(s.get("name") or "").casefold()
-            or search in str(s.get("category") or "").casefold()
-            or search in str(s.get("summary") or "").casefold()
-            or search in source_label(s).casefold()
-        ]
-        rows = []
-        for s in filtered:
-            rules = normalize_machine_rules(s.get("machine_rules"))
-            readiness = s.get("research_readiness") or research_readiness(s)
-            rows.append(
-                {
-                    "Strategy": s.get("name"),
-                    "Category": s.get("category"),
-                    "Direction": s.get("direction"),
-                    "Source": source_label(s),
-                    "Measurable rules": sum(v is not None for v in rules.values()),
-                    "Setup modeled": (
-                        f"{safe_float(readiness.get('semantic_coverage_pct'), 100.0):.0f}%"
-                        if int(readiness.get("semantic_requirement_count") or 0) > 0
-                        else "—"
-                    ),
-                    "AI readiness": str(readiness.get("label") or "unknown").replace("_", " ").title(),
-                    "Confidence / support": s.get("confidence"),
-                    "Validation": s.get("validation_status") or "unvalidated",
-                }
-            )
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        ready_count = sum(
+            1
+            for item in strategies
+            if (item.get("research_readiness") or research_readiness(item)).get("label")
+            == "ready_for_backtest"
+        )
+        validated_count = sum(
+            1
+            for item in strategies
+            if str(item.get("validation_status") or "").lower() == "validated"
+        )
+        needs_work_count = max(0, len(strategies) - ready_count)
 
-        labels = {
-            f"{s.get('name')} · {source_label(s)}": s
-            for s in filtered
-        }
-        if labels:
-            selected = labels[st.selectbox("Inspect strategy", list(labels))]
-            st.markdown(f"### {selected.get('name')}")
-            st.write(selected.get("summary") or "No summary.")
-            readiness = selected.get("research_readiness") or research_readiness(selected)
-            x1, x2, x3, x4 = st.columns(4)
-            confidence_label = (
-                "Synthesis support"
-                if is_synthetic_strategy(selected)
-                else "Extraction confidence"
+        summary_cols = st.columns(4)
+        summary_cols[0].metric("Saved strategies", len(strategies))
+        summary_cols[1].metric("Ready to test", ready_count)
+        summary_cols[2].metric("Validated", validated_count)
+        summary_cols[3].metric("Need clearer rules", needs_work_count)
+
+        st.markdown("### Choose a strategy")
+        search = st.text_input(
+            "Search",
+            placeholder="Try VWAP, pullback, breakout, momentum…",
+            label_visibility="collapsed",
+            key="til_strategy_library_search",
+        ).strip().casefold()
+        filtered = [
+            item
+            for item in strategies
+            if not search
+            or search in str(item.get("name") or "").casefold()
+            or search in str(item.get("summary") or "").casefold()
+            or search in str(item.get("source_title") or "").casefold()
+            or search in str(item.get("category") or "").casefold()
+        ]
+        if not filtered:
+            st.warning("No saved strategy matches that search.")
+        else:
+            strategy_choices: dict[str, dict[str, Any]] = {}
+            for item in filtered:
+                source_name = str(item.get("source_title") or "Unknown source")
+                label = f"{item.get('name') or 'Unnamed strategy'} — {source_name}"
+                if label in strategy_choices:
+                    label += f" · {str(item.get('id') or '')[:7]}"
+                strategy_choices[label] = item
+
+            target_id = str(st.session_state.pop("til_selected_strategy_id", "") or "")
+            if target_id:
+                for label, item in strategy_choices.items():
+                    if str(item.get("id") or "") == target_id:
+                        st.session_state["til_strategy_library_choice"] = label
+                        break
+
+            selected_label = st.selectbox(
+                "Saved strategy",
+                list(strategy_choices),
+                key="til_strategy_library_choice",
+                label_visibility="collapsed",
             )
-            x1.metric(confidence_label, f"{float(selected.get('confidence') or 0):.0f}%")
-            x2.metric("AI research readiness", f"{safe_float(readiness.get('score'), 0.0):.0f}/100")
-            x3.metric("Validation", selected.get("validation_status") or "unvalidated")
-            x4.metric("Optimization", selected.get("optimization_status") or "not_run")
-            st.caption(str(readiness.get("note") or ""))
-            if int(readiness.get("semantic_requirement_count") or 0) > 0:
-                semantic_pct = safe_float(readiness.get("semantic_coverage_pct"), 0.0) or 0.0
-                gate_pct = safe_float(readiness.get("semantic_coverage_gate_pct"), 90.0) or 90.0
-                st.markdown(f"#### Setup coverage · {semantic_pct:.0f}% modeled")
-                st.progress(
-                    max(0.0, min(1.0, semantic_pct / 100.0)),
-                    text=f"Core setup modeled: {semantic_pct:.0f}% · deep-research gate: {gate_pct:.0f}%",
-                )
-                modeled = list(readiness.get("semantic_modeled_requirements") or [])
-                missing = list(readiness.get("semantic_missing_requirements") or [])
-                if modeled:
-                    with st.expander("Modeled parts of the setup", expanded=False):
-                        for item in modeled:
-                            st.write("✓ " + str(item))
-                if missing:
-                    st.warning(
-                        "Deep autonomous validation is blocked until more of the defining setup is "
-                        "represented. Missing: " + " · ".join(str(item) for item in missing)
-                    )
-            st.markdown("#### Source-extracted machine rules")
-            active_rules = {
-                key: value for key, value in normalize_machine_rules(selected.get("machine_rules")).items()
+            selected = strategy_choices[selected_label]
+            readiness = selected.get("research_readiness") or research_readiness(selected)
+            readiness_label = str(readiness.get("label") or "unknown")
+            validation_status = str(selected.get("validation_status") or "unvalidated").lower()
+            explicit_rules = {
+                key: value
+                for key, value in normalize_machine_rules(selected.get("machine_rules")).items()
                 if value is not None
             }
-            st.json(active_rules or {"status": "No objective thresholds extracted yet."})
             research_overrides = {
                 key: value
-                for key, value in normalize_machine_rules(selected.get("research_rule_overrides")).items()
+                for key, value in normalize_machine_rules(
+                    selected.get("research_rule_overrides")
+                ).items()
                 if value is not None
             }
-            if research_overrides:
-                st.markdown("#### AI / accepted research assumptions")
-                st.json(research_overrides)
-                auto_prep = selected.get("autopilot_preparation") or {}
-                auto_count = int(auto_prep.get("suggestions_auto_applied") or 0)
-                if auto_count:
-                    st.caption(
-                        f"AI Autopilot added {auto_count} of these assumptions. They fill machine-testable "
-                        "gaps for research and are never presented as explicit source rules."
-                    )
-                else:
-                    st.caption(
-                        "These fill machine-testable gaps for research. They are not presented as explicit source rules."
-                    )
-            if (
-                str(selected.get("validation_status") or "").lower() == "validated"
-                and isinstance(selected.get("validated_rules"), dict)
-            ):
-                st.markdown("#### Frozen validated rules used by live modules")
-                validated_rules = {
-                    key: value
-                    for key, value in normalize_machine_rules(selected.get("validated_rules")).items()
-                    if value is not None
-                }
-                st.json(validated_rules or {"status": "Validated run did not contain objective rules."})
-                st.caption(
-                    "The original source rules are preserved above. Market Discovery and Stock Analyzer "
-                    "use this frozen validated rule set so later research edits do not silently change a validated setup."
+
+            st.markdown(f"## {selected.get('name') or 'Unnamed strategy'}")
+            st.caption(
+                f"Source: {selected.get('source_title') or 'Unknown source'}"
+                + (
+                    f" · {selected.get('source_author')}"
+                    if selected.get("source_author")
+                    else ""
                 )
-            if selected.get("unresolved_rules"):
-                st.markdown("#### Requires interpretation / unavailable data")
-                for item in selected.get("unresolved_rules") or []:
+            )
+            st.write(selected.get("summary") or "No plain-language summary was saved for this strategy.")
+
+            st.markdown("### Where this strategy stands")
+            status_cols = st.columns(4)
+            status_cols[0].metric(
+                "Can the backtester use it?",
+                "Yes" if readiness_label == "ready_for_backtest" else "Not fully yet",
+            )
+            status_cols[1].metric(
+                "Validation",
+                "Passed" if validation_status == "validated" else "Not passed yet",
+            )
+            status_cols[2].metric(
+                "Rules from source",
+                len(explicit_rules),
+            )
+            status_cols[3].metric(
+                "AI test assumptions",
+                len(research_overrides),
+            )
+
+            if readiness_label != "ready_for_backtest":
+                st.warning(
+                    "**Recommended next step: make this strategy more testable.** Some important parts "
+                    "are still too vague for a historical backtest."
+                )
+            elif validation_status != "validated":
+                st.info(
+                    "**Recommended next step: test and validate it on historical data.** The rules are "
+                    "clear enough to test, but the strategy has not yet passed the validation gates."
+                )
+            else:
+                st.success(
+                    "**This strategy passed validation.** The useful next step is to look for stocks "
+                    "currently matching it or move into paper/live monitoring."
+                )
+
+            st.markdown("### What the strategy says to do")
+            entry_conditions = list(selected.get("entry_conditions") or [])
+            exit_conditions = list(selected.get("exit_conditions") or [])
+            risk_rules = list(selected.get("risk_rules") or [])
+            avoid_conditions = list(selected.get("avoid_conditions") or [])
+
+            if entry_conditions:
+                st.markdown("**Entry / setup**")
+                for item in entry_conditions:
                     st.write("• " + str(item))
+            if exit_conditions:
+                st.markdown("**Exit / profit taking**")
+                for item in exit_conditions:
+                    st.write("• " + str(item))
+            if risk_rules:
+                st.markdown("**Risk rules**")
+                for item in risk_rules:
+                    st.write("• " + str(item))
+            if avoid_conditions:
+                with st.expander("When the strategy says to stay out", expanded=False):
+                    for item in avoid_conditions:
+                        st.write("• " + str(item))
+
+            if explicit_rules or research_overrides:
+                with st.expander("How the computer will test this — plain English", expanded=False):
+                    if explicit_rules:
+                        st.markdown("**Rules that came directly from the source**")
+                        render_plain_rules(explicit_rules)
+                    if research_overrides:
+                        st.markdown("**AI-added assumptions used only for research**")
+                        render_plain_rules(research_overrides, assumption=True)
+
+            if selected.get("unresolved_rules"):
+                with st.expander("Parts the computer still cannot judge reliably", expanded=False):
+                    for item in selected.get("unresolved_rules") or []:
+                        st.write("• " + str(item))
+
+            st.markdown("### What do you want to do with it?")
+            action_cols = st.columns(4)
+
+            if action_cols[0].button(
+                "🧪 Test + validate",
+                use_container_width=True,
+                type="primary" if readiness_label == "ready_for_backtest" and validation_status != "validated" else "secondary",
+                disabled=readiness_label != "ready_for_backtest",
+                help="Open Strategy Lab with this strategy selected and test it on historical market data.",
+                key="til_library_test_validate",
+            ):
+                st.session_state["til_selected_strategy_id"] = str(selected.get("id") or "")
+                st.session_state["til_navigate_to"] = "Strategy Lab"
+                st.rerun()
+
+            if action_cols[1].button(
+                "🧩 Make more testable",
+                use_container_width=True,
+                type="primary" if readiness_label != "ready_for_backtest" else "secondary",
+                help="Let AI translate vague parts into clearly labeled research assumptions.",
+                key="til_library_make_testable",
+            ):
+                st.session_state["til_selected_strategy_id"] = str(selected.get("id") or "")
+                st.session_state["til_navigate_to"] = "Make Strategy Testable"
+                st.rerun()
+
+            if action_cols[2].button(
+                "🔎 Find matching stocks",
+                use_container_width=True,
+                disabled=readiness_label != "ready_for_backtest",
+                help="Open Market Discovery with this strategy selected.",
+                key="til_library_find_matches",
+            ):
+                st.session_state["til_selected_strategy_id"] = str(selected.get("id") or "")
+                st.session_state["til_navigate_to"] = "Market Discovery"
+                st.rerun()
+
+            if action_cols[3].button(
+                "📊 Validation history",
+                use_container_width=True,
+                help="See saved validation runs and whether this or other strategies survived unseen data.",
+                key="til_library_validation_history",
+            ):
+                st.session_state["til_navigate_to"] = "Validation"
+                st.rerun()
+
+            if validation_status == "validated":
+                if st.button(
+                    "▶️ Open Live / Paper for validated strategies",
+                    use_container_width=True,
+                    key="til_library_live_paper",
+                ):
+                    st.session_state["til_selected_strategy_id"] = str(selected.get("id") or "")
+                    st.session_state["til_navigate_to"] = "Live / Paper"
+                    st.rerun()
 
 
 elif module == "Strategy DNA":
@@ -1732,6 +1837,12 @@ elif module == "Make Strategy Testable":
             if label in compiler_choices:
                 label += f" · {str(item.get('id') or '')[:7]}"
             compiler_choices[label] = item
+        target_id = str(st.session_state.pop("til_selected_strategy_id", "") or "")
+        if target_id:
+            for label, item in compiler_choices.items():
+                if str(item.get("id") or "") == target_id:
+                    st.session_state["til_compiler_strategy"] = label
+                    break
         compiler_strategy = compiler_choices[
             st.selectbox(
                 "Strategy to make testable",
@@ -2346,7 +2457,17 @@ elif module == "Strategy Lab":
                 label += f" · {str(item.get('id') or '')[:7]}"
             strategy_labels[label] = item
 
-        selected_label = st.selectbox("Strategy to research", list(strategy_labels))
+        target_id = str(st.session_state.pop("til_selected_strategy_id", "") or "")
+        if target_id:
+            for label, item in strategy_labels.items():
+                if str(item.get("id") or "") == target_id:
+                    st.session_state["til_strategy_lab_choice"] = label
+                    break
+        selected_label = st.selectbox(
+            "Strategy to research",
+            list(strategy_labels),
+            key="til_strategy_lab_choice",
+        )
         selected_strategy = strategy_labels[selected_label]
         compare_all = st.checkbox(
             "Compare all compatible strategies and let validation choose the winner",
@@ -3176,8 +3297,18 @@ elif module == "Market Discovery":
             if label in strategy_choices:
                 label += f" · {str(item.get('id') or '')[:7]}"
             strategy_choices[label] = item
+        target_id = str(st.session_state.pop("til_selected_strategy_id", "") or "")
+        if target_id:
+            for label, item in strategy_choices.items():
+                if str(item.get("id") or "") == target_id:
+                    st.session_state["til_market_discovery_strategy"] = label
+                    break
         selected_discovery_strategy = strategy_choices[
-            st.selectbox("Strategy to scan for", list(strategy_choices))
+            st.selectbox(
+                "Strategy to scan for",
+                list(strategy_choices),
+                key="til_market_discovery_strategy",
+            )
         ]
 
         scan_cols = st.columns([1.1, 1.0, 2.0])
