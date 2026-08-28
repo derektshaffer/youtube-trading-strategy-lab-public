@@ -1211,6 +1211,10 @@ if module == "Stock Strategy Finder":
         st.info(
             f"Loaded the last completed {finder_symbol} {finder_profile.name} research result from durable storage."
         )
+    elif not finder_result:
+        st.caption(
+            f"No completed {finder_symbol} {finder_profile.name} Finder result is saved yet."
+        )
 
     finder_slot = st.empty()
     finder_action = "Resume" if checkpoint_resumable else "Research"
