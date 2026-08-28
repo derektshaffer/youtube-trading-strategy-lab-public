@@ -323,6 +323,84 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(len(engine.bars_to_frame(rows)), 1)
 
 
+class ParallelOptimizerTests(unittest.TestCase):
+    def test_parallel_family_optimizer_matches_sequential_ranking(self):
+        rows = []
+        for day in (18, 19, 20, 21, 22, 23):
+            for minute in range(10):
+                close = 10.0 + (day - 18) * 0.03 + minute * 0.04
+                rows.append(
+                    bar(
+                        day,
+                        minute,
+                        close - 0.02,
+                        close + 0.08,
+                        close - 0.07,
+                        close,
+                        1200 + minute * 80,
+                    )
+                )
+
+        strategies = [
+            {
+                **simple_strategy(min_day_change_pct=-50.0, breakout_lookback_bars=2),
+                "id": "parallel-a",
+                "name": "Parallel A",
+            },
+            {
+                **simple_strategy(min_day_change_pct=-50.0, min_relative_volume=0.1),
+                "id": "parallel-b",
+                "name": "Parallel B",
+            },
+        ]
+        settings = engine.BacktestSettings(
+            starting_cash=10_000,
+            risk_per_trade_pct=0.5,
+            max_position_pct=20.0,
+            spread_bps=0,
+            slippage_bps=0,
+        )
+        optimizer = engine.OptimizationSettings(
+            max_variants_per_strategy=2,
+            finalists_per_strategy=1,
+            minimum_training_trades=1,
+            minimum_validation_trades=1,
+            optimize_position_sizing=False,
+            max_execution_variants_per_finalist=1,
+            selection_mode="validated",
+        )
+        sequential = engine.optimize_stock_strategies(
+            rows,
+            strategies,
+            "TEST",
+            settings,
+            optimizer,
+            finalize_holdout=False,
+        )
+        parallel = engine.optimize_stock_strategies_parallel(
+            rows,
+            strategies,
+            "TEST",
+            settings,
+            optimizer,
+            max_workers=2,
+            finalize_holdout=False,
+        )
+
+        self.assertEqual(
+            [item["source_strategy_id"] for item in parallel["rankings"]],
+            [item["source_strategy_id"] for item in sequential["rankings"]],
+        )
+        self.assertEqual(
+            parallel["winner"]["source_strategy_id"],
+            sequential["winner"]["source_strategy_id"],
+        )
+        self.assertEqual(parallel["strategies_tested"], sequential["strategies_tested"])
+        self.assertEqual(parallel["unique_configurations_tested"], sequential["unique_configurations_tested"])
+        self.assertEqual(parallel["parallelized_by"], "strategy_family")
+        self.assertGreaterEqual(parallel["parallel_workers"], 2)
+
+
 class IndicatorCacheEquivalenceTests(unittest.TestCase):
     def test_cached_base_rebuild_matches_full_strategy_indicators(self):
         rows = []
