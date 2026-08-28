@@ -568,6 +568,10 @@ def merge_finder_checkpoint_into_library(
     result = dict(data or {})
     record = dict(checkpoint or {})
     symbol = str(record.get("symbol") or "").strip().upper()
+    profile_name = str(record.get("profile") or "").strip()
+    previous_checkpoint = latest_finder_checkpoint(result, symbol, profile_name)
+    previous_engine_state = dict((previous_checkpoint or {}).get("engine_state") or {})
+    previous_timeframes = dict(previous_engine_state.get("timeframes") or {})
     engine_state = dict(record.get("engine_state") or {})
     timeframes = dict(engine_state.get("timeframes") or {})
     durable_timeframes: dict[str, Any] = {}
@@ -580,16 +584,25 @@ def merge_finder_checkpoint_into_library(
             for item in state.get("configuration_history") or []
             if isinstance(item, dict)
         ]
-        for raw in history:
+        total_configuration_count = max(
+            int(state.get("configuration_count") or 0),
+            len(history),
+        )
+        previous_state = dict(previous_timeframes.get(str(timeframe)) or {})
+        previous_configuration_count = int(previous_state.get("configuration_count") or 0)
+        new_configuration_count = max(0, total_configuration_count - previous_configuration_count)
+        history_to_persist = (
+            history[-new_configuration_count:]
+            if 0 < new_configuration_count < len(history)
+            else (history if new_configuration_count else [])
+        )
+        for raw in history_to_persist:
             raw.setdefault("timeframe", str(timeframe))
             compact = compact_configuration_record(raw, symbol=symbol)
             if compact.get("signature"):
                 new_records.append(compact)
         durable_state = dict(state)
-        durable_state["configuration_count"] = max(
-            int(state.get("configuration_count") or 0),
-            len(history),
-        )
+        durable_state["configuration_count"] = total_configuration_count
         durable_state["configuration_history"] = []
         durable_timeframes[str(timeframe)] = durable_state
 
