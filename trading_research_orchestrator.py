@@ -403,12 +403,93 @@ def research_queue_status(library: dict[str, Any]) -> dict[str, int]:
     return counts
 
 
+def source_challenge_jobs(
+    library: dict[str, Any],
+    *,
+    cycle_date: str,
+    maximum: int = 4,
+) -> list[dict[str, Any]]:
+    """Build independent evidence-check jobs for user-supplied books/videos.
+
+    Uploaded material is deliberately treated as a hypothesis generator. These
+    jobs ask grounded research to challenge the source-authored idea rather than
+    treating repeated book/video claims as corroboration.
+    """
+    candidates: list[dict[str, Any]] = []
+    for item in (library or {}).get("strategies") or []:
+        if not isinstance(item, dict):
+            continue
+        source_type = str(item.get("source_type") or "").strip().casefold()
+        if source_type not in {"youtube", "book_or_document"}:
+            continue
+        if str(item.get("validation_status") or "unvalidated").casefold() == "validated":
+            continue
+        rules = {
+            key: value
+            for key, value in normalize_machine_rules(item.get("machine_rules")).items()
+            if value is not None
+        }
+        if not rules:
+            continue
+        candidates.append(
+            {
+                "strategy_id": str(item.get("id") or ""),
+                "name": str(item.get("name") or "Unnamed strategy"),
+                "source_type": source_type,
+                "source_title": str(item.get("source_title") or ""),
+                "source_author": str(item.get("source_author") or item.get("creator") or ""),
+                "summary": str(item.get("summary") or "")[:2200],
+                "machine_rules": rules,
+            }
+        )
+    if not candidates:
+        return []
+
+    # Rotate deterministically by day so a large library is challenged over time
+    # instead of repeatedly spending research budget on the same first few items.
+    candidates.sort(
+        key=lambda item: hashlib.sha256(
+            f"{cycle_date}|{item['strategy_id']}".encode("utf-8")
+        ).hexdigest()
+    )
+    jobs: list[dict[str, Any]] = []
+    for candidate in candidates[: max(1, int(maximum))]:
+        name = candidate["name"]
+        topic = (
+            f"Independent evidence check for the trading hypothesis '{name}'. "
+            "Search for empirical, academic, exchange, regulatory, or high-quality market evidence "
+            "that supports, contradicts, limits, or changes this setup. Focus on whether the claimed "
+            "conditions have measurable predictive value after realistic costs and across market regimes."
+        )
+        context = json.dumps(
+            {
+                "important": (
+                    "The following came from a user-supplied book/video. It is an unverified claim, "
+                    "not ground truth. Challenge it independently."
+                ),
+                **candidate,
+            },
+            indent=2,
+            default=str,
+        )
+        jobs.append(
+            {
+                "topic": topic,
+                "existing_context": context,
+                "origin": "source_challenge",
+                "source_strategy_id": candidate["strategy_id"],
+            }
+        )
+    return jobs
+
+
 def seed_continuous_research_cycle(
     library: dict[str, Any],
     *,
     topics: tuple[str, ...] | list[str] = DEFAULT_RESEARCH_TOPICS,
     cycle_date: str | None = None,
     maximum_topics: int = 10,
+    source_challenge_limit: int = 4,
 ) -> tuple[dict[str, Any], int]:
     data = ensure_research_collections(library)
     day = str(cycle_date or datetime.now(UTC).date().isoformat())
@@ -426,6 +507,23 @@ def seed_continuous_research_cycle(
         )
         if job:
             added += 1
+
+    for challenge in source_challenge_jobs(
+        data,
+        cycle_date=day,
+        maximum=max(1, int(source_challenge_limit)),
+    ):
+        strategy_id = str(challenge.get("source_strategy_id") or "")
+        data, job = enqueue_research_job(
+            data,
+            "web_research",
+            challenge,
+            priority=70,
+            dedupe_key=f"source-challenge:{day}:{strategy_id}",
+        )
+        if job:
+            added += 1
+
     system["last_seeded_cycle"] = day
     system["last_seeded_at"] = utc_iso()
     system["topics_seeded"] = added
