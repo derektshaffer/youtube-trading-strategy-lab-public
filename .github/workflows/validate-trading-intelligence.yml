@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "trading_intelligence_app.py"
+      - "trading_glass_theme.py"
       - "trading_intelligence_core.py"
       - "trading_progress_ui.py"
       - "pages/Full_Trading_Lab.py"
@@ -33,6 +34,7 @@ on:
   pull_request:
     paths:
       - "trading_intelligence_app.py"
+      - "trading_glass_theme.py"
       - "trading_intelligence_core.py"
       - "trading_progress_ui.py"
       - "pages/Full_Trading_Lab.py"
@@ -65,6 +67,7 @@ jobs:
       - name: Compile Trading Intelligence modules
         run: |
           python -m py_compile trading_intelligence_app.py
+          python -m py_compile trading_glass_theme.py
           python -m py_compile trading_intelligence_core.py
           python -m py_compile trading_progress_ui.py
           python -m py_compile machine_learning_lab_core.py
