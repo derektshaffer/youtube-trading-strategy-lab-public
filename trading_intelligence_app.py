@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import html
+import importlib
+import inspect
 import os
 import time
 from datetime import datetime, timedelta
@@ -15,17 +17,48 @@ import streamlit as st
 
 from trading_glass_theme import inject_research_glass_theme
 from live_strategy_runner_page import market_client, setting
-from stock_strategy_finder import (
-    SEARCH_PROFILES,
-    estimate_search_work,
-    latest_completed_finder_report,
-    latest_finder_checkpoint,
-    merge_finder_checkpoint_into_library,
-    merge_finder_report_into_library,
-    run_stock_strategy_finder,
-    search_profile,
-    selected_strategies_for_profile,
+
+# Streamlit hot-reloads the page script but can keep already-imported helper
+# modules alive in sys.modules. Finder persistence/resume added new public
+# helpers and optimizer parameters, so a hot deploy could otherwise pair the
+# new page with the previous in-memory helper module and raise ImportError.
+# Reload only when the loaded module is demonstrably stale.
+import stock_strategy_finder as _stock_strategy_finder
+import youtube_strategy_engine as _youtube_strategy_engine
+
+_finder_required_exports = (
+    "SEARCH_PROFILES",
+    "estimate_search_work",
+    "latest_completed_finder_report",
+    "latest_finder_checkpoint",
+    "merge_finder_checkpoint_into_library",
+    "merge_finder_report_into_library",
+    "run_stock_strategy_finder",
+    "search_profile",
+    "selected_strategies_for_profile",
 )
+_engine_has_resume = (
+    "resume_state"
+    in inspect.signature(_youtube_strategy_engine.optimize_stock_timeframes).parameters
+)
+_finder_has_exports = all(
+    hasattr(_stock_strategy_finder, name)
+    for name in _finder_required_exports
+)
+if not _engine_has_resume:
+    _youtube_strategy_engine = importlib.reload(_youtube_strategy_engine)
+if not _finder_has_exports or not _engine_has_resume:
+    _stock_strategy_finder = importlib.reload(_stock_strategy_finder)
+
+SEARCH_PROFILES = _stock_strategy_finder.SEARCH_PROFILES
+estimate_search_work = _stock_strategy_finder.estimate_search_work
+latest_completed_finder_report = _stock_strategy_finder.latest_completed_finder_report
+latest_finder_checkpoint = _stock_strategy_finder.latest_finder_checkpoint
+merge_finder_checkpoint_into_library = _stock_strategy_finder.merge_finder_checkpoint_into_library
+merge_finder_report_into_library = _stock_strategy_finder.merge_finder_report_into_library
+run_stock_strategy_finder = _stock_strategy_finder.run_stock_strategy_finder
+search_profile = _stock_strategy_finder.search_profile
+selected_strategies_for_profile = _stock_strategy_finder.selected_strategies_for_profile
 from trading_catalyst_core import (
     classify_catalyst,
     enrich_bars_with_point_in_time_catalysts,
