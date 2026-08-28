@@ -967,7 +967,7 @@ def inject_research_glass_theme() -> None:
                 linear-gradient(135deg, rgba(9,32,53,.66), rgba(7,22,37,.48)) !important;
         }
 
-        /* Primary actions should finally look like primary actions. */
+        /* Primary actions: darker, higher-contrast teal so labels stay readable. */
         div[data-testid="stButton"] button,
         div[data-testid="stDownloadButton"] button {
             border-radius: 7px !important;
@@ -975,23 +975,23 @@ def inject_research_glass_theme() -> None:
         }
         div[data-testid="stButton"] button[kind="primary"],
         div[data-testid="stDownloadButton"] button[kind="primary"] {
-            color: #04120a !important;
-            border-color: rgba(81,235,144,.72) !important;
+            color: #f4fbff !important;
+            border-color: rgba(70,174,167,.58) !important;
             background:
-                linear-gradient(100deg, #39c974 0%, #55e394 58%, #42d4b6 100%) !important;
+                linear-gradient(100deg, #176a67 0%, #1d7770 58%, #19666f 100%) !important;
             box-shadow:
-                inset 0 1px 0 rgba(255,255,255,.34),
-                0 0 20px rgba(69,223,135,.13) !important;
+                inset 0 1px 0 rgba(255,255,255,.08),
+                0 0 16px rgba(42,164,157,.08) !important;
         }
         div[data-testid="stButton"] button[kind="primary"]:hover:not(:disabled),
         div[data-testid="stDownloadButton"] button[kind="primary"]:hover:not(:disabled) {
-            color: #031008 !important;
-            border-color: rgba(119,255,173,.90) !important;
+            color: #ffffff !important;
+            border-color: rgba(91,207,198,.72) !important;
             background:
-                linear-gradient(100deg, #45d883 0%, #68eca4 58%, #51dfc1 100%) !important;
+                linear-gradient(100deg, #1d7b76 0%, #23877e 58%, #1d7480 100%) !important;
             box-shadow:
-                inset 0 1px 0 rgba(255,255,255,.42),
-                0 0 26px rgba(69,223,135,.20) !important;
+                inset 0 1px 0 rgba(255,255,255,.11),
+                0 0 18px rgba(58,187,179,.11) !important;
         }
         div[data-testid="stButton"] button[kind="secondary"],
         div[data-testid="stDownloadButton"] button[kind="secondary"] {
@@ -1039,13 +1039,17 @@ def inject_research_glass_theme() -> None:
         }
 
         [data-testid="stProgress"] [role="progressbar"] {
-            border-color: rgba(91,199,255,.18) !important;
-            background: rgba(11,34,54,.72) !important;
+            min-height: 10px !important;
+            border-color: rgba(104,154,194,.34) !important;
+            background: #081521 !important;
+            box-shadow:
+                inset 0 0 0 1px rgba(0,0,0,.32),
+                inset 0 1px 3px rgba(0,0,0,.42) !important;
         }
         [data-testid="stProgress"] [role="progressbar"] > div {
-            background:
-                linear-gradient(90deg, #39a9dc 0%, #45d98b 100%) !important;
-            box-shadow: 0 0 12px rgba(72,215,145,.14) !important;
+            background: #3f9fca !important;
+            border-right: 2px solid rgba(228,246,255,.82) !important;
+            box-shadow: 0 0 8px rgba(63,159,202,.18) !important;
         }
 
         /* ---------- Concept-match layout overrides ---------- */
