@@ -611,6 +611,110 @@ WORKSPACE_DISPLAY_TO_INTERNAL = {
     for internal, label in WORKSPACE_DISPLAY_LABELS.items()
 }
 
+WORKSPACE_PAGE_META = {
+    "Overview": {
+        "step": "01",
+        "group": "Research",
+        "title": "Overview",
+        "subtitle": "See what the research system knows, what has been validated, and where the workflow should go next.",
+    },
+    "Knowledge Sources": {
+        "step": "02",
+        "group": "Research",
+        "title": "Knowledge Sources",
+        "subtitle": "Bring books, PDFs, videos, notes, and research into one durable evidence library.",
+    },
+    "AI Research Autopilot": {
+        "step": "03",
+        "group": "Research",
+        "title": "AI Research Autopilot",
+        "subtitle": "Let AI consolidate source ideas, prepare testable hypotheses, and move promising families into research.",
+    },
+    "Strategy Library": {
+        "step": "04",
+        "group": "Strategy Development",
+        "title": "Strategy Library",
+        "subtitle": "Review the organized strategy families that AI has extracted and consolidated from your sources.",
+    },
+    "Strategy DNA": {
+        "step": "05",
+        "group": "Strategy Development",
+        "title": "Strategy Blueprint",
+        "subtitle": "See the structural components shared across strategies and where source authors meaningfully disagree.",
+    },
+    "Make Strategy Testable": {
+        "step": "06",
+        "group": "Strategy Development",
+        "title": "Rule Builder",
+        "subtitle": "Translate vague trading language into measurable research hypotheses without rewriting source-authored rules.",
+    },
+    "Strategy Lab": {
+        "step": "07",
+        "group": "Strategy Development",
+        "title": "Strategy Lab",
+        "subtitle": "Optimize candidate rules, test unseen data, and measure whether an apparent edge survives serious historical research.",
+    },
+    "Validation": {
+        "step": "08",
+        "group": "Strategy Development",
+        "title": "Validation",
+        "subtitle": "Review frozen validation results, robustness scores, holdouts, and walk-forward evidence.",
+    },
+    "Universe Research": {
+        "step": "09",
+        "group": "Market Research",
+        "title": "Market Universe",
+        "subtitle": "Test whether a strategy generalizes across stocks instead of only fitting one ticker.",
+    },
+    "Market Discovery": {
+        "step": "10",
+        "group": "Market Research",
+        "title": "Market Discovery",
+        "subtitle": "Search the current market for stocks that match the conditions of validated or research-ready strategies.",
+    },
+    "Catalyst Intelligence": {
+        "step": "11",
+        "group": "Market Research",
+        "title": "Catalyst Intelligence",
+        "subtitle": "Add point-in-time news and catalyst context so momentum setups are evaluated with the reason behind the move.",
+    },
+    "Stock Analyzer": {
+        "step": "12",
+        "group": "Market Research",
+        "title": "Stock Analyzer",
+        "subtitle": "Deep-dive one ticker with strategy matches, market structure, catalysts, and current setup quality.",
+    },
+    "Live / Paper": {
+        "step": "13",
+        "group": "Execution",
+        "title": "Paper & Live Trading",
+        "subtitle": "Deploy validated rules into paper or live workflows while keeping research and execution clearly separated.",
+    },
+}
+
+
+def render_workspace_page_header(section: str) -> None:
+    meta = WORKSPACE_PAGE_META.get(section) or {
+        "step": "—",
+        "group": "Workspace",
+        "title": section,
+        "subtitle": "",
+    }
+    st.markdown(
+        (
+            '<div class="til-pagehead">'
+            '<div class="til-pagehead-main">'
+            f'<div class="til-page-eyebrow">STEP {meta["step"]} <span>•</span> {meta["group"].upper()}</div>'
+            f'<div class="til-page-title">{meta["title"]}</div>'
+            f'<div class="til-page-sub">{meta["subtitle"]}</div>'
+            '</div>'
+            f'<div class="til-page-step">{meta["step"]}</div>'
+            '</div>'
+        ),
+        unsafe_allow_html=True,
+    )
+
+
 requested_workspace = st.session_state.pop("til_navigate_to", None)
 requested_workspace = WORKSPACE_DISPLAY_TO_INTERNAL.get(
     requested_workspace,
@@ -620,7 +724,19 @@ if requested_workspace in WORKSPACE_SECTIONS:
     st.session_state["til_workspace_section"] = requested_workspace
 
 with st.sidebar:
-    st.markdown("### Research workspace")
+    st.markdown(
+        """
+        <div class="til-sidebrand">
+          <div class="til-sidebrand-mark">◈</div>
+          <div>
+            <div class="til-sidebrand-name">Trading Intelligence</div>
+            <div class="til-sidebrand-sub">Research Workspace</div>
+          </div>
+        </div>
+        <div class="til-sideflow">13-step research workflow</div>
+        """,
+        unsafe_allow_html=True,
+    )
     module = st.radio(
         "Section",
         WORKSPACE_SECTIONS,
@@ -630,10 +746,6 @@ with st.sidebar:
         ),
         label_visibility="collapsed",
         key="til_workspace_section",
-    )
-    st.divider()
-    st.caption(
-        "This is a new app entrypoint. The existing YouTube Trading Lab home screen is unchanged."
     )
 
 try:
@@ -651,6 +763,8 @@ canonical_strategies = [
     if str(item.get("source_type") or "").lower() == "canonical_family"
 ]
 managed_strategies = canonical_strategies or source_strategies
+
+render_workspace_page_header(module)
 
 
 if module == "Overview":
@@ -696,7 +810,6 @@ if module == "Overview":
 
 
 elif module == "Knowledge Sources":
-    st.markdown("## Knowledge Sources")
     st.caption(
         "Upload a source you have lawful access to. The AI extracts trading hypotheses and short "
         "evidence references; it does not reproduce the book or treat the author's claims as validated."
@@ -1277,7 +1390,6 @@ elif module == "Knowledge Sources":
 
 
 elif module == "Strategy Library":
-    st.markdown("## AI-Managed Strategy Library")
     st.info(
         "**You do not need to test these one-by-one.** The Lab keeps every strategy extracted from your "
         "books and videos in the background, groups strategies that share the same underlying blueprint, "
@@ -1509,7 +1621,6 @@ elif module == "Strategy Library":
 
 
 elif module == "Strategy DNA":
-    st.markdown("## Strategy DNA & Cross-Book Synthesis")
     st.caption(
         "Break every extracted strategy into reusable components, measure where independent sources "
         "agree, cluster related setups, and generate research-only cross-source candidates. "
@@ -1991,7 +2102,6 @@ elif module == "Strategy DNA":
 
 
 elif module == "Make Strategy Testable":
-    st.markdown("## Make Strategy Testable")
     st.info(
         "**What this page does:** trading books often use phrases like “very active,” “strong chart,” "
         "or “good news.” A backtester cannot test those phrases directly. This page lets AI translate "
@@ -2281,7 +2391,6 @@ elif module == "Make Strategy Testable":
 
 
 elif module == "AI Research Autopilot":
-    st.markdown("## AI Research Autopilot")
     st.caption(
         "This is the AI research manager. It works on consolidated strategy families—not every raw book/video "
         "variation. It prepares vague rules when possible, builds its own historical stock universe, optimizes "
@@ -2714,7 +2823,6 @@ elif module == "AI Research Autopilot":
 
 
 elif module == "Strategy Lab":
-    st.markdown("## Strategy Lab")
     st.caption(
         "Choose a strategy from any source, download historical Alpaca candles, optimize only on "
         "earlier sessions, then evaluate separate validation and untouched holdout periods."
@@ -3148,7 +3256,6 @@ elif module == "Strategy Lab":
 
 
 elif module == "Universe Research":
-    st.markdown("## Universe Research")
     st.caption(
         "Run one frozen strategy unchanged across several stocks. This is designed to expose ticker-specific "
         "overfitting: a strategy that only works on one symbol should look narrow here."
@@ -3357,7 +3464,6 @@ elif module == "Universe Research":
 
 
 elif module == "Validation":
-    st.markdown("## Validation History")
     st.caption(
         "Saved research runs are kept separate from strategy approval. A validated label requires "
         "positive validation and untouched holdout behavior plus the robustness gate; it never auto-enables trading."
@@ -3392,7 +3498,6 @@ elif module == "Validation":
 
 
 elif module == "Catalyst Intelligence":
-    st.markdown("## Catalyst Intelligence")
     st.caption(
         "Inspect the same timestamped historical news taxonomy used by catalyst-aware backtests. "
         "Generic articles are kept visible but do not receive a catalyst score."
@@ -3543,7 +3648,6 @@ elif module == "Catalyst Intelligence":
 
 
 elif module == "Market Discovery":
-    st.markdown("## Market Discovery")
     st.caption(
         "Use current Alpaca market data as a sensor, then apply a saved strategy's actual rules "
         "to the candidates. Validation status and live setup matching remain separate."
@@ -3747,7 +3851,6 @@ elif module == "Market Discovery":
 
 
 elif module == "Stock Analyzer":
-    st.markdown("## Stock Analyzer")
     st.caption(
         "Compare one stock against the strategy library using shared live market data, then inspect "
         "which validated setup currently fits best."
@@ -3893,7 +3996,6 @@ elif module == "Stock Analyzer":
 
 
 elif module == "Live / Paper":
-    st.markdown("## Live / Paper Strategy Runner")
     st.caption(
         "Research and validation remain separate from execution. Existing safety checks and Alpaca "
         "paper-trading controls stay in place."
