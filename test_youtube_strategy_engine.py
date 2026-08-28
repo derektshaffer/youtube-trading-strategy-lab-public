@@ -172,6 +172,100 @@ class PriorDayRuleTests(unittest.TestCase):
         )
 
 
+class EmaRuleTests(unittest.TestCase):
+    def test_ema_rules_normalize_and_validate(self):
+        rules = engine.normalize_machine_rules(
+            {
+                "fast_ema_period": "9",
+                "slow_ema_period": "20",
+                "trend_ema_period": "200",
+                "require_price_above_slow_ema": "true",
+                "require_price_above_trend_ema": True,
+                "require_fast_ema_pullback": True,
+                "pullback_touch_tolerance_pct": "0.75",
+                "max_pullback_number": "2",
+                "stop_below_fast_ema": True,
+                "stop_ema_buffer_pct": "0.25",
+            }
+        )
+        self.assertEqual(rules["fast_ema_period"], 9)
+        self.assertEqual(rules["slow_ema_period"], 20)
+        self.assertEqual(rules["trend_ema_period"], 200)
+        self.assertTrue(rules["require_fast_ema_pullback"])
+        self.assertEqual(rules["pullback_touch_tolerance_pct"], 0.75)
+        self.assertEqual(rules["max_pullback_number"], 2)
+        self.assertTrue(rules["stop_below_fast_ema"])
+
+    def test_ema_signal_requires_alignment_pullback_and_pullback_number(self):
+        rules = engine.normalize_machine_rules(
+            {
+                "fast_ema_period": 9,
+                "slow_ema_period": 20,
+                "trend_ema_period": 200,
+                "require_price_above_slow_ema": True,
+                "require_price_above_trend_ema": True,
+                "require_fast_ema_rising": True,
+                "require_fast_ema_pullback": True,
+                "max_pullback_number": 2,
+                "require_pullback_breakout": True,
+            }
+        )
+        row = {
+            "close": 10.5,
+            "fast_ema": 10.2,
+            "slow_ema": 10.0,
+            "trend_ema": 9.0,
+            "fast_ema_rising": True,
+            "fast_ema_pullback_recent": True,
+            "fast_ema_pullback_number": 2,
+            "pullback_breakout": True,
+            "session_minute": 15,
+        }
+        self.assertTrue(engine.evaluate_signal(row, rules))
+        too_late = dict(row)
+        too_late["fast_ema_pullback_number"] = 3
+        self.assertFalse(engine.evaluate_signal(too_late, rules))
+
+    def test_ema_indicators_are_causal_and_detect_pullback_state(self):
+        rows = []
+        prices = [10.0, 10.2, 10.4, 10.6, 10.8, 10.7, 10.9, 11.0, 11.1, 11.2]
+        for minute, price in enumerate(prices):
+            rows.append(
+                bar(
+                    18,
+                    minute,
+                    price - 0.05,
+                    price + 0.08,
+                    price - (0.25 if minute == 5 else 0.08),
+                    price,
+                    10_000,
+                )
+            )
+        strategy = simple_strategy(
+            fast_ema_period=3,
+            slow_ema_period=5,
+            trend_ema_period=8,
+            require_fast_ema_pullback=True,
+            pullback_touch_tolerance_pct=1.0,
+        )
+        frame = engine.add_indicators(engine.bars_to_frame(rows), strategy)
+        self.assertTrue(frame["fast_ema"].tail(5).notna().all())
+        self.assertTrue(frame["slow_ema"].tail(5).notna().all())
+        self.assertTrue(frame["trend_ema"].tail(2).notna().all())
+        self.assertTrue(bool(frame["fast_ema_pullback_recent"].tail(5).any()))
+
+    def test_optimizer_can_tune_ema_pullback_tolerance(self):
+        strategy = simple_strategy(
+            fast_ema_period=9,
+            require_fast_ema_pullback=True,
+            pullback_touch_tolerance_pct=0.75,
+        )
+        variants = engine.generate_strategy_variants(strategy, maximum=80)
+        self.assertTrue(
+            any(item["pullback_touch_tolerance_pct"] != 0.75 for item in variants)
+        )
+
+
 class RuleTests(unittest.TestCase):
     def test_numeric_rules_are_cleaned(self):
         rules = engine.normalize_machine_rules({"min_price": "3.5", "max_price": "1.5", "stop_loss_pct": "-4", "reward_risk": "nan"})
