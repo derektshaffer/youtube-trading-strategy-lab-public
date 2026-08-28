@@ -37,7 +37,7 @@ GEMINI_INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/inte
 GEMINI_GENERATE_CONTENT_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 DEFAULT_GEMINI_MODEL = "gemini-3.7-flash"
 DEFAULT_GEMINI_FALLBACK_MODEL = "gemini-3.6-flash"
-DEFAULT_GEMINI_ADDITIONAL_FALLBACK_MODELS = ("gemini-3.5-flash", "gemini-2.5-flash")
+DEFAULT_GEMINI_ADDITIONAL_FALLBACK_MODELS = ("gemini-3.5-flash",)
 MAX_SINGLE_VIDEO_SECONDS = 45 * 60
 VIDEO_SEGMENT_SECONDS = 40 * 60
 MAX_VIDEO_SEGMENTS = 30
@@ -93,6 +93,25 @@ def provider_temporarily_unavailable(error: Exception | str) -> bool:
             "remote end closed connection",
             "temporary failure in name resolution",
         )
+    )
+
+
+def provider_model_unavailable(error: Exception | str) -> bool:
+    """Return True when Google says a configured Gemini model cannot be used anymore."""
+    message = str(error).lower()
+    return any(
+        marker in message
+        for marker in (
+            "no longer available",
+            "not available to new users",
+            "model is not found",
+            "model not found",
+            "unsupported model",
+            "please update your code to use models/",
+        )
+    ) or (
+        ("(404)" in message or " 404" in message)
+        and "model" in message
     )
 
 
@@ -744,7 +763,10 @@ class GeminiVideoAnalyzer:
         return True
 
     def _activate_model_fallback(self, error: Exception | str) -> bool:
-        if not provider_temporarily_unavailable(error):
+        if not (
+            provider_temporarily_unavailable(error)
+            or provider_model_unavailable(error)
+        ):
             return False
         while self._fallback_model_index < len(self.fallback_models):
             candidate = self.fallback_models[self._fallback_model_index]
@@ -1115,6 +1137,19 @@ class GeminiVideoAnalyzer:
                                 )
                             sleep(retry_delay)
                             continue
+                        if provider_model_unavailable(exc):
+                            failed_model = self.model
+                            if self._activate_model_fallback(exc):
+                                rate_limit_attempts = 0
+                                transient_attempts = 0
+                                if progress:
+                                    progress(
+                                        index,
+                                        total,
+                                        f"{failed_model} is unavailable. Switching {label} "
+                                        f"to backup model {self.model}…",
+                                    )
+                                continue
                         if provider_temporarily_unavailable(exc):
                             if transient_attempts < MAX_VIDEO_SECTION_TRANSIENT_RETRIES:
                                 retry_wait = min(
@@ -1246,6 +1281,18 @@ class GeminiVideoAnalyzer:
             try:
                 return self._analyze_whole_video(normalized_url, prompt)
             except AppError as exc:
+                if provider_model_unavailable(exc):
+                    failed_model = self.model
+                    if self._activate_model_fallback(exc):
+                        transient_attempts = 0
+                        if progress:
+                            progress(
+                                0,
+                                1,
+                                f"{failed_model} is unavailable. Switching to backup model {self.model}…",
+                            )
+                        continue
+                    raise
                 if not provider_temporarily_unavailable(exc):
                     raise
                 if transient_attempts < MAX_VIDEO_SECTION_TRANSIENT_RETRIES:
