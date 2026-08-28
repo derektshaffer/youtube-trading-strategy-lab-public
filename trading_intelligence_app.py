@@ -918,7 +918,9 @@ elif module == "Knowledge Sources":
                 ingest_id=ingest_id,
                 stage="prepared" if autopilot_prepare else "extracted",
             )
-            data = intelligence_store().load()
+            # Rebuild the canonical family layer now that this source is saved. New ideas join
+            # existing blueprints automatically instead of becoming another manual research queue.
+            data = load_library()
 
             autonomous_report = None
             autonomous_error = ""
@@ -928,9 +930,45 @@ elif module == "Knowledge Sources":
                 and analysis.get("strategies")
                 and not analysis.get("analysis_incomplete")
             ):
+                new_source_strategy_ids = {
+                    str(item.get("id") or "")
+                    for item in analysis.get("strategies") or []
+                    if isinstance(item, dict) and item.get("id")
+                }
+                affected_families = [
+                    item
+                    for item in data.get("strategies") or []
+                    if str(item.get("source_type") or "").lower() == "canonical_family"
+                    and new_source_strategy_ids.intersection(
+                        {str(value) for value in item.get("source_strategy_ids") or []}
+                    )
+                ]
+
+                # Canonical families can still contain qualitative gaps. Let the same compiler
+                # prepare those automatically before historical research, then persist the prepared
+                # family record so the user never has to resolve each source variation manually.
+                prepared_families = []
+                for family_item in affected_families:
+                    prepared_family = dict(family_item)
+                    if (
+                        (prepared_family.get("research_readiness") or research_readiness(prepared_family)).get("label")
+                        != "ready_for_backtest"
+                    ):
+                        prepared_family = prepare_strategies_with_ai(
+                            [prepared_family],
+                            compiler,
+                            minimum_confidence=65.0,
+                        )[0]
+                    prepared_family["research_readiness"] = research_readiness(prepared_family)
+                    prepared_families.append(prepared_family)
+                    data = upsert_strategy_record(data, prepared_family)
+
+                if prepared_families:
+                    intelligence_store().save(data)
+
                 ready_for_deep = [
                     item
-                    for item in analysis.get("strategies") or []
+                    for item in prepared_families
                     if (item.get("research_readiness") or {}).get("label") == "ready_for_backtest"
                 ]
                 if ready_for_deep:
@@ -993,7 +1031,9 @@ elif module == "Knowledge Sources":
                         )
                 else:
                     autonomous_error = (
-                        "No extracted strategy had enough machine-testable entry/filter rules for deep historical research."
+                        "The newly affected strategy families still do not have enough machine-testable "
+                        "entry/filter rules for deep historical research. Their source ideas and family "
+                        "membership were saved, and AI can revisit them as more sources are added."
                     )
                     analysis["autonomous_research_summary"] = {
                         "completed": False,
@@ -1039,8 +1079,8 @@ elif module == "Knowledge Sources":
                     if item.get("validation_status") == "validated"
                 )
                 message += (
-                    f" Historical Autopilot deep-tested "
-                    f"{int(autonomous_report.get('deep_strategies_tested') or 0)} finalists and "
+                    f" The AI family manager consolidated the new ideas into the strategy library, then "
+                    f"deep-tested {int(autonomous_report.get('deep_strategies_tested') or 0)} affected family finalist(s); "
                     f"{validated_count} passed the full autonomous validation gate."
                 )
             st.success(message)
@@ -1844,11 +1884,11 @@ elif module == "Make Strategy Testable":
         "**Source idea → measurable test rule → historical backtest → validation decides whether it survives.**"
     )
 
-    if not strategies:
+    if not managed_strategies:
         st.info("Add or import a strategy before asking AI to make it testable.")
     else:
         compiler_choices = {}
-        for item in strategies:
+        for item in managed_strategies:
             label = f"{item.get('name') or 'Unnamed strategy'} · {source_label(item)}"
             if label in compiler_choices:
                 label += f" · {str(item.get('id') or '')[:7]}"
