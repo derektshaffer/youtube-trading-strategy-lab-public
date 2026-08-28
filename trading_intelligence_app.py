@@ -692,7 +692,7 @@ WORKSPACE_PAGE_META = {
         "step": "02",
         "group": "Research",
         "title": "Knowledge Sources",
-        "subtitle": "Bring books, PDFs, videos, notes, and research into one durable evidence library.",
+        "subtitle": "Build your evidence library. The AI reads, extracts, and organizes trading intelligence.",
     },
     "AI Research Autopilot": {
         "step": "03",
@@ -865,20 +865,48 @@ with st.sidebar:
     st.markdown(
         """
         <div class="til-sidebrand">
-          <div class="til-sidebrand-mark">
-            <span class="til-logo-core"></span>
-            <span class="til-logo-orbit til-logo-orbit-a"></span>
-            <span class="til-logo-orbit til-logo-orbit-b"></span>
+          <div class="til-sidebrand-mark til-crystal-logo">
+            <svg viewBox="0 0 64 64" aria-hidden="true">
+              <defs>
+                <linearGradient id="tilCrystalA" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stop-color="#55dcff"/>
+                  <stop offset="100%" stop-color="#42eca0"/>
+                </linearGradient>
+                <linearGradient id="tilCrystalB" x1="1" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#30aeea"/>
+                  <stop offset="100%" stop-color="#59f0bf"/>
+                </linearGradient>
+              </defs>
+              <polygon points="32,3 54,17 59,42 39,60 14,54 5,30 15,10" fill="rgba(22,110,145,.13)" stroke="url(#tilCrystalA)" stroke-width="1.2"/>
+              <polygon points="32,3 39,60 5,30 54,17 14,54 15,10 59,42 32,3" fill="none" stroke="url(#tilCrystalB)" stroke-width=".9" opacity=".88"/>
+              <polyline points="15,10 32,31 54,17 39,60 32,31 5,30 32,3 32,31 59,42 14,54 32,31" fill="none" stroke="#67e7ff" stroke-width=".75" opacity=".74"/>
+              <g fill="#6cf2c0">
+                <circle cx="32" cy="3" r="1.8"/><circle cx="54" cy="17" r="1.6"/><circle cx="59" cy="42" r="1.6"/>
+                <circle cx="39" cy="60" r="1.6"/><circle cx="14" cy="54" r="1.6"/><circle cx="5" cy="30" r="1.6"/>
+                <circle cx="15" cy="10" r="1.6"/><circle cx="32" cy="31" r="2"/>
+              </g>
+            </svg>
           </div>
           <div>
-            <div class="til-sidebrand-name">Trading Intelligence</div>
-            <div class="til-sidebrand-sub">Research Workspace</div>
+            <div class="til-sidebrand-name">Trading<br>Intelligence<br>Lab</div>
           </div>
+          <div class="til-side-collapse">‹‹</div>
         </div>
-        <div class="til-sideflow"><span>◈</span> 13-step research workflow</div>
+        <div class="til-workspace-label">RESEARCH WORKSPACE</div>
         """,
         unsafe_allow_html=True,
     )
+
+    dashboard_active = module == "Overview"
+    dashboard_clicked = st.button(
+        "⬡   Dashboard\nWorkspace Home",
+        use_container_width=True,
+        type="secondary",
+        key="til_dashboard_active" if dashboard_active else "til_dashboard",
+    )
+    if dashboard_clicked and not dashboard_active:
+        st.session_state["til_workspace_section"] = "Overview"
+        st.rerun()
 
     for group_name, group_sections in WORKSPACE_NAV_GROUPS:
         st.markdown(
@@ -918,10 +946,6 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    st.markdown(
-        '<div class="til-side-labs-note">Research Workspace navigation active</div>',
-        unsafe_allow_html=True,
-    )
 
 try:
     library = load_library()
@@ -939,20 +963,32 @@ canonical_strategies = [
 ]
 managed_strategies = canonical_strategies or source_strategies
 
-tool_spacer, tool_search = st.columns([3.55, 1.15], vertical_alignment="center")
-with tool_spacer:
+top_gap, top_search, top_actions = st.columns([2.55, 1.35, .72], vertical_alignment="center")
+with top_gap:
     st.markdown(
         '<div class="til-top-status"><span class="til-top-status-dot"></span>'
         'AI RESEARCH SYSTEM <strong>ONLINE</strong></div>',
         unsafe_allow_html=True,
     )
-with tool_search:
+with top_search:
     workspace_search_query = st.text_input(
         "Search workspace",
         placeholder="⌕  Search workspace…",
         label_visibility="collapsed",
         key="til_workspace_search",
     ).strip()
+with top_actions:
+    st.markdown(
+        """
+        <div class="til-top-actions">
+          <div class="til-top-icon til-notify">♢<span></span></div>
+          <div class="til-top-icon">?</div>
+          <div class="til-avatar">AI</div>
+          <div class="til-top-chevron">⌄</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 render_workspace_page_header(module)
 
@@ -1021,18 +1057,34 @@ if workspace_search_query:
 
 
 if module == "Overview":
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Knowledge sources", len(sources))
-    c2.metric("AI strategy families", len(canonical_strategies))
-    c3.metric(
-        "Validated families",
-        sum(
-            1
-            for s in canonical_strategies
-            if str(s.get("validation_status") or "").lower() == "validated"
-        ),
+    overview_validated = sum(
+        1
+        for item in canonical_strategies
+        if str(item.get("validation_status") or "").lower() == "validated"
     )
-    c4.metric("Raw source ideas", len(source_strategies))
+    st.markdown(
+        (
+            '<div class="til-kpi-grid">'
+            '<div class="til-kpi til-kpi-cyan"><div class="til-kpi-icon">▤</div><div>'
+            '<div class="til-kpi-label">KNOWLEDGE SOURCES</div>'
+            f'<div class="til-kpi-value">{len(sources):,}</div>'
+            '<div class="til-kpi-note">evidence in the library</div></div></div>'
+            '<div class="til-kpi til-kpi-blue"><div class="til-kpi-icon">⌘</div><div>'
+            '<div class="til-kpi-label">AI STRATEGY FAMILIES</div>'
+            f'<div class="til-kpi-value">{len(canonical_strategies):,}</div>'
+            '<div class="til-kpi-note">consolidated research blueprints</div></div></div>'
+            '<div class="til-kpi til-kpi-green"><div class="til-kpi-icon">◇</div><div>'
+            '<div class="til-kpi-label">VALIDATED FAMILIES</div>'
+            f'<div class="til-kpi-value">{overview_validated:,}</div>'
+            '<div class="til-kpi-note">passed current validation gate</div></div></div>'
+            '<div class="til-kpi til-kpi-purple"><div class="til-kpi-icon">✦</div><div>'
+            '<div class="til-kpi-label">RAW SOURCE IDEAS</div>'
+            f'<div class="til-kpi-value">{len(source_strategies):,}</div>'
+            '<div class="til-kpi-note">retained for provenance</div></div></div>'
+            '</div>'
+        ),
+        unsafe_allow_html=True,
+    )
 
     st.markdown("### Platform pipeline")
     cols = st.columns(4)
