@@ -6146,6 +6146,18 @@ def _merge_parallel_optimization_reports(
     }
 
 
+def combine_strategy_family_reports(
+    reports: list[dict[str, Any]],
+    *,
+    parallel_workers: int = 1,
+) -> dict[str, Any]:
+    """Public wrapper for merging independently optimized strategy-family shards."""
+    return _merge_parallel_optimization_reports(
+        reports,
+        parallel_workers=max(1, int(parallel_workers or 1)),
+    )
+
+
 def optimize_stock_strategies_parallel(
     rows: list[dict[str, Any]],
     strategies: list[dict[str, Any]],
