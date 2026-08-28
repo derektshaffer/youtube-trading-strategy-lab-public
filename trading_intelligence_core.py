@@ -244,6 +244,27 @@ def reconcile_knowledge_sources(
         if str(item.get("id") or "").strip()
     }
 
+    # Uploaded books/videos are evidence-bearing hypothesis sources, never ground truth.
+    # Apply this policy to old records as well as new ingestions.
+    for source in sources:
+        source_type = str(source.get("source_type") or "").strip().casefold()
+        if source_type in {"youtube", "book_or_document", "research_source"}:
+            if source.get("source_claim_status") != "unverified_source_claim":
+                source["source_claim_status"] = "unverified_source_claim"
+                changed = True
+            if source.get("source_role") != "hypothesis_generator":
+                source["source_role"] = "hypothesis_generator"
+                changed = True
+    for strategy in strategies:
+        source_type = str(strategy.get("source_type") or "").strip().casefold()
+        if source_type in {"youtube", "book_or_document", "research_source"}:
+            if strategy.get("source_claim_status") != "unverified_source_claim":
+                strategy["source_claim_status"] = "unverified_source_claim"
+                changed = True
+            if strategy.get("source_role") != "hypothesis_generator":
+                strategy["source_role"] = "hypothesis_generator"
+                changed = True
+
     # Repair old "Uploaded source" book records from the filename that was already saved.
     for source in sources:
         source_id = str(source.get("id") or "").strip()
@@ -710,6 +731,16 @@ def canonicalize_strategy(
         "source_title": source_title,
         "source_author": source_author,
         "source_url": str(item.get("source_url") or "").strip(),
+        "source_claim_status": str(
+            item.get("source_claim_status")
+            or (
+                "unverified_source_claim"
+                if str(source_type or "").strip().casefold()
+                in {"youtube", "book_or_document", "research_source"}
+                else "research_hypothesis"
+            )
+        ),
+        "source_role": str(item.get("source_role") or "hypothesis_generator"),
         "validation_status": str(item.get("validation_status") or "unvalidated"),
         "optimization_status": str(item.get("optimization_status") or "not_run"),
         "created_at": str(item.get("created_at") or _utc_iso()),
@@ -2257,6 +2288,8 @@ class GeminiBookAnalyzer:
             return {
                 "id": source_id,
                 "source_type": "book_or_document",
+                "source_claim_status": "unverified_source_claim",
+                "source_role": "hypothesis_generator",
                 "title": resolved_title,
                 "author": resolved_author,
                 "detected_title": detected_titles[0] if detected_titles else "",
