@@ -80,6 +80,7 @@ from trading_auto_research import (
 from trading_research_orchestrator import (
     DEFAULT_GEMINI_BULK_RESEARCH_MODEL,
     DEFAULT_GEMINI_SPECIALIST_MODEL,
+    enqueue_research_job,
     research_queue_status,
     seed_continuous_research_cycle,
 )
@@ -1254,6 +1255,69 @@ if module == "Stock Strategy Finder":
         st.caption(
             f"No completed {finder_symbol} {finder_profile.name} Finder result is saved yet."
         )
+
+    active_cloud_finder = next(
+        (
+            item
+            for item in library.get("research_queue") or []
+            if isinstance(item, dict)
+            and str(item.get("type") or "") == "stock_finder"
+            and str(item.get("status") or "") in {"queued", "running", "retry"}
+            and str((item.get("payload") or {}).get("symbol") or "").upper() == finder_symbol
+            and str((item.get("payload") or {}).get("profile") or "") == finder_profile.name
+        ),
+        None,
+    )
+    if active_cloud_finder:
+        cloud_status = str(active_cloud_finder.get("status") or "queued").replace("_", " ").title()
+        st.info(
+            f"Cloud {finder_profile.name} research for {finder_symbol} is already {cloud_status.lower()}. "
+            "It will keep running independently of this browser."
+        )
+
+    cloud_col, local_col = st.columns([1.0, 1.35])
+    with cloud_col:
+        queue_cloud_finder = st.button(
+            f"☁ Queue {finder_symbol or 'Stock'} — {finder_profile.name} in Cloud",
+            use_container_width=True,
+            disabled=(
+                not bool(finder_symbol)
+                or not bool(finder_candidates)
+                or active_cloud_finder is not None
+            ),
+            key="til_queue_stock_strategy_finder_cloud",
+            help=(
+                "Queues the same stock-specific research on the persistent cloud worker. "
+                "You can close this browser after it is queued."
+            ),
+        )
+    with local_col:
+        st.caption(
+            "Cloud mode is recommended for Deep/Very Deep runs because it does not depend on the Streamlit session."
+        )
+
+    if queue_cloud_finder and finder_symbol:
+        queued_library, queued_job = enqueue_research_job(
+            load_library(),
+            "stock_finder",
+            {
+                "symbol": finder_symbol,
+                "profile": finder_profile.name,
+                "requested_from": "Stock Strategy Finder",
+            },
+            priority=90 if finder_profile.name == "Very Deep" else 75,
+            dedupe_key=f"stock-finder:{finder_symbol}:{finder_profile.name}",
+            max_attempts=2,
+        )
+        if queued_job:
+            intelligence_store().save(queued_library)
+            st.success(
+                f"{finder_symbol} {finder_profile.name} research is queued for the cloud worker. "
+                "You can close your Mac or browser; results will be saved back into the Finder when complete."
+            )
+            st.rerun()
+        else:
+            st.info("That cloud Finder job is already queued or running.")
 
     finder_slot = st.empty()
     finder_action = "Resume" if checkpoint_resumable else "Research"
