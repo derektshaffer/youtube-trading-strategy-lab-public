@@ -356,6 +356,8 @@ def run_stock_strategy_finder(
     profile_name: str = "Deep",
     backtest_settings: BacktestSettings | None = None,
     progress: Callable[[int, int, str], None] | None = None,
+    resume_state: dict[str, Any] | None = None,
+    checkpoint: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     profile = search_profile(profile_name)
     selected, skipped = selected_strategies_for_profile(strategies, symbol, profile)
@@ -392,6 +394,8 @@ def run_stock_strategy_finder(
         optimizer,
         timeframes=profile.timeframes,
         progress=progress,
+        resume_state=resume_state,
+        checkpoint=checkpoint,
     )
 
     distinct_ids = _top_distinct_strategy_ids(optimization, profile.walk_forward_family_limit)
@@ -506,6 +510,171 @@ def compact_configuration_record(record: dict[str, Any], *, symbol: str) -> dict
     }
 
 
+def latest_finder_checkpoint(
+    data: dict[str, Any],
+    symbol: str,
+    profile_name: str | None = None,
+) -> dict[str, Any] | None:
+    target_symbol = str(symbol or "").strip().upper()
+    target_profile = str(profile_name or "").strip()
+    for item in data.get("stock_strategy_finder_checkpoints") or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("symbol") or "").strip().upper() != target_symbol:
+            continue
+        if target_profile and str(item.get("profile") or "").strip() != target_profile:
+            continue
+        return dict(item)
+    return None
+
+
+def upsert_finder_checkpoint(
+    data: dict[str, Any],
+    checkpoint: dict[str, Any],
+) -> dict[str, Any]:
+    result = dict(data or {})
+    record = dict(checkpoint or {})
+    symbol = str(record.get("symbol") or "").strip().upper()
+    profile_name = str(record.get("profile") or "").strip()
+    started_at = str(record.get("started_at") or record.get("updated_at") or "")
+    if not symbol or not profile_name:
+        raise AppError("A Finder checkpoint needs both a stock symbol and search profile.")
+    record["symbol"] = symbol
+    record["profile"] = profile_name
+    if not record.get("id"):
+        record["id"] = hashlib.sha256(
+            f"{symbol}|{profile_name}|{started_at}".encode("utf-8")
+        ).hexdigest()[:24]
+    record_id = str(record.get("id") or "")
+    existing = [
+        dict(item)
+        for item in result.get("stock_strategy_finder_checkpoints") or []
+        if isinstance(item, dict) and str(item.get("id") or "") != record_id
+    ]
+    result["stock_strategy_finder_checkpoints"] = [record, *existing][:25]
+    return result
+
+
+def merge_finder_checkpoint_into_library(
+    data: dict[str, Any],
+    checkpoint: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist a lean resumable checkpoint plus completed configuration evidence.
+
+    Raw configuration histories can be very large. They are merged into the
+    existing bounded configuration ledger, while the resumable engine state keeps
+    rankings and counts but drops duplicated configuration payloads.
+    """
+    result = dict(data or {})
+    record = dict(checkpoint or {})
+    symbol = str(record.get("symbol") or "").strip().upper()
+    engine_state = dict(record.get("engine_state") or {})
+    timeframes = dict(engine_state.get("timeframes") or {})
+    durable_timeframes: dict[str, Any] = {}
+    new_records: list[dict[str, Any]] = []
+
+    for timeframe, raw_state in timeframes.items():
+        state = dict(raw_state or {})
+        history = [
+            dict(item)
+            for item in state.get("configuration_history") or []
+            if isinstance(item, dict)
+        ]
+        for raw in history:
+            raw.setdefault("timeframe", str(timeframe))
+            compact = compact_configuration_record(raw, symbol=symbol)
+            if compact.get("signature"):
+                new_records.append(compact)
+        durable_state = dict(state)
+        durable_state["configuration_count"] = max(
+            int(state.get("configuration_count") or 0),
+            len(history),
+        )
+        durable_state["configuration_history"] = []
+        durable_timeframes[str(timeframe)] = durable_state
+
+    durable_engine_state = dict(engine_state)
+    durable_engine_state["timeframes"] = durable_timeframes
+    record["engine_state"] = durable_engine_state
+    result = upsert_finder_checkpoint(result, record)
+
+    existing_records = list(result.get("stock_strategy_configuration_ledger") or [])
+    seen = {
+        (
+            str(item.get("symbol") or ""),
+            str(item.get("timeframe") or ""),
+            str(item.get("signature") or ""),
+        )
+        for item in existing_records
+        if isinstance(item, dict)
+    }
+    additions: list[dict[str, Any]] = []
+    for compact in new_records:
+        key = (
+            str(compact.get("symbol") or ""),
+            str(compact.get("timeframe") or ""),
+            str(compact.get("signature") or ""),
+        )
+        if not key[2] or key in seen:
+            continue
+        seen.add(key)
+        additions.append(compact)
+    result["stock_strategy_configuration_ledger"] = [*additions, *existing_records][:50000]
+    return result
+
+
+def finder_summary_to_report(summary: dict[str, Any]) -> dict[str, Any]:
+    """Rebuild the compact UI report saved after a completed Finder run."""
+    winner = {
+        "status": summary.get("optimizer_status"),
+        "optimized_rules": summary.get("optimized_rules") or {},
+        "optimized_backtest_settings": summary.get("optimized_backtest_settings") or {},
+        "training_metrics": summary.get("training_metrics") or {},
+        "validation_metrics": summary.get("validation_metrics") or {},
+        "holdout_metrics": summary.get("holdout_metrics") or {},
+        "stress_metrics": summary.get("stress_metrics") or {},
+    }
+    return {
+        "version": "stock-strategy-finder-v1-restored",
+        "generated_at": summary.get("generated_at"),
+        "symbol": str(summary.get("symbol") or "").upper(),
+        "profile": summary.get("profile_details") or {"name": summary.get("profile")},
+        "search_policy": summary.get("search_policy") or {},
+        "strategies_considered": summary.get("strategies_considered"),
+        "strategies_tested": summary.get("strategies_tested"),
+        "technical_skips": summary.get("technical_skips") or [],
+        "estimated_work": summary.get("estimated_work") or {},
+        "optimization": {"winner": winner},
+        "walk_forward": {"summary": summary.get("walk_forward_summary") or {}},
+        "robustness": summary.get("robustness") or {},
+        "parameter_stability": summary.get("parameter_stability") or {},
+        "verdict": summary.get("verdict") or {},
+        "winner_source_strategy_id": summary.get("winner_source_strategy_id"),
+        "winner_strategy_name": summary.get("winner_strategy_name"),
+        "timeframe": summary.get("timeframe"),
+        "unique_configurations_tested": int(summary.get("unique_configurations_tested") or 0),
+        "restored_from_library": True,
+    }
+
+
+def latest_completed_finder_report(
+    data: dict[str, Any],
+    symbol: str,
+    profile_name: str | None = None,
+) -> dict[str, Any]:
+    target_symbol = str(symbol or "").strip().upper()
+    target_profile = str(profile_name or "").strip()
+    for summary in data.get("stock_strategy_finder_runs") or []:
+        if not isinstance(summary, dict):
+            continue
+        if str(summary.get("symbol") or "").strip().upper() != target_symbol:
+            continue
+        if target_profile and str(summary.get("profile") or "").strip() != target_profile:
+            continue
+        return finder_summary_to_report(summary)
+    return {}
+
+
 def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
     """Persist search summary + exact compact configuration ledger."""
     result = dict(data or {})
@@ -522,12 +691,17 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
         "generated_at": generated_at,
         "symbol": symbol,
         "profile": (report.get("profile") or {}).get("name"),
+        "profile_details": report.get("profile") or {},
+        "search_policy": report.get("search_policy") or {},
         "verdict": report.get("verdict") or {},
         "winner_strategy_name": report.get("winner_strategy_name"),
         "winner_source_strategy_id": report.get("winner_source_strategy_id"),
         "timeframe": report.get("timeframe"),
         "unique_configurations_tested": report.get("unique_configurations_tested"),
+        "strategies_considered": report.get("strategies_considered"),
         "strategies_tested": report.get("strategies_tested"),
+        "technical_skips": report.get("technical_skips") or [],
+        "estimated_work": report.get("estimated_work") or {},
         "robustness": report.get("robustness") or {},
         "parameter_stability": report.get("parameter_stability") or {},
         "walk_forward_summary": (report.get("walk_forward") or {}).get("summary") or {},
@@ -535,6 +709,7 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
         "validation_metrics": winner.get("validation_metrics") or {},
         "holdout_metrics": winner.get("holdout_metrics") or {},
         "stress_metrics": winner.get("stress_metrics") or {},
+        "optimizer_status": winner.get("status"),
         "optimized_rules": winner.get("optimized_rules") or {},
         "optimized_backtest_settings": winner.get("optimized_backtest_settings") or {},
     }
@@ -621,5 +796,24 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
         result["strategies"] = [child, *existing_strategies]
         summary["stock_specific_strategy_id"] = child_id
         summary["paper_validation_status"] = child["paper_validation_status"]
+
+    checkpoint = latest_finder_checkpoint(
+        result,
+        symbol,
+        (report.get("profile") or {}).get("name"),
+    )
+    if checkpoint:
+        completed_checkpoint = {
+            **checkpoint,
+            "status": "complete",
+            "progress": 1.0,
+            "message": f"{symbol} strategy research complete",
+            "updated_at": generated_at,
+            "completed_at": generated_at,
+            "last_error": None,
+            "engine_state": {},
+            "result_run_id": run_id,
+        }
+        result = upsert_finder_checkpoint(result, completed_checkpoint)
 
     return result
