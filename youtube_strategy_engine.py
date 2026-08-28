@@ -4617,6 +4617,54 @@ def _optimize_stock_strategies_historical(
             progress(min(completed, total_steps), total_steps, message)
 
     ranked: list[dict[str, Any]] = []
+    configuration_history: list[dict[str, Any]] = []
+    configuration_index: dict[str, int] = {}
+
+    def remember_configuration(
+        source_strategy: dict[str, Any],
+        phase: str,
+        rules: dict[str, Any],
+        chosen_settings: BacktestSettings,
+        metrics: dict[str, Any],
+    ) -> None:
+        normalized_rules = normalize_machine_rules(rules)
+        settings_payload = asdict(chosen_settings)
+        signature_payload = {
+            "strategy_id": str(source_strategy.get("id") or ""),
+            "rules": normalized_rules,
+            "settings": settings_payload,
+        }
+        signature = hashlib.sha256(
+            json.dumps(signature_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()[:24]
+        existing_index = configuration_index.get(signature)
+        if existing_index is not None:
+            existing = configuration_history[existing_index]
+            phases = list(existing.get("phases") or [])
+            if phase not in phases:
+                phases.append(phase)
+                existing["phases"] = phases
+            return
+        configuration_index[signature] = len(configuration_history)
+        configuration_history.append(
+            {
+                "signature": signature,
+                "strategy_id": str(source_strategy.get("id") or ""),
+                "strategy_name": str(source_strategy.get("name") or "Unnamed strategy"),
+                "phases": [phase],
+                "rules": normalized_rules,
+                "settings": settings_payload,
+                "metrics": {
+                    "trade_count": int(safe_float(metrics.get("trade_count"), 0) or 0),
+                    "net_pnl": safe_float(metrics.get("net_pnl"), 0.0) or 0.0,
+                    "return_pct": safe_float(metrics.get("return_pct"), 0.0) or 0.0,
+                    "win_rate_pct": safe_float(metrics.get("win_rate_pct"), 0.0) or 0.0,
+                    "profit_factor": metrics.get("profit_factor"),
+                    "max_drawdown_pct": safe_float(metrics.get("max_drawdown_pct"), 0.0) or 0.0,
+                },
+            }
+        )
+
     for source_strategy, variants in search_plan:
         name = str(source_strategy.get("name") or "Unnamed strategy")
         original = normalize_machine_rules(source_strategy.get("machine_rules"))
@@ -4777,6 +4825,13 @@ def _optimize_stock_strategies_historical(
             candidate_settings = effective_settings(refined_rules, candidate_settings)
             metrics = evaluate(refined_rules, candidate_settings)["metrics"]
             adaptive_final_rule_tests += 1
+            remember_configuration(
+                source_strategy,
+                "final_rule_refinement",
+                refined_rules,
+                candidate_settings,
+                metrics,
+            )
             sized_candidates.append({
                 **local_seed,
                 "variant_index": len(variants) + adaptive_rule_tests + adaptive_final_rule_tests,
@@ -4803,6 +4858,13 @@ def _optimize_stock_strategies_historical(
             candidate_settings = effective_settings(local_seed["rules"], candidate_settings)
             metrics = evaluate(local_seed["rules"], candidate_settings)["metrics"]
             adaptive_final_execution_tests += 1
+            remember_configuration(
+                source_strategy,
+                "final_execution_refinement",
+                local_seed["rules"],
+                candidate_settings,
+                metrics,
+            )
             sized_candidates.append({
                 **local_seed,
                 "execution_index": len(execution_variants) + adaptive_final_execution_tests,
@@ -5334,6 +5396,13 @@ def optimize_stock_strategies(
                         maximum_drawdown_pct=optimizer.maximum_drawdown_pct,
                     ),
                 })
+                remember_configuration(
+                    source_strategy,
+                    "coarse_training",
+                    candidate_rules,
+                    candidate_settings,
+                    metrics,
+                )
             best_behavior_trial = max(behavior_trials, key=lambda item: item["score"])
             trained.append(
                 {
@@ -5372,6 +5441,13 @@ def optimize_stock_strategies(
                 candidate_strategy = {**source_strategy, "machine_rules": refined_rules}
                 metrics = evaluate(candidate_strategy, "training", candidate_settings)["metrics"]
                 adaptive_rule_tests += 1
+                remember_configuration(
+                    source_strategy,
+                    "adaptive_rule_refinement",
+                    refined_rules,
+                    candidate_settings,
+                    metrics,
+                )
                 trained.append({
                     "variant_index": len(variants) + adaptive_rule_tests,
                     "execution_index": 0,
@@ -5406,6 +5482,13 @@ def optimize_stock_strategies(
                 candidate_strategy = {**source_strategy, "machine_rules": candidate["rules"]}
                 result = evaluate(candidate_strategy, "training", candidate_settings)
                 metrics = result["metrics"]
+                remember_configuration(
+                    source_strategy,
+                    "execution_refinement",
+                    candidate["rules"],
+                    candidate_settings,
+                    metrics,
+                )
                 sized_candidates.append(
                     {
                         **candidate,
@@ -5523,6 +5606,13 @@ def optimize_stock_strategies(
                 )
                 + candidate["training_score"] * 0.10
             )
+            remember_configuration(
+                source_strategy,
+                "validation",
+                candidate["rules"],
+                candidate_settings,
+                validation_metrics,
+            )
             validated.append({**candidate, "validation_metrics": validation_metrics, "validation_score": validation_score})
             notify(f"Checking unseen validation sessions for {name}")
         best = max(validated, key=lambda item: (item["validation_score"], -item["variant_index"], -item["execution_index"]))
@@ -5534,6 +5624,13 @@ def optimize_stock_strategies(
         )
         stressed = evaluate({**source_strategy, "machine_rules": best["rules"]}, "validation", stressed_settings)
         stress_metrics = _period_metrics(stressed, set(validation_sessions), stressed_settings.starting_cash)
+        remember_configuration(
+            source_strategy,
+            "cost_stress",
+            best["rules"],
+            stressed_settings,
+            stress_metrics,
+        )
         notify(f"Stress-testing {name} with higher trading costs")
 
         training_metrics = best["training_metrics"]
@@ -5639,6 +5736,8 @@ def optimize_stock_strategies(
         "rule_variants_tested": sum(item["rule_variants_tested"] for item in ranked),
         "execution_variants_tested": sum(item["execution_variants_tested"] for item in ranked),
         "adaptive_refinement_tests": sum(item.get("adaptive_refinement_tests", 0) for item in ranked),
+        "unique_configurations_tested": len(configuration_history),
+        "configuration_history": configuration_history,
         "training_sessions": training_sessions,
         "validation_sessions": validation_sessions,
         "holdout_sessions": holdout_sessions,
@@ -5770,6 +5869,8 @@ def optimize_stock_timeframes(
         report["timeframe"] = interval
         for candidate in report["rankings"]:
             candidate["timeframe"] = interval
+        for record in report.get("configuration_history") or []:
+            record["timeframe"] = interval
         by_interval.append((interval, interval_rows, report))
 
     candidates = [candidate for _, _, report in by_interval for candidate in report["rankings"]]
@@ -5794,6 +5895,15 @@ def optimize_stock_timeframes(
         "variants_tested": sum(item[2]["variants_tested"] for item in by_interval),
         "rule_variants_tested": sum(item[2]["rule_variants_tested"] for item in by_interval),
         "execution_variants_tested": sum(item[2]["execution_variants_tested"] for item in by_interval),
+        "unique_configurations_tested": sum(
+            int(item[2].get("unique_configurations_tested") or 0)
+            for item in by_interval
+        ),
+        "configuration_history": [
+            record
+            for _, _, interval_report in by_interval
+            for record in interval_report.get("configuration_history") or []
+        ],
         "rankings": candidates,
         "winner": winner,
         "timeframe_comparison": [
