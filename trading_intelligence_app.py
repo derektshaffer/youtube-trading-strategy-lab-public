@@ -1330,14 +1330,54 @@ if module == "Stock Strategy Finder":
 
             if is_waiting_for_worker:
                 job_id = str(job.get("id") or "")
+                auto_attempt_key = f"til_auto_cloud_launch_attempted_{job_id}"
+                auto_result_key = f"til_auto_cloud_launch_result_{job_id}"
+
+                # Existing queued jobs should not require the user to press a
+                # second button. Try one immediate dispatch automatically when
+                # this page sees the waiting job. If GitHub rejects it, keep the
+                # job queued and show the exact permission/setup issue.
+                if job_id and not st.session_state.get(auto_attempt_key):
+                    st.session_state[auto_attempt_key] = True
+                    actions_token = setting(
+                        "GITHUB_ACTIONS_TOKEN",
+                        setting("GITHUB_BACKUP_TOKEN"),
+                    )
+                    actions_repository = setting(
+                        "GITHUB_ACTIONS_REPOSITORY",
+                        "derektshaffer/youtube-trading-strategy-lab-public",
+                    )
+                    actions_ref = setting("GITHUB_ACTIONS_REF", "main")
+                    auto_ok, auto_detail = dispatch_github_workflow(
+                        actions_repository,
+                        actions_token,
+                        workflow="distributed-stock-finder.yml",
+                        ref=actions_ref,
+                        inputs={"job_id": job_id},
+                    )
+                    st.session_state[auto_result_key] = {
+                        "ok": bool(auto_ok),
+                        "detail": str(auto_detail),
+                    }
+
+                auto_result = st.session_state.get(auto_result_key) or {}
+                if auto_result:
+                    if auto_result.get("ok"):
+                        st.info(
+                            "Immediate cloud launch was requested automatically. "
+                            "GitHub should claim this queued job shortly."
+                        )
+                    else:
+                        st.warning(str(auto_result.get("detail") or ""))
+
                 launch_key = f"til_launch_cloud_now_{job_id}"
                 if st.button(
-                    "☁ Launch cloud worker now",
+                    "☁ Retry cloud launch now",
                     key=launch_key,
                     use_container_width=True,
                     help=(
-                        "Immediately asks GitHub Actions to start the distributed worker for this exact queued job. "
-                        "The scheduled poller remains the fallback."
+                        "Retries the immediate GitHub Actions launch for this exact queued job. "
+                        "Use this after fixing token permissions or if GitHub had a transient error."
                     ),
                 ):
                     actions_token = setting(
@@ -1356,15 +1396,16 @@ if module == "Stock Strategy Finder":
                         ref=actions_ref,
                         inputs={"job_id": job_id},
                     )
+                    st.session_state[auto_result_key] = {
+                        "ok": bool(launch_ok),
+                        "detail": str(launch_detail),
+                    }
                     if launch_ok:
                         st.success(
                             "Immediate cloud launch requested. GitHub should move this job from QUEUED to RUNNING shortly."
                         )
                     else:
-                        st.warning(
-                            launch_detail
-                            + " The job is still safely queued and the scheduled worker remains the fallback."
-                        )
+                        st.warning(launch_detail)
             if index < min(3, len(active_jobs) - 1):
                 st.caption("")
 
