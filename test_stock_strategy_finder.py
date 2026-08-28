@@ -290,7 +290,10 @@ class FinderPersistenceTests(unittest.TestCase):
             report,
         )
         ledger = merged.get("stock_strategy_configuration_ledger") or []
-        self.assertEqual({item["signature"] for item in ledger}, {"winner-config", "loser-config"})
+        self.assertEqual(
+            {item["signature"] for item in ledger},
+            {"checkpoint-config", "winner-config", "loser-config"},
+        )
         child = next(
             item for item in merged["strategies"]
             if str(item.get("source_type") or "") == "stock_specific_finder"
