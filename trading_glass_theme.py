@@ -60,71 +60,192 @@ def inject_research_glass_theme() -> None:
             padding-bottom: 2.8rem !important;
         }
 
-        /* ---------- Product header ---------- */
+        /* ---------- Compact product bar ---------- */
         .til-hero {
             position: relative;
             overflow: hidden;
-            padding: 20px 22px 19px !important;
-            margin: 2px 0 24px !important;
-            border: 1px solid rgba(112,151,190,.13) !important;
-            border-radius: 15px !important;
+            display: flex;
+            align-items: center;
+            gap: 13px;
+            padding: 10px 14px !important;
+            margin: 2px 0 16px !important;
+            min-height: 54px !important;
+            border: 1px solid rgba(112,151,190,.10) !important;
+            border-radius: 12px !important;
             background:
-                linear-gradient(135deg, rgba(11,27,45,.82), rgba(7,18,31,.62)) !important;
+                linear-gradient(135deg, rgba(10,25,42,.72), rgba(7,18,31,.52)) !important;
             box-shadow:
-                inset 0 1px 0 rgba(255,255,255,.025),
-                0 10px 30px rgba(0,0,0,.11) !important;
-            backdrop-filter: blur(18px) !important;
-            -webkit-backdrop-filter: blur(18px) !important;
+                inset 0 1px 0 rgba(255,255,255,.018),
+                0 7px 22px rgba(0,0,0,.075) !important;
+            backdrop-filter: blur(16px) !important;
+            -webkit-backdrop-filter: blur(16px) !important;
         }
         .til-hero::after {
             content: "";
             position: absolute;
             left: 0;
-            top: 19px;
-            bottom: 19px;
+            top: 12px;
+            bottom: 12px;
             width: 2px;
             border-radius: 999px;
-            background: rgba(67,209,125,.78);
+            background: rgba(67,209,125,.66);
         }
         .til-kicker {
-            display: flex;
+            display: inline-flex;
             align-items: center;
-            gap: 8px;
-            margin-bottom: 7px;
-            color: #7f94ab;
-            font-size: .68rem;
+            gap: 7px;
+            margin: 0 10px 0 0;
+            color: #7489a1;
+            font-size: .63rem;
             line-height: 1;
             font-weight: 850;
-            letter-spacing: .13em;
+            letter-spacing: .12em;
             text-transform: uppercase;
+            white-space: nowrap;
         }
         .til-brand-mark {
-            width: 20px;
-            height: 20px;
+            width: 19px;
+            height: 19px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
             border-radius: 6px;
-            color: #7ae1a3;
-            border: 1px solid rgba(67,209,125,.20);
-            background: rgba(67,209,125,.055);
-            font-size: 11px;
+            color: #70d99a;
+            border: 1px solid rgba(67,209,125,.17);
+            background: rgba(67,209,125,.045);
+            font-size: 10px;
             letter-spacing: 0;
         }
         .til-title {
-            color: #f5f8fc !important;
-            font-size: 30px !important;
-            line-height: 1.12 !important;
-            font-weight: 820 !important;
-            letter-spacing: -.035em !important;
+            display: inline-block;
+            color: #eaf1f8 !important;
+            font-size: 1.04rem !important;
+            line-height: 1 !important;
+            font-weight: 760 !important;
+            letter-spacing: -.022em !important;
             text-shadow: none !important;
         }
         .til-sub {
-            color: var(--til-muted) !important;
-            font-size: .96rem !important;
-            line-height: 1.62 !important;
-            margin-top: 7px !important;
-            max-width: 1040px !important;
+            display: none !important;
+        }
+
+        /* ---------- Per-page workspace header ---------- */
+        .til-pagehead {
+            position: relative;
+            display: flex;
+            align-items: stretch;
+            justify-content: space-between;
+            gap: 24px;
+            overflow: hidden;
+            padding: 20px 22px 19px;
+            margin: 0 0 22px;
+            border: 1px solid rgba(112,151,190,.13);
+            border-radius: 14px;
+            background:
+                radial-gradient(circle at 98% 0%, rgba(67,209,125,.055), transparent 28%),
+                linear-gradient(145deg, rgba(11,27,45,.78), rgba(7,18,31,.60));
+            box-shadow:
+                inset 0 1px 0 rgba(255,255,255,.022),
+                0 10px 30px rgba(0,0,0,.09);
+        }
+        .til-pagehead::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 17px;
+            bottom: 17px;
+            width: 2px;
+            border-radius: 999px;
+            background: rgba(67,209,125,.72);
+        }
+        .til-pagehead-main {
+            min-width: 0;
+            max-width: 1000px;
+        }
+        .til-page-eyebrow {
+            color: #71879f;
+            font-size: .66rem;
+            line-height: 1;
+            font-weight: 850;
+            letter-spacing: .13em;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+        .til-page-eyebrow span {
+            color: rgba(67,209,125,.68);
+            padding: 0 4px;
+        }
+        .til-page-title {
+            color: #f1f5f9;
+            font-size: 2rem;
+            line-height: 1.06;
+            font-weight: 805;
+            letter-spacing: -.042em;
+        }
+        .til-page-sub {
+            margin-top: 8px;
+            max-width: 900px;
+            color: #91a4b9;
+            font-size: .94rem;
+            line-height: 1.54;
+        }
+        .til-page-step {
+            align-self: center;
+            flex: 0 0 auto;
+            padding-right: 4px;
+            color: rgba(132,153,176,.14);
+            font-size: 4.35rem;
+            line-height: .9;
+            font-weight: 900;
+            letter-spacing: -.08em;
+            user-select: none;
+        }
+
+        /* ---------- Sidebar product identity ---------- */
+        .til-sidebrand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 7px 10px;
+            margin: 0 0 3px;
+        }
+        .til-sidebrand-mark {
+            width: 31px;
+            height: 31px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex: 0 0 31px;
+            border-radius: 9px;
+            color: #75dda0;
+            border: 1px solid rgba(67,209,125,.18);
+            background: rgba(67,209,125,.05);
+            font-size: 14px;
+        }
+        .til-sidebrand-name {
+            color: #edf3f8;
+            font-size: .92rem;
+            line-height: 1.1;
+            font-weight: 760;
+            letter-spacing: -.018em;
+        }
+        .til-sidebrand-sub {
+            margin-top: 3px;
+            color: #71869e;
+            font-size: .68rem;
+            line-height: 1;
+            font-weight: 680;
+        }
+        .til-sideflow {
+            margin: 0 7px 20px;
+            padding: 7px 9px;
+            border: 1px solid rgba(112,151,190,.08);
+            border-radius: 8px;
+            color: #657a92;
+            background: rgba(12,28,46,.22);
+            font-size: .67rem;
+            font-weight: 650;
+            letter-spacing: .025em;
         }
 
         /* ---------- Page hierarchy ---------- */
@@ -554,11 +675,23 @@ def inject_research_glass_theme() -> None:
                 padding-left: .85rem !important;
                 padding-right: .85rem !important;
             }
-            .til-title {
-                font-size: 26px !important;
-            }
             .til-hero {
+                padding: 9px 12px !important;
+            }
+            .til-kicker {
+                display: none !important;
+            }
+            .til-title {
+                font-size: .98rem !important;
+            }
+            .til-pagehead {
                 padding: 17px 18px !important;
+            }
+            .til-page-title {
+                font-size: 1.65rem !important;
+            }
+            .til-page-step {
+                font-size: 3.3rem !important;
             }
         }
         </style>
