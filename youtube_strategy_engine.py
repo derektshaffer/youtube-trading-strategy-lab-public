@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, time, timedelta, timezone
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import base64
 import binascii
 import hashlib
@@ -6033,6 +6034,215 @@ def optimize_stock_strategies(
     return report
 
 
+_PARALLEL_OPTIMIZER_CONTEXT: dict[str, Any] = {}
+
+
+def _initialize_parallel_optimizer(
+    rows: list[dict[str, Any]],
+    symbol: str,
+    settings_payload: dict[str, Any],
+    optimizer_payload: dict[str, Any],
+) -> None:
+    global _PARALLEL_OPTIMIZER_CONTEXT
+    _PARALLEL_OPTIMIZER_CONTEXT = {
+        "rows": rows,
+        "symbol": symbol,
+        "settings": settings_payload,
+        "optimizer": optimizer_payload,
+    }
+
+
+def _parallel_optimize_family(strategy: dict[str, Any]) -> dict[str, Any]:
+    context = _PARALLEL_OPTIMIZER_CONTEXT
+    if not context:
+        raise RuntimeError("Parallel optimizer worker was not initialized.")
+    return optimize_stock_strategies(
+        context["rows"],
+        [strategy],
+        context["symbol"],
+        BacktestSettings(**context["settings"]),
+        OptimizationSettings(**context["optimizer"]),
+        finalize_holdout=False,
+    )
+
+
+def _merge_parallel_optimization_reports(
+    reports: list[dict[str, Any]],
+    *,
+    parallel_workers: int,
+) -> dict[str, Any]:
+    if not reports:
+        raise AppError("Parallel optimization returned no strategy-family reports.")
+
+    rankings = [
+        dict(candidate)
+        for report in reports
+        for candidate in report.get("rankings") or []
+        if isinstance(candidate, dict)
+    ]
+    if not rankings:
+        raise AppError("Parallel optimization produced no ranked strategy candidates.")
+    rankings.sort(
+        key=lambda item: (
+            item["status"] == "VALIDATED",
+            item["adequate_sample"],
+            item["validation_metrics"]["net_pnl"] > 0,
+            item["score"],
+        ),
+        reverse=True,
+    )
+    winner = rankings[0]
+
+    configuration_history = [
+        dict(record)
+        for report in reports
+        for record in report.get("configuration_history") or []
+        if isinstance(record, dict)
+    ]
+    base = reports[0]
+    warnings: list[str] = []
+    for report in reports:
+        for note in report.get("warnings") or []:
+            text = str(note or "")
+            if text.startswith("Short optimization window:"):
+                warnings.append(text)
+    if not winner["adequate_sample"]:
+        warnings.append("The highest-ranked setup has too few trades to support a reliable conclusion.")
+    if winner["validation_metrics"]["net_pnl"] <= 0:
+        warnings.append("No tested strategy earned a positive simulated result in the separate validation period.")
+    if winner["stress_metrics"]["net_pnl"] <= 0 and winner["validation_metrics"]["net_pnl"] > 0:
+        warnings.append("The selected setup becomes unprofitable when estimated spread and slippage increase.")
+    optimizer_settings = base.get("optimization_settings") or {}
+    maximum_drawdown = safe_float(optimizer_settings.get("maximum_drawdown_pct"), 100.0) or 100.0
+    if winner["validation_metrics"]["max_drawdown_pct"] > maximum_drawdown:
+        warnings.append("The selected setup exceeded your maximum acceptable drawdown during validation.")
+
+    fingerprint_material = "|".join(
+        sorted(str(report.get("resume_fingerprint") or "") for report in reports)
+    )
+    return {
+        **base,
+        "generated_at": isoformat_utc(utc_now()),
+        "strategies_tested": len({str(item.get("source_strategy_id") or "") for item in rankings}),
+        "resumed_strategy_count": 0,
+        "resume_fingerprint": "parallel-" + hashlib.sha256(
+            fingerprint_material.encode("utf-8")
+        ).hexdigest()[:16],
+        "variants_tested": sum(int(report.get("variants_tested") or 0) for report in reports),
+        "rule_variants_tested": sum(int(report.get("rule_variants_tested") or 0) for report in reports),
+        "execution_variants_tested": sum(int(report.get("execution_variants_tested") or 0) for report in reports),
+        "adaptive_refinement_tests": sum(int(report.get("adaptive_refinement_tests") or 0) for report in reports),
+        "unique_configurations_tested": sum(
+            int(report.get("unique_configurations_tested") or 0)
+            for report in reports
+        ),
+        "configuration_history": configuration_history,
+        "rankings": rankings,
+        "winner": winner,
+        "winning_backtest": {},
+        "warnings": list(dict.fromkeys(warnings)),
+        "parallel_workers": max(1, int(parallel_workers)),
+        "parallelized_by": "strategy_family",
+    }
+
+
+def optimize_stock_strategies_parallel(
+    rows: list[dict[str, Any]],
+    strategies: list[dict[str, Any]],
+    symbol: str,
+    backtest_settings: BacktestSettings | None = None,
+    optimization_settings: OptimizationSettings | None = None,
+    *,
+    max_workers: int = 2,
+    progress: Callable[[int, int, str], None] | None = None,
+    finalize_holdout: bool = True,
+) -> dict[str, Any]:
+    """Optimize independent strategy families in separate CPU processes.
+
+    This preserves the full rule/execution search inside each family. It speeds
+    the search by distributing families across CPU cores rather than pruning
+    combinations. Streamlit's resumable path remains sequential; cloud workers
+    use this path because they can run uninterrupted outside the browser session.
+    """
+    settings = backtest_settings or BacktestSettings()
+    settings.validate()
+    optimizer = optimization_settings or OptimizationSettings()
+    optimizer.validate()
+    workers = max(1, min(int(max_workers or 1), 8))
+    if workers <= 1 or len(strategies) <= 1 or optimizer.selection_mode == "historical_pnl":
+        report = optimize_stock_strategies(
+            rows,
+            strategies,
+            symbol,
+            settings,
+            optimizer,
+            progress=progress,
+            finalize_holdout=finalize_holdout,
+        )
+        report["parallel_workers"] = 1
+        report["parallelized_by"] = "none"
+        return report
+
+    tickers = parse_symbols(symbol)
+    if len(tickers) != 1:
+        raise AppError("Enter exactly one valid stock ticker to optimize.")
+    target_symbol = tickers[0]
+    eligible: list[dict[str, Any]] = []
+    for strategy in strategies:
+        if not isinstance(strategy, dict) or not strategy.get("id"):
+            continue
+        if str(strategy.get("direction", "long")).lower() not in {"long", "both"}:
+            continue
+        locked = str(strategy.get("optimized_for_symbol") or "").strip().upper()
+        if locked and locked != target_symbol:
+            continue
+        eligible.append(dict(strategy))
+    if not eligible:
+        raise AppError("No saved long strategies are available for this stock.")
+
+    workers = min(workers, len(eligible), max(1, os.cpu_count() or 1))
+    settings_payload = asdict(settings)
+    optimizer_payload = asdict(optimizer)
+    reports: list[dict[str, Any]] = []
+    completed = 0
+    if progress:
+        progress(0, len(eligible), f"Starting {workers} parallel strategy-family workers")
+    with ProcessPoolExecutor(
+        max_workers=workers,
+        initializer=_initialize_parallel_optimizer,
+        initargs=(rows, target_symbol, settings_payload, optimizer_payload),
+    ) as executor:
+        future_to_strategy = {
+            executor.submit(_parallel_optimize_family, strategy): strategy
+            for strategy in eligible
+        }
+        for future in as_completed(future_to_strategy):
+            strategy = future_to_strategy[future]
+            name = str(strategy.get("name") or "Unnamed strategy")
+            reports.append(future.result())
+            completed += 1
+            if progress:
+                progress(
+                    completed,
+                    len(eligible),
+                    f"Parallel family complete: {name} ({completed}/{len(eligible)})",
+                )
+
+    combined = _merge_parallel_optimization_reports(
+        reports,
+        parallel_workers=workers,
+    )
+    if finalize_holdout:
+        finalize_stock_optimization(combined, rows, eligible)
+        if progress:
+            progress(
+                len(eligible),
+                len(eligible),
+                "Parallel family search complete · final untouched holdout finished",
+            )
+    return combined
+
+
 def behavior_ab_comparison(
     rows: list[dict[str, Any]],
     strategy: dict[str, Any],
@@ -6111,6 +6321,7 @@ def optimize_stock_timeframes(
     progress: Callable[[int, int, str], None] | None = None,
     resume_state: dict[str, Any] | None = None,
     checkpoint: Callable[[dict[str, Any]], None] | None = None,
+    parallel_workers: int = 1,
 ) -> dict[str, Any]:
     """Choose candle size using the selected optimization objective."""
     settings = backtest_settings or BacktestSettings()
@@ -6151,17 +6362,29 @@ def optimize_stock_timeframes(
                     }
                 )
 
-        report = optimize_stock_strategies(
-            interval_rows,
-            strategies,
-            symbol,
-            settings,
-            optimizer,
-            progress=interval_progress,
-            finalize_holdout=False,
-            resume_state=resume_timeframes.get(interval),
-            checkpoint=interval_checkpoint,
-        )
+        if int(parallel_workers or 1) > 1 and not resume_timeframes.get(interval):
+            report = optimize_stock_strategies_parallel(
+                interval_rows,
+                strategies,
+                symbol,
+                settings,
+                optimizer,
+                max_workers=int(parallel_workers),
+                progress=interval_progress,
+                finalize_holdout=False,
+            )
+        else:
+            report = optimize_stock_strategies(
+                interval_rows,
+                strategies,
+                symbol,
+                settings,
+                optimizer,
+                progress=interval_progress,
+                finalize_holdout=False,
+                resume_state=resume_timeframes.get(interval),
+                checkpoint=interval_checkpoint,
+            )
         report["timeframe"] = interval
         for candidate in report["rankings"]:
             candidate["timeframe"] = interval
