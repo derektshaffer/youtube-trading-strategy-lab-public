@@ -85,6 +85,16 @@ from trading_research_orchestrator import (
     research_queue_status,
     seed_continuous_research_cycle,
 )
+from trading_system_health import (
+    CLOUD_SMOKE_WORKFLOW,
+    cloud_job_display_state,
+    configuration_checks,
+    latest_workflow_run,
+    overall_system_state,
+    probe_github_workflow,
+    subsystem_ready,
+    workflow_run_display_state,
+)
 from trading_strategy_dna import (
     DNA_DIMENSIONS,
     DNA_LABELS,
@@ -801,6 +811,7 @@ WORKSPACE_SECTIONS = [
     "Catalyst Intelligence",
     "Stock Analyzer",
     "Live / Paper",
+    "System Health",
 ]
 
 WORKSPACE_DISPLAY_LABELS = {
@@ -818,6 +829,7 @@ WORKSPACE_DISPLAY_LABELS = {
     "Catalyst Intelligence": "11. Catalyst Intelligence",
     "Stock Analyzer": "12. Stock Analyzer",
     "Live / Paper": "13. Paper & Live Trading",
+    "System Health": "14. System Health",
 }
 WORKSPACE_DISPLAY_TO_INTERNAL = {
     label: internal
@@ -909,6 +921,12 @@ WORKSPACE_PAGE_META = {
         "title": "Paper & Live Trading",
         "subtitle": "Deploy validated rules into paper or live workflows while keeping research and execution clearly separated.",
     },
+    "System Health": {
+        "step": "14",
+        "group": "Operations",
+        "title": "System Health",
+        "subtitle": "Verify storage, market data, AI, GitHub Actions, and cloud workers before trusting a long-running research job.",
+    },
 }
 
 WORKSPACE_NAV_GROUPS = [
@@ -923,6 +941,7 @@ WORKSPACE_NAV_GROUPS = [
         ["Universe Research", "Market Discovery", "Catalyst Intelligence", "Stock Analyzer"],
     ),
     ("EXECUTION", ["Live / Paper"]),
+    ("OPERATIONS", ["System Health"]),
 ]
 
 WORKSPACE_NAV_ICONS = {
@@ -940,6 +959,7 @@ WORKSPACE_NAV_ICONS = {
     "Catalyst Intelligence": "ϟ",
     "Stock Analyzer": "⌕",
     "Live / Paper": "↗",
+    "System Health": "⚙",
 }
 
 
@@ -1012,6 +1032,23 @@ if module not in WORKSPACE_SECTIONS:
     module = "Overview"
     st.session_state["til_workspace_section"] = module
 
+system_config_checks = configuration_checks(
+    setting,
+    backup_repository=resolved_backup_repository(),
+)
+system_config_summary = overall_system_state(system_config_checks)
+stock_cloud_ready, stock_cloud_blockers = subsystem_ready(
+    system_config_checks,
+    "stock_finder",
+)
+actions_token_setting = setting("GITHUB_ACTIONS_TOKEN")
+actions_repository_setting = setting(
+    "GITHUB_ACTIONS_REPOSITORY",
+    "derektshaffer/youtube-trading-strategy-lab-public",
+)
+actions_ref_setting = setting("GITHUB_ACTIONS_REF", "main")
+system_status_word = str(system_config_summary.get("state") or "DEGRADED")
+
 with st.sidebar:
     st.markdown(
         """
@@ -1079,16 +1116,17 @@ with st.sidebar:
                 st.session_state["til_workspace_section"] = section
                 st.rerun()
 
+    system_status_color = "#47dda0" if system_status_word == "READY" else "#f3bd58"
     st.markdown(
-        """
+        f"""
         <div class="til-side-status">
           <div class="til-side-status-row">
             <div>
               <div class="til-side-status-label">RESEARCH SYSTEM</div>
-              <div class="til-side-status-value"><span class="til-live-dot"></span> READY</div>
+              <div class="til-side-status-value"><span class="til-live-dot" style="background:{system_status_color};"></span> {html.escape(system_status_word)}</div>
             </div>
             <svg class="til-mini-spark" viewBox="0 0 90 28" aria-hidden="true">
-              <polyline points="1,22 15,18 28,21 40,12 53,16 67,8 89,11" fill="none" stroke="#47dda0" stroke-width="2"/>
+              <polyline points="1,22 15,18 28,21 40,12 53,16 67,8 89,11" fill="none" stroke="{system_status_color}" stroke-width="2"/>
               <polyline points="1,26 15,24 28,25 40,19 53,21 67,15 89,16" fill="none" stroke="#4bcfff" stroke-opacity=".35" stroke-width="1"/>
             </svg>
           </div>
@@ -1116,9 +1154,10 @@ managed_strategies = canonical_strategies or source_strategies
 
 top_gap, top_search, top_actions = st.columns([2.55, 1.35, .72], vertical_alignment="center")
 with top_gap:
+    top_status_label = "ONLINE" if system_status_word == "READY" else "DEGRADED"
     st.markdown(
         '<div class="til-top-status"><span class="til-top-status-dot"></span>'
-        'AI RESEARCH SYSTEM <strong>ONLINE</strong></div>',
+        f'AI RESEARCH SYSTEM <strong>{html.escape(top_status_label)}</strong></div>',
         unsafe_allow_html=True,
     )
 with top_search:
