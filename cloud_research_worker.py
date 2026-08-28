@@ -296,7 +296,7 @@ def execute_job(
 
         parallel_workers = max(
             1,
-            min(8, int(env("RESEARCH_PARALLEL_WORKERS", "2") or 2)),
+            min(8, int(env("RESEARCH_PARALLEL_WORKERS", "4") or 4)),
         )
         # Resume uses the sequential checkpoint-aware path. A fresh cloud run can
         # spread independent strategy families across CPU cores.
