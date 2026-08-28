@@ -1397,13 +1397,15 @@ elif module == "Strategy DNA":
         "Source agreement and historical validation are deliberately shown as separate kinds of evidence."
     )
 
-    if not strategies:
+    st.info(
+        "Advanced audit view: the AI family manager uses this DNA automatically. You do not need to "
+        "manually cluster or consolidate strategies here unless you want to inspect how the grouping works."
+    )
+    if not source_strategies:
         st.info("Add book, document, or YouTube strategies before building the Strategy DNA map.")
     else:
         dna_strategies = []
-        for item in strategies:
-            if is_synthetic_strategy(item):
-                continue
+        for item in source_strategies:
             enriched = dict(item)
             enriched["strategy_dna"] = infer_strategy_dna(enriched)
             dna_strategies.append(enriched)
