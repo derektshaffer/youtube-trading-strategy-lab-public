@@ -186,6 +186,13 @@ def cloud_job_display_state(
         if queued_at is not None
         else 0.0
     )
+    if bool(launch.get("ok")):
+        return {
+            "state": "STARTING",
+            "severity": "info",
+            "detail": "GitHub accepted the launch request; waiting for the worker to claim the saved job.",
+        }
+
     if not payload.get("distributed_run_id") and age_minutes >= max(5, int(stalled_after_minutes)):
         return {
             "state": "STALLED",
@@ -194,13 +201,6 @@ def cloud_job_display_state(
                 f"No cloud worker has claimed this job after about {age_minutes:.0f} minutes. "
                 "Do not assume compute is running; check System Health."
             ),
-        }
-
-    if bool(launch.get("ok")):
-        return {
-            "state": "STARTING",
-            "severity": "info",
-            "detail": "GitHub accepted the launch request; waiting for the worker to claim the saved job.",
         }
 
     if launch and not bool(launch.get("ok")):
