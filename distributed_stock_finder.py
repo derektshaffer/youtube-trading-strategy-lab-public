@@ -333,12 +333,67 @@ def _update_parent_distribution(
                         "distributed_run_id": run_id,
                         "distributed_shards_total": int(shard_count),
                         "distributed_mode": True,
+                        "distributed_stage": "distributed_optimization",
+                        "distributed_progress": 0.10,
+                        "distributed_message": f"Prepared {shard_count} cloud shards; waiting for optimization workers.",
+                        "distributed_shards_completed": [],
                         "research_start": start.isoformat(),
                         "research_end": end.isoformat(),
                     }
                 )
                 item["payload"] = payload
                 item["updated_at"] = now_text
+            queue.append(item)
+        data["research_queue"] = queue
+        return data
+
+    mutate_remote_library(mutation)
+
+
+def _update_parent_cloud_progress(
+    job_id: str,
+    *,
+    run_id: str,
+    stage: str,
+    progress: float,
+    message: str,
+    shard_index: int | None = None,
+    shard_label: str = "",
+) -> None:
+    """Persist coarse distributed progress without coupling the UI to Actions logs."""
+    def mutation(data: dict[str, Any]) -> dict[str, Any]:
+        queue: list[dict[str, Any]] = []
+        now_text = isoformat_utc(utc_now())
+        for raw in data.get("research_queue") or []:
+            item = dict(raw)
+            if str(item.get("id") or "") != job_id:
+                queue.append(item)
+                continue
+            payload = dict(item.get("payload") or {})
+            if str(payload.get("distributed_run_id") or "") not in {"", run_id}:
+                queue.append(item)
+                continue
+            completed = {
+                int(value)
+                for value in payload.get("distributed_shards_completed") or []
+                if str(value).lstrip("-").isdigit()
+            }
+            if shard_index is not None:
+                completed.add(int(shard_index))
+            payload.update(
+                {
+                    "distributed_run_id": run_id,
+                    "distributed_stage": str(stage),
+                    "distributed_progress": max(0.0, min(1.0, float(progress))),
+                    "distributed_message": str(message)[:500],
+                    "distributed_shards_completed": sorted(completed),
+                    "distributed_last_update": now_text,
+                }
+            )
+            if shard_label:
+                payload["distributed_last_shard"] = str(shard_label)
+            item["payload"] = payload
+            item["updated_at"] = now_text
             queue.append(item)
         data["research_queue"] = queue
         return data
@@ -609,6 +664,41 @@ def command_shard(run_id: str, index: int) -> int:
             "report": report,
         },
     )
+    parent_job_id = str(plan.get("parent_job_id") or "")
+    total_shards = max(1, len(plan.get("shards") or []))
+    if parent_job_id:
+        # Each shard reports only at completion. Concurrent writes are reconciled
+        # by mutate_remote_library, so the durable completed-shard set never
+        # loses another worker's progress.
+        current_library = read_remote_library()
+        parent = next(
+            (
+                item
+                for item in current_library.get("research_queue") or []
+                if isinstance(item, dict)
+                and str(item.get("id") or "") == parent_job_id
+            ),
+            {},
+        )
+        parent_payload = dict((parent or {}).get("payload") or {})
+        already_done = {
+            int(value)
+            for value in parent_payload.get("distributed_shards_completed") or []
+            if str(value).lstrip("-").isdigit()
+        }
+        projected_done = min(total_shards, len(already_done | {int(index)}))
+        shard_progress = 0.10 + 0.75 * (projected_done / total_shards)
+        _update_parent_cloud_progress(
+            parent_job_id,
+            run_id=run_id,
+            stage="distributed_optimization",
+            progress=shard_progress,
+            message=(
+                f"Cloud optimization: {projected_done} of {total_shards} shards complete"
+            ),
+            shard_index=int(index),
+            shard_label=str(spec.get("label") or f"shard-{index}"),
+        )
     print(
         f"Completed shard {index}: {timeframe}, {len(selected)} families, "
         f"{int(report.get('unique_configurations_tested') or 0):,} configurations.",
@@ -623,6 +713,14 @@ def command_aggregate(run_id: str) -> int:
     job_id = str(plan.get("parent_job_id") or "")
     specs = [item for item in plan.get("shards") or [] if isinstance(item, dict)]
     try:
+        if job_id:
+            _update_parent_cloud_progress(
+                job_id,
+                run_id=run_id,
+                stage="final_holdout",
+                progress=0.88,
+                message="All cloud shards finished; combining results and running the untouched holdout.",
+            )
         shard_payloads: list[dict[str, Any]] = []
         missing: list[int] = []
         for spec in specs:
@@ -707,6 +805,26 @@ def command_aggregate(run_id: str) -> int:
             default=0.0,
         )
 
+        def final_progress(completed: int, total: int, message: str) -> None:
+            if not job_id:
+                return
+            if completed >= 965:
+                stage = "parameter_stability"
+                fraction = 0.98
+            elif completed >= 910:
+                stage = "walk_forward"
+                fraction = 0.94
+            else:
+                stage = "final_validation"
+                fraction = 0.91
+            _update_parent_cloud_progress(
+                job_id,
+                run_id=run_id,
+                stage=stage,
+                progress=fraction,
+                message=message,
+            )
+
         report = complete_stock_strategy_finder_from_optimization(
             one_minute_rows,
             selected,
@@ -717,6 +835,7 @@ def command_aggregate(run_id: str) -> int:
             settings,
             optimizer,
             optimization,
+            progress=final_progress,
             optimization_seconds=slowest_shard_seconds,
             parallel_workers=len(shard_payloads),
             strategies_considered_count=strategies_considered_count,
