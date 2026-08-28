@@ -1327,6 +1327,44 @@ if module == "Stock Strategy Finder":
                 ),
                 unsafe_allow_html=True,
             )
+
+            if is_waiting_for_worker:
+                job_id = str(job.get("id") or "")
+                launch_key = f"til_launch_cloud_now_{job_id}"
+                if st.button(
+                    "☁ Launch cloud worker now",
+                    key=launch_key,
+                    use_container_width=True,
+                    help=(
+                        "Immediately asks GitHub Actions to start the distributed worker for this exact queued job. "
+                        "The scheduled poller remains the fallback."
+                    ),
+                ):
+                    actions_token = setting(
+                        "GITHUB_ACTIONS_TOKEN",
+                        setting("GITHUB_BACKUP_TOKEN"),
+                    )
+                    actions_repository = setting(
+                        "GITHUB_ACTIONS_REPOSITORY",
+                        "derektshaffer/youtube-trading-strategy-lab-public",
+                    )
+                    actions_ref = setting("GITHUB_ACTIONS_REF", "main")
+                    launch_ok, launch_detail = dispatch_github_workflow(
+                        actions_repository,
+                        actions_token,
+                        workflow="distributed-stock-finder.yml",
+                        ref=actions_ref,
+                        inputs={"job_id": job_id},
+                    )
+                    if launch_ok:
+                        st.success(
+                            "Immediate cloud launch requested. GitHub should move this job from QUEUED to RUNNING shortly."
+                        )
+                    else:
+                        st.warning(
+                            launch_detail
+                            + " The job is still safely queued and the scheduled worker remains the fallback."
+                        )
             if index < min(3, len(active_jobs) - 1):
                 st.caption("")
 
