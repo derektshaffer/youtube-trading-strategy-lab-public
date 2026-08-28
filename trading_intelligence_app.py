@@ -2244,6 +2244,144 @@ elif module == "Overview":
     )
 
 
+elif module == "System Health":
+    st.caption(
+        "This page separates **configured** from **proven working**. A saved queue entry is not treated as proof that compute started."
+    )
+
+    summary_cols = st.columns(4)
+    summary_cols[0].metric(
+        "Configuration",
+        system_status_word,
+        f"{int(system_config_summary.get('ready') or 0)}/{int(system_config_summary.get('total') or 0)} required checks ready",
+        delta_color="off",
+    )
+    summary_cols[1].metric(
+        "Cloud launcher",
+        "CONFIGURED" if actions_token_setting else "MISSING",
+        "dedicated Actions token" if actions_token_setting else "GITHUB_ACTIONS_TOKEN",
+        delta_color="off",
+    )
+    research_system = dict(library.get("research_system") or {})
+    summary_cols[2].metric(
+        "Worker heartbeat",
+        "SEEN" if research_system.get("last_worker_at") else "NOT SEEN",
+        str(research_system.get("last_worker_at") or "No completed worker heartbeat saved"),
+        delta_color="off",
+    )
+    active_health_jobs = [
+        item
+        for item in library.get("research_queue") or []
+        if isinstance(item, dict)
+        and str(item.get("status") or "") in {"queued", "running", "retry"}
+    ]
+    summary_cols[3].metric(
+        "Active research jobs",
+        len(active_health_jobs),
+        "queued / running / retry",
+        delta_color="off",
+    )
+
+    st.markdown("### Configuration checks")
+    for check in system_config_checks:
+        status = str(check.get("status") or "blocked").upper()
+        detail = str(check.get("detail") or "")
+        if status == "READY":
+            st.success(f"**{check.get('name')} · READY** — {detail}")
+        else:
+            st.error(f"**{check.get('name')} · {status}** — {detail}")
+
+    st.markdown("### GitHub Actions live probe")
+    if actions_token_setting:
+        with st.spinner("Checking workflow access…"):
+            workflow_probe = probe_github_workflow(
+                actions_repository_setting,
+                actions_token_setting,
+                workflow="distributed-stock-finder.yml",
+            )
+        probe_state = str(workflow_probe.get("state") or "UNKNOWN")
+        probe_detail = str(workflow_probe.get("detail") or "")
+        if probe_state == "READY":
+            st.success(f"**Actions workflow · READY** — {probe_detail}")
+        elif probe_state == "BLOCKED":
+            st.error(f"**Actions workflow · BLOCKED** — {probe_detail}")
+        else:
+            st.warning(f"**Actions workflow · {probe_state}** — {probe_detail}")
+    else:
+        st.error(
+            "**Actions workflow · BLOCKED** — Add the Streamlit secret GITHUB_ACTIONS_TOKEN "
+            "before cloud launches can be tested."
+        )
+
+    st.markdown("### End-to-end cloud smoke test")
+    st.write(
+        "This launches a tiny GitHub Actions diagnostic. It verifies the runner can start, "
+        "read **and write** the private backup, authenticate to Alpaca, and authenticate to Gemini. "
+        "It does not place a trade or run a strategy search."
+    )
+    smoke_clicked = st.button(
+        "☁ Run end-to-end cloud smoke test",
+        type="primary",
+        use_container_width=True,
+        disabled=not bool(actions_token_setting),
+        key="til_run_cloud_smoke_test",
+    )
+    if smoke_clicked:
+        smoke_ok, smoke_detail = dispatch_github_workflow(
+            actions_repository_setting,
+            actions_token_setting,
+            workflow=CLOUD_SMOKE_WORKFLOW,
+            ref=actions_ref_setting,
+            inputs={"requested_from": "streamlit-system-health"},
+        )
+        if smoke_ok:
+            st.session_state["til_cloud_smoke_requested"] = True
+            st.success(
+                "Smoke test launch accepted. The live status below refreshes automatically; "
+                "do not treat it as passed until it explicitly says PASS."
+            )
+        else:
+            st.error(smoke_detail)
+
+    @st.fragment(run_every="15s")
+    def render_smoke_status() -> None:
+        if not actions_token_setting:
+            return
+        latest = latest_workflow_run(
+            actions_repository_setting,
+            actions_token_setting,
+            workflow=CLOUD_SMOKE_WORKFLOW,
+        )
+        display = workflow_run_display_state(latest)
+        state = str(display.get("state") or "UNKNOWN")
+        detail = str(display.get("detail") or "")
+        if state == "PASS":
+            st.success(f"**Latest smoke test · PASS** — {detail}")
+        elif state == "FAIL":
+            st.error(f"**Latest smoke test · FAIL** — {detail}")
+        elif state in {"RUNNING", "QUEUED"}:
+            st.info(f"**Latest smoke test · {state}** — {detail}")
+        else:
+            st.warning(f"**Latest smoke test · {state}** — {detail}")
+        if latest and latest.get("html_url"):
+            st.link_button(
+                "Open smoke-test run details",
+                str(latest.get("html_url")),
+                use_container_width=True,
+            )
+
+    render_smoke_status()
+
+    st.markdown("### Reliability rules now enforced")
+    st.write(
+        "• The app no longer displays a hard-coded READY/ONLINE status.\n"
+        "• Distributed Finder jobs older than 15 minutes without a worker claim are labeled STALLED.\n"
+        "• New distributed jobs are disabled when required cloud configuration is missing.\n"
+        "• The cloud worker and distributed Finder use the Trading Intelligence durable queue, not the legacy library path.\n"
+        "• The live smoke test proves the external worker path instead of assuming it works."
+    )
+
+
 elif module == "Knowledge Sources":
     total_pages = sum(_source_page_count(item) for item in sources)
     completed_sources = sum(1 for item in sources if _source_is_complete(item))
