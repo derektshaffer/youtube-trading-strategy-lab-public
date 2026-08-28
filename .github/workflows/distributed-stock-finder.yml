@@ -27,6 +27,7 @@ jobs:
       has_job: ${{ steps.meta.outputs.has_job }}
       run_id: ${{ steps.meta.outputs.run_id }}
       matrix: ${{ steps.meta.outputs.matrix }}
+      needs_shards: ${{ steps.meta.outputs.needs_shards }}
       symbol: ${{ steps.meta.outputs.symbol }}
       profile: ${{ steps.meta.outputs.profile }}
     env:
@@ -81,12 +82,15 @@ jobs:
           print("run_id=" + str(meta.get("run_id") or ""))
           print("symbol=" + str(meta.get("symbol") or ""))
           print("profile=" + str(meta.get("profile") or ""))
+          print("needs_shards=" + str(bool(meta.get("needs_shards"))).lower())
           print("matrix=" + matrix)
           PY
 
   shard:
     needs: prepare
-    if: needs.prepare.outputs.has_job == 'true'
+    if: >-
+      needs.prepare.outputs.has_job == 'true' &&
+      needs.prepare.outputs.needs_shards == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 330
     strategy:

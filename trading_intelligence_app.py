@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import html
-import importlib
 import inspect
 import os
 import time
@@ -16,44 +15,25 @@ import pandas as pd
 import streamlit as st
 
 from app_access import require_app_access
+from finder_report_persistence import latest_completed_finder_report
+from hot_deploy_imports import load_current_source_module
+from trading_app_runtime import market_client, setting
 from trading_glass_theme import inject_research_glass_theme
-from live_strategy_runner_page import market_client, setting
 
-# Streamlit hot-reloads the page script but can keep already-imported helper
-# modules alive in sys.modules. Finder persistence/resume added new public
-# helpers and optimizer parameters, so a hot deploy could otherwise pair the
-# new page with the previous in-memory helper module and raise ImportError.
-# Reload only when the loaded module is demonstrably stale.
+# Do not reload shared modules in place during a Streamlit rerun. Doing so can
+# expose partially initialized modules to the file watcher and other pages.
 import stock_strategy_finder as _stock_strategy_finder
-import youtube_strategy_engine as _youtube_strategy_engine
 
-_finder_required_exports = (
-    "SEARCH_PROFILES",
-    "estimate_search_work",
-    "latest_completed_finder_report",
-    "latest_finder_checkpoint",
-    "merge_finder_checkpoint_into_library",
-    "merge_finder_report_into_library",
-    "run_stock_strategy_finder",
-    "search_profile",
-    "selected_strategies_for_profile",
-)
-_engine_has_resume = (
-    "resume_state"
-    in inspect.signature(_youtube_strategy_engine.optimize_stock_timeframes).parameters
-)
-_finder_has_exports = all(
-    hasattr(_stock_strategy_finder, name)
-    for name in _finder_required_exports
-)
-if not _engine_has_resume:
-    _youtube_strategy_engine = importlib.reload(_youtube_strategy_engine)
-if not _finder_has_exports or not _engine_has_resume:
-    _stock_strategy_finder = importlib.reload(_stock_strategy_finder)
+_finder_run_parameters = inspect.signature(
+    _stock_strategy_finder.run_stock_strategy_finder
+).parameters
+_finder_supports_resume = {
+    "resume_state",
+    "checkpoint",
+}.issubset(_finder_run_parameters)
 
 SEARCH_PROFILES = _stock_strategy_finder.SEARCH_PROFILES
 estimate_search_work = _stock_strategy_finder.estimate_search_work
-latest_completed_finder_report = _stock_strategy_finder.latest_completed_finder_report
 latest_finder_checkpoint = _stock_strategy_finder.latest_finder_checkpoint
 merge_finder_checkpoint_into_library = _stock_strategy_finder.merge_finder_checkpoint_into_library
 merge_finder_report_into_library = _stock_strategy_finder.merge_finder_report_into_library
@@ -1352,6 +1332,24 @@ if module == "Stock Strategy Finder":
             )
             stage = str(payload.get("distributed_stage") or operational_state).replace("_", " ").title()
             message = str(payload.get("distributed_message") or "").strip()
+            failed_step = str(
+                payload.get("distributed_failed_stage")
+                or job.get("failure_step")
+                or ""
+            ).replace("_", " ").strip()
+            last_error = str(
+                payload.get("distributed_last_error")
+                or job.get("last_error")
+                or ""
+            ).strip()
+            next_attempt = str(job.get("next_attempt_at") or "").strip()
+            if durable_status == "RETRY" and last_error:
+                message = (
+                    f"Retrying after {failed_step or 'the current step'} failed: {last_error}"
+                    + (f" Next attempt: {next_attempt}." if next_attempt else "")
+                )
+            elif not message:
+                message = str(job.get("status_message") or "").strip()
             progress_value = safe_float(payload.get("distributed_progress"), None)
             if progress_value is None:
                 if is_waiting_for_worker:
@@ -1572,7 +1570,8 @@ if module == "Stock Strategy Finder":
         if isinstance(state, dict)
     )
     checkpoint_resumable = (
-        checkpoint_status in {"running", "failed", "interrupted"}
+        _finder_supports_resume
+        and checkpoint_status in {"running", "failed", "interrupted"}
         and bool(checkpoint_timeframes)
         and checkpoint_family_passes > 0
     )
@@ -1588,6 +1587,12 @@ if module == "Stock Strategy Finder":
                 '</div></div>'
             ),
             unsafe_allow_html=True,
+        )
+    elif checkpoint_timeframes and not _finder_supports_resume:
+        st.warning(
+            "A saved local Finder checkpoint is intact, but this Streamlit process still has the "
+            "pre-resume helper loaded from before the deploy. Refresh after the app process restarts; "
+            "the checkpoint has not been discarded."
         )
     elif checkpoint_status in {"running", "interrupted"}:
         st.warning(
@@ -1723,16 +1728,14 @@ if module == "Stock Strategy Finder":
                 max_attempts=2,
             )
         except AppError as exc:
-            # Streamlit can hot-reload this page while keeping an older imported
-            # helper module in memory. If that stale module predates stock_finder
-            # queue support, reload the helper once and retry instead of crashing
-            # the whole page with an "Unsupported research job type" traceback.
+            # Streamlit can hot-deploy this page while an older helper remains
+            # cached. Load the current source under a private versioned name;
+            # never replace a shared sys.modules entry during a page rerun.
             if "Unsupported research job type" not in str(exc):
                 raise
-            import importlib
-            import trading_research_orchestrator as _research_orchestrator
-
-            _research_orchestrator = importlib.reload(_research_orchestrator)
+            _research_orchestrator = load_current_source_module(
+                "trading_research_orchestrator"
+            )
             queued_library, queued_job = _research_orchestrator.enqueue_research_job(
                 load_library(),
                 "stock_finder",
@@ -1990,14 +1993,22 @@ if module == "Stock Strategy Finder":
                         finder_status.write(f"Checkpoint warning: {checkpoint_exc}")
                         checkpoint_save_warning[0] = True
 
+            finder_run_kwargs: dict[str, Any] = {
+                "profile_name": finder_profile.name,
+                "progress": on_finder_progress,
+            }
+            if _finder_supports_resume:
+                finder_run_kwargs.update(
+                    {
+                        "resume_state": resume_engine_state or None,
+                        "checkpoint": on_finder_engine_checkpoint,
+                    }
+                )
             finder_report = run_stock_strategy_finder(
                 finder_rows,
                 strategies,
                 finder_symbol,
-                profile_name=finder_profile.name,
-                progress=on_finder_progress,
-                resume_state=resume_engine_state or None,
-                checkpoint=on_finder_engine_checkpoint,
+                **finder_run_kwargs,
             )
 
             # Flush the newest optimizer state/loser ledger before writing the final result.
