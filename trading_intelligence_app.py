@@ -156,6 +156,48 @@ st.markdown(
     .til-card strong {font-size:1.03rem;}
     .muted {color:#91a2b7;}
 
+    .til-finder-notice {
+        border:1px solid transparent;
+        border-radius:11px;
+        padding:17px 18px;
+        margin:14px 0 16px 0;
+        line-height:1.5;
+    }
+    .til-finder-notice-title {
+        font-weight:850;
+        letter-spacing:.01em;
+        margin-bottom:6px;
+    }
+    .til-finder-notice-body {
+        font-size:.95rem;
+        opacity:.94;
+    }
+    .til-finder-policy-note {
+        background:#102c42;
+        border-color:#1f607c;
+        color:#d5effb;
+    }
+    .til-finder-checkpoint-note {
+        background:#3b321c;
+        border-color:#8e7130;
+        color:#f4e7bc;
+    }
+    .til-finder-local-note {
+        background:#35261d;
+        border-color:#9a6037;
+        color:#f6d7bf;
+    }
+    .til-finder-cloud-note {
+        background:#103d35;
+        border-color:#278b72;
+        color:#d8fff2;
+    }
+    .til-finder-complete-note {
+        background:#172f4d;
+        border-color:#377bb0;
+        color:#dcefff;
+    }
+
     /* Research Workspace navigation: one continuous radio keeps existing
        routing/session-state behavior, while visual section headers make the
        workflow readable as an ordered process. */
@@ -1176,14 +1218,28 @@ if module == "Stock Strategy Finder":
     )
     st.caption(finder_profile.description)
     if finder_profile.quick_family_limit is None:
-        st.success(
-            "Deep-mode search policy: every technically executable long strategy family is included. "
-            "AI may prioritize search order, but it cannot reject a valid family or combination because it looks unconventional."
+        st.markdown(
+            (
+                '<div class="til-finder-notice til-finder-policy-note">'
+                '<div class="til-finder-notice-title">SEARCH POLICY · FULL FAMILY COVERAGE</div>'
+                '<div class="til-finder-notice-body">'
+                'Every technically executable long strategy family is included. AI may prioritize search order, '
+                'but it cannot reject a valid family or combination because it looks unconventional.'
+                '</div></div>'
+            ),
+            unsafe_allow_html=True,
         )
     else:
-        st.info(
-            "Quick mode deliberately limits the number of strategy families for speed, but chooses them round-robin "
-            "across different behavior buckets. Use Deep when you do not want that family cap."
+        st.markdown(
+            (
+                '<div class="til-finder-notice til-finder-policy-note">'
+                '<div class="til-finder-notice-title">SEARCH POLICY · QUICK MODE</div>'
+                '<div class="til-finder-notice-body">'
+                'Quick mode limits the family count for speed but samples round-robin across behavior buckets. '
+                'Use Deep when you do not want the family cap.'
+                '</div></div>'
+            ),
+            unsafe_allow_html=True,
         )
 
     with st.expander("What gets tested", expanded=False):
@@ -1231,10 +1287,16 @@ if module == "Stock Strategy Finder":
     )
 
     if checkpoint_resumable:
-        st.warning(
-            f"A saved {finder_profile.name} checkpoint exists for {finder_symbol}. "
-            f"{checkpoint_family_passes:,} strategy-family/timeframe passes are already complete. "
-            "Resume will reuse them instead of starting those tests over."
+        st.markdown(
+            (
+                '<div class="til-finder-notice til-finder-checkpoint-note">'
+                '<div class="til-finder-notice-title">SAVED LOCAL CHECKPOINT</div>'
+                f'<div class="til-finder-notice-body">{html.escape(finder_symbol)} {html.escape(finder_profile.name)} '
+                f'has {checkpoint_family_passes:,} completed strategy-family/timeframe passes. '
+                'Resume Locally will reuse them instead of starting those completed passes over.'
+                '</div></div>'
+            ),
+            unsafe_allow_html=True,
         )
     elif checkpoint_status in {"running", "interrupted"}:
         st.warning(
@@ -1268,26 +1330,113 @@ if module == "Stock Strategy Finder":
         ),
         None,
     )
-    if active_cloud_finder:
-        cloud_status = str(active_cloud_finder.get("status") or "queued").replace("_", " ").title()
-        cloud_payload = dict(active_cloud_finder.get("payload") or {})
-        distributed_shards = int(cloud_payload.get("distributed_shards_total") or 0)
-        distributed_note = (
-            f" It is split across {distributed_shards} independent cloud shards."
-            if distributed_shards > 1
-            else ""
+    @st.fragment(run_every="30s")
+    def render_cloud_finder_monitor(symbol: str, profile_name: str) -> None:
+        try:
+            fresh_library = load_library()
+        except AppError as exc:
+            st.error(f"Cloud status could not refresh: {exc}")
+            return
+
+        live_job = next(
+            (
+                item
+                for item in fresh_library.get("research_queue") or []
+                if isinstance(item, dict)
+                and str(item.get("type") or "") == "stock_finder"
+                and str(item.get("status") or "") in {"queued", "running", "retry"}
+                and str((item.get("payload") or {}).get("symbol") or "").upper() == symbol
+                and str((item.get("payload") or {}).get("profile") or "") == profile_name
+            ),
+            None,
         )
-        st.success(
-            f"☁ **CLOUD {cloud_status.upper()} — SAFE TO CLOSE YOUR COMPUTER**\n\n"
-            f"{finder_symbol} {finder_profile.name} research is running independently of this browser."
-            f"{distributed_note} You can close the browser, put your Mac to sleep, or shut it down."
+        completed = latest_completed_finder_report(
+            fresh_library,
+            symbol,
+            profile_name,
         )
-    else:
-        st.warning(
-            "◆ **LOCAL SESSION MODE — KEEP THIS BROWSER OPEN WHILE A LOCAL TEST IS RUNNING**\n\n"
-            "The local Research/Resume button uses the Streamlit session. "
-            "For work that should continue with your Mac closed, use the **☁ Queue Distributed** button."
+
+        if live_job:
+            status = str(live_job.get("status") or "queued").replace("_", " ").upper()
+            payload = dict(live_job.get("payload") or {})
+            total_shards = int(payload.get("distributed_shards_total") or 0)
+            completed_shards = len(
+                {
+                    int(value)
+                    for value in payload.get("distributed_shards_completed") or []
+                    if str(value).lstrip("-").isdigit()
+                }
+            )
+            stage = str(payload.get("distributed_stage") or "queued").replace("_", " ").title()
+            message = str(payload.get("distributed_message") or "").strip()
+            progress_value = safe_float(payload.get("distributed_progress"), None)
+            if progress_value is None:
+                if status == "QUEUED":
+                    progress_value = 0.02
+                elif total_shards > 0:
+                    progress_value = 0.10 + 0.75 * min(1.0, completed_shards / total_shards)
+                else:
+                    progress_value = 0.06
+            progress_value = max(0.01, min(0.99, float(progress_value)))
+            shard_text = (
+                f" · {completed_shards}/{total_shards} shards complete"
+                if total_shards > 0
+                else ""
+            )
+            st.markdown(
+                (
+                    '<div class="til-finder-notice til-finder-cloud-note">'
+                    f'<div class="til-finder-notice-title">☁ CLOUD {html.escape(status)} · SAFE TO CLOSE YOUR COMPUTER</div>'
+                    f'<div class="til-finder-notice-body">{html.escape(symbol)} {html.escape(profile_name)} '
+                    'is running independently of this browser. You can close the browser, put your Mac to sleep, '
+                    f'or shut it down.{html.escape(shard_text)}</div>'
+                    '</div>'
+                ),
+                unsafe_allow_html=True,
+            )
+            progress_label = f"Cloud progress: {progress_value * 100:.0f}% · {stage}{shard_text}"
+            if message:
+                progress_label += f" · {message}"
+            st.progress(progress_value, text=progress_label)
+            return
+
+        distributed = dict((completed or {}).get("distributed") or {})
+        if completed and distributed.get("enabled"):
+            generated_at = str(completed.get("generated_at") or "")
+            loaded_marker = str(st.session_state.get("til_cloud_completed_marker") or "")
+            st.markdown(
+                (
+                    '<div class="til-finder-notice til-finder-complete-note">'
+                    '<div class="til-finder-notice-title">☁ CLOUD RESEARCH COMPLETE · RESULTS SAVED</div>'
+                    f'<div class="til-finder-notice-body">{html.escape(symbol)} {html.escape(profile_name)} '
+                    'finished in the cloud. The shard results were merged, then the final untouched holdout, '
+                    'walk-forward, and parameter-stability checks were completed. The result is saved permanently '
+                    'and appears below in this Finder.</div>'
+                    '</div>'
+                ),
+                unsafe_allow_html=True,
+            )
+            if generated_at and generated_at != loaded_marker:
+                st.session_state["til_cloud_completed_marker"] = generated_at
+                st.rerun()
+            return
+
+        st.markdown(
+            (
+                '<div class="til-finder-notice til-finder-local-note">'
+                '<div class="til-finder-notice-title">◆ LOCAL SESSION MODE</div>'
+                '<div class="til-finder-notice-body">'
+                'A local Research/Resume run uses the Streamlit session, so keep this browser open while it is computing. '
+                'For a run that continues with your Mac closed, use the ☁ Queue Distributed button.'
+                '</div></div>'
+            ),
+            unsafe_allow_html=True,
         )
+
+    render_cloud_finder_monitor(
+        finder_symbol,
+        finder_profile.name,
+    )
 
     cloud_col, local_col = st.columns([1.0, 1.35])
     with cloud_col:
@@ -1310,7 +1459,7 @@ if module == "Stock Strategy Finder":
         st.caption(
             "Distributed cloud mode is recommended for Deep/Very Deep runs. It preserves the full search space "
             "while splitting independent family/timeframe work across multiple cloud runners. "
-            "The distributed worker checks the queue automatically about every 15 minutes."
+            "The status monitor above refreshes automatically about every 30 seconds while this page is open."
         )
 
     if queue_cloud_finder and finder_symbol:
