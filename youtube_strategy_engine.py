@@ -2602,7 +2602,7 @@ class StrategyStore:
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise AppError("The imported backup is not a valid UTF-8 JSON file.") from exc
         if not isinstance(parsed, dict) or not isinstance(parsed.get("strategies"), list):
-            raise AppError("The backup must contain a strategies list from this application.") from exc
+            raise AppError("The backup must contain a strategies list from this application.")
         current = self.load()
         videos = {video.get("url"): video for video in current["videos"] if video.get("url")}
         for video in parsed.get("videos") or []:
@@ -3092,7 +3092,7 @@ def add_indicators(frame: pd.DataFrame, strategy: dict[str, Any]) -> pd.DataFram
         & data["fast_ema_touch_distance_pct"].notna()
         & (data["fast_ema_touch_distance_pct"] <= float(tolerance))
     )
-    prior_touch = fast_touch.groupby(data["session"], sort=False).shift(1).fillna(False)
+    prior_touch = fast_touch.groupby(data["session"], sort=False).shift(1).fillna(False).astype(bool)
     touch_start = fast_touch & ~prior_touch
     data["fast_ema_pullback_number"] = (
         touch_start.astype(int).groupby(data["session"], sort=False).cumsum()

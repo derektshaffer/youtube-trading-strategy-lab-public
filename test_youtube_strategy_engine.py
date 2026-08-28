@@ -9,6 +9,7 @@ import sys
 import tempfile
 import types
 import unittest
+import warnings
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -248,7 +249,9 @@ class EmaRuleTests(unittest.TestCase):
             require_fast_ema_pullback=True,
             pullback_touch_tolerance_pct=1.0,
         )
-        frame = engine.add_indicators(engine.bars_to_frame(rows), strategy)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            frame = engine.add_indicators(engine.bars_to_frame(rows), strategy)
         self.assertTrue(frame["fast_ema"].tail(5).notna().all())
         self.assertTrue(frame["slow_ema"].tail(5).notna().all())
         self.assertTrue(frame["trend_ema"].tail(2).notna().all())
@@ -589,6 +592,13 @@ class StorageTests(unittest.TestCase):
         result = self.store.import_data(json.dumps({"strategies": [simple_strategy()], "videos": [], "paper_positions": []}))
         self.assertEqual(len(result["paper_positions"]), 1)
         self.assertEqual(len(result["strategies"]), 1)
+
+    def test_valid_json_without_a_strategies_list_returns_an_app_error(self):
+        for payload in ("{}", "[]", '{"strategies": null}'):
+            with self.subTest(payload=payload), self.assertRaisesRegex(
+                engine.AppError, "must contain a strategies list"
+            ):
+                self.store.import_data(payload)
 
 
 class DurableStorageTests(unittest.TestCase):
@@ -1281,6 +1291,7 @@ class FakeStreamlit(types.ModuleType):
             "ALPACA_API_KEY": "fake-alpaca-key",
             "ALPACA_SECRET_KEY": "fake-alpaca-secret",
             "GEMINI_API_KEY": "fake-gemini-key",
+            "APP_ACCESS_PASSWORD": "test-access-password",
         }
         self.sidebar = FakePanel()
         self.rendered = []
@@ -1349,6 +1360,7 @@ class StreamlitSmokeTests(unittest.TestCase):
                     "backtest_results": [result],
                     "live_scan": [{"metrics": snapshot, "matches": [match], "best": match}],
                     "paper_live_prices": {"NVDA": 103},
+                    "_trading_app_access_granted": True,
                 }
             )
             app_path = Path(__file__).with_name("youtube_strategy_app.py")

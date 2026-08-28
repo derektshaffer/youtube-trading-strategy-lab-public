@@ -12,6 +12,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from app_access import require_app_access
 from live_strategy_runner_page import market_client, setting
 from trading_catalyst_core import (
     classify_catalyst,
@@ -82,6 +83,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+require_app_access(st)
 
 st.markdown(
     """
@@ -695,7 +697,7 @@ elif module == "Knowledge Sources":
     analyze = analyze_slot.button(
         "🧠 Analyze source and extract strategies",
         type="primary",
-        use_container_width=True,
+        width="stretch",
         disabled=not can_analyze,
         key="til_analyze_source",
     )
@@ -704,7 +706,7 @@ elif module == "Knowledge Sources":
         analyze_slot.button(
             "🧠 Analyzing…",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             disabled=True,
             key="til_analyze_source_busy",
         )
@@ -1224,14 +1226,14 @@ elif module == "Strategy Library":
         if action_cols[0].button(
             "🤖 Research all strategy families automatically",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             key="til_library_run_ai_manager",
         ):
             st.session_state["til_navigate_to"] = "AI Research Autopilot"
             st.rerun()
         if action_cols[1].button(
             "🔎 Find stocks matching validated families",
-            use_container_width=True,
+            width="stretch",
             disabled=not bool(validated_families),
             key="til_library_find_validated",
         ):
@@ -1403,7 +1405,7 @@ elif module == "Strategy Library":
                 advanced = st.columns(2)
                 if advanced[0].button(
                     "Open this family in Strategy Lab",
-                    use_container_width=True,
+                    width="stretch",
                     key="til_family_manual_lab",
                 ):
                     st.session_state["til_selected_strategy_id"] = str(family.get("id") or "")
@@ -1411,7 +1413,7 @@ elif module == "Strategy Library":
                     st.rerun()
                 if advanced[1].button(
                     "Inspect / improve testable rules",
-                    use_container_width=True,
+                    width="stretch",
                     key="til_family_manual_compiler",
                 ):
                     st.session_state["til_selected_strategy_id"] = str(family.get("id") or "")
@@ -1493,7 +1495,7 @@ elif module == "Strategy DNA":
                 for dimension in DNA_DIMENSIONS:
                     row[DNA_LABELS[dimension]] = ", ".join(dna.get(dimension) or [])
                 rows.append(row)
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
             fingerprint_labels = {
                 f"{item.get('name')} · {item.get('source_title') or 'Unknown source'}": item
@@ -1536,7 +1538,7 @@ elif module == "Strategy DNA":
                     }
                     for item in visible_concepts
                 ]
-                st.dataframe(pd.DataFrame(concept_rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(concept_rows), width="stretch", hide_index=True)
 
                 concept_labels = {
                     (
@@ -1578,7 +1580,7 @@ elif module == "Strategy DNA":
                 }
                 for family in strategy_families
             ]
-            st.dataframe(pd.DataFrame(family_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(family_rows), width="stretch", hide_index=True)
             family_labels = {
                 f"{family.get('name')} · {int(family.get('independent_source_count') or 0)} source(s)": family
                 for family in strategy_families
@@ -1622,7 +1624,7 @@ elif module == "Strategy DNA":
                     }
                     for item in candidate_blueprints
                 ]
-                st.dataframe(pd.DataFrame(candidate_rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(candidate_rows), width="stretch", hide_index=True)
                 candidate_labels = {
                     f"{item.get('name')} · priority {safe_float(item.get('research_priority_score'), 0.0):.0f}": item
                     for item in candidate_blueprints
@@ -1710,14 +1712,14 @@ elif module == "Strategy DNA":
                 action_cols = st.columns(2)
                 save_candidate = action_cols[0].button(
                     "💾 Save / refresh research candidate",
-                    use_container_width=True,
+                    width="stretch",
                     key=f"save_synth_{candidate.get('id')}",
                 )
                 synth_run_slot = action_cols[1].empty()
                 run_candidate = synth_run_slot.button(
                     "🧪 Run full historical research pipeline",
                     type="primary",
-                    use_container_width=True,
+                    width="stretch",
                     disabled=not bool(candidate.get("backtest_supported")),
                     key=f"run_synth_{candidate.get('id')}",
                     help=(
@@ -1744,7 +1746,7 @@ elif module == "Strategy DNA":
                     synth_run_slot.button(
                         "🧪 Researching…",
                         type="primary",
-                        use_container_width=True,
+                        width="stretch",
                         disabled=True,
                         key=f"run_synth_busy_{candidate.get('id')}",
                     )
@@ -1985,14 +1987,14 @@ elif module == "Make Strategy Testable":
         compile_rules = compiler_slot.button(
             "🧩 Make remaining rules testable",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             key="til_compile_rule_suggestions",
         )
         if compile_rules:
             compiler_slot.button(
                 "🧩 Translating…",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
                 disabled=True,
                 key="til_compile_rule_suggestions_busy",
             )
@@ -2071,7 +2073,7 @@ elif module == "Make Strategy Testable":
                             "Why": suggestion.get("rationale"),
                         }
                     )
-                st.dataframe(pd.DataFrame(suggestion_rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(suggestion_rows), width="stretch", hide_index=True)
                 chosen_labels = st.multiselect(
                     "Choose AI test assumptions to use",
                     list(labels),
@@ -2083,7 +2085,7 @@ elif module == "Make Strategy Testable":
                 )
                 save_compiler = st.button(
                     "💾 Use selected assumptions for research",
-                    use_container_width=True,
+                    width="stretch",
                     disabled=not chosen_labels,
                 )
                 if save_compiler:
@@ -2136,7 +2138,7 @@ elif module == "Make Strategy Testable":
 
         if accepted_overrides and st.button(
             "Remove all AI test assumptions",
-            use_container_width=True,
+            width="stretch",
         ):
             data = load_library()
             for item in data.get("strategies") or []:
@@ -2197,7 +2199,7 @@ elif module == "AI Research Autopilot":
     run_auto = auto_button_slot.button(
         "🤖 Run full autonomous research now",
         type="primary",
-        use_container_width=True,
+        width="stretch",
         disabled=not managed_strategies,
         key="til_run_full_autonomous_research",
     )
@@ -2205,7 +2207,7 @@ elif module == "AI Research Autopilot":
         auto_button_slot.button(
             "🤖 Researching…",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             disabled=True,
             key="til_run_full_autonomous_research_busy",
         )
@@ -2496,7 +2498,7 @@ elif module == "AI Research Autopilot":
                     ["Status", "Global score"],
                     ascending=[True, False],
                 ),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
 
@@ -2548,7 +2550,7 @@ elif module == "AI Research Autopilot":
                                 for item in opportunities
                             ]
                         ),
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                     )
                     outlier_total = sum(
@@ -2700,7 +2702,7 @@ elif module == "Strategy Lab":
         run_lab = strategy_lab_slot.button(
             "🧪 Optimize + validate strategy",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             disabled=not ticker or not split_ok or (entry_rule_count == 0 and not compare_all),
             key="til_optimize_validate_strategy",
         )
@@ -2709,7 +2711,7 @@ elif module == "Strategy Lab":
             strategy_lab_slot.button(
                 "🧪 Optimizing…",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
                 disabled=True,
                 key="til_optimize_validate_strategy_busy",
             )
@@ -2908,7 +2910,7 @@ elif module == "Strategy Lab":
                         "Max drawdown %": safe_float(metrics.get("max_drawdown_pct"), 0.0) or 0.0,
                     }
                 )
-            st.dataframe(pd.DataFrame(period_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(period_rows), width="stretch", hide_index=True)
 
             if strength.get("reasons"):
                 with st.expander("Why the robustness score was reduced", expanded=False):
@@ -2942,7 +2944,7 @@ elif module == "Strategy Lab":
                         }
                     )
                 if fold_rows:
-                    st.dataframe(pd.DataFrame(fold_rows), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(fold_rows), width="stretch", hide_index=True)
                 for warning in walk_report.get("warnings") or []:
                     st.warning(str(warning))
 
@@ -2957,7 +2959,7 @@ elif module == "Strategy Lab":
             )
             save_validation = st.button(
                 "💾 Save this validation result to the strategy library",
-                use_container_width=True,
+                width="stretch",
             )
             if save_validation:
                 data = load_library()
@@ -3075,7 +3077,7 @@ elif module == "Universe Research":
         run_universe = universe_slot.button(
             "🧬 Test strategy across stocks",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             disabled=len(universe_symbols) < 2,
             key="til_test_strategy_across_stocks",
         )
@@ -3083,7 +3085,7 @@ elif module == "Universe Research":
             universe_slot.button(
                 "🧬 Testing…",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
                 disabled=True,
                 key="til_test_strategy_across_stocks_busy",
             )
@@ -3223,7 +3225,7 @@ elif module == "Universe Research":
                     }
                 )
             if table_rows:
-                st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(table_rows), width="stretch", hide_index=True)
             for warning in universe_result.get("warnings") or []:
                 st.warning(str(warning))
 
@@ -3256,7 +3258,7 @@ elif module == "Validation":
                     "Walk-forward profitable folds %": walk.get("profitable_fold_pct"),
                 }
             )
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
         st.caption(
             "Validation history is evidence tracking, not a leaderboard. Large historical P/L with weak "
             "holdout or walk-forward behavior should rank below a smaller but more stable result."
@@ -3286,7 +3288,7 @@ elif module == "Catalyst Intelligence":
     load_catalysts = catalyst_slot.button(
         "📰 Load + classify historical catalysts",
         type="primary",
-        use_container_width=True,
+        width="stretch",
         disabled=not catalyst_ticker,
         key="til_load_classify_catalysts",
     )
@@ -3294,7 +3296,7 @@ elif module == "Catalyst Intelligence":
         catalyst_slot.button(
             "📰 Loading…",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             disabled=True,
             key="til_load_classify_catalysts_busy",
         )
@@ -3393,7 +3395,7 @@ elif module == "Catalyst Intelligence":
             for item in visible
         ]
         if table_rows:
-            st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(table_rows), width="stretch", hide_index=True)
             inspect_labels = {
                 f"{item.get('published_at') or 'Unknown time'} · {item.get('category')} · {str(item.get('headline') or '')[:70]}": item
                 for item in visible
@@ -3478,14 +3480,14 @@ elif module == "Market Discovery":
         scan_now = scan_slot.button(
             "🔎 Scan current market",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             key="til_scan_current_market",
         )
         if scan_now:
             scan_slot.button(
                 "🔎 Scanning…",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
                 disabled=True,
                 key="til_scan_current_market_busy",
             )
@@ -3580,7 +3582,7 @@ elif module == "Market Discovery":
                         "Needs verification": int(safe_float(item.get("unknown"), 0) or 0),
                     }
                 )
-            st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(table_rows), width="stretch", hide_index=True)
 
             matches = [item for item in live_results if str(item.get("status")).upper() == "MATCH"]
             watches = [
@@ -3656,7 +3658,7 @@ elif module == "Stock Analyzer":
         analyze_stock = analyzer_slot.button(
             "🧭 Analyze stock against strategies",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             disabled=not analyzer_ticker or not analyzer_strategies,
             key="til_analyze_stock_strategies",
         )
@@ -3664,7 +3666,7 @@ elif module == "Stock Analyzer":
             analyzer_slot.button(
                 "🧭 Analyzing…",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
                 disabled=True,
                 key="til_analyze_stock_strategies_busy",
             )
@@ -3740,7 +3742,7 @@ elif module == "Stock Analyzer":
                             "Source": item.get("source_title") or item.get("source_type"),
                         }
                     )
-                st.dataframe(pd.DataFrame(comparison_rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(comparison_rows), width="stretch", hide_index=True)
 
                 inspect_options = {
                     f"{item.get('strategy_name')} · {item.get('status')} · {safe_float(item.get('score'), 0.0):.0f}%": item
@@ -3770,5 +3772,5 @@ elif module == "Live / Paper":
         "Research and validation remain separate from execution. Existing safety checks and Alpaca "
         "paper-trading controls stay in place."
     )
-    if st.button("Open existing Live Strategy Runner", use_container_width=True):
+    if st.button("Open existing Live Strategy Runner", width="stretch"):
         st.switch_page("pages/Live_Strategy_Runner.py")

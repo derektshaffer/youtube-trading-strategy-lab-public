@@ -6,7 +6,7 @@ restricted to strategies the user explicitly approved in the main Trading Lab.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 import re
 from typing import Any
@@ -14,6 +14,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from app_access import require_app_access
 from trading_progress_ui import LongTaskMonitor, session_task_profiles
 from alpaca_paper_trader import (
     AlpacaPaperTrader,
@@ -38,6 +39,10 @@ from youtube_strategy_engine import (
     snapshot_metrics,
     utc_now,
 )
+
+
+MAX_MARKET_DATA_AGE_SECONDS = 90.0
+MAX_MARKET_DATA_FUTURE_SKEW_SECONDS = 15.0
 
 
 def setting(name: str, default: str = "") -> str:
@@ -134,15 +139,17 @@ def current_signal(symbol: str, strategy: dict[str, Any]) -> tuple[dict[str, Any
         raise AppError("Enter exactly one valid ticker.")
     ticker = parsed[0]
     optimized_symbol = str(strategy.get("optimized_for_symbol") or "").strip().upper()
-    if optimized_symbol and optimized_symbol != ticker:
-        raise AppError(f"This optimized strategy is locked to {optimized_symbol}.")
-
     market = market_client()
     snapshot = market.snapshots([ticker]).get(ticker)
     if not snapshot:
         raise AppError(f"No current Alpaca snapshot was available for {ticker}.")
 
     warnings: list[str] = []
+    if optimized_symbol and optimized_symbol != ticker:
+        warnings.append(
+            f"This strategy was optimized/backtested for {optimized_symbol}, but you are evaluating {ticker}. "
+            "Its historical results may not transfer to this stock."
+        )
     historical_end = utc_now() - timedelta(
         minutes=16 if market.historical_feed == "sip" and market.live_feed != "sip" else 1
     )
@@ -202,7 +209,41 @@ def is_long_strategy(strategy: dict[str, Any]) -> bool:
     direction = str(strategy.get("direction") or "").strip().lower()
     if "short" in direction and "long" not in direction:
         return False
-    return "long" in direction or direction in {"bullish", "buy"}
+    return "long" in direction or direction in {"both", "bullish", "buy"}
+
+
+def _market_timestamp(raw: Any) -> datetime | None:
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def market_data_freshness(
+    metrics: dict[str, Any],
+    *,
+    now: datetime | None = None,
+    max_age_seconds: float = MAX_MARKET_DATA_AGE_SECONDS,
+) -> tuple[bool, str, dict[str, float]]:
+    """Require independently timestamped, recent quote and trade data."""
+    current = (now or utc_now()).astimezone(timezone.utc)
+    ages: dict[str, float] = {}
+    for label, field in (("quote", "quote_timestamp"), ("trade", "trade_timestamp")):
+        timestamp = _market_timestamp(metrics.get(field))
+        if timestamp is None:
+            return False, f"{label} timestamp is missing or invalid", ages
+        age_seconds = (current - timestamp).total_seconds()
+        ages[label] = age_seconds
+        if age_seconds < -MAX_MARKET_DATA_FUTURE_SKEW_SECONDS:
+            return False, f"{label} timestamp is unexpectedly in the future", ages
+        if age_seconds > max_age_seconds:
+            return False, f"{label} data is stale ({age_seconds:.0f} seconds old)", ages
+    return True, "quote and trade timestamps are recent", ages
 
 
 def session_start_iso() -> str:
@@ -225,6 +266,8 @@ def paper_entry(
     one_entry_per_symbol_day: bool,
 ) -> dict[str, Any]:
     ticker = str(metrics.get("symbol") or "").strip().upper()
+    if parse_symbols(ticker) != [ticker]:
+        return {"submitted": False, "message": "No paper order: the market snapshot did not contain one valid ticker."}
     if not strategy.get("approved"):
         return {"submitted": False, "message": "Paper Auto is locked until this strategy is explicitly approved in the main Trading Lab."}
     if signal.get("status") != "MATCH":
@@ -233,6 +276,13 @@ def paper_entry(
         return {"submitted": False, "message": "No paper order: at least one rule still needs verification."}
     if not is_long_strategy(strategy):
         return {"submitted": False, "message": "Paper Auto currently supports LONG strategies only."}
+
+    fresh, freshness_message, _ = market_data_freshness(metrics)
+    if not fresh:
+        return {
+            "submitted": False,
+            "message": f"No paper order: current market data could not be verified as recent ({freshness_message}).",
+        }
 
     price = safe_float(metrics.get("price"))
     stop = safe_float(signal.get("suggested_stop"))
@@ -243,10 +293,10 @@ def paper_entry(
     trader = paper_client()
     account = trader.account()
     clock = trader.clock()
-    if account.get("trading_blocked"):
-        return {"submitted": False, "message": "No paper order: Alpaca reports that paper trading is blocked."}
-    if not bool(clock.get("is_open")):
-        return {"submitted": False, "message": "No paper order: the U.S. stock market is closed."}
+    if account.get("trading_blocked") is not False:
+        return {"submitted": False, "message": "No paper order: Alpaca did not explicitly confirm that paper trading is allowed."}
+    if clock.get("is_open") is not True:
+        return {"submitted": False, "message": "No paper order: Alpaca did not explicitly confirm that the U.S. stock market is open."}
 
     equity = safe_float(account.get("equity"), 0.0) or 0.0
     day_pnl = daily_account_pnl(account)
@@ -287,6 +337,13 @@ def paper_entry(
     if qty < 1:
         return {"submitted": False, "message": "No paper order: risk limits allow less than one whole share."}
 
+    fresh, freshness_message, _ = market_data_freshness(metrics)
+    if not fresh:
+        return {
+            "submitted": False,
+            "message": f"No paper order: market data expired during safety checks ({freshness_message}).",
+        }
+
     strategy_id = re.sub(r"[^A-Za-z0-9]", "", str(strategy.get("id") or "strategy"))[:10] or "strategy"
     client_order_id = f"ytlab-{ticker.lower()}-{strategy_id}-{utc_now().strftime('%Y%m%d%H%M')}"
     order = trader.submit_bracket_market_order(
@@ -306,6 +363,7 @@ def paper_entry(
 
 
 def render() -> None:
+    require_app_access(st)
     st.markdown(
         """
         <style>
@@ -392,8 +450,9 @@ def render() -> None:
         "Ticker to watch",
         value=optimized_symbol or "",
         placeholder="SDOT",
-        disabled=bool(optimized_symbol),
-        help="Stock-optimized strategies stay locked to the stock they were optimized for.",
+        key=f"runner_ticker_{strategy.get('id')}",
+        disabled=False,
+        help="The optimized ticker is filled in by default, but you can inspect another stock. Cross-ticker paper trading requires a separate acknowledgement.",
     ).strip().upper()
     available_modes = ["Signal only", "Alpaca paper auto-entry"]
     mode = controls[1].radio(
@@ -404,6 +463,13 @@ def render() -> None:
     )
     controls[2].metric("Preferred candle interval", preferred_timeframe)
     controls[2].caption(f'Direction: {strategy.get("direction") or "Unclear"} · Optimized ticker: {optimized_symbol or "Any"}')
+
+    ticker_mismatch = bool(optimized_symbol and ticker and optimized_symbol != ticker)
+    if ticker_mismatch:
+        st.warning(
+            f"Cross-ticker test: this strategy was optimized for {optimized_symbol}, not {ticker}. "
+            "Signal Only is allowed, but its historical performance should not be assumed to transfer."
+        )
 
     if mode == "Alpaca paper auto-entry" and not approved:
         st.warning("Paper Auto is locked for this strategy. Approve it in Strategy library first, or switch to Signal Only.")
@@ -430,12 +496,20 @@ def render() -> None:
     max_open_positions = int(limits[1].number_input("Max open paper positions", 1, 50, 3, 1))
     one_entry_per_symbol_day = limits[2].checkbox("One runner entry / ticker / day", value=True)
 
+    cross_ticker_confirmed = not ticker_mismatch
+    if mode == "Alpaca paper auto-entry" and ticker_mismatch:
+        cross_ticker_confirmed = st.checkbox(
+            f"I understand this strategy was optimized for {optimized_symbol} and want to PAPER-test it on {ticker}",
+            value=False,
+            help="This applies only to simulated Alpaca paper trading and does not change the saved strategy.",
+        )
+
     armed = False
     if mode == "Alpaca paper auto-entry":
         armed = st.checkbox(
             "ARM PAPER AUTO-ENTRY",
             value=False,
-            disabled=not approved or not paper_ready or not is_long_strategy(strategy),
+            disabled=not approved or not paper_ready or not is_long_strategy(strategy) or not cross_ticker_confirmed,
             help="When armed, Refresh can submit a simulated Alpaca bracket order after every safeguard passes.",
         )
         if armed:
@@ -554,6 +628,13 @@ def render() -> None:
             f'Rule score {safe_float(signal.get("score"), 0.0):.0f}% · '
             "Stop/target are reference levels only; they are not an entry recommendation unless the strategy reaches a full MATCH."
         )
+        fresh, freshness_message, ages = market_data_freshness(metrics)
+        freshness_text = (
+            f"Verified recent · quote {ages.get('quote', 0):.0f}s · trade {ages.get('trade', 0):.0f}s"
+            if fresh
+            else f"Not safe for Paper Auto · {freshness_message}"
+        )
+        st.caption(f"Market-data freshness: {freshness_text}")
 
         details = st.columns(4)
         details[0].metric("Today", percent(metrics.get("day_change_pct"), signed=True))

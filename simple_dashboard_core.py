@@ -7,11 +7,13 @@ from typing import Any
 
 import streamlit as st
 
+from app_access import require_app_access
 from alpaca_paper_trader import PaperTradeError
 from live_strategy_runner_page import (
     build_store,
     current_signal,
     market_client,
+    market_data_freshness,
     paper_client,
     paper_entry,
 )
@@ -26,6 +28,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+require_app_access(st)
 
 st.markdown(
     """
@@ -77,9 +80,9 @@ def pct(value: Any, digits: int = 1, signed: bool = False) -> str:
 def strategy_label(strategy: dict[str, Any]) -> str:
     name = str(strategy.get("name") or "Unnamed strategy")
     optimized = str(strategy.get("optimized_for_symbol") or "").strip().upper()
-    approval = "Approved" if strategy.get("approved") else "Review only"
-    suffix = f" · {optimized} only" if optimized else ""
-    return f"{name}{suffix} · {approval}"
+    scope = f"[{optimized} optimized]" if optimized else "[Any stock]"
+    approval = "✓ Approved" if strategy.get("approved") else "Review only"
+    return f"{scope} {name} · {approval}"
 
 
 def applicable_strategies(
@@ -107,11 +110,11 @@ with st.sidebar:
     st.caption("This is the normal screen. Advanced tools are still available when you want them.")
     st.divider()
     with st.expander("🧰 Advanced tools", expanded=False):
-        if st.button("Full Trading Lab", use_container_width=True):
-            st.switch_page("pages/Advanced_Trading_Lab.py")
-        if st.button("Machine Learning Lab", use_container_width=True):
-            st.switch_page("pages/Advanced_Machine_Learning.py")
-        if st.button("Detailed Live Runner", use_container_width=True):
+        if st.button("Upload / Analyze Videos + Full Lab", width="stretch"):
+            st.switch_page("pages/Full_Trading_Lab.py")
+        if st.button("Machine Learning Lab", width="stretch"):
+            st.switch_page("pages/Machine_Learning_Lab.py")
+        if st.button("Detailed Live Runner", width="stretch"):
             st.switch_page("pages/Live_Strategy_Runner.py")
     st.divider()
     st.caption(
@@ -131,7 +134,7 @@ if not strategies:
     st.warning("No saved strategies are available yet. Open Advanced tools → Full Trading Lab to create one.")
     st.stop()
 
-top = st.columns([1.0, 2.2, 1.15, 1.0])
+top = st.columns([1.0, 1.25, 1.0])
 with top[0]:
     ticker = st.text_input(
         "Stock",
@@ -140,37 +143,43 @@ with top[0]:
     ).strip().upper()
     st.caption("Technical: ticker symbol")
 
-available = applicable_strategies(strategies, ticker)
 with top[1]:
-    if available:
-        labels = {strategy_label(item): item for item in available}
-        selected_label = st.selectbox("Strategy", list(labels), key="simple_strategy")
-        strategy = labels[selected_label]
-    else:
-        st.selectbox("Strategy", ["No compatible saved strategy"], disabled=True)
-        strategy = None
-    st.caption("Technical: deterministic strategy rules")
-
-with top[2]:
     mode = st.radio(
         "What should it do?",
         ["Analyze only", "Simulated trading"],
-        horizontal=False,
+        horizontal=True,
     )
     st.caption("Simulated trading = Alpaca paper account")
 
-with top[3]:
+with top[2]:
     risk_dollars = float(
         st.number_input(
-            "Max loss per trade",
+            "Max loss per trade ($)",
             min_value=1.0,
             max_value=10000.0,
             value=25.0,
             step=5.0,
-            format="$%.0f",
+            format="%.0f",
         )
     )
     st.caption("Technical: position risk budget")
+
+available = applicable_strategies(strategies, ticker)
+if available:
+    labels = {strategy_label(item): item for item in available}
+    selected_label = st.selectbox(
+        "Strategy",
+        list(labels),
+        key="simple_strategy",
+        help="The strategy selector is full width so the complete saved strategy name and ticker scope are easier to read.",
+    )
+    strategy = labels[selected_label]
+else:
+    st.selectbox("Strategy", ["No compatible saved strategy"], disabled=True)
+    strategy = None
+st.caption("Technical: deterministic strategy rules")
+if strategy is not None:
+    st.caption(f"Selected: **{strategy_label(strategy)}**")
 
 if strategy is not None:
     optimized_for = str(strategy.get("optimized_for_symbol") or "").strip().upper()
@@ -236,7 +245,7 @@ analyze_slot = st.empty()
 analyze = analyze_slot.button(
     "🔎 Analyze setup",
     type="primary",
-    use_container_width=True,
+    width="stretch",
     disabled=analyze_disabled,
     key="simple_analyze_setup",
 )
@@ -245,7 +254,7 @@ if analyze:
     analyze_slot.button(
         "🔎 Analyzing…",
         type="primary",
-        use_container_width=True,
+        width="stretch",
         disabled=True,
         key="simple_analyze_setup_busy",
     )
@@ -492,11 +501,17 @@ if (
             place = st.button(
                 "Place simulated trade now",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
                 disabled=not armed,
             )
             if place:
                 try:
+                    fresh, freshness_message, _ = market_data_freshness(metrics)
+                    if not fresh:
+                        raise PaperTradeError(
+                            "Current market data could not be verified as recent; no simulated order was sent "
+                            f"({freshness_message})."
+                        )
                     trader = paper_client()
                     account = trader.account()
                     equity = safe_float(account.get("equity"), 0.0) or 0.0
