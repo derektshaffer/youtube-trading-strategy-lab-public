@@ -3782,6 +3782,48 @@ def generate_strategy_variants(
                 if set(left).isdisjoint(right):
                     add({**left, **right})
 
+    # AI compiler assumptions are a different provenance class from source
+    # rules. They are research hypotheses only. Test their proposed values and
+    # nearby alternatives automatically, but never let them overwrite an
+    # explicit author/source rule.
+    ai_seed_updates: list[dict[str, Any]] = []
+    raw_ai_options = strategy.get("ai_candidate_rule_options")
+    research_overrides = normalize_machine_rules(
+        strategy.get("research_rule_overrides")
+    )
+    if isinstance(raw_ai_options, dict):
+        for field_name, raw_values in raw_ai_options.items():
+            if (
+                field_name not in baseline
+                or not isinstance(raw_values, list)
+                or research_overrides.get(field_name) is None
+            ):
+                continue
+            for raw_value in raw_values:
+                if raw_value is None:
+                    continue
+                parsed = normalize_machine_rules(
+                    {field_name: raw_value}
+                ).get(field_name)
+                if parsed is None or parsed == baseline.get(field_name):
+                    continue
+                update = {field_name: parsed}
+                if update not in ai_seed_updates:
+                    ai_seed_updates.append(update)
+                    add(update)
+
+        # Give AI assumption interactions some room, while leaving the rest of
+        # the variant budget for generic neighborhood/risk exploration.
+        ai_seed_budget = min(limit, max(len(variants), int(limit * 0.62)))
+        for left_index, left in enumerate(ai_seed_updates):
+            if len(variants) >= ai_seed_budget:
+                break
+            for right in ai_seed_updates[left_index + 1:]:
+                if len(variants) >= ai_seed_budget:
+                    break
+                if set(left).isdisjoint(right):
+                    add({**left, **right})
+
     if limit <= 64:
         stop_values = [0.75, 1.5, 2.5, 4.0, 5.0, 7.5, 10.0, 15.0]
         reward_values = [1.0, 1.5, 2.0, 3.0, 5.0]
