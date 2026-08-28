@@ -169,6 +169,12 @@ def infer_strategy_dna(strategy: dict[str, Any]) -> dict[str, list[str]]:
         _add(dna, "structure", "Compression / pinch")
     if _contains(text, "avwap handoff", "handoff"):
         _add(dna, "structure", "AVWAP handoff")
+    if _contains(text, "short squeeze", "short interest ratio", "heavily shorted"):
+        _add(dna, "structure", "Short-squeeze reclaim")
+    if _contains(text, "ipo day-one", "first trading day of an ipo", "first day of an ipo"):
+        _add(dna, "structure", "IPO day-one AVWAP")
+    if _contains(text, "day 2", "day two") and _contains(text, "avwap", "anchored vwap"):
+        _add(dna, "structure", "Multi-day AVWAP continuation")
     if rules.get("above_vwap") is True:
         _add(dna, "structure", "Above VWAP")
     if rules.get("vwap_reclaim") is True or _contains(text, "vwap reclaim", "reclaim vwap"):
@@ -428,7 +434,6 @@ def _direction_compatible(left: dict[str, Any], right: dict[str, Any]) -> bool:
 
 STRONG_STRUCTURE_CONCEPTS = {
     "previous-day high breakout",
-    "anchored vwap",
     "vwap reclaim",
     "opening-range breakout",
     "ema pullback",
@@ -437,6 +442,9 @@ STRONG_STRUCTURE_CONCEPTS = {
     "mean-reversion reversal",
     "compression / pinch",
     "avwap handoff",
+    "short-squeeze reclaim",
+    "ipo day-one avwap",
+    "multi-day avwap continuation",
 }
 
 
@@ -754,6 +762,12 @@ def _canonical_family_name(family: dict[str, Any], core_dna: dict[str, list[str]
 
     if "previous-day high breakout" in structure:
         base = "Previous-Day High Continuation Breakout"
+    elif "short-squeeze reclaim" in structure:
+        base = "AVWAP Short-Squeeze Reclaim"
+    elif "ipo day-one avwap" in structure:
+        base = "IPO Day-One Anchored VWAP"
+    elif "multi-day avwap continuation" in structure:
+        base = "Multi-Day AVWAP Continuation"
     elif "compression / pinch" in structure:
         base = "AVWAP Pinch / Compression"
     elif "avwap handoff" in structure:
