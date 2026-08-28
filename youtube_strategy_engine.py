@@ -5363,6 +5363,14 @@ def optimize_stock_strategies(
         for item in ((resume_state or {}).get("configuration_history") or [])
         if isinstance(item, dict)
     ] if valid_resume else []
+    stored_configuration_count = (
+        int((resume_state or {}).get("configuration_count") or 0)
+        if valid_resume else 0
+    )
+    resumed_configuration_count = max(
+        0,
+        stored_configuration_count - len(resumed_configuration_history),
+    )
     eligible_ids = {str(item.get("id") or "") for item in eligible}
     resumed_rankings = [
         item for item in resumed_rankings
@@ -5842,6 +5850,7 @@ def optimize_stock_strategies(
                     "updated_at": isoformat_utc(utc_now()),
                     "completed_strategy_ids": sorted(completed_strategy_ids),
                     "rankings": list(ranked),
+                    "configuration_count": resumed_configuration_count + len(configuration_history),
                     "configuration_history": list(configuration_history),
                 }
             )
@@ -5877,7 +5886,7 @@ def optimize_stock_strategies(
         "rule_variants_tested": sum(item["rule_variants_tested"] for item in ranked),
         "execution_variants_tested": sum(item["execution_variants_tested"] for item in ranked),
         "adaptive_refinement_tests": sum(item.get("adaptive_refinement_tests", 0) for item in ranked),
-        "unique_configurations_tested": len(configuration_history),
+        "unique_configurations_tested": resumed_configuration_count + len(configuration_history),
         "configuration_history": configuration_history,
         "training_sessions": training_sessions,
         "validation_sessions": validation_sessions,
