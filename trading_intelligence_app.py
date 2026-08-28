@@ -1302,7 +1302,8 @@ if module == "Stock Strategy Finder":
     with local_col:
         st.caption(
             "Distributed cloud mode is recommended for Deep/Very Deep runs. It preserves the full search space "
-            "while splitting independent family/timeframe work across multiple cloud runners."
+            "while splitting independent family/timeframe work across multiple cloud runners. "
+            "The distributed worker checks the queue automatically about every 15 minutes."
         )
 
     if queue_cloud_finder and finder_symbol:
