@@ -323,6 +323,55 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(len(engine.bars_to_frame(rows)), 1)
 
 
+class IndicatorCacheEquivalenceTests(unittest.TestCase):
+    def test_cached_base_rebuild_matches_full_strategy_indicators(self):
+        rows = []
+        for day in (18, 19, 20, 21):
+            for minute in range(30):
+                close = 10.0 + day * 0.02 + minute * 0.015 + (0.08 if minute % 7 == 0 else 0)
+                rows.append(
+                    bar(
+                        day,
+                        minute,
+                        close - 0.02,
+                        close + 0.06,
+                        close - 0.07,
+                        close,
+                        1000 + minute * 50,
+                    )
+                )
+        frame = engine.bars_to_frame(rows)
+        strategy = simple_strategy(
+            breakout_lookback_bars=7,
+            opening_range_minutes=10,
+            fast_ema_period=5,
+            slow_ema_period=9,
+            trend_ema_period=15,
+            pullback_touch_tolerance_pct=0.8,
+            require_fast_ema_pullback=True,
+        )
+        direct = engine.add_indicators(frame, strategy)
+        base = engine.add_indicators(frame, {"machine_rules": {}})
+        cached = engine.apply_strategy_specific_indicators(base, strategy)
+
+        dependent_columns = [
+            "prior_breakout_high",
+            "opening_range_high",
+            "fast_ema",
+            "slow_ema",
+            "trend_ema",
+            "fast_ema_distance_pct",
+            "fast_ema_touch_distance_pct",
+            "fast_ema_pullback_number",
+            "fast_ema_pullback_recent",
+            "fast_ema_rising",
+        ]
+        for column in dependent_columns:
+            left = direct[column].astype(object).where(direct[column].notna(), None).tolist()
+            right = cached[column].astype(object).where(cached[column].notna(), None).tolist()
+            self.assertEqual(left, right, column)
+
+
 class BacktestTests(unittest.TestCase):
     def setUp(self):
         self.settings = engine.BacktestSettings(
