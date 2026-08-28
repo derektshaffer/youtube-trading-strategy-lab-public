@@ -5261,6 +5261,8 @@ def optimize_stock_strategies(
     *,
     progress: Callable[[int, int, str], None] | None = None,
     finalize_holdout: bool = True,
+    resume_state: dict[str, Any] | None = None,
+    checkpoint: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Tune rules and account sizing on training data without peeking at holdout."""
     settings = backtest_settings or BacktestSettings()
@@ -5326,6 +5328,52 @@ def optimize_stock_strategies(
         generate_execution_variants(settings, maximum=optimizer.max_execution_variants_per_finalist)
         if optimizer.optimize_position_sizing else [settings]
     )
+
+    frame_start = str(frame["timestamp"].iloc[0]) if not frame.empty and "timestamp" in frame.columns else ""
+    frame_end = str(frame["timestamp"].iloc[-1]) if not frame.empty and "timestamp" in frame.columns else ""
+    resume_fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                "version": 1,
+                "symbol": target_symbol,
+                "sessions": sessions,
+                "row_count": len(frame),
+                "frame_start": frame_start,
+                "frame_end": frame_end,
+                "strategy_ids": [str(item.get("id") or "") for item in eligible],
+                "backtest_settings": asdict(settings),
+                "optimization_settings": asdict(optimizer),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()[:24]
+    valid_resume = (
+        isinstance(resume_state, dict)
+        and str(resume_state.get("fingerprint") or "") == resume_fingerprint
+    )
+    resumed_rankings = [
+        dict(item)
+        for item in ((resume_state or {}).get("rankings") or [])
+        if isinstance(item, dict)
+    ] if valid_resume else []
+    resumed_configuration_history = [
+        dict(item)
+        for item in ((resume_state or {}).get("configuration_history") or [])
+        if isinstance(item, dict)
+    ] if valid_resume else []
+    eligible_ids = {str(item.get("id") or "") for item in eligible}
+    resumed_rankings = [
+        item for item in resumed_rankings
+        if str(item.get("source_strategy_id") or "") in eligible_ids
+    ]
+    completed_strategy_ids = {
+        str(item.get("source_strategy_id") or "")
+        for item in resumed_rankings
+        if item.get("source_strategy_id")
+    }
+
     total_steps = sum(
         len(variants)
         + min(len(variants), optimizer.finalists_per_strategy) * (len(execution_variants) - 1)
@@ -5333,7 +5381,23 @@ def optimize_stock_strategies(
         + 1
         for _, variants in search_plan
     ) + int(finalize_holdout)
-    completed_steps = 0
+
+    def planned_family_steps(variants: list[dict[str, Any]]) -> int:
+        return (
+            len(variants)
+            + min(len(variants), optimizer.finalists_per_strategy) * (len(execution_variants) - 1)
+            + min(
+                min(len(variants), optimizer.finalists_per_strategy) * len(execution_variants),
+                optimizer.finalists_per_strategy,
+            )
+            + 1
+        )
+
+    completed_steps = sum(
+        planned_family_steps(variants)
+        for source_strategy, variants in search_plan
+        if str(source_strategy.get("id") or "") in completed_strategy_ids
+    )
     indicator_cache: dict[tuple[str, bool, int, int], pd.DataFrame] = {}
 
     def frame_for_settings(period: str, chosen_settings: BacktestSettings) -> pd.DataFrame:
@@ -5370,9 +5434,13 @@ def optimize_stock_strategies(
         if progress:
             progress(min(completed_steps, total_steps), total_steps, message)
 
-    ranked: list[dict[str, Any]] = []
-    configuration_history: list[dict[str, Any]] = []
+    ranked: list[dict[str, Any]] = list(resumed_rankings)
+    configuration_history: list[dict[str, Any]] = list(resumed_configuration_history)
     configuration_index: dict[str, int] = {}
+    for config_index, existing in enumerate(configuration_history):
+        signature = str(existing.get("signature") or "")
+        if signature:
+            configuration_index[signature] = config_index
 
     def remember_configuration(
         source_strategy: dict[str, Any],
@@ -5419,7 +5487,17 @@ def optimize_stock_strategies(
             }
         )
 
+    if completed_strategy_ids and progress:
+        progress(
+            min(completed_steps, total_steps),
+            total_steps,
+            f"Resuming optimizer from checkpoint · {len(completed_strategy_ids)} strategy families already complete",
+        )
+
     for source_strategy, variants in search_plan:
+        source_strategy_id = str(source_strategy.get("id") or "")
+        if source_strategy_id in completed_strategy_ids:
+            continue
         name = str(source_strategy.get("name") or "Unnamed strategy")
         original = normalize_machine_rules(source_strategy.get("machine_rules"))
         trained: list[dict[str, Any]] = []
@@ -5754,6 +5832,19 @@ def optimize_stock_strategies(
                 "limitations": backtest_limitations(source_strategy),
             }
         )
+        completed_strategy_ids.add(source_strategy_id)
+        if checkpoint:
+            checkpoint(
+                {
+                    "version": 1,
+                    "fingerprint": resume_fingerprint,
+                    "symbol": target_symbol,
+                    "updated_at": isoformat_utc(utc_now()),
+                    "completed_strategy_ids": sorted(completed_strategy_ids),
+                    "rankings": list(ranked),
+                    "configuration_history": list(configuration_history),
+                }
+            )
 
     ranked.sort(
         key=lambda item: (
@@ -5780,6 +5871,8 @@ def optimize_stock_strategies(
         "automatic_slippage_enabled": bool(optimizer.automatic_slippage),
         "session_count": len(sessions),
         "strategies_tested": len(eligible),
+        "resumed_strategy_count": len(resumed_rankings),
+        "resume_fingerprint": resume_fingerprint,
         "variants_tested": sum(item["variants_tested"] for item in ranked),
         "rule_variants_tested": sum(item["rule_variants_tested"] for item in ranked),
         "execution_variants_tested": sum(item["execution_variants_tested"] for item in ranked),
@@ -5878,6 +5971,8 @@ def optimize_stock_timeframes(
     *,
     timeframes: tuple[str, ...] = ("1Min", "5Min", "15Min"),
     progress: Callable[[int, int, str], None] | None = None,
+    resume_state: dict[str, Any] | None = None,
+    checkpoint: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Choose candle size using the selected optimization objective."""
     settings = backtest_settings or BacktestSettings()
@@ -5893,6 +5988,7 @@ def optimize_stock_timeframes(
     if not requested or any(item not in {"1Min", "5Min", "15Min"} for item in requested):
         raise AppError("Select one or more supported candle intervals: 1Min, 5Min, or 15Min.")
     by_interval: list[tuple[str, list[dict[str, Any]], dict[str, Any]]] = []
+    resume_timeframes = dict((resume_state or {}).get("timeframes") or {}) if isinstance(resume_state, dict) else {}
     for interval_index, interval in enumerate(requested):
         interval_rows = resample_intraday_bars(
             one_minute_rows,
@@ -5905,6 +6001,18 @@ def optimize_stock_timeframes(
                 portion = min(1.0, completed / max(total, 1))
                 progress(int((interval_index + portion) * 1000), len(requested) * 1000 + 1, f"{interval}: {message}")
 
+        def interval_checkpoint(state: dict[str, Any]) -> None:
+            resume_timeframes[interval] = state
+            if checkpoint:
+                checkpoint(
+                    {
+                        "version": 1,
+                        "symbol": str(symbol or "").strip().upper(),
+                        "updated_at": isoformat_utc(utc_now()),
+                        "timeframes": dict(resume_timeframes),
+                    }
+                )
+
         report = optimize_stock_strategies(
             interval_rows,
             strategies,
@@ -5913,6 +6021,8 @@ def optimize_stock_timeframes(
             optimizer,
             progress=interval_progress,
             finalize_holdout=False,
+            resume_state=resume_timeframes.get(interval),
+            checkpoint=interval_checkpoint,
         )
         report["timeframe"] = interval
         for candidate in report["rankings"]:
