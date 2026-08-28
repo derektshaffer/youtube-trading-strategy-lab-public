@@ -18,6 +18,9 @@ from live_strategy_runner_page import market_client, setting
 from stock_strategy_finder import (
     SEARCH_PROFILES,
     estimate_search_work,
+    latest_completed_finder_report,
+    latest_finder_checkpoint,
+    merge_finder_checkpoint_into_library,
     merge_finder_report_into_library,
     run_stock_strategy_finder,
     search_profile,
@@ -1156,9 +1159,58 @@ if module == "Stock Strategy Finder":
         if finder_skips:
             st.caption(f"{len(finder_skips)} technically ineligible library record(s) will be skipped.")
 
+    saved_finder_checkpoint = latest_finder_checkpoint(
+        library,
+        finder_symbol,
+        finder_profile.name,
+    )
+    session_finder_result = st.session_state.get("til_stock_strategy_finder_result") or {}
+    session_result_matches = (
+        str(session_finder_result.get("symbol") or "").upper() == finder_symbol
+        and str((session_finder_result.get("profile") or {}).get("name") or "") == finder_profile.name
+    )
+    saved_finder_result = latest_completed_finder_report(
+        library,
+        finder_symbol,
+        finder_profile.name,
+    )
+    finder_result = session_finder_result if session_result_matches else saved_finder_result
+
+    checkpoint_status = str((saved_finder_checkpoint or {}).get("status") or "").lower()
+    checkpoint_engine_state = dict((saved_finder_checkpoint or {}).get("engine_state") or {})
+    checkpoint_timeframes = dict(checkpoint_engine_state.get("timeframes") or {})
+    checkpoint_family_passes = sum(
+        len((state or {}).get("rankings") or [])
+        for state in checkpoint_timeframes.values()
+        if isinstance(state, dict)
+    )
+    checkpoint_resumable = (
+        checkpoint_status in {"running", "failed", "interrupted"}
+        and bool(checkpoint_timeframes)
+        and checkpoint_family_passes > 0
+    )
+
+    if checkpoint_resumable:
+        st.warning(
+            f"A saved {finder_profile.name} checkpoint exists for {finder_symbol}. "
+            f"{checkpoint_family_passes:,} strategy-family/timeframe passes are already complete. "
+            "Resume will reuse them instead of starting those tests over."
+        )
+    elif checkpoint_status == "failed":
+        last_error = str((saved_finder_checkpoint or {}).get("last_error") or "").strip()
+        st.error(
+            f"The previous {finder_symbol} run stopped before a resumable optimizer checkpoint was available."
+            + (f" Last error: {last_error}" if last_error else "")
+        )
+    elif saved_finder_result and not session_result_matches:
+        st.info(
+            f"Loaded the last completed {finder_symbol} {finder_profile.name} research result from durable storage."
+        )
+
     finder_slot = st.empty()
+    finder_action = "Resume" if checkpoint_resumable else "Research"
     run_finder = finder_slot.button(
-        f"◆ Research {finder_symbol or 'Stock'} — {finder_profile.name}",
+        f"◆ {finder_action} {finder_symbol or 'Stock'} — {finder_profile.name}",
         type="primary",
         use_container_width=True,
         disabled=not bool(finder_symbol) or not bool(finder_candidates),
@@ -1166,8 +1218,36 @@ if module == "Stock Strategy Finder":
     )
 
     if run_finder and finder_symbol:
+        resume_engine_state = checkpoint_engine_state if checkpoint_resumable else {}
+        now_iso = utc_now().isoformat()
+        checkpoint_record = {
+            "id": (
+                str((saved_finder_checkpoint or {}).get("id") or "")
+                if checkpoint_resumable
+                else hashlib.sha256(
+                    f"{finder_symbol}|{finder_profile.name}|{now_iso}".encode("utf-8")
+                ).hexdigest()[:24]
+            ),
+            "symbol": finder_symbol,
+            "profile": finder_profile.name,
+            "status": "running",
+            "started_at": (
+                str((saved_finder_checkpoint or {}).get("started_at") or now_iso)
+                if checkpoint_resumable else now_iso
+            ),
+            "updated_at": now_iso,
+            "progress": safe_float((saved_finder_checkpoint or {}).get("progress"), 0.0) or 0.0,
+            "message": (
+                f"Resuming {finder_symbol} from durable optimizer checkpoint"
+                if checkpoint_resumable
+                else f"Preparing {finder_symbol} stock-specific research"
+            ),
+            "engine_state": resume_engine_state,
+            "last_error": None,
+        }
+
         finder_slot.button(
-            f"◆ Researching {finder_symbol}…",
+            f"◆ {'Resuming' if checkpoint_resumable else 'Researching'} {finder_symbol}…",
             type="primary",
             use_container_width=True,
             disabled=True,
@@ -1175,14 +1255,43 @@ if module == "Stock Strategy Finder":
         )
         finder_monitor = long_task_monitor("stock_strategy_finder")
         finder_bar = st.progress(
-            0.01,
-            text=finder_monitor.text(0.01, f"Preparing {finder_symbol} stock-specific research…"),
+            max(0.01, min(0.99, float(checkpoint_record["progress"]) or 0.01)),
+            text=finder_monitor.text(
+                max(0.01, min(0.99, float(checkpoint_record["progress"]) or 0.01)),
+                str(checkpoint_record["message"]),
+            ),
         )
         finder_status = st.status(
-            f"Building {finder_symbol} historical research set…",
+            (
+                f"Resuming {finder_symbol} saved research…"
+                if checkpoint_resumable
+                else f"Building {finder_symbol} historical research set…"
+            ),
             expanded=True,
         )
+        checkpoint_store = intelligence_store()
+        checkpoint_counter = [0]
+        checkpoint_last_save = [time.monotonic()]
+        checkpoint_save_warning = [False]
+
+        def persist_finder_checkpoint(*, force: bool = False) -> None:
+            if not force:
+                checkpoint_counter[0] += 1
+                if checkpoint_counter[0] % 4 != 0 and time.monotonic() - checkpoint_last_save[0] < 90:
+                    return
+            checkpoint_record["updated_at"] = utc_now().isoformat()
+            checkpoint_data = checkpoint_store.load_latest()
+            checkpoint_data = merge_finder_checkpoint_into_library(
+                checkpoint_data,
+                checkpoint_record,
+            )
+            checkpoint_store.save(checkpoint_data)
+            checkpoint_last_save[0] = time.monotonic()
+
         try:
+            # Refuse to spend a long Deep run if the durable checkpoint cannot be created.
+            persist_finder_checkpoint(force=True)
+
             market = market_client()
             finder_end = utc_now()
             if market.historical_feed == "sip" and market.live_feed != "sip":
@@ -1191,11 +1300,13 @@ if module == "Stock Strategy Finder":
 
             def finder_history_progress(page: int) -> None:
                 fraction = 0.03 + 0.12 * min(1.0, page / 100.0)
+                checkpoint_record["progress"] = fraction
+                checkpoint_record["message"] = f"Downloading {finder_symbol} 1-minute history · page {page}"
                 update_task_bar(
                     finder_bar,
                     finder_monitor,
                     fraction,
-                    f"Downloading {finder_symbol} 1-minute history · page {page}",
+                    str(checkpoint_record["message"]),
                 )
 
             rows_by_symbol = market.bars(
@@ -1214,11 +1325,13 @@ if module == "Stock Strategy Finder":
                 f"Historical bars ready · {len(finder_rows):,} one-minute candles · "
                 f"{len(finder_candidates)} strategy families queued"
             )
+            checkpoint_record["progress"] = max(float(checkpoint_record.get("progress") or 0.0), 0.16)
+            checkpoint_record["message"] = f"Historical bars ready · {len(finder_rows):,} candles"
             update_task_bar(
                 finder_bar,
                 finder_monitor,
                 0.16,
-                f"Historical bars ready · {len(finder_rows):,} candles",
+                str(checkpoint_record["message"]),
             )
 
             needs_catalyst_history = any(
@@ -1245,18 +1358,38 @@ if module == "Stock Strategy Finder":
 
             def on_finder_progress(completed: int, total: int, message: str) -> None:
                 portion = min(1.0, max(0.0, completed / max(1, total)))
+                overall = 0.18 + 0.79 * portion
+                checkpoint_record["progress"] = overall
+                checkpoint_record["message"] = message
                 update_task_bar(
                     finder_bar,
                     finder_monitor,
-                    0.18 + 0.79 * portion,
+                    overall,
                     message,
                 )
                 if message and (
                     "Walk-forward" in message
                     or "Parameter stability" in message
                     or "search:" in message
+                    or "Resuming optimizer" in message
                 ):
                     finder_status.write(message)
+                if message and ("Walk-forward" in message or "Parameter stability" in message):
+                    try:
+                        persist_finder_checkpoint(force=True)
+                    except AppError as checkpoint_exc:
+                        if not checkpoint_save_warning[0]:
+                            finder_status.write(f"Checkpoint warning: {checkpoint_exc}")
+                            checkpoint_save_warning[0] = True
+
+            def on_finder_engine_checkpoint(engine_state: dict[str, Any]) -> None:
+                checkpoint_record["engine_state"] = engine_state
+                try:
+                    persist_finder_checkpoint()
+                except AppError as checkpoint_exc:
+                    if not checkpoint_save_warning[0]:
+                        finder_status.write(f"Checkpoint warning: {checkpoint_exc}")
+                        checkpoint_save_warning[0] = True
 
             finder_report = run_stock_strategy_finder(
                 finder_rows,
@@ -1264,10 +1397,21 @@ if module == "Stock Strategy Finder":
                 finder_symbol,
                 profile_name=finder_profile.name,
                 progress=on_finder_progress,
+                resume_state=resume_engine_state or None,
+                checkpoint=on_finder_engine_checkpoint,
             )
-            data = load_library()
+
+            # Flush the newest optimizer state/loser ledger before writing the final result.
+            checkpoint_record["status"] = "complete"
+            checkpoint_record["progress"] = 1.0
+            checkpoint_record["message"] = f"{finder_symbol} strategy research complete"
+            checkpoint_record["completed_at"] = str(finder_report.get("generated_at") or utc_now().isoformat())
+            checkpoint_record["last_error"] = None
+
+            data = checkpoint_store.load_latest()
+            data = merge_finder_checkpoint_into_library(data, checkpoint_record)
             data = merge_finder_report_into_library(data, finder_report)
-            intelligence_store().save(data)
+            checkpoint_store.save(data)
 
             ui_report = dict(finder_report)
             ui_report["configuration_history"] = []
@@ -1292,13 +1436,26 @@ if module == "Stock Strategy Finder":
             )
             st.rerun()
         except AppError as exc:
+            checkpoint_record["status"] = "failed"
+            checkpoint_record["last_error"] = str(exc)
+            checkpoint_record["message"] = "Stock Strategy Finder stopped safely"
+            try:
+                persist_finder_checkpoint(force=True)
+            except Exception:
+                pass
             finder_status.update(label="Stock Strategy Finder stopped safely", state="error", expanded=False)
             st.error(str(exc))
         except Exception as exc:
+            checkpoint_record["status"] = "failed"
+            checkpoint_record["last_error"] = str(exc)
+            checkpoint_record["message"] = "Stock Strategy Finder encountered an error"
+            try:
+                persist_finder_checkpoint(force=True)
+            except Exception:
+                pass
             finder_status.update(label="Stock Strategy Finder encountered an error", state="error", expanded=False)
             st.error(f"Stock Strategy Finder failed: {exc}")
 
-    finder_result = st.session_state.get("til_stock_strategy_finder_result") or {}
     if finder_result and str(finder_result.get("symbol") or "").upper() == finder_symbol:
         verdict = finder_result.get("verdict") or {}
         robustness = finder_result.get("robustness") or {}
