@@ -119,6 +119,79 @@ class OptimizerLedgerTests(unittest.TestCase):
         self.assertTrue(all(item.get("settings") for item in history))
 
 
+class OptimizerResumeTests(unittest.TestCase):
+    def test_resume_skips_families_already_completed_in_checkpoint(self):
+        rows = []
+        for day in (18, 19, 20, 21, 22, 23):
+            for minute in range(8):
+                rows.append(bar(day, minute, 10.0 + day * 0.01 + minute * 0.03))
+
+        candidates = [
+            strategy("resume-a", min_day_change_pct=-50.0, max_hold_minutes=5),
+            strategy("resume-b", min_day_change_pct=-50.0, max_hold_minutes=5),
+        ]
+        settings = engine.BacktestSettings(
+            starting_cash=10_000,
+            risk_per_trade_pct=0.5,
+            max_position_pct=20.0,
+            allow_extended_hours=False,
+        )
+        optimizer = engine.OptimizationSettings(
+            max_variants_per_strategy=2,
+            finalists_per_strategy=1,
+            minimum_training_trades=1,
+            minimum_validation_trades=1,
+            optimize_position_sizing=False,
+            max_execution_variants_per_finalist=1,
+            selection_mode="validated",
+        )
+        captured = {}
+
+        class StopAfterFirstFamily(RuntimeError):
+            pass
+
+        def checkpoint(state):
+            captured["state"] = state
+            if len(state.get("rankings") or []) == 1:
+                raise StopAfterFirstFamily()
+
+        with self.assertRaises(StopAfterFirstFamily):
+            engine.optimize_stock_strategies(
+                rows,
+                candidates,
+                "TEST",
+                settings,
+                optimizer,
+                finalize_holdout=False,
+                checkpoint=checkpoint,
+            )
+
+        raw_state = dict(captured["state"])
+        durable_state = {
+            **raw_state,
+            "configuration_history": [],
+            "configuration_count": int(raw_state.get("configuration_count") or 0),
+        }
+        resumed = engine.optimize_stock_strategies(
+            rows,
+            candidates,
+            "TEST",
+            settings,
+            optimizer,
+            finalize_holdout=False,
+            resume_state=durable_state,
+        )
+        self.assertEqual(resumed.get("resumed_strategy_count"), 1)
+        self.assertEqual(
+            {item["source_strategy_id"] for item in resumed["rankings"]},
+            {"resume-a", "resume-b"},
+        )
+        self.assertGreaterEqual(
+            int(resumed.get("unique_configurations_tested") or 0),
+            int(durable_state.get("configuration_count") or 0),
+        )
+
+
 class FinderPersistenceTests(unittest.TestCase):
     def test_merge_saves_loser_ledger_and_stock_specific_child(self):
         source = strategy("source-family", breakout_lookback_bars=20)
@@ -169,8 +242,51 @@ class FinderPersistenceTests(unittest.TestCase):
                 },
             ],
         }
-        merged = finder.merge_finder_report_into_library(
+        checkpoint = {
+            "id": "sdot-deep-checkpoint",
+            "symbol": "SDOT",
+            "profile": "Deep",
+            "status": "running",
+            "started_at": "2026-08-28T04:00:00+00:00",
+            "updated_at": "2026-08-28T04:30:00+00:00",
+            "progress": 0.5,
+            "engine_state": {
+                "timeframes": {
+                    "5Min": {
+                        "fingerprint": "abc",
+                        "rankings": [{"source_strategy_id": source["id"]}],
+                        "configuration_count": 1,
+                        "configuration_history": [
+                            {
+                                "signature": "checkpoint-config",
+                                "strategy_id": source["id"],
+                                "strategy_name": source["name"],
+                                "phases": ["coarse_training"],
+                                "rules": source["machine_rules"],
+                                "settings": {"risk_per_trade_pct": 0.5},
+                                "metrics": {"net_pnl": -10},
+                            }
+                        ],
+                    }
+                }
+            },
+        }
+        checkpointed = finder.merge_finder_checkpoint_into_library(
             {"strategies": [source]},
+            checkpoint,
+        )
+        durable_checkpoint = finder.latest_finder_checkpoint(checkpointed, "SDOT", "Deep")
+        self.assertIsNotNone(durable_checkpoint)
+        durable_state = durable_checkpoint["engine_state"]["timeframes"]["5Min"]
+        self.assertEqual(durable_state["configuration_history"], [])
+        self.assertEqual(durable_state["configuration_count"], 1)
+        self.assertIn(
+            "checkpoint-config",
+            {item["signature"] for item in checkpointed["stock_strategy_configuration_ledger"]},
+        )
+
+        merged = finder.merge_finder_report_into_library(
+            checkpointed,
             report,
         )
         ledger = merged.get("stock_strategy_configuration_ledger") or []
@@ -182,6 +298,16 @@ class FinderPersistenceTests(unittest.TestCase):
         self.assertEqual(child["optimized_for_symbol"], "SDOT")
         self.assertEqual(child["paper_validation_status"], "ready")
         self.assertEqual(child["validation_status"], "validated")
+
+        restored = finder.latest_completed_finder_report(merged, "SDOT", "Deep")
+        self.assertTrue(restored.get("restored_from_library"))
+        self.assertEqual(restored["winner_strategy_name"], source["name"])
+        self.assertEqual(restored["timeframe"], "5Min")
+        self.assertEqual(restored["optimization"]["winner"]["holdout_metrics"]["net_pnl"], 40)
+
+        completed_checkpoint = finder.latest_finder_checkpoint(merged, "SDOT", "Deep")
+        self.assertEqual(completed_checkpoint["status"], "complete")
+        self.assertEqual(completed_checkpoint["engine_state"], {})
 
 
 if __name__ == "__main__":
