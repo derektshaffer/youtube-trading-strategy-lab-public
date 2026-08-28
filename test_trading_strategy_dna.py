@@ -361,7 +361,7 @@ class CanonicalFamilyManagerTests(unittest.TestCase):
         strategy = {
             **self._strategy("micro", "video-1"),
             "name": "Micro Pullback / Bull Flag Pattern",
-            "summary": "A strong stock is squeezing higher, then forms a micro pullback before continuation.",
+            "summary": "A strong stock forms a brief momentum compression, then a micro pullback before continuation.",
             "entry_conditions": ["Enter on the first candle making a new high after the pullback."],
             "indicators": ["VWAP", "9 EMA"],
             "machine_rules": {"above_vwap": True, "fast_ema_period": 9},
