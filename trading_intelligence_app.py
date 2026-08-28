@@ -6,7 +6,7 @@ import hashlib
 import html
 import os
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -1243,6 +1243,14 @@ if module == "Stock Strategy Finder":
                 else f"Preparing {finder_symbol} stock-specific research"
             ),
             "engine_state": resume_engine_state,
+            "research_start": (
+                (saved_finder_checkpoint or {}).get("research_start")
+                if checkpoint_resumable else None
+            ),
+            "research_end": (
+                (saved_finder_checkpoint or {}).get("research_end")
+                if checkpoint_resumable else None
+            ),
             "last_error": None,
         }
 
@@ -1289,14 +1297,29 @@ if module == "Stock Strategy Finder":
             checkpoint_last_save[0] = time.monotonic()
 
         try:
-            # Refuse to spend a long Deep run if the durable checkpoint cannot be created.
-            persist_finder_checkpoint(force=True)
-
             market = market_client()
-            finder_end = utc_now()
-            if market.historical_feed == "sip" and market.live_feed != "sip":
-                finder_end -= timedelta(minutes=16)
-            finder_start = finder_end - timedelta(days=finder_profile.history_days)
+            saved_research_start = str(checkpoint_record.get("research_start") or "").strip()
+            saved_research_end = str(checkpoint_record.get("research_end") or "").strip()
+            if checkpoint_resumable and saved_research_start and saved_research_end:
+                try:
+                    finder_start = datetime.fromisoformat(saved_research_start.replace("Z", "+00:00"))
+                    finder_end = datetime.fromisoformat(saved_research_end.replace("Z", "+00:00"))
+                except ValueError:
+                    finder_end = utc_now()
+                    if market.historical_feed == "sip" and market.live_feed != "sip":
+                        finder_end -= timedelta(minutes=16)
+                    finder_start = finder_end - timedelta(days=finder_profile.history_days)
+            else:
+                finder_end = utc_now()
+                if market.historical_feed == "sip" and market.live_feed != "sip":
+                    finder_end -= timedelta(minutes=16)
+                finder_start = finder_end - timedelta(days=finder_profile.history_days)
+            checkpoint_record["research_start"] = finder_start.isoformat()
+            checkpoint_record["research_end"] = finder_end.isoformat()
+
+            # Freeze the exact research window before spending a long Deep run.
+            # A later resume downloads the same bars, so optimizer fingerprints still match.
+            persist_finder_checkpoint(force=True)
 
             def finder_history_progress(page: int) -> None:
                 fraction = 0.03 + 0.12 * min(1.0, page / 100.0)
