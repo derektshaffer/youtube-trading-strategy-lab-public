@@ -189,6 +189,58 @@ class ResearchMergeTests(unittest.TestCase):
         ]
         self.assertEqual(len(validation_jobs), 1)
 
+    def test_validation_result_syncs_back_to_hypothesis(self):
+        library, _, hypothesis_ids = research.merge_grounded_research(
+            {},
+            self.sample_research(),
+            topic="momentum",
+        )
+        hypothesis = research.find_research_hypothesis(library, hypothesis_ids[0])
+        review = {
+            "decision": "promote_to_validation",
+            "reason": "Testable enough to falsify.",
+            "confidence": 82,
+            "revised_hypothesis": {
+                "name": hypothesis["name"],
+                "category": hypothesis["category"],
+                "direction": "long",
+                "statement": hypothesis["statement"],
+                "why_it_might_work": hypothesis["why_it_might_work"],
+                "market_scope": hypothesis["market_scope"],
+                "machine_rules": hypothesis["machine_rules"],
+                "unresolved_rules": [],
+                "supporting_source_ids": ["s1", "s2"],
+                "contradicting_source_ids": [],
+                "confidence": 80,
+                "novelty": 45,
+            },
+            "risk_flags": [],
+            "follow_up_questions": [],
+            "generated_at": "2026-08-28T12:30:00Z",
+        }
+        library, strategy_id = research.apply_specialist_review(
+            library,
+            hypothesis_ids[0],
+            review,
+        )
+        report = {
+            "generated_at": "2026-08-28T13:00:00Z",
+            "results": [
+                {
+                    "strategy_id": strategy_id,
+                    "validation_status": "validated",
+                    "global_score": 81.5,
+                    "anchor_symbol": "TEST",
+                    "candidate_symbols": ["TEST", "TWO"],
+                    "gate_reasons": [],
+                }
+            ],
+        }
+        library = research.sync_hypothesis_validation_results(library, report)
+        saved = research.find_research_hypothesis(library, hypothesis_ids[0])
+        self.assertEqual(saved["status"], "validated")
+        self.assertEqual(saved["validation_summary"]["global_score"], 81.5)
+
     def test_pro_cannot_promote_without_machine_testable_rules(self):
         research_payload = self.sample_research()
         research_payload["hypotheses"][0]["machine_rules"] = {}
