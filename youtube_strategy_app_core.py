@@ -1282,7 +1282,7 @@ with st.sidebar:
     st.caption(f'Primary model: {setting("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)}')
     st.caption(
         "Overload backup sequence: "
-        f'{setting("GEMINI_FALLBACK_MODEL", DEFAULT_GEMINI_FALLBACK_MODEL)} → gemini-3.5-flash → gemini-2.5-flash'
+        f'{setting("GEMINI_FALLBACK_MODEL", DEFAULT_GEMINI_FALLBACK_MODEL)} → gemini-3.5-flash'
     )
     st.caption(f'Live feed: {setting("ALPACA_LIVE_FEED", "iex").upper()}')
     st.caption(f'Historical feed: {setting("ALPACA_HISTORICAL_FEED", "sip").upper()}')
