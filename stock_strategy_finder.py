@@ -567,4 +567,59 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
         new_records.append(compact)
     # Keep a large but bounded durable ledger. It includes losers as well as winners.
     result["stock_strategy_configuration_ledger"] = [*new_records, *existing_records][:50000]
+
+    # Materialize the selected stock-specific strategy as a child of the source
+    # family. This preserves the general research family while giving paper/live
+    # workflows an explicit ticker-locked candidate to track.
+    source_id = str(report.get("winner_source_strategy_id") or "")
+    source = next(
+        (
+            item for item in result.get("strategies") or []
+            if str(item.get("id") or "") == source_id
+        ),
+        None,
+    )
+    if isinstance(source, dict) and winner:
+        child_id = "stockfinder-" + hashlib.sha256(
+            f"{source_id}|{symbol}".encode("utf-8")
+        ).hexdigest()[:18]
+        verdict = report.get("verdict") or {}
+        ready_for_paper = str(verdict.get("code") or "") == "ready_for_paper"
+        child = {
+            **source,
+            "id": child_id,
+            "name": f"{source.get('name') or 'Strategy'} — {symbol} optimized",
+            "source_type": "stock_specific_finder",
+            "parent_strategy_id": source_id,
+            "parent_is_master_strategy": True,
+            "optimized_for_symbol": symbol,
+            "optimized_at": generated_at,
+            "machine_rules": winner.get("optimized_rules") or source.get("machine_rules") or {},
+            "optimized_backtest_settings": winner.get("optimized_backtest_settings") or {},
+            "validation_status": "validated" if ready_for_paper else "research_only",
+            "paper_validation_status": "ready" if ready_for_paper else "not_ready",
+            "stock_strategy_finder_verdict": verdict,
+            "stock_strategy_finder_run_id": run_id,
+            "last_validation": {
+                "symbol": symbol,
+                "generated_at": generated_at,
+                "robustness_score": (report.get("robustness") or {}).get("score"),
+                "robustness_label": (report.get("robustness") or {}).get("label"),
+                "optimizer_status": winner.get("status"),
+                "training_metrics": winner.get("training_metrics") or {},
+                "validation_metrics": winner.get("validation_metrics") or {},
+                "holdout_metrics": winner.get("holdout_metrics") or {},
+                "stress_metrics": winner.get("stress_metrics") or {},
+                "walk_forward_summary": (report.get("walk_forward") or {}).get("summary") or {},
+                "parameter_stability": report.get("parameter_stability") or {},
+            },
+        }
+        existing_strategies = [
+            item for item in result.get("strategies") or []
+            if str(item.get("id") or "") != child_id
+        ]
+        result["strategies"] = [child, *existing_strategies]
+        summary["stock_specific_strategy_id"] = child_id
+        summary["paper_validation_status"] = child["paper_validation_status"]
+
     return result
