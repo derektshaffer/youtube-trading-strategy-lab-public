@@ -353,6 +353,13 @@ def reconcile_knowledge_sources(
         recovered = {
             "id": source_id,
             "source_type": source_type,
+            "source_claim_status": (
+                "unverified_source_claim"
+                if str(source_type or "").strip().casefold()
+                in {"youtube", "book_or_document", "research_source"}
+                else "research_hypothesis"
+            ),
+            "source_role": "hypothesis_generator",
             "title": source_title,
             "author": source_author,
             "source_url": source_url,
