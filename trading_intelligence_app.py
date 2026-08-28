@@ -1270,15 +1270,22 @@ if module == "Stock Strategy Finder":
     )
     if active_cloud_finder:
         cloud_status = str(active_cloud_finder.get("status") or "queued").replace("_", " ").title()
+        cloud_payload = dict(active_cloud_finder.get("payload") or {})
+        distributed_shards = int(cloud_payload.get("distributed_shards_total") or 0)
+        distributed_note = (
+            f" It is split across {distributed_shards} independent cloud shards."
+            if distributed_shards > 1
+            else ""
+        )
         st.info(
-            f"Cloud {finder_profile.name} research for {finder_symbol} is already {cloud_status.lower()}. "
-            "It will keep running independently of this browser."
+            f"Cloud {finder_profile.name} research for {finder_symbol} is already {cloud_status.lower()}."
+            f"{distributed_note} It will keep running independently of this browser."
         )
 
     cloud_col, local_col = st.columns([1.0, 1.35])
     with cloud_col:
         queue_cloud_finder = st.button(
-            f"☁ Queue {finder_symbol or 'Stock'} — {finder_profile.name} in Cloud",
+            f"☁ Queue Distributed {finder_symbol or 'Stock'} — {finder_profile.name}",
             use_container_width=True,
             disabled=(
                 not bool(finder_symbol)
@@ -1287,13 +1294,15 @@ if module == "Stock Strategy Finder":
             ),
             key="til_queue_stock_strategy_finder_cloud",
             help=(
-                "Queues the same stock-specific research on the persistent cloud worker. "
-                "You can close this browser after it is queued."
+                "Queues the same stock-specific research for distributed cloud execution. "
+                "Strategy-family/timeframe shards run independently, then one final holdout, "
+                "walk-forward, and stability pass chooses the result. You can close this browser."
             ),
         )
     with local_col:
         st.caption(
-            "Cloud mode is recommended for Deep/Very Deep runs because it does not depend on the Streamlit session."
+            "Distributed cloud mode is recommended for Deep/Very Deep runs. It preserves the full search space "
+            "while splitting independent family/timeframe work across multiple cloud runners."
         )
 
     if queue_cloud_finder and finder_symbol:
@@ -1312,8 +1321,9 @@ if module == "Stock Strategy Finder":
         if queued_job:
             intelligence_store().save(queued_library)
             st.success(
-                f"{finder_symbol} {finder_profile.name} research is queued for the cloud worker. "
-                "You can close your Mac or browser; results will be saved back into the Finder when complete."
+                f"{finder_symbol} {finder_profile.name} research is queued for distributed cloud execution. "
+                "You can close your Mac or browser; the shards will run independently and the final result "
+                "will be saved back into the Finder when complete."
             )
             st.rerun()
         else:
@@ -1325,7 +1335,11 @@ if module == "Stock Strategy Finder":
         f"◆ {finder_action} {finder_symbol or 'Stock'} — {finder_profile.name}",
         type="primary",
         use_container_width=True,
-        disabled=not bool(finder_symbol) or not bool(finder_candidates),
+        disabled=(
+            not bool(finder_symbol)
+            or not bool(finder_candidates)
+            or active_cloud_finder is not None
+        ),
         key="til_run_stock_strategy_finder",
     )
 
