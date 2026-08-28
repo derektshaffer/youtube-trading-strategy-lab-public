@@ -1660,6 +1660,17 @@ if module == "Stock Strategy Finder":
             unsafe_allow_html=True,
         )
 
+    if stock_cloud_ready:
+        st.success(
+            "Cloud configuration preflight: **READY**. System Health can run a live end-to-end smoke test before a long job."
+        )
+    else:
+        st.warning(
+            "Cloud configuration preflight: **NOT READY**. "
+            + " ".join(stock_cloud_blockers)
+            + " Open **14. System Health** to verify the complete worker path."
+        )
+
     cloud_col, local_col = st.columns([1.0, 1.35])
     with cloud_col:
         queue_cloud_finder = st.button(
@@ -1669,6 +1680,7 @@ if module == "Stock Strategy Finder":
                 not bool(finder_symbol)
                 or not bool(finder_candidates)
                 or active_cloud_finder is not None
+                or not stock_cloud_ready
             ),
             key="til_queue_stock_strategy_finder_cloud",
             help=(
@@ -1721,10 +1733,7 @@ if module == "Stock Strategy Finder":
 
         if queued_job:
             intelligence_store().save(queued_library)
-            actions_token = setting(
-                "GITHUB_ACTIONS_TOKEN",
-                setting("GITHUB_BACKUP_TOKEN"),
-            )
+            actions_token = setting("GITHUB_ACTIONS_TOKEN")
             actions_repository = setting(
                 "GITHUB_ACTIONS_REPOSITORY",
                 "derektshaffer/youtube-trading-strategy-lab-public",
