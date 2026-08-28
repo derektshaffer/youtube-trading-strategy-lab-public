@@ -56,8 +56,10 @@ class AccessControlTests(unittest.TestCase):
     def test_secrets_template_and_readme_require_access_password(self):
         secrets = (ROOT / "secrets.example.toml").read_text(encoding="utf-8")
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        full_lab = (ROOT / "youtube_strategy_app_core.py").read_text(encoding="utf-8")
         self.assertIn("APP_ACCESS_PASSWORD", secrets)
         self.assertIn("APP_ACCESS_PASSWORD", readme)
+        self.assertIn('APP_ACCESS_PASSWORD="strong_unique_app_password"', full_lab)
         self.assertNotIn("Upload these three files", readme)
         self.assertNotIn("does not place real or simulated brokerage orders", readme)
 

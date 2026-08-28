@@ -1,6 +1,8 @@
 import ast
+import runpy
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parent
@@ -23,6 +25,20 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
                 self.assertFalse(any(isinstance(node.func, ast.Name) and node.func.id == "exec" for node in calls))
                 self.assertNotIn("read_text", source)
                 self.assertNotIn("source.replace", source)
+
+    def test_side_effect_core_entrypoints_render_on_every_streamlit_rerun(self):
+        entrypoints = {
+            ROOT / "youtube_strategy_app.py": "simple_dashboard_core",
+            ROOT / "pages" / "Full_Trading_Lab.py": "youtube_strategy_app_core",
+            ROOT / "pages" / "Machine_Learning_Lab.py": "machine_learning_lab_core",
+            ROOT / "pages" / "Trading_Intelligence_Lab.py": "trading_intelligence_app",
+        }
+        for path, module_name in entrypoints.items():
+            with self.subTest(path=path.name), patch.object(runpy, "run_module") as run_module:
+                runpy.run_path(str(path), run_name="__main__")
+                runpy.run_path(str(path), run_name="__main__")
+                self.assertEqual(run_module.call_count, 2)
+                run_module.assert_called_with(module_name, run_name="__main__")
 
     def test_full_lab_features_are_integrated_into_the_core_module(self):
         source = (ROOT / "youtube_strategy_app_core.py").read_text(encoding="utf-8")

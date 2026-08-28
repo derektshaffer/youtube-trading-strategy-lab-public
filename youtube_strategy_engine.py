@@ -3214,7 +3214,7 @@ def apply_strategy_specific_indicators(
         & data["fast_ema_touch_distance_pct"].notna()
         & (data["fast_ema_touch_distance_pct"] <= float(tolerance))
     )
-    prior_touch = fast_touch.groupby(data["session"], sort=False).shift(1).fillna(False)
+    prior_touch = fast_touch.groupby(data["session"], sort=False).shift(1).fillna(False).astype(bool)
     touch_start = fast_touch & ~prior_touch
     data["fast_ema_pullback_number"] = (
         touch_start.astype(int).groupby(data["session"], sort=False).cumsum()

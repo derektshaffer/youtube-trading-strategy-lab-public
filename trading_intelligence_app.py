@@ -1099,7 +1099,7 @@ with st.sidebar:
     dashboard_active = module == "Overview"
     dashboard_clicked = st.button(
         "⬡   Dashboard\nWorkspace Home",
-        use_container_width=True,
+        width="stretch",
         type="secondary",
         key="til_dashboard_active" if dashboard_active else "til_dashboard",
     )
@@ -1119,7 +1119,7 @@ with st.sidebar:
             is_active = section == module
             clicked = st.button(
                 f"{icon}   {number.zfill(2)}   {label}",
-                use_container_width=True,
+                width="stretch",
                 type="secondary",
                 key=_nav_key(section, active=is_active),
             )
@@ -1224,7 +1224,7 @@ if workspace_search_query:
                 if cols[index % len(cols)].button(
                     WORKSPACE_DISPLAY_LABELS.get(section, section),
                     key=f"til_search_page_{_nav_key(section)}",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     st.session_state["til_workspace_section"] = section
                     st.session_state["til_workspace_search"] = ""
@@ -1236,7 +1236,7 @@ if workspace_search_query:
                     f"◇ {item.get('title') or 'Untitled source'}"
                     + (f" · {item.get('author')}" if item.get("author") else ""),
                     key=f"til_search_source_{str(item.get('id') or item.get('ingest_id') or '')}",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     st.session_state["til_workspace_section"] = "Knowledge Sources"
                     st.session_state["til_workspace_search"] = ""
@@ -1247,7 +1247,7 @@ if workspace_search_query:
                 if st.button(
                     f"✦ {item.get('name') or 'Unnamed strategy'}",
                     key=f"til_search_strategy_{str(item.get('id') or '')}",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     st.session_state["til_workspace_section"] = "Strategy Library"
                     st.session_state["til_selected_strategy_id"] = str(item.get("id") or "")
@@ -1436,7 +1436,7 @@ if module == "Stock Strategy Finder":
                 if st.button(
                     "☁ Retry cloud launch now",
                     key=launch_key,
-                    use_container_width=True,
+                    width="stretch",
                     disabled=not actions_configured,
                     help=(
                         "Retries the immediate GitHub Actions launch for this exact queued job. "
@@ -1686,7 +1686,7 @@ if module == "Stock Strategy Finder":
     with cloud_col:
         queue_cloud_finder = st.button(
             f"☁ Queue Distributed {finder_symbol or 'Stock'} — {finder_profile.name}",
-            use_container_width=True,
+            width="stretch",
             disabled=(
                 not bool(finder_symbol)
                 or not bool(finder_candidates)
@@ -1778,7 +1778,7 @@ if module == "Stock Strategy Finder":
     run_finder = finder_slot.button(
         f"◆ {finder_action} {finder_symbol or 'Stock'} — {finder_profile.name}",
         type="primary",
-        use_container_width=True,
+        width="stretch",
         disabled=(
             not bool(finder_symbol)
             or not bool(finder_candidates)
@@ -1833,7 +1833,7 @@ if module == "Stock Strategy Finder":
         finder_slot.button(
             f"◆ {'Resuming' if checkpoint_resumable else 'Researching'} {finder_symbol}…",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             disabled=True,
             key="til_run_stock_strategy_finder_busy",
         )
@@ -2119,7 +2119,7 @@ if module == "Stock Strategy Finder":
                     "Max drawdown %": safe_float(metrics.get("max_drawdown_pct"), 0.0) or 0.0,
                 }
             )
-        st.dataframe(pd.DataFrame(evidence_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(evidence_rows), width="stretch", hide_index=True)
 
         with st.expander("Winning optimized rules", expanded=False):
             st.json(winner.get("optimized_rules") or {})
@@ -2158,7 +2158,7 @@ if module == "Stock Strategy Finder":
                     )
                 st.dataframe(
                     pd.DataFrame(timing_rows),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
                 st.caption(
@@ -2174,7 +2174,7 @@ if module == "Stock Strategy Finder":
         actions = st.columns(3)
         if actions[0].button(
             "↗ Open Paper & Live Trading",
-            use_container_width=True,
+            width="stretch",
             disabled=str(verdict.get("code") or "") != "ready_for_paper",
             key="til_finder_open_paper",
         ):
@@ -2182,7 +2182,7 @@ if module == "Stock Strategy Finder":
             st.rerun()
         if actions[1].button(
             "⌖ Scan market for this setup",
-            use_container_width=True,
+            width="stretch",
             key="til_finder_open_discovery",
         ):
             st.session_state["til_selected_strategy_id"] = str(finder_result.get("winner_source_strategy_id") or "")
@@ -2190,7 +2190,7 @@ if module == "Stock Strategy Finder":
             st.rerun()
         if actions[2].button(
             "⌬ Open advanced Strategy Lab",
-            use_container_width=True,
+            width="stretch",
             key="til_finder_open_lab",
         ):
             st.session_state["til_selected_strategy_id"] = str(finder_result.get("winner_source_strategy_id") or "")
@@ -2371,7 +2371,7 @@ elif module == "System Health":
     smoke_clicked = st.button(
         "☁ Run end-to-end cloud smoke test",
         type="primary",
-        use_container_width=True,
+        width="stretch",
         disabled=not bool(actions_token_setting),
         key="til_run_cloud_smoke_test",
     )
@@ -2416,7 +2416,7 @@ elif module == "System Health":
             st.link_button(
                 "Open smoke-test run details",
                 str(latest.get("html_url")),
-                use_container_width=True,
+                width="stretch",
             )
 
     render_smoke_status()
@@ -4184,7 +4184,7 @@ elif module == "AI Research Autopilot":
         if st.button(
             "Queue today's continuous research cycle",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             key="til_seed_continuous_research",
         ):
             queued_library, added_jobs = seed_continuous_research_cycle(load_library())
@@ -4222,7 +4222,7 @@ elif module == "AI Research Autopilot":
                         for item in recent_queue
                     ]
                 ),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
 
