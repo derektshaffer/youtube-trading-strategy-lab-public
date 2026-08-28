@@ -2002,7 +2002,7 @@ elif module == "Knowledge Sources":
                     )
                     compiler = GeminiRuleCompiler(
                         setting("GEMINI_API_KEY"),
-                        setting("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
+                        setting("GEMINI_RULE_COMPILER_MODEL", DEFAULT_GEMINI_SPECIALIST_MODEL),
                         fallback_api_key=setting("GEMINI_PAID_API_KEY", ""),
                     )
 
@@ -2961,7 +2961,7 @@ elif module == "Strategy DNA":
                             )
                             compiler = GeminiRuleCompiler(
                                 setting("GEMINI_API_KEY"),
-                                setting("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
+                                setting("GEMINI_RULE_COMPILER_MODEL", DEFAULT_GEMINI_SPECIALIST_MODEL),
                                 fallback_api_key=setting("GEMINI_PAID_API_KEY", ""),
                             )
                             candidate_to_run = prepare_strategies_with_ai(
@@ -3190,7 +3190,7 @@ elif module == "Make Strategy Testable":
                 with st.status("Turning vague requirements into measurable test rules…", expanded=True) as status:
                     compiler = GeminiRuleCompiler(
                         setting("GEMINI_API_KEY"),
-                        setting("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
+                        setting("GEMINI_RULE_COMPILER_MODEL", DEFAULT_GEMINI_SPECIALIST_MODEL),
                         fallback_api_key=setting("GEMINI_PAID_API_KEY", ""),
                     )
                     update_task_bar(
@@ -3614,7 +3614,7 @@ elif module == "AI Research Autopilot":
                 )
                 compiler = GeminiRuleCompiler(
                     setting("GEMINI_API_KEY"),
-                    setting("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
+                    setting("GEMINI_RULE_COMPILER_MODEL", DEFAULT_GEMINI_SPECIALIST_MODEL),
                     fallback_api_key=setting("GEMINI_PAID_API_KEY", ""),
                 )
 
