@@ -1755,7 +1755,8 @@ if module == "Stock Strategy Finder":
             else:
                 st.warning(
                     f"{finder_symbol} {finder_profile.name} is safely queued, but instant launch was not available. "
-                    f"{launch_detail} The automatic scheduled worker remains active as a fallback."
+                    f"{launch_detail} The scheduled worker is only a fallback; do not assume compute started "
+                    "until this job changes to STARTING/RUNNING or System Health confirms the worker path."
                 )
             st.rerun()
         else:
