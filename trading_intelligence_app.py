@@ -1277,9 +1277,16 @@ if module == "Stock Strategy Finder":
             if distributed_shards > 1
             else ""
         )
-        st.info(
-            f"Cloud {finder_profile.name} research for {finder_symbol} is already {cloud_status.lower()}."
-            f"{distributed_note} It will keep running independently of this browser."
+        st.success(
+            f"☁ **CLOUD {cloud_status.upper()} — SAFE TO CLOSE YOUR COMPUTER**\n\n"
+            f"{finder_symbol} {finder_profile.name} research is running independently of this browser."
+            f"{distributed_note} You can close the browser, put your Mac to sleep, or shut it down."
+        )
+    else:
+        st.warning(
+            "◆ **LOCAL SESSION MODE — KEEP THIS BROWSER OPEN WHILE A LOCAL TEST IS RUNNING**\n\n"
+            "The local Research/Resume button uses the Streamlit session. "
+            "For work that should continue with your Mac closed, use the **☁ Queue Distributed** button."
         )
 
     cloud_col, local_col = st.columns([1.0, 1.35])
@@ -1353,7 +1360,7 @@ if module == "Stock Strategy Finder":
             st.info("That cloud Finder job is already queued or running.")
 
     finder_slot = st.empty()
-    finder_action = "Resume" if checkpoint_resumable else "Research"
+    finder_action = "Resume Locally" if checkpoint_resumable else "Research Locally"
     run_finder = finder_slot.button(
         f"◆ {finder_action} {finder_symbol or 'Stock'} — {finder_profile.name}",
         type="primary",
@@ -1367,6 +1374,12 @@ if module == "Stock Strategy Finder":
     )
 
     if run_finder and finder_symbol:
+        st.warning(
+            "◆ **LOCAL SESSION RUNNING — KEEP THIS BROWSER OPEN**\n\n"
+            "This run is executing in the current Streamlit session. "
+            "If the session stops, the saved checkpoint will protect completed work, "
+            "but computation will not continue until you resume it."
+        )
         resume_engine_state = checkpoint_engine_state if checkpoint_resumable else {}
         now_iso = utc_now().isoformat()
         checkpoint_record = {
