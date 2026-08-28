@@ -1,0 +1,61 @@
+name: Cloud Research Smoke Test
+
+run-name: Cloud research smoke test · ${{ inputs.requested_from || 'manual' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      requested_from:
+        description: "Where the smoke test was requested from"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-research-smoke-test
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GITHUB_BACKUP_REPOSITORY: ${{ secrets.TRADING_LAB_BACKUP_REPOSITORY }}
+      GITHUB_BACKUP_TOKEN: ${{ secrets.TRADING_LAB_BACKUP_TOKEN }}
+      GITHUB_BACKUP_BRANCH: ${{ vars.GITHUB_BACKUP_BRANCH }}
+      GITHUB_BACKUP_PATH: ${{ vars.TRADING_INTELLIGENCE_BACKUP_PATH || 'trading-intelligence-lab/intelligence_library.json' }}
+      TRADING_SYSTEM_HEALTH_BACKUP_PATH: ${{ vars.TRADING_SYSTEM_HEALTH_BACKUP_PATH || 'trading-intelligence-lab/system_health.json' }}
+      ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+      ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+      ALPACA_LIVE_FEED: ${{ vars.ALPACA_LIVE_FEED || 'iex' }}
+      ALPACA_HISTORICAL_FEED: ${{ vars.ALPACA_HISTORICAL_FEED || 'sip' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Validate required worker secrets
+        shell: bash
+        run: |
+          missing=0
+          for name in GEMINI_API_KEY GITHUB_BACKUP_REPOSITORY GITHUB_BACKUP_TOKEN ALPACA_API_KEY ALPACA_SECRET_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing required Actions secret: $name"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Run end-to-end cloud smoke test
+        run: python cloud_research_smoke_test.py
