@@ -180,7 +180,10 @@ class EmaSemanticCoverageTests(unittest.TestCase):
             any("proximity" in item.lower() for item in readiness["semantic_missing_requirements"])
         )
 
-        upgraded["research_rule_overrides"] = {"pullback_touch_tolerance_pct": 0.75}
+        upgraded["research_rule_overrides"] = {
+            "pullback_touch_tolerance_pct": 0.75,
+            "stop_ema_buffer_pct": 0.25,
+        }
         ready = research_readiness(upgraded)
         self.assertEqual(ready["label"], "ready_for_backtest")
         self.assertEqual(ready["semantic_coverage_pct"], 100.0)
