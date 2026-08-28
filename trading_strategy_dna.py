@@ -159,6 +159,16 @@ def infer_strategy_dna(strategy: dict[str, Any]) -> dict[str, list[str]]:
         _add(dna, "momentum", "Momentum continuation")
 
     # Price / chart structure.
+    if rules.get("previous_day_high_breakout") is True:
+        _add(dna, "structure", "Previous-day high breakout")
+    if _contains(text, "anchored vwap", "avwap"):
+        _add(dna, "structure", "Anchored VWAP")
+    if _contains(text, "mean reversion", "mean-reversion", "extreme reversal", "counter-trend reversal"):
+        _add(dna, "structure", "Mean-reversion reversal")
+    if _contains(text, "avwap pinch", "pinch strategy", "compression", "squeeze between"):
+        _add(dna, "structure", "Compression / pinch")
+    if _contains(text, "avwap handoff", "handoff"):
+        _add(dna, "structure", "AVWAP handoff")
     if rules.get("above_vwap") is True:
         _add(dna, "structure", "Above VWAP")
     if rules.get("vwap_reclaim") is True or _contains(text, "vwap reclaim", "reclaim vwap"):
@@ -409,7 +419,33 @@ def _structure_set(strategy: dict[str, Any]) -> set[str]:
 def _direction_compatible(left: dict[str, Any], right: dict[str, Any]) -> bool:
     a = str(left.get("direction") or "unclear").lower()
     b = str(right.get("direction") or "unclear").lower()
-    return a == b or a in {"both", "unclear"} or b in {"both", "unclear"}
+    if a == b:
+        return True
+    # "Both" is a genuinely different executable blueprint from long-only or short-only.
+    # Only an unclear extraction is allowed to attach provisionally to a directional family.
+    return a == "unclear" or b == "unclear"
+
+
+STRONG_STRUCTURE_CONCEPTS = {
+    "previous-day high breakout",
+    "anchored vwap",
+    "vwap reclaim",
+    "opening-range breakout",
+    "ema pullback",
+    "flag continuation",
+    "high-of-day break",
+    "mean-reversion reversal",
+    "compression / pinch",
+    "avwap handoff",
+}
+
+
+def _strong_structure_set(strategy: dict[str, Any]) -> set[str]:
+    return {
+        value
+        for value in _structure_set(strategy)
+        if value in STRONG_STRUCTURE_CONCEPTS
+    }
 
 
 def _strategy_similarity(left: dict[str, Any], right: dict[str, Any]) -> float:
@@ -560,7 +596,7 @@ def _family_summary(strategies: list[dict[str, Any]], family_id: int) -> dict[st
 def build_strategy_families(
     strategies: list[dict[str, Any]],
     *,
-    similarity_threshold: float = 0.28,
+    similarity_threshold: float = 0.40,
 ) -> list[dict[str, Any]]:
     """Greedily cluster related strategies using reusable DNA rather than strategy names."""
     items = sorted(
@@ -580,20 +616,30 @@ def build_strategy_families(
         best_index = None
         best_score = 0.0
         strategy_structure = _structure_set(strategy)
+        strategy_strong = _strong_structure_set(strategy)
         category = re.sub(r"[^a-z0-9]+", " ", str(strategy.get("category") or "").casefold()).strip()
         for index, family in enumerate(families):
             representative = family[0]
             if not _direction_compatible(strategy, representative):
                 continue
             family_structure = set().union(*(_structure_set(member) for member in family))
+            family_strong = set().union(*(_strong_structure_set(member) for member in family))
             rep_category = re.sub(
                 r"[^a-z0-9]+", " ", str(representative.get("category") or "").casefold()
             ).strip()
-            structure_overlap = bool(strategy_structure & family_structure)
-            if strategy_structure and family_structure and not structure_overlap:
-                continue
-            if not structure_overlap and category and rep_category and category != rep_category:
-                continue
+
+            # Strong mechanism tags are blueprint-defining. A bull-flag/EMA pullback should not
+            # merge with an AVWAP pinch or mean-reversion setup just because both mention support.
+            if strategy_strong or family_strong:
+                if not (strategy_strong & family_strong):
+                    continue
+            else:
+                structure_overlap = strategy_structure & family_structure
+                if strategy_structure and family_structure and not structure_overlap:
+                    continue
+                if len(structure_overlap) < 2 and category and rep_category and category != rep_category:
+                    continue
+
             score = max(_strategy_similarity(strategy, member) for member in family)
             if score >= similarity_threshold and score > best_score:
                 best_index = index
@@ -706,7 +752,19 @@ def _canonical_family_name(family: dict[str, Any], core_dna: dict[str, list[str]
     structure = {str(value).casefold() for value in core_dna.get("structure") or []}
     momentum = {str(value).casefold() for value in core_dna.get("momentum") or []}
 
-    if "opening-range breakout" in structure:
+    if "previous-day high breakout" in structure:
+        base = "Previous-Day High Continuation Breakout"
+    elif "compression / pinch" in structure:
+        base = "AVWAP Pinch / Compression"
+    elif "avwap handoff" in structure:
+        base = "Anchored VWAP Handoff"
+    elif "mean-reversion reversal" in structure:
+        base = "Extreme Mean-Reversion Reversal"
+    elif "anchored vwap" in structure and "vwap reclaim" in structure:
+        base = "Anchored VWAP Reclaim"
+    elif "anchored vwap" in structure and "pullback" in structure:
+        base = "Anchored VWAP Pullback"
+    elif "opening-range breakout" in structure:
         base = "Opening Range Breakout"
     elif "vwap reclaim" in structure and "pullback" in structure:
         base = "VWAP Reclaim Pullback"
@@ -720,6 +778,8 @@ def _canonical_family_name(family: dict[str, Any], core_dna: dict[str, list[str]
         base = "Flag / Pullback Continuation"
     elif "pullback" in structure and "breakout" in structure:
         base = "Pullback Breakout"
+    elif "anchored vwap" in structure:
+        base = "Anchored VWAP Trend / Structure"
     elif "breakout" in structure and "high relative volume" in momentum:
         base = "High-RVOL Momentum Breakout"
     elif "breakout" in structure:
@@ -728,10 +788,13 @@ def _canonical_family_name(family: dict[str, Any], core_dna: dict[str, list[str]
         base = "Momentum Pullback"
     else:
         base = str(family.get("name") or "Strategy family").replace(" family", "").strip()
+        base = base.replace("_", " ").title()
 
     direction = str(family.get("direction") or "").lower()
     if direction == "short":
         return f"{base} — Short"
+    if direction == "both":
+        return f"{base} — Long & Short"
     return base
 
 
