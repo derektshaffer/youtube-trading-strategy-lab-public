@@ -197,6 +197,74 @@ class AutonomousResearchBaselineTests(unittest.TestCase):
         self.assertEqual({item["id"] for item in baselines}, {"a", "b"})
 
 
+class EmaOpportunityDiscoveryTests(unittest.TestCase):
+    def test_ema_pullback_uses_strategy_specific_daily_proxy(self):
+        rows = []
+        price = 10.0
+        for index in range(40):
+            price *= 1.01
+            rows.append(
+                {
+                    "t": f"2026-06-{(index % 28) + 1:02d}T20:00:00Z",
+                    "c": round(price, 4),
+                    "h": round(price * 1.01, 4),
+                    "l": round(price * 0.99, 4),
+                    "v": 2_000_000,
+                }
+            )
+        strategy = {
+            "direction": "long",
+            "machine_rules": {
+                "fast_ema_period": 3,
+                "slow_ema_period": 5,
+                "trend_ema_period": 8,
+                "require_fast_ema_pullback": True,
+                "pullback_touch_tolerance_pct": 20.0,
+                "require_price_above_slow_ema": True,
+                "require_price_above_trend_ema": True,
+            },
+        }
+        result = score_historical_opportunities(rows, strategy)
+        self.assertGreater(result["event_count"], 0)
+        self.assertEqual(
+            result["candidate_selection_mode"],
+            "strategy_ema_pullback_daily_proxy",
+        )
+        self.assertGreater(result["explicit_opportunity_rule_count"], 0)
+        self.assertIsNotNone(result["events"][0]["fast_ema"])
+
+    def test_extreme_rvol_from_dormant_baseline_is_audited_not_ranked_as_event(self):
+        rows = []
+        for index in range(25):
+            rows.append(
+                {
+                    "t": f"2026-05-{index + 1:02d}T20:00:00Z",
+                    "c": 10.0,
+                    "h": 10.1,
+                    "l": 9.9,
+                    "v": 1_000,
+                }
+            )
+        rows.append(
+            {
+                "t": "2026-06-01T20:00:00Z",
+                "c": 12.0,
+                "h": 12.5,
+                "l": 9.8,
+                "v": 1_000_000,
+            }
+        )
+        result = score_historical_opportunities(
+            rows,
+            {"direction": "long", "machine_rules": {}},
+        )
+        self.assertEqual(result["event_count"], 0)
+        self.assertEqual(result["liquidity_regime_outlier_count"], 1)
+        self.assertGreater(result["peak_relative_volume"], 100)
+        self.assertLess(result["peak_relative_volume_for_ranking"], 5)
+        self.assertTrue(result["outlier_events"][0]["liquidity_regime_outlier"])
+
+
 class AutonomousResearchTests(unittest.TestCase):
     def test_broad_sample_keeps_priority_and_is_deterministic(self):
         symbols = [f"S{index:04d}" for index in range(1000)]
