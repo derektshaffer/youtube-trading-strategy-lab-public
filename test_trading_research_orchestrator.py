@@ -55,6 +55,35 @@ class ResearchQueueTests(unittest.TestCase):
         self.assertIn("unverified claim", job["payload"]["existing_context"])
         self.assertIn("Challenge it independently", job["payload"]["existing_context"])
 
+    def test_stale_running_job_returns_to_retry_queue(self):
+        library, job = research.enqueue_research_job(
+            {},
+            "web_research",
+            {"topic": "stale"},
+            priority=50,
+            dedupe_key="stale",
+            max_attempts=3,
+        )
+        library["research_queue"][0].update(
+            {
+                "status": "running",
+                "attempts": 1,
+                "worker_id": "dead-worker",
+                "started_at": "2026-08-28T00:00:00Z",
+                "updated_at": "2026-08-28T00:00:00Z",
+            }
+        )
+        library, recovered = research.recover_stale_research_jobs(
+            library,
+            now=datetime(2026, 8, 28, 7, 0, tzinfo=timezone.utc),
+            stale_after_minutes=360,
+        )
+        self.assertEqual(recovered, 1)
+        saved = library["research_queue"][0]
+        self.assertEqual(saved["status"], "retry")
+        self.assertIsNone(saved["worker_id"])
+        self.assertIn("Retrying from durable state", saved["last_error"])
+
     def test_claim_prefers_priority_and_retry_can_fail_terminally(self):
         library = {}
         library, low = research.enqueue_research_job(
