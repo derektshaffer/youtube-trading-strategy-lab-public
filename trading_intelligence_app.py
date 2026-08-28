@@ -35,6 +35,7 @@ from trading_strategy_dna import (
     DNA_DIMENSIONS,
     DNA_LABELS,
     build_candidate_blueprints,
+    build_canonical_family_strategies,
     build_concept_graph,
     build_strategy_families,
     compile_candidate_blueprint,
@@ -194,15 +195,37 @@ def load_library() -> dict[str, Any]:
     data["strategies"] = upgraded_strategies
 
     # Older Trading Lab versions saved source provenance only on strategy records.
-    # Rebuild the Saved Sources catalog automatically so existing books/videos are
-    # visible without asking the user to upload or analyze them again.
     data, sources_changed = reconcile_knowledge_sources(data)
-    if sources_changed:
+
+    existing_canonical = [
+        dict(item)
+        for item in data.get("strategies") or []
+        if isinstance(item, dict)
+        and str(item.get("source_type") or "").lower() == "canonical_family"
+    ]
+    source_and_other = [
+        dict(item)
+        for item in data.get("strategies") or []
+        if isinstance(item, dict)
+        and str(item.get("source_type") or "").lower() != "canonical_family"
+    ]
+
+    canonical_families, _ = build_canonical_family_strategies(
+        source_and_other,
+        existing=existing_canonical,
+    )
+    for item in canonical_families:
+        item["research_readiness"] = research_readiness(item)
+
+    canonical_changed = canonical_families != existing_canonical
+    data["strategies"] = [*source_and_other, *canonical_families]
+
+    if sources_changed or canonical_changed:
         try:
             store.save(data)
         except AppError:
-            # Keep the repaired catalog visible in this session. The storage-health
-            # panel will surface persistence problems and the migration retries next load.
+            # Keep the repaired/consolidated library visible for this session. Storage health
+            # surfaces any cloud-write problem and the migration retries on the next load.
             pass
     return data
 
