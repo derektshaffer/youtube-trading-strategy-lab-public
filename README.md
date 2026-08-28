@@ -109,7 +109,7 @@ It is intentionally separate from the current YouTube Trading Lab home screen. T
 
 - PDF/TXT/Markdown knowledge-source ingestion
 - resilient chunked Gemini extraction for books and research documents, with retry/fallback/resume support
-- model-role routing for books: Gemini 3.6 Flash handles normal bulk extraction, Gemini 3.7 Flash is reserved for genuinely difficult/ambiguous sections, and Gemini 3.5/2.5 remain reliability fallbacks
+- model-role routing for books: Gemini 3.6 Flash handles normal bulk extraction, Gemini 3.1 Pro Preview is reserved for genuinely difficult/ambiguous sections, and Gemini 3.5/2.5 remain reliability fallbacks
 - automatic title/author detection when the source clearly identifies them
 - AI Autopilot that converts qualitative lessons into clearly labeled research assumptions
 - source-rule protection so AI assumptions never overwrite thresholds explicitly stated by the author
@@ -130,7 +130,7 @@ Normal book workflow:
 2. Leave title, author, and research focus blank unless you want to override or narrow the AI.
 3. Keep **AI Autopilot** and **Continue automatically into historical opportunity discovery + validation** enabled.
 4. Click **Analyze source and extract strategies** once.
-5. Gemini 3.6 Flash performs the normal bulk book extraction. Only sections with low confidence, conflicting/ambiguous requirements, evidence gaps, or unusually difficult formalization are escalated to Gemini 3.7 Flash for a specialist second pass. If 3.7 is unavailable, the successful 3.6 extraction is kept rather than discarded.
+5. Gemini 3.6 Flash performs the normal bulk book extraction. Only sections with low confidence, conflicting/ambiguous requirements, evidence gaps, or unusually difficult formalization are escalated to Gemini 3.1 Pro Preview for a specialist second pass. If Pro is unavailable, the successful Flash extraction is kept rather than discarded.
 6. The AI extracts strategies, preserves source evidence, and creates clearly labeled research assumptions where needed.
 7. The Strategy DNA layer converts each strategy into reusable components and compares those concepts across independent books/documents without treating author agreement as proof of an edge.
 8. Cross-source strategy families and candidate blueprints are generated as research hypotheses; conflicting explicit thresholds remain visible instead of being averaged into invented rules.
