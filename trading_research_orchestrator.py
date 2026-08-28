@@ -293,14 +293,62 @@ def enqueue_research_job(
     return data, job
 
 
+def recover_stale_research_jobs(
+    library: dict[str, Any],
+    *,
+    now: datetime | None = None,
+    stale_after_minutes: int = 360,
+) -> tuple[dict[str, Any], int]:
+    """Return abandoned running jobs to retry after a worker dies or times out."""
+    data = ensure_research_collections(library)
+    current = (now or datetime.now(UTC)).astimezone(UTC)
+    threshold = current - timedelta(minutes=max(30, int(stale_after_minutes)))
+    recovered = 0
+    queue: list[dict[str, Any]] = []
+    for raw in data["research_queue"]:
+        item = dict(raw)
+        if str(item.get("status") or "") != "running":
+            queue.append(item)
+            continue
+        heartbeat = (
+            _parse_iso(item.get("updated_at"))
+            or _parse_iso(item.get("started_at"))
+            or _parse_iso(item.get("created_at"))
+        )
+        if heartbeat is None or heartbeat > threshold:
+            queue.append(item)
+            continue
+        attempts = int(item.get("attempts") or 0)
+        max_attempts = int(item.get("max_attempts") or 3)
+        retry = attempts < max_attempts
+        item["status"] = "retry" if retry else "failed"
+        item["updated_at"] = current.isoformat().replace("+00:00", "Z")
+        item["worker_id"] = None
+        item["next_attempt_at"] = (
+            current.isoformat().replace("+00:00", "Z")
+            if retry else None
+        )
+        item["last_error"] = (
+            "Previous cloud worker stopped or timed out before completing this job. "
+            + ("Retrying from durable state." if retry else "Maximum attempts reached.")
+        )
+        recovered += 1
+        queue.append(item)
+    data["research_queue"] = queue
+    return data, recovered
+
+
 def claim_next_research_job(
     library: dict[str, Any],
     worker_id: str,
     *,
     now: datetime | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    data = ensure_research_collections(library)
     current = (now or datetime.now(UTC)).astimezone(UTC)
+    data, _ = recover_stale_research_jobs(
+        library,
+        now=current,
+    )
     eligible: list[dict[str, Any]] = []
     for job in data["research_queue"]:
         if str(job.get("status") or "") not in {"queued", "retry"}:
