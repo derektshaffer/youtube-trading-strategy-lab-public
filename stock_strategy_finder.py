@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from statistics import median
+from time import perf_counter
 from typing import Any, Callable
 
 from trading_validation_core import validation_strength, walk_forward_validate
@@ -359,6 +360,8 @@ def run_stock_strategy_finder(
     resume_state: dict[str, Any] | None = None,
     checkpoint: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
+    total_started = perf_counter()
+    stage_timings: dict[str, float] = {}
     profile = search_profile(profile_name)
     selected, skipped = selected_strategies_for_profile(strategies, symbol, profile)
     if not selected:
@@ -386,6 +389,7 @@ def run_stock_strategy_finder(
     if progress:
         progress(0, 1000, f"{profile.name} search: testing {len(selected)} strategy families without AI vetoes…")
 
+    optimization_started = perf_counter()
     optimization = optimize_stock_timeframes(
         one_minute_rows,
         selected,
@@ -397,6 +401,7 @@ def run_stock_strategy_finder(
         resume_state=resume_state,
         checkpoint=checkpoint,
     )
+    stage_timings["optimization"] = round(perf_counter() - optimization_started, 3)
 
     distinct_ids = _top_distinct_strategy_ids(optimization, profile.walk_forward_family_limit)
     walk_strategies = [
@@ -414,6 +419,7 @@ def run_stock_strategy_finder(
         max_variants_per_strategy=min(profile.max_variants_per_strategy, 140 if profile.name == "Quick" else 180),
         finalists_per_strategy=min(profile.finalists_per_strategy, 8),
     )
+    walk_started = perf_counter()
     walk = walk_forward_validate(
         chosen_rows,
         walk_strategies,
@@ -424,6 +430,7 @@ def run_stock_strategy_finder(
         test_sessions_per_fold=2,
         max_folds=profile.walk_forward_folds,
     )
+    stage_timings["walk_forward"] = round(perf_counter() - walk_started, 3)
     robustness = validation_strength(optimization, walk)
 
     winner = optimization.get("winner") or {}
@@ -435,13 +442,16 @@ def run_stock_strategy_finder(
     if progress:
         progress(965, 1000, "Parameter stability: perturbing the winning rules on untouched holdout data…")
 
+    stability_started = perf_counter()
     stability = parameter_stability_test(
         one_minute_rows,
         winner_source,
         optimization,
         maximum=profile.stability_variants,
     )
+    stage_timings["parameter_stability"] = round(perf_counter() - stability_started, 3)
     verdict = _verdict(robustness, stability, walk)
+    stage_timings["total"] = round(perf_counter() - total_started, 3)
 
     return {
         "version": "stock-strategy-finder-v1",
@@ -469,6 +479,7 @@ def run_stock_strategy_finder(
         "timeframe": chosen_timeframe,
         "unique_configurations_tested": int(optimization.get("unique_configurations_tested") or 0),
         "configuration_history": list(optimization.get("configuration_history") or []),
+        "stage_timings_seconds": stage_timings,
     }
 
 
@@ -657,6 +668,7 @@ def finder_summary_to_report(summary: dict[str, Any]) -> dict[str, Any]:
         "strategies_tested": summary.get("strategies_tested"),
         "technical_skips": summary.get("technical_skips") or [],
         "estimated_work": summary.get("estimated_work") or {},
+        "stage_timings_seconds": summary.get("stage_timings_seconds") or {},
         "optimization": {"winner": winner},
         "walk_forward": {"summary": summary.get("walk_forward_summary") or {}},
         "robustness": summary.get("robustness") or {},
@@ -715,6 +727,7 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
         "strategies_tested": report.get("strategies_tested"),
         "technical_skips": report.get("technical_skips") or [],
         "estimated_work": report.get("estimated_work") or {},
+        "stage_timings_seconds": report.get("stage_timings_seconds") or {},
         "robustness": report.get("robustness") or {},
         "parameter_stability": report.get("parameter_stability") or {},
         "walk_forward_summary": (report.get("walk_forward") or {}).get("summary") or {},
