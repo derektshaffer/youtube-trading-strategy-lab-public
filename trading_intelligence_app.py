@@ -101,6 +101,57 @@ st.markdown(
     }
     .til-card strong {font-size:1.03rem;}
     .muted {color:#91a2b7;}
+
+    /* Research Workspace navigation: one continuous radio keeps existing
+       routing/session-state behavior, while visual section headers make the
+       workflow readable as an ordered process. */
+    .st-key-til_workspace_section div[role="radiogroup"] {
+        gap: .12rem !important;
+    }
+    .st-key-til_workspace_section div[role="radiogroup"] > label {
+        position: relative !important;
+        min-height: 2.15rem !important;
+        padding-top: .08rem !important;
+        padding-bottom: .08rem !important;
+    }
+    .st-key-til_workspace_section div[role="radiogroup"] > label p {
+        font-weight: 650 !important;
+        letter-spacing: -.01em !important;
+    }
+
+    /* Non-clickable workflow section labels. */
+    .st-key-til_workspace_section div[role="radiogroup"] > label:nth-child(1),
+    .st-key-til_workspace_section div[role="radiogroup"] > label:nth-child(4),
+    .st-key-til_workspace_section div[role="radiogroup"] > label:nth-child(9),
+    .st-key-til_workspace_section div[role="radiogroup"] > label:nth-child(13) {
+        margin-top: 1.8rem !important;
+    }
+    .st-key-til_workspace_section div[role="radiogroup"] > label:nth-child(1)::before,
+    .st-key-til_workspace_section div[role="radiogroup"] > label:nth-child(4)::before,
+    .st-key-til_workspace_section div[role="radiogroup"] > label:nth-child(9)::before,
+    .st-key-til_workspace_section div[role="radiogroup"] > label:nth-child(13)::before {
+        position: absolute !important;
+        left: 0 !important;
+        top: -1.38rem !important;
+        color: #7f93ad !important;
+        font-size: .68rem !important;
+        font-weight: 850 !important;
+        letter-spacing: .12em !important;
+        line-height: 1 !important;
+        pointer-events: none !important;
+    }
+    .st-key-til_workspace_section div[role="radiogroup"] > label:nth-child(1)::before {
+        content: "RESEARCH";
+    }
+    .st-key-til_workspace_section div[role="radiogroup"] > label:nth-child(4)::before {
+        content: "STRATEGY DEVELOPMENT";
+    }
+    .st-key-til_workspace_section div[role="radiogroup"] > label:nth-child(9)::before {
+        content: "MARKET RESEARCH";
+    }
+    .st-key-til_workspace_section div[role="radiogroup"] > label:nth-child(13)::before {
+        content: "EXECUTION";
+    }
     </style>
     <div class="til-hero">
       <div class="til-title">🧠 Trading Intelligence Lab</div>
@@ -514,23 +565,50 @@ def upsert_strategy_record(
     return result
 
 
+# Internal page IDs stay unchanged so existing buttons, deep links, saved
+# session state, and page logic continue to work. Only the visible navigation
+# order/names are changed.
 WORKSPACE_SECTIONS = [
     "Overview",
     "Knowledge Sources",
+    "AI Research Autopilot",
     "Strategy Library",
     "Strategy DNA",
     "Make Strategy Testable",
-    "AI Research Autopilot",
     "Strategy Lab",
-    "Universe Research",
     "Validation",
-    "Catalyst Intelligence",
+    "Universe Research",
     "Market Discovery",
+    "Catalyst Intelligence",
     "Stock Analyzer",
     "Live / Paper",
 ]
 
+WORKSPACE_DISPLAY_LABELS = {
+    "Overview": "1. Overview",
+    "Knowledge Sources": "2. Knowledge Sources",
+    "AI Research Autopilot": "3. AI Research Autopilot",
+    "Strategy Library": "4. Strategy Library",
+    "Strategy DNA": "5. Strategy Blueprint",
+    "Make Strategy Testable": "6. Rule Builder",
+    "Strategy Lab": "7. Strategy Lab",
+    "Validation": "8. Validation",
+    "Universe Research": "9. Market Universe",
+    "Market Discovery": "10. Market Discovery",
+    "Catalyst Intelligence": "11. Catalyst Intelligence",
+    "Stock Analyzer": "12. Stock Analyzer",
+    "Live / Paper": "13. Paper & Live Trading",
+}
+WORKSPACE_DISPLAY_TO_INTERNAL = {
+    label: internal
+    for internal, label in WORKSPACE_DISPLAY_LABELS.items()
+}
+
 requested_workspace = st.session_state.pop("til_navigate_to", None)
+requested_workspace = WORKSPACE_DISPLAY_TO_INTERNAL.get(
+    requested_workspace,
+    requested_workspace,
+)
 if requested_workspace in WORKSPACE_SECTIONS:
     st.session_state["til_workspace_section"] = requested_workspace
 
@@ -539,6 +617,10 @@ with st.sidebar:
     module = st.radio(
         "Section",
         WORKSPACE_SECTIONS,
+        format_func=lambda section: WORKSPACE_DISPLAY_LABELS.get(
+            section,
+            section,
+        ),
         label_visibility="collapsed",
         key="til_workspace_section",
     )
