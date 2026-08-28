@@ -904,6 +904,7 @@ def _family_research_signature(strategy: dict[str, Any]) -> str:
         "machine_rules": normalize_machine_rules(strategy.get("machine_rules")),
         "research_rule_overrides": normalize_machine_rules(strategy.get("research_rule_overrides")),
         "candidate_rule_options": strategy.get("candidate_rule_options") or {},
+        "ai_candidate_rule_options": strategy.get("ai_candidate_rule_options") or {},
         "strategy_dna": normalize_strategy_dna(strategy.get("strategy_dna")),
         "direction": str(strategy.get("direction") or ""),
     }
@@ -978,6 +979,7 @@ def build_canonical_family_strategies(
         if previous and str(previous.get("canonical_research_signature") or "") == signature:
             for field in (
                 "research_rule_overrides",
+                "ai_candidate_rule_options",
                 "compiler_assumptions",
                 "autopilot_preparation",
                 "research_readiness",
