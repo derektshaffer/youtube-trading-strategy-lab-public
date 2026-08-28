@@ -23,6 +23,38 @@ class ResearchQueueTests(unittest.TestCase):
         self.assertEqual(second, 0)
         self.assertEqual(research.research_queue_status(library)["queued"], 2)
 
+    def test_uploaded_source_is_challenged_not_treated_as_truth(self):
+        library = {
+            "strategies": [
+                {
+                    "id": "book-hypothesis-1",
+                    "name": "Book pullback setup",
+                    "source_type": "book_or_document",
+                    "source_title": "Example trading book",
+                    "source_author": "Example Author",
+                    "validation_status": "unvalidated",
+                    "summary": "Claims high relative volume helps pullback continuation.",
+                    "machine_rules": {
+                        "min_relative_volume": 3.0,
+                        "breakout_lookback_bars": 20,
+                    },
+                }
+            ]
+        }
+        library, added = research.seed_continuous_research_cycle(
+            library,
+            topics=[],
+            cycle_date="2026-08-28",
+            maximum_topics=1,
+            source_challenge_limit=1,
+        )
+        self.assertEqual(added, 1)
+        job = library["research_queue"][0]
+        self.assertEqual(job["payload"]["origin"], "source_challenge")
+        self.assertEqual(job["payload"]["source_strategy_id"], "book-hypothesis-1")
+        self.assertIn("unverified claim", job["payload"]["existing_context"])
+        self.assertIn("Challenge it independently", job["payload"]["existing_context"])
+
     def test_claim_prefers_priority_and_retry_can_fail_terminally(self):
         library = {}
         library, low = research.enqueue_research_job(
