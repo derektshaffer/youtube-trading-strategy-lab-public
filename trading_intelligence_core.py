@@ -471,7 +471,11 @@ def upgrade_native_strategy_rules(strategy: dict[str, Any]) -> dict[str, Any]:
     text_parts = [
         item.get("name"),
         item.get("summary"),
+        *(item.get("indicators") or []),
         *(item.get("entry_conditions") or []),
+        *(item.get("exit_conditions") or []),
+        *(item.get("risk_rules") or []),
+        *(item.get("avoid_conditions") or []),
         *(item.get("stock_selection") or []),
         *(item.get("market_context") or []),
         *(item.get("unresolved_rules") or []),
