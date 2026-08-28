@@ -173,6 +173,17 @@ def infer_strategy_dna(strategy: dict[str, Any]) -> dict[str, list[str]]:
         _add(dna, "structure", "Opening-range breakout")
     if _contains(text, "pullback", "first pullback"):
         _add(dna, "structure", "Pullback")
+    if (
+        rules.get("fast_ema_period") is not None
+        or (_contains(text, "ema", "exponential moving average") and _contains(text, "pullback", "pull back"))
+    ):
+        _add(dna, "structure", "EMA pullback")
+    if (
+        rules.get("require_price_above_slow_ema") is True
+        or rules.get("require_price_above_trend_ema") is True
+        or _contains(text, "above its moving averages", "ema alignment")
+    ):
+        _add(dna, "structure", "EMA trend alignment")
     if _contains(text, "bull flag", "bear flag", "flag pattern"):
         _add(dna, "structure", "Flag continuation")
     if _contains(text, "high of day", "hod break", "day high"):
@@ -201,6 +212,10 @@ def infer_strategy_dna(strategy: dict[str, Any]) -> dict[str, list[str]]:
         _add(dna, "risk", "Structure-based stop")
     if _contains(text, "stop below vwap", "vwap stop"):
         _add(dna, "risk", "VWAP-based stop")
+    if rules.get("stop_below_fast_ema") is True or (
+        _contains(text, "stop", "stop loss") and _contains(text, "below the 9 ema", "below ema", "below the ema")
+    ):
+        _add(dna, "risk", "EMA-anchored stop")
     if _contains(text, "position size", "position sizing", "risk per trade", "fixed risk"):
         _add(dna, "risk", "Risk-based position sizing")
 
@@ -663,6 +678,8 @@ def _semantic_rules_from_shared_dna(core_dna: dict[str, Any]) -> dict[str, Any]:
         rules["vwap_reclaim"] = True
     if "news catalyst" in catalysts:
         rules["catalyst_required"] = True
+    if "ema pullback" in structure:
+        rules["require_fast_ema_pullback"] = True
     return rules
 
 
@@ -721,6 +738,7 @@ def compile_candidate_blueprint(blueprint: dict[str, Any]) -> dict[str, Any]:
         "Above VWAP",
         "VWAP reclaim",
         "News catalyst",
+        "EMA pullback",
     }
     untranslated_dna: dict[str, list[str]] = {}
     for dimension in DNA_DIMENSIONS:
