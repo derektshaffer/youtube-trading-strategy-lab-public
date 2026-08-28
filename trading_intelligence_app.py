@@ -917,11 +917,10 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    with st.expander("Other labs", expanded=False):
-        st.page_link("youtube_strategy_app.py", label="Home")
-        st.page_link("pages/Full_Trading_Lab.py", label="Full Trading Lab")
-        st.page_link("pages/Live_Strategy_Runner.py", label="Live Strategy Runner")
-        st.page_link("pages/Machine_Learning_Lab.py", label="Machine Learning Lab")
+    st.markdown(
+        '<div class="til-side-labs-note">Research Workspace navigation active</div>',
+        unsafe_allow_html=True,
+    )
 
 try:
     library = load_library()
