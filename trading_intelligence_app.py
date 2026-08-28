@@ -1642,6 +1642,14 @@ if module == "Stock Strategy Finder":
         result_cols[4].metric("Walk-forward profitable", f"{safe_float(walk.get('profitable_fold_pct'), 0.0):.0f}%")
         result_cols[5].metric("Nearby settings profitable", f"{safe_float(stability.get('positive_pct'), 0.0):.0f}%")
 
+        distributed_details = dict(finder_result.get("distributed") or {})
+        if distributed_details.get("enabled"):
+            st.caption(
+                f"Distributed cloud execution · {int(distributed_details.get('shard_count') or 0)} shards "
+                f"across {len(distributed_details.get('timeframes') or [])} timeframes · "
+                "all shards were merged before the final untouched holdout, walk-forward, and stability checks."
+            )
+
         st.markdown("### Evidence by period")
         evidence_rows = []
         for period_name, metrics in (
