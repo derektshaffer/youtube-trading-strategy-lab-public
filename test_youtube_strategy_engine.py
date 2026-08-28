@@ -400,6 +400,104 @@ class ParallelOptimizerTests(unittest.TestCase):
         self.assertEqual(parallel["parallelized_by"], "strategy_family")
         self.assertGreaterEqual(parallel["parallel_workers"], 2)
 
+    def test_distributed_family_and_timeframe_merge_matches_single_process(self):
+        rows = []
+        for day in (18, 19, 20, 21, 22, 23):
+            for minute in range(20):
+                close = 9.5 + (day - 18) * 0.04 + minute * 0.025
+                rows.append(
+                    bar(
+                        day,
+                        minute,
+                        close - 0.02,
+                        close + 0.07,
+                        close - 0.06,
+                        close,
+                        1400 + minute * 60,
+                    )
+                )
+        strategies = [
+            {
+                **simple_strategy(min_day_change_pct=-50.0, breakout_lookback_bars=2),
+                "id": "dist-a",
+                "name": "Distributed A",
+            },
+            {
+                **simple_strategy(min_day_change_pct=-50.0, min_relative_volume=0.1),
+                "id": "dist-b",
+                "name": "Distributed B",
+            },
+        ]
+        settings = engine.BacktestSettings(
+            starting_cash=10_000,
+            risk_per_trade_pct=0.5,
+            max_position_pct=20.0,
+            spread_bps=0,
+            slippage_bps=0,
+        )
+        optimizer = engine.OptimizationSettings(
+            max_variants_per_strategy=2,
+            finalists_per_strategy=1,
+            minimum_training_trades=1,
+            minimum_validation_trades=1,
+            optimize_position_sizing=False,
+            max_execution_variants_per_finalist=1,
+            selection_mode="validated",
+        )
+        timeframes = ("1Min", "5Min")
+        expected = engine.optimize_stock_timeframes(
+            rows,
+            strategies,
+            "TEST",
+            settings,
+            optimizer,
+            timeframes=timeframes,
+        )
+
+        reports_by_interval = {}
+        for timeframe in timeframes:
+            interval_rows = engine.resample_intraday_bars(
+                rows,
+                timeframe,
+                include_extended_hours=True,
+            )
+            family_reports = [
+                engine.optimize_stock_strategies(
+                    interval_rows,
+                    [strategy],
+                    "TEST",
+                    settings,
+                    optimizer,
+                    finalize_holdout=False,
+                )
+                for strategy in strategies
+            ]
+            reports_by_interval[timeframe] = engine.combine_strategy_family_reports(
+                family_reports,
+                parallel_workers=len(family_reports),
+            )
+
+        distributed = engine.combine_stock_timeframe_reports(
+            rows,
+            strategies,
+            "TEST",
+            reports_by_interval,
+            timeframes,
+        )
+        self.assertEqual(distributed["timeframe"], expected["timeframe"])
+        self.assertEqual(
+            distributed["winner"]["source_strategy_id"],
+            expected["winner"]["source_strategy_id"],
+        )
+        self.assertEqual(
+            distributed["unique_configurations_tested"],
+            expected["unique_configurations_tested"],
+        )
+        self.assertEqual(
+            distributed["winner"]["holdout_metrics"],
+            expected["winner"]["holdout_metrics"],
+        )
+
 
 class IndicatorCacheEquivalenceTests(unittest.TestCase):
     def test_cached_base_rebuild_matches_full_strategy_indicators(self):
