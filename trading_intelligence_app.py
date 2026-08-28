@@ -12,6 +12,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from trading_glass_theme import inject_research_glass_theme
 from live_strategy_runner_page import market_client, setting
 from trading_catalyst_core import (
     classify_catalyst,
@@ -164,6 +165,10 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+# Apply the scanner-inspired glass theme after the local hero/sidebar CSS so
+# this shared design layer wins the final cascade without changing page logic.
+inject_research_glass_theme()
 
 
 DEFAULT_PRIVATE_BACKUP_REPOSITORY = "derektshaffer/derektshaffer-youtube-trading-strategy-lab"
