@@ -197,6 +197,53 @@ st.markdown(
         border-color:#377bb0;
         color:#dcefff;
     }
+    .til-cloud-progress-wrap {
+        margin: 9px 0 18px 0;
+    }
+    .til-cloud-progress-meta {
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        gap:12px;
+        margin-bottom:7px;
+        color:#e8f4ff;
+        font-weight:760;
+        font-size:.94rem;
+    }
+    .til-cloud-progress-track {
+        position:relative;
+        height:15px;
+        width:100%;
+        overflow:hidden;
+        border-radius:999px;
+        background:#06111d;
+        border:1px solid #4f7391;
+        box-shadow:inset 0 0 0 1px rgba(0,0,0,.48);
+    }
+    .til-cloud-progress-fill {
+        height:100%;
+        min-width:0;
+        border-radius:999px;
+        background:linear-gradient(90deg,#2edc9a 0%,#42c8e8 100%);
+        box-shadow:0 0 10px rgba(66,200,232,.24);
+    }
+    .til-cloud-progress-queued {
+        height:100%;
+        width:100%;
+        border-radius:999px;
+        background:repeating-linear-gradient(
+            135deg,
+            #10283a 0px,
+            #10283a 12px,
+            #17384f 12px,
+            #17384f 24px
+        );
+    }
+    .til-cloud-progress-sub {
+        margin-top:6px;
+        color:#9fb3c7;
+        font-size:.84rem;
+    }
 
     /* Research Workspace navigation: one continuous radio keeps existing
        routing/session-state behavior, while visual section headers make the
@@ -1218,14 +1265,18 @@ if module == "Stock Strategy Finder":
             stage = str(payload.get("distributed_stage") or "queued").replace("_", " ").title()
             message = str(payload.get("distributed_message") or "").strip()
             progress_value = safe_float(payload.get("distributed_progress"), None)
+            is_waiting_for_worker = (
+                status == "QUEUED"
+                and not payload.get("distributed_run_id")
+            )
             if progress_value is None:
-                if status == "QUEUED":
-                    progress_value = 0.02
+                if is_waiting_for_worker:
+                    progress_value = 0.0
                 elif total_shards > 0:
                     progress_value = 0.10 + 0.75 * min(1.0, completed_shards / total_shards)
                 else:
                     progress_value = 0.06
-            progress_value = max(0.01, min(0.99, float(progress_value)))
+            progress_value = max(0.0, min(0.99, float(progress_value)))
             shard_text = (
                 f" · {completed_shards}/{total_shards} shards complete"
                 if total_shards > 0
@@ -1244,14 +1295,36 @@ if module == "Stock Strategy Finder":
                 ),
                 unsafe_allow_html=True,
             )
-            progress_label = (
-                f"{symbol} {profile_name}: {progress_value * 100:.0f}% · {stage}{shard_text}"
-            )
-            if message:
-                progress_label += f" · {message}"
-            st.progress(
-                progress_value,
-                text=progress_label,
+            if is_waiting_for_worker:
+                progress_title = f"{symbol} {profile_name} · WAITING FOR CLOUD WORKER"
+                progress_detail = (
+                    "Queued successfully. No compute shard has started yet; the distributed worker "
+                    "will claim this job automatically."
+                )
+                bar_html = '<div class="til-cloud-progress-queued"></div>'
+            else:
+                progress_title = (
+                    f"{symbol} {profile_name} · {progress_value * 100:.0f}% · {stage}{shard_text}"
+                )
+                progress_detail = message or "Cloud compute is active."
+                bar_html = (
+                    f'<div class="til-cloud-progress-fill" '
+                    f'style="width:{progress_value * 100:.2f}%"></div>'
+                )
+            st.markdown(
+                (
+                    '<div class="til-cloud-progress-wrap">'
+                    '<div class="til-cloud-progress-meta">'
+                    f'<span>{html.escape(progress_title)}</span>'
+                    f'<span>{"QUEUED" if is_waiting_for_worker else f"{progress_value * 100:.0f}%"}</span>'
+                    '</div>'
+                    '<div class="til-cloud-progress-track">'
+                    f'{bar_html}'
+                    '</div>'
+                    f'<div class="til-cloud-progress-sub">{html.escape(progress_detail)}</div>'
+                    '</div>'
+                ),
+                unsafe_allow_html=True,
             )
             if index < min(3, len(active_jobs) - 1):
                 st.caption("")
