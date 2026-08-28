@@ -1,0 +1,133 @@
+name: Distributed Stock Finder
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: distributed-stock-finder
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      has_job: ${{ steps.meta.outputs.has_job }}
+      run_id: ${{ steps.meta.outputs.run_id }}
+      matrix: ${{ steps.meta.outputs.matrix }}
+      symbol: ${{ steps.meta.outputs.symbol }}
+      profile: ${{ steps.meta.outputs.profile }}
+    env:
+      GITHUB_BACKUP_REPOSITORY: ${{ secrets.TRADING_LAB_BACKUP_REPOSITORY }}
+      GITHUB_BACKUP_TOKEN: ${{ secrets.TRADING_LAB_BACKUP_TOKEN }}
+      GITHUB_BACKUP_BRANCH: ${{ vars.GITHUB_BACKUP_BRANCH }}
+      GITHUB_BACKUP_PATH: ${{ vars.GITHUB_BACKUP_PATH || 'youtube-strategy-lab/strategy_library.json' }}
+      ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+      ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+      ALPACA_LIVE_FEED: ${{ vars.ALPACA_LIVE_FEED || 'iex' }}
+      ALPACA_HISTORICAL_FEED: ${{ vars.ALPACA_HISTORICAL_FEED || 'sip' }}
+      DISTRIBUTED_FINDER_FAMILY_SHARDS: ${{ vars.DISTRIBUTED_FINDER_FAMILY_SHARDS || '4' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Validate distributed Finder secrets
+        shell: bash
+        run: |
+          missing=0
+          for name in GITHUB_BACKUP_REPOSITORY GITHUB_BACKUP_TOKEN ALPACA_API_KEY ALPACA_SECRET_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing required secret: $name"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Prepare private distributed run
+        run: python distributed_stock_finder.py prepare
+
+      - name: Publish safe matrix metadata
+        id: meta
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          meta = json.load(open("distributed_meta.json", encoding="utf-8"))
+          matrix = open("distributed_matrix.json", encoding="utf-8").read().strip()
+          print("has_job=" + str(bool(meta.get("has_job"))).lower())
+          print("run_id=" + str(meta.get("run_id") or ""))
+          print("symbol=" + str(meta.get("symbol") or ""))
+          print("profile=" + str(meta.get("profile") or ""))
+          print("matrix=" + matrix)
+          PY
+
+  shard:
+    needs: prepare
+    if: needs.prepare.outputs.has_job == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    env:
+      GITHUB_BACKUP_REPOSITORY: ${{ secrets.TRADING_LAB_BACKUP_REPOSITORY }}
+      GITHUB_BACKUP_TOKEN: ${{ secrets.TRADING_LAB_BACKUP_TOKEN }}
+      GITHUB_BACKUP_BRANCH: ${{ vars.GITHUB_BACKUP_BRANCH }}
+      DISTRIBUTED_FINDER_LOCAL_WORKERS: ${{ vars.DISTRIBUTED_FINDER_LOCAL_WORKERS || '2' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Run ${{ matrix.label }} shard
+        run: >-
+          python distributed_stock_finder.py shard
+          --run-id "${{ needs.prepare.outputs.run_id }}"
+          --index "${{ matrix.index }}"
+
+  aggregate:
+    needs: [prepare, shard]
+    if: always() && needs.prepare.outputs.has_job == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      GITHUB_BACKUP_REPOSITORY: ${{ secrets.TRADING_LAB_BACKUP_REPOSITORY }}
+      GITHUB_BACKUP_TOKEN: ${{ secrets.TRADING_LAB_BACKUP_TOKEN }}
+      GITHUB_BACKUP_BRANCH: ${{ vars.GITHUB_BACKUP_BRANCH }}
+      GITHUB_BACKUP_PATH: ${{ vars.GITHUB_BACKUP_PATH || 'youtube-strategy-lab/strategy_library.json' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Aggregate shards and run final validation
+        run: >-
+          python distributed_stock_finder.py aggregate
+          --run-id "${{ needs.prepare.outputs.run_id }}"
