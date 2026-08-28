@@ -73,18 +73,22 @@ def env(name: str, default: str = "") -> str:
     return str(os.environ.get(name, default) or "").strip()
 
 
-def build_cloud_backup(*, path: str = DEFAULT_GITHUB_BACKUP_PATH) -> GitHubCloudBackup:
+def build_cloud_backup(*, path: str = "") -> GitHubCloudBackup:
     repository = env("GITHUB_BACKUP_REPOSITORY")
     token = env("GITHUB_BACKUP_TOKEN")
     if not repository or not token:
         raise AppError(
             "Distributed Finder needs GITHUB_BACKUP_REPOSITORY and GITHUB_BACKUP_TOKEN."
         )
+    effective_path = str(path or "").strip() or env(
+        "GITHUB_BACKUP_PATH",
+        DEFAULT_GITHUB_BACKUP_PATH,
+    )
     return GitHubCloudBackup(
         repository,
         token,
         branch=env("GITHUB_BACKUP_BRANCH"),
-        path=path,
+        path=effective_path,
     )
 
 
