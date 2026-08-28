@@ -156,7 +156,8 @@ st.markdown(
     }
     </style>
     <div class="til-hero">
-      <div class="til-title">🧠 Trading Intelligence Lab</div>
+      <div class="til-kicker"><span class="til-brand-mark">◈</span> Research Workspace</div>
+      <div class="til-title">Trading Intelligence Lab</div>
       <div class="til-sub">
         Learn trading ideas from books, videos, and existing research; convert them into explicit
         rules; test them against historical markets; validate them on unseen data; and match
