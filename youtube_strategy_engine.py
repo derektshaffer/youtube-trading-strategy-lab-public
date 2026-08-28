@@ -1842,6 +1842,10 @@ class GitHubCloudBackup:
             "knowledge_sources",
             "research_runs",
             "validation_runs",
+            "research_queue",
+            "external_research_runs",
+            "research_hypotheses",
+            "research_worker_runs",
         ):
             if name in library and not isinstance(library[name], list):
                 raise AppError(f"The GitHub cloud backup contains an invalid {name} collection.")
@@ -1920,6 +1924,11 @@ class StrategyStore:
             "knowledge_sources": [],
             "research_runs": [],
             "validation_runs": [],
+            "research_queue": [],
+            "external_research_runs": [],
+            "research_hypotheses": [],
+            "research_worker_runs": [],
+            "research_system": {},
             "updated_at": None,
         }
 
@@ -1937,9 +1946,15 @@ class StrategyStore:
             "knowledge_sources",
             "research_runs",
             "validation_runs",
+            "research_queue",
+            "external_research_runs",
+            "research_hypotheses",
+            "research_worker_runs",
         ):
             if not isinstance(result.get(name), list):
                 result[name] = []
+        if not isinstance(result.get("research_system"), dict):
+            result["research_system"] = {}
         return result
 
     def load(self) -> dict[str, Any]:
@@ -1971,6 +1986,10 @@ class StrategyStore:
             "knowledge_sources",
             "research_runs",
             "validation_runs",
+            "research_queue",
+            "external_research_runs",
+            "research_hypotheses",
+            "research_worker_runs",
         ):
             value = data.get(name)
             if isinstance(value, list) and value:
