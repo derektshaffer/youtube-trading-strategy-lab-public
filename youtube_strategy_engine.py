@@ -3142,6 +3142,91 @@ def add_indicators(frame: pd.DataFrame, strategy: dict[str, Any]) -> pd.DataFram
     )
     return data
 
+def apply_strategy_specific_indicators(
+    prepared_base: pd.DataFrame,
+    strategy: dict[str, Any],
+) -> pd.DataFrame:
+    """Recompute only indicators whose values depend on candidate strategy parameters.
+
+    The optimizer tests thousands of rule variants against the same historical frame.
+    Rebuilding VWAP, daily references, relative volume, and other invariant columns for
+    every candidate was a major avoidable cost. A base frame can now be prepared once
+    with add_indicators(frame, {"machine_rules": {}}), then this function cheaply
+    refreshes breakout/opening-range/EMA/pullback columns for each candidate.
+
+    This must stay mathematically equivalent to add_indicators(frame, strategy) for
+    every strategy-dependent column.
+    """
+    if prepared_base.empty:
+        return prepared_base.copy()
+    data = prepared_base.copy()
+    rules = normalize_machine_rules(strategy.get("machine_rules"))
+
+    lookback = int(rules.get("breakout_lookback_bars") or 20)
+    data["prior_breakout_high"] = data.groupby("session", sort=False)["high"].transform(
+        lambda series: series.shift(1).rolling(lookback, min_periods=lookback).max()
+    )
+
+    opening_minutes = int(rules.get("opening_range_minutes") or 15)
+    opening_only = data["high"].where(
+        (data["session_minute"] >= 0) & (data["session_minute"] < opening_minutes)
+    )
+    opening_high = opening_only.groupby(data["session"], sort=False).transform("max")
+    data["opening_range_high"] = opening_high.where(
+        data["session_minute"] >= opening_minutes
+    )
+
+    for role, field_name in (
+        ("fast", "fast_ema_period"),
+        ("slow", "slow_ema_period"),
+        ("trend", "trend_ema_period"),
+    ):
+        period = rules.get(field_name)
+        column = f"{role}_ema"
+        if period is not None:
+            period = int(period)
+            data[column] = data["close"].ewm(
+                span=period,
+                adjust=False,
+                min_periods=period,
+            ).mean()
+        else:
+            data[column] = float("nan")
+
+    data["fast_ema_distance_pct"] = (
+        (data["close"].div(data["fast_ema"]) - 1.0).abs() * 100.0
+    )
+    fast_ema = data["fast_ema"]
+    below_distance = ((data["low"] - fast_ema).abs().div(fast_ema) * 100.0)
+    above_distance = ((data["high"] - fast_ema).abs().div(fast_ema) * 100.0)
+    crosses_ema = (data["low"] <= fast_ema) & (data["high"] >= fast_ema)
+    data["fast_ema_touch_distance_pct"] = pd.concat(
+        [below_distance, above_distance], axis=1
+    ).min(axis=1)
+    data.loc[crosses_ema, "fast_ema_touch_distance_pct"] = 0.0
+
+    tolerance = safe_float(rules.get("pullback_touch_tolerance_pct"), 0.5) or 0.5
+    fast_touch = (
+        data["fast_ema"].notna()
+        & data["fast_ema_touch_distance_pct"].notna()
+        & (data["fast_ema_touch_distance_pct"] <= float(tolerance))
+    )
+    prior_touch = fast_touch.groupby(data["session"], sort=False).shift(1).fillna(False)
+    touch_start = fast_touch & ~prior_touch
+    data["fast_ema_pullback_number"] = (
+        touch_start.astype(int).groupby(data["session"], sort=False).cumsum()
+    )
+    data["fast_ema_pullback_recent"] = fast_touch.groupby(
+        data["session"], sort=False
+    ).transform(lambda series: series.rolling(4, min_periods=1).max()).fillna(False).astype(bool)
+    data["fast_ema_rising"] = (
+        data["fast_ema"].notna()
+        & data["fast_ema"].shift(3).notna()
+        & (data["fast_ema"] > data["fast_ema"].shift(3))
+    )
+    return data
+
+
 def parse_clock_minutes(value: str | None) -> int | None:
     if not value:
         return None
@@ -5425,7 +5510,11 @@ def optimize_stock_strategies(
         for source_strategy, variants in search_plan
         if str(source_strategy.get("id") or "") in completed_strategy_ids
     )
-    indicator_cache: dict[tuple[str, bool, int, int], pd.DataFrame] = {}
+    base_indicator_cache: dict[tuple[str, bool], pd.DataFrame] = {}
+    indicator_cache: dict[
+        tuple[str, bool, int, int, int | None, int | None, int | None, float],
+        pd.DataFrame,
+    ] = {}
 
     def frame_for_settings(period: str, chosen_settings: BacktestSettings) -> pd.DataFrame:
         candidate_frame = frames[period]
@@ -5445,15 +5534,34 @@ def optimize_stock_strategies(
 
     def evaluate(candidate_strategy: dict[str, Any], period: str, chosen_settings: BacktestSettings) -> dict[str, Any]:
         rules = normalize_machine_rules(candidate_strategy.get("machine_rules"))
+        base_key = (period, bool(chosen_settings.allow_extended_hours))
+        if base_key not in base_indicator_cache:
+            base_indicator_cache[base_key] = add_indicators(
+                frame_for_settings(period, chosen_settings),
+                {"machine_rules": {}},
+            )
         key = (
             period,
             bool(chosen_settings.allow_extended_hours),
             int(rules.get("breakout_lookback_bars") or 20),
             int(rules.get("opening_range_minutes") or 15),
+            int(rules["fast_ema_period"]) if rules.get("fast_ema_period") is not None else None,
+            int(rules["slow_ema_period"]) if rules.get("slow_ema_period") is not None else None,
+            int(rules["trend_ema_period"]) if rules.get("trend_ema_period") is not None else None,
+            round(float(safe_float(rules.get("pullback_touch_tolerance_pct"), 0.5) or 0.5), 8),
         )
         if key not in indicator_cache:
-            indicator_cache[key] = add_indicators(frame_for_settings(period, chosen_settings), candidate_strategy)
-        return run_backtest([], candidate_strategy, target_symbol, chosen_settings, prepared_indicators=indicator_cache[key])
+            indicator_cache[key] = apply_strategy_specific_indicators(
+                base_indicator_cache[base_key],
+                candidate_strategy,
+            )
+        return run_backtest(
+            [],
+            candidate_strategy,
+            target_symbol,
+            chosen_settings,
+            prepared_indicators=indicator_cache[key],
+        )
 
     def notify(message: str) -> None:
         nonlocal completed_steps
