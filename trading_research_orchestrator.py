@@ -726,20 +726,44 @@ def merge_grounded_research(
         existing_hypotheses[str(hypothesis["id"])] = hypothesis
     data["research_hypotheses"] = list(existing_hypotheses.values())[-500:]
 
-    for hypothesis in hypotheses:
-        quality = int(hypothesis.get("source_quality_score") or 0)
-        confidence = safe_float(hypothesis.get("confidence"), 0.0) or 0.0
-        priority = int(max(35, min(90, quality * 0.55 + confidence * 0.45)))
-        data, _ = enqueue_research_job(
-            data,
-            "specialist_review",
-            {
-                "hypothesis_id": hypothesis["id"],
-                "research_run_id": run_id,
-            },
-            priority=priority,
-            dedupe_key=f"specialist:{hypothesis['id']}",
-        )
+    # Pro is intentionally reserved for the strongest/hardest discoveries rather
+    # than being used as a high-volume reader. Rank every hypothesis, then send only
+    # the top two from each grounded research run to specialist review.
+    ranked_for_specialist = sorted(
+        hypotheses,
+        key=lambda item: (
+            int(item.get("source_quality_score") or 0) * 0.55
+            + (safe_float(item.get("confidence"), 0.0) or 0.0) * 0.35
+            + (safe_float(item.get("novelty"), 0.0) or 0.0) * 0.10
+        ),
+        reverse=True,
+    )
+    specialist_ids = {
+        str(item.get("id") or "")
+        for item in ranked_for_specialist[:2]
+    }
+    refreshed_hypotheses: list[dict[str, Any]] = []
+    for hypothesis in data["research_hypotheses"]:
+        item = dict(hypothesis)
+        hypothesis_id = str(item.get("id") or "")
+        if hypothesis_id in specialist_ids:
+            quality = int(item.get("source_quality_score") or 0)
+            confidence = safe_float(item.get("confidence"), 0.0) or 0.0
+            priority = int(max(35, min(90, quality * 0.55 + confidence * 0.45)))
+            data, _ = enqueue_research_job(
+                data,
+                "specialist_review",
+                {
+                    "hypothesis_id": hypothesis_id,
+                    "research_run_id": run_id,
+                },
+                priority=priority,
+                dedupe_key=f"specialist:{hypothesis_id}",
+            )
+        elif str(item.get("research_run_id") or "") == run_id:
+            item["status"] = "research_backlog"
+        refreshed_hypotheses.append(item)
+    data["research_hypotheses"] = refreshed_hypotheses
     return data, run_id, hypothesis_ids
 
 
@@ -894,6 +918,56 @@ def apply_specialist_review(
 
     data["research_hypotheses"] = updated_hypotheses
     return data, strategy_id
+
+
+def sync_hypothesis_validation_results(
+    library: dict[str, Any],
+    report: dict[str, Any],
+) -> dict[str, Any]:
+    """Mirror deterministic validation outcomes back onto research hypotheses."""
+    data = ensure_research_collections(library)
+    strategies_by_id = {
+        str(item.get("id") or ""): item
+        for item in data.get("strategies") or []
+        if isinstance(item, dict)
+    }
+    outcome_by_hypothesis: dict[str, dict[str, Any]] = {}
+    for result in report.get("results") or []:
+        if not isinstance(result, dict):
+            continue
+        strategy_id = str(result.get("strategy_id") or "")
+        strategy = strategies_by_id.get(strategy_id) or {}
+        hypothesis_id = str(strategy.get("research_hypothesis_id") or "")
+        if not hypothesis_id:
+            continue
+        outcome_by_hypothesis[hypothesis_id] = {
+            "validation_status": str(result.get("validation_status") or "research_only"),
+            "global_score": result.get("global_score"),
+            "anchor_symbol": result.get("anchor_symbol"),
+            "candidate_symbols": result.get("candidate_symbols") or [],
+            "gate_reasons": result.get("gate_reasons") or [],
+            "generated_at": report.get("generated_at") or utc_iso(),
+        }
+
+    if not outcome_by_hypothesis:
+        return data
+
+    updated: list[dict[str, Any]] = []
+    for raw in data["research_hypotheses"]:
+        item = dict(raw)
+        hypothesis_id = str(item.get("id") or "")
+        outcome = outcome_by_hypothesis.get(hypothesis_id)
+        if outcome:
+            item["validation_summary"] = outcome
+            item["updated_at"] = str(outcome.get("generated_at") or utc_iso())
+            item["status"] = (
+                "validated"
+                if outcome.get("validation_status") == "validated"
+                else "historically_rejected_or_unconfirmed"
+            )
+        updated.append(item)
+    data["research_hypotheses"] = updated
+    return data
 
 
 def record_worker_run(
