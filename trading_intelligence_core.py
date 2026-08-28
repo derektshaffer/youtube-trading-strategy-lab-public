@@ -1254,6 +1254,43 @@ def research_readiness(strategy: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _assumption_test_values(rule_name: str, value: Any) -> list[Any]:
+    """Build a small, auditable neighborhood around an AI research assumption.
+
+    These are hypotheses for the optimizer, not author-attributed rules. Every
+    candidate is normalized through the machine-rule schema before it can be
+    tested.
+    """
+    try:
+        parsed = coerce_machine_rule_value(rule_name, value)
+    except AppError:
+        return []
+
+    if isinstance(parsed, bool):
+        return [parsed]
+
+    if isinstance(parsed, (int, float)) and not isinstance(parsed, bool):
+        numeric = float(parsed)
+        raw_candidates: list[float] = []
+        if numeric == 0:
+            raw_candidates = [0.0, 0.1, 0.25, 0.5]
+        else:
+            factors = (0.50, 0.75, 1.00, 1.25, 1.50)
+            raw_candidates = [numeric * factor for factor in factors]
+
+        candidates: list[Any] = []
+        for raw in raw_candidates:
+            try:
+                normalized = coerce_machine_rule_value(rule_name, raw)
+            except AppError:
+                continue
+            if normalized not in candidates:
+                candidates.append(normalized)
+        return candidates[:5]
+
+    return [parsed]
+
+
 def apply_compiler_suggestions(
     strategy: dict[str, Any],
     compiled: dict[str, Any],
@@ -1267,6 +1304,11 @@ def apply_compiler_suggestions(
         key: value
         for key, value in normalize_machine_rules(item.get("research_rule_overrides")).items()
         if value is not None
+    }
+    ai_candidate_options = {
+        str(key): list(values)
+        for key, values in (item.get("ai_candidate_rule_options") or {}).items()
+        if isinstance(values, list)
     }
     assumption_log = list(item.get("compiler_assumptions") or [])
     applied: list[dict[str, Any]] = []
@@ -1291,9 +1333,21 @@ def apply_compiler_suggestions(
             except AppError:
                 continue
         current_overrides[target] = value
+
+        # Keep AI-generated hypotheses separate from exact source-supported
+        # alternatives. The optimizer tests the AI seed plus a small nearby
+        # neighborhood before generic parameter exploration.
+        test_values = _assumption_test_values(target, value)
+        existing_values = ai_candidate_options.setdefault(target, [])
+        for candidate_value in test_values:
+            if candidate_value not in existing_values:
+                existing_values.append(candidate_value)
+        ai_candidate_options[target] = existing_values[:7]
+
         record = {
             "target_rule": target,
             "value": value,
+            "test_values": list(ai_candidate_options.get(target) or []),
             "source_requirement": suggestion.get("source_requirement"),
             "rationale": suggestion.get("rationale"),
             "confidence": confidence,
@@ -1301,15 +1355,37 @@ def apply_compiler_suggestions(
             "model": compiled.get("model"),
             "accepted_by": "ai_autopilot",
             "is_research_assumption": True,
+            "test_policy": "optimizer_then_walk_forward_holdout",
         }
         applied.append(record)
-        assumption_log.append(record)
+
+        # Keep the log idempotent if Streamlit reruns the same compiler result.
+        signature = (
+            str(record.get("target_rule") or ""),
+            repr(record.get("value")),
+            str(record.get("source_requirement") or ""),
+            str(record.get("model") or ""),
+        )
+        prior_signatures = {
+            (
+                str(existing.get("target_rule") or ""),
+                repr(existing.get("value")),
+                str(existing.get("source_requirement") or ""),
+                str(existing.get("model") or ""),
+            )
+            for existing in assumption_log
+            if isinstance(existing, dict)
+        }
+        if signature not in prior_signatures:
+            assumption_log.append(record)
 
     if applied:
         item["research_rule_overrides"] = current_overrides
+        item["ai_candidate_rule_options"] = ai_candidate_options
         item["compiler_assumptions"] = assumption_log[-150:]
         # Any executable-rule change invalidates a previously frozen validation result.
         item["validation_status"] = "unvalidated"
+        item["optimization_status"] = "not_run"
         item.pop("validated_rules", None)
         item.pop("validated_backtest_settings", None)
         item.pop("validated_at", None)
@@ -1320,6 +1396,17 @@ def apply_compiler_suggestions(
         "compiler_summary": compiled.get("summary") or "",
         "suggestions_considered": len(compiled.get("suggestions") or []),
         "suggestions_auto_applied": len(applied),
+        "assumption_rules_queued_for_testing": len(
+            {
+                str(record.get("target_rule") or "")
+                for record in applied
+                if record.get("target_rule")
+            }
+        ),
+        "assumption_test_values_queued": sum(
+            len(record.get("test_values") or [])
+            for record in applied
+        ),
         "minimum_confidence": float(minimum_confidence),
         "skipped_low_confidence": skipped_low_confidence,
         "unmapped_requirements": list(compiled.get("unmapped_requirements") or []),
