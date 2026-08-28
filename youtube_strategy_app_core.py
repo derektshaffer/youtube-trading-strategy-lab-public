@@ -12,8 +12,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
-import streamlit.components.v1 as components
 
+from app_access import require_app_access
 from trading_progress_ui import LongTaskMonitor, session_task_profiles
 from youtube_strategy_engine import (
     ALPACA_DATA_URL,
@@ -59,6 +59,13 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+require_app_access(st)
+
+with st.sidebar:
+    st.divider()
+    st.caption("Build 2026-08-28")
+    if st.button("← Trading Dashboard", key="full_lab_back_dashboard", width="stretch"):
+        st.switch_page("youtube_strategy_app.py")
 
 
 st.markdown(
@@ -480,7 +487,7 @@ def render_backtest_trade_chart(
     if range_cols[0].button(
         "🎯 Trade focus",
         key=f"trade_chart_focus_{symbol}",
-        use_container_width=True,
+        width="stretch",
         help="Zoom to the area containing the selected trades.",
     ):
         view_start, view_end = set_view(default_start, default_end)
@@ -491,16 +498,16 @@ def render_backtest_trade_chart(
         (range_cols[2], "5D", 5),
         (range_cols[3], "1M", 30),
     ):
-        if column.button(label, key=f"trade_chart_{label}_{symbol}", use_container_width=True):
+        if column.button(label, key=f"trade_chart_{label}_{symbol}", width="stretch"):
             view_start, view_end = set_view(range_anchor - pd.Timedelta(days=days), range_anchor)
 
-    if range_cols[4].button("All", key=f"trade_chart_all_{symbol}", use_container_width=True):
+    if range_cols[4].button("All", key=f"trade_chart_all_{symbol}", width="stretch"):
         view_start, view_end = set_view(frame_start, frame_end)
 
     if range_cols[5].button(
         "↺ Reset",
         key=f"trade_chart_reset_{symbol}",
-        use_container_width=True,
+        width="stretch",
         help="Return to the automatic trade-focused view.",
     ):
         view_start, view_end = set_view(default_start, default_end)
@@ -510,7 +517,7 @@ def render_backtest_trade_chart(
     if range_cols[6].button(
         "−",
         key=f"trade_chart_zoom_out_{symbol}",
-        use_container_width=True,
+        width="stretch",
         help="Zoom out",
     ):
         expanded = current_span * 1.6
@@ -518,7 +525,7 @@ def render_backtest_trade_chart(
     if range_cols[7].button(
         "+",
         key=f"trade_chart_zoom_in_{symbol}",
-        use_container_width=True,
+        width="stretch",
         help="Zoom in",
     ):
         contracted = max(current_span * 0.625, pd.Timedelta(minutes=10))
@@ -825,7 +832,7 @@ def render_backtest_trade_chart(
     if visible_trades:
         st.plotly_chart(
             figure,
-            use_container_width=True,
+            width="stretch",
             key=f"backtest_trade_chart_{symbol}_{timeframe}",
             config={
                 "displaylogo": False,
@@ -947,179 +954,6 @@ HELP_GLOSSARY: list[dict[str, str]] = [
 ]
 
 
-TECHNICAL_TOOLTIP_ALIASES: dict[str, str] = {
-    "Optimization goal": "What the optimizer is trying to find. Maximum historical P/L searches for the most profitable historical fit; Validated edge prioritizes settings that also hold up on separate validation and holdout data.",
-    "Search depth": "How many parameter combinations the optimizer explores. Deeper searches take longer but examine more possible settings before refining the strongest candidates.",
-    "Minimum training trades": "The fewest completed simulated trades required in the training period before a result has enough observations to qualify.",
-    "Minimum validation trades": "The fewest completed simulated trades required in the separate validation period before the app treats that validation result as usable.",
-    "Starting cash": "The simulated account balance at the beginning of the backtest. It affects dollar P/L and position sizing but does not change the historical price data.",
-    "Execution-cost model": "How the backtest estimates real-world trading friction. Automatic mode uses a conservative historical spread floor plus estimated slippage; Manual mode uses the fixed values you enter. A single current quote is not imposed across the whole historical window.",
-    "Spread (bps)": "The historical bid/ask spread floor expressed in basis points. 100 bps equals 1%. In Automatic mode the optimizer keeps this as a conservative floor instead of applying one potentially stale or after-hours live quote to the entire backtest.",
-    "Slippage per fill (bps)": "Estimated price movement between the expected execution price and the simulated fill, expressed in basis points. In Automatic mode this is a conservative floor.",
-    "Fee per order": "A fixed simulated commission or order fee applied to each order in the backtest.",
-    "Maximum acceptable drawdown": "The largest peak-to-trough account decline you are willing to accept in the historical test. Candidates beyond this limit receive a strong ranking penalty.",
-    "Position-size search depth": "How many different position-sizing possibilities the optimizer tests. A deeper search explores more sizing combinations and takes longer.",
-    "8-trade sample safeguard": "When enabled, a Maximum historical P/L result needs at least 8 completed trades to outrank tiny-sample results that may look impressive by chance.",
-    "SEARCH": "A control that changes how broadly or deeply the optimizer searches. It is not itself a trading rule.",
-    "THRESHOLD": "A qualification rule the optimizer must respect, such as a minimum trade count or maximum drawdown.",
-    "CEILING": "A maximum the optimizer may not exceed. It can test smaller values, but never larger ones.",
-    "AUTO": "The displayed value is a starting or fallback value while the app automatically evaluates better supported values.",
-    "FLOOR": "A conservative minimum assumption. The automatic model can use a higher value when conditions warrant it, but not a lower one.",
-    "FIXED": "A value held constant for every candidate during that optimization run.",
-}
-
-
-def _technical_tooltip_map() -> dict[str, str]:
-    tips = {item["term"]: item["meaning"] for item in HELP_GLOSSARY}
-    tips.update(TECHNICAL_TOOLTIP_ALIASES)
-    return tips
-
-
-def install_technical_tooltips() -> None:
-    """Add dotted-underlined hover definitions to technical labels throughout the app."""
-    tooltip_json = json.dumps(_technical_tooltip_map())
-    components.html(
-        f"""
-        <script>
-        (() => {{
-          const p = window.parent;
-          const d = p.document;
-          const tips = {tooltip_json};
-          const selector = [
-            '[data-testid="stWidgetLabel"]',
-            '[data-testid="stMetricLabel"]',
-            '.metric-label',
-            'th'
-          ].join(',');
-
-          const simplify = (text) => String(text || '')
-            .replace(/\s+/g, ' ')
-            .trim()
-            .toUpperCase()
-            .replace(/[^A-Z0-9%/]+/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
-
-          const entries = Object.entries(tips)
-            .map(([term, explanation]) => [simplify(term), explanation])
-            .filter(([term]) => term)
-            .sort((a, b) => b[0].length - a[0].length);
-
-          function explanationFor(rawText) {{
-            const label = simplify(rawText);
-            if (!label) return null;
-            for (const [term, explanation] of entries) {{
-              if (
-                label === term ||
-                label.startsWith(term + ' ') ||
-                label.endsWith(' ' + term) ||
-                label.includes(' ' + term + ' ')
-              ) {{
-                return explanation;
-              }}
-            }}
-            return null;
-          }}
-
-          function applyTips() {{
-            d.querySelectorAll(selector).forEach((el) => {{
-              const explanation = explanationFor(el.textContent);
-              if (explanation) {{
-                el.setAttribute('data-tech-tooltip', explanation);
-                el.setAttribute('tabindex', '0');
-                el.setAttribute('aria-label', el.textContent.trim() + '. ' + explanation);
-              }} else {{
-                el.removeAttribute('data-tech-tooltip');
-              }}
-            }});
-          }}
-
-          let box = d.getElementById('youtube-tech-tooltip');
-          if (!box) {{
-            box = d.createElement('div');
-            box.id = 'youtube-tech-tooltip';
-            box.setAttribute('role', 'tooltip');
-            d.body.appendChild(box);
-          }}
-
-          function show(el) {{
-            const text = el && el.getAttribute('data-tech-tooltip');
-            if (!text) return;
-            box.textContent = text;
-            box.style.display = 'block';
-
-            const r = el.getBoundingClientRect();
-            const pad = 10;
-            const width = box.offsetWidth;
-            const height = box.offsetHeight;
-            let left = r.left;
-            let top = r.bottom + 8;
-
-            if (left + width > p.innerWidth - pad) left = p.innerWidth - width - pad;
-            if (left < pad) left = pad;
-            if (top + height > p.innerHeight - pad) top = r.top - height - 8;
-            if (top < pad) top = pad;
-
-            box.style.left = Math.round(left) + 'px';
-            box.style.top = Math.round(top) + 'px';
-          }}
-
-          function hide() {{
-            box.style.display = 'none';
-          }}
-
-          const old = p.__youtubeTechnicalTooltips;
-          if (old) {{
-            try {{ old.observer.disconnect(); }} catch (_) {{}}
-            try {{ d.removeEventListener('mouseover', old.over); }} catch (_) {{}}
-            try {{ d.removeEventListener('mouseout', old.out); }} catch (_) {{}}
-            try {{ d.removeEventListener('focusin', old.focusin); }} catch (_) {{}}
-            try {{ d.removeEventListener('focusout', old.focusout); }} catch (_) {{}}
-          }}
-
-          const over = (event) => {{
-            const el = event.target.closest && event.target.closest('[data-tech-tooltip]');
-            if (el) show(el);
-          }};
-          const out = (event) => {{
-            const el = event.target.closest && event.target.closest('[data-tech-tooltip]');
-            if (el && (!event.relatedTarget || !el.contains(event.relatedTarget))) hide();
-          }};
-          const focusin = (event) => {{
-            const el = event.target.closest && event.target.closest('[data-tech-tooltip]');
-            if (el) show(el);
-          }};
-          const focusout = (event) => {{
-            const el = event.target.closest && event.target.closest('[data-tech-tooltip]');
-            if (el) hide();
-          }};
-
-          d.addEventListener('mouseover', over);
-          d.addEventListener('mouseout', out);
-          d.addEventListener('focusin', focusin);
-          d.addEventListener('focusout', focusout);
-
-          let queued = false;
-          const observer = new MutationObserver(() => {{
-            if (queued) return;
-            queued = true;
-            p.requestAnimationFrame(() => {{
-              queued = false;
-              applyTips();
-            }});
-          }});
-          if (d.body) observer.observe(d.body, {{childList: true, subtree: true}});
-
-          p.__youtubeTechnicalTooltips = {{observer, over, out, focusin, focusout}};
-          applyTips();
-        }})();
-        </script>
-        """,
-        height=0,
-        scrolling=False,
-    )
-
-
 def glossary_context_text() -> str:
     return " | ".join(f'{item["term"]}: {item["meaning"]}' for item in HELP_GLOSSARY)
 
@@ -1174,7 +1008,7 @@ def render_help_glossary_tab(openai_ready: bool) -> None:
                 height=105,
                 placeholder="Example: Why can profit factor be blank even when the strategy made money?",
             )
-            ask_submitted = st.form_submit_button("Ask ChatGPT", use_container_width=True, disabled=not openai_ready)
+            ask_submitted = st.form_submit_button("Ask ChatGPT", width="stretch", disabled=not openai_ready)
 
         if ask_submitted:
             clean_question = question.strip()
@@ -1196,7 +1030,7 @@ def render_help_glossary_tab(openai_ready: bool) -> None:
                 except AppError as error:
                     st.error(str(error))
 
-        if history and st.button("Clear Help chat", key="clear_help_chat", use_container_width=True):
+        if history and st.button("Clear Help chat", key="clear_help_chat", width="stretch"):
             st.session_state["help_chat_history"] = []
             st.rerun()
 
@@ -1308,6 +1142,7 @@ with st.sidebar:
     st.divider()
     st.markdown("### Required app secrets")
     st.code(
+        'APP_ACCESS_PASSWORD="strong_unique_app_password"\n'
         'ALPACA_API_KEY="your_existing_key"\n'
         'ALPACA_SECRET_KEY="your_existing_secret"\n'
         'GEMINI_API_KEY="your_free_google_key"\n'
@@ -1323,12 +1158,10 @@ with st.sidebar:
     st.markdown("[Create a Gemini API key](https://aistudio.google.com/apikey)")
     st.divider()
     st.caption(
-        "This app is research and paper tracking only. It never places live or paper brokerage orders. "
-        "YouTube strategies are hypotheses, not evidence of future profits."
+        "The Full Trading Lab is research and journal tooling. Other authenticated pages can submit explicitly "
+        "armed Alpaca paper orders, but no part of the app uses a live-trading endpoint. YouTube strategies are "
+        "hypotheses, not evidence of future profits."
     )
-
-
-install_technical_tooltips()
 
 
 overview_tab, videos_tab, master_tab, strategies_tab, backtest_tab, optimizer_tab, scanner_tab, paper_tab, help_tab, settings_tab = st.tabs(
@@ -1362,7 +1195,7 @@ with overview_tab:
 
     if not library["strategies"]:
         st.info("Add a YouTube video to extract your first strategy, or load an example to explore the interface.")
-        if st.button("Load example strategy", key="load_example", use_container_width=False):
+        if st.button("Load example strategy", key="load_example", width="content"):
             updated = store.load()
             if not any(item.get("id") == "demo_vwap_momentum" for item in updated["strategies"]):
                 updated["strategies"].append(demo_strategy())
@@ -1380,7 +1213,7 @@ with overview_tab:
             }
             for item in library["videos"][:8]
         ]
-        st.dataframe(pd.DataFrame(recent), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(recent), width="stretch", hide_index=True)
 
 
 with videos_tab:
@@ -1399,7 +1232,7 @@ with videos_tab:
             }
             for item in analyzed_video_lookup.values()
         ]
-        st.dataframe(pd.DataFrame(analyzed_video_rows), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(analyzed_video_rows), hide_index=True, width="stretch")
         st.caption(f"{len(analyzed_video_lookup)} unique YouTube video(s) are already in your library.")
     else:
         st.info("No previously analyzed YouTube videos are currently saved.")
@@ -1431,7 +1264,7 @@ with videos_tab:
             value=False,
             help="Leave this off to prevent accidental duplicate analysis and unnecessary Gemini usage.",
         )
-        submitted = st.form_submit_button("Analyze YouTube videos", use_container_width=True)
+        submitted = st.form_submit_button("Analyze YouTube videos", width="stretch")
 
     if submitted:
         urls, invalid = parse_youtube_urls(raw_urls)
@@ -1482,7 +1315,7 @@ with videos_tab:
         else:
             st.button(
                 "🎥 Analyzing videos…",
-                use_container_width=True,
+                width="stretch",
                 disabled=True,
                 key="video_analysis_busy_state",
             )
@@ -1639,13 +1472,13 @@ with master_tab:
             )
             create_master = st.form_submit_button(
                 "Combine video lessons into one master strategy",
-                use_container_width=True,
+                width="stretch",
             )
 
         if create_master:
             st.button(
                 "🧠 Combining strategies…",
-                use_container_width=True,
+                width="stretch",
                 disabled=True,
                 key="master_strategy_busy_state",
             )
@@ -1840,7 +1673,7 @@ with strategies_tab:
                     "Holdout P/L": money((strategy.get("last_backtest") or {}).get("holdout_net_pnl")),
                 }
             )
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
         options = selected_strategy_options(library["strategies"])
         selection = st.selectbox("Choose a strategy to inspect or edit", list(options), key="strategy_inspector")
         selected = options[selection]
@@ -1865,7 +1698,7 @@ with strategies_tab:
         if approval_columns[1].button(
             "Save approval",
             key=f"save_strategy_approval_{selected['id']}",
-            use_container_width=True,
+            width="stretch",
         ):
             store.update_strategy(selected["id"], {"approved": approved})
             st.success("Approval status saved.")
@@ -1998,7 +1831,7 @@ with strategies_tab:
                     )
                 save_strategy = st.form_submit_button(
                     "Save advanced strategy rules",
-                    use_container_width=True,
+                    width="stretch",
                 )
             if save_strategy:
                 store.update_strategy(selected["id"], {"machine_rules": updated})
@@ -2047,7 +1880,7 @@ with strategies_tab:
                         if value is not None or rules.get(name) is not None
                     ]
                     if differences:
-                        st.dataframe(pd.DataFrame(differences), hide_index=True, use_container_width=True)
+                        st.dataframe(pd.DataFrame(differences), hide_index=True, width="stretch")
                     if summary:
                         st.caption(
                             f'Tested tickers: {", ".join(summary.get("symbols") or []) or "—"} · '
@@ -2100,17 +1933,83 @@ with backtest_tab:
         limitations = backtest_limitations(chosen)
         if limitations:
             st.warning("Backtest limitations: " + " · ".join(limitations))
+        saved_backtest_rules = normalize_machine_rules(chosen.get("machine_rules"))
+        saved_stop_rule = safe_float(saved_backtest_rules.get("stop_loss_pct"))
+        saved_reward_rule = safe_float(saved_backtest_rules.get("reward_risk"))
+
+        run_history = list(chosen.get("backtest_run_history") or [])
+        if run_history:
+            with st.expander("🕘 Backtest run history — reproduce an earlier test", expanded=False):
+                st.caption(
+                    "These records store the exact historical timestamps and settings used. "
+                    "Re-run exact settings tests the same candle window again."
+                )
+                for history_index, previous_run in enumerate(run_history[:12]):
+                    previous_results = previous_run.get("results") or []
+                    total_pnl = sum(safe_float(item.get("net_pnl"), 0.0) or 0.0 for item in previous_results)
+                    total_trades = sum(int(safe_float(item.get("trades"), 0.0) or 0.0) for item in previous_results)
+                    row = st.columns([4.4, 1.35])
+                    row[0].markdown(
+                        f'**{local_timestamp(previous_run.get("tested_at"))}** · '
+                        f'{", ".join(previous_run.get("tickers") or []) or "—"} · '
+                        f'{previous_run.get("timeframe") or "?"} · '
+                        f'{previous_run.get("window_label") or "Saved window"}'
+                    )
+                    row[0].caption(
+                        f'Net {money(total_pnl)} · {total_trades} trades · '
+                        f'actual stop {safe_float(previous_run.get("actual_stop_pct"), 0.0):.2f}% · '
+                        f'actual reward/risk {safe_float(previous_run.get("actual_reward_risk"), 0.0):.2f}x'
+                    )
+                    if row[1].button(
+                        "Re-run exact settings",
+                        key=f'backtest_replay_{chosen.get("id")}_{history_index}',
+                        width="stretch",
+                    ):
+                        st.session_state["backtest_replay_payload"] = previous_run
+                        st.session_state["backtest_replay_requested"] = True
+                        st.rerun()
+
+        st.caption("Choose a rolling window for the latest data, or fixed dates for an apples-to-apples comparison.")
         with st.form("backtest_form"):
-            ticker_column, history_column, timeframe_column = st.columns(3)
+            ticker_column, window_column, timeframe_column = st.columns(3)
             tickers_raw = ticker_column.text_input(
                 "Tickers to test",
                 value=optimized_symbol or "AAPL, NVDA",
                 help="Use up to five tickers, separated by commas.",
             )
-            history_days = history_column.slider("Calendar days of history", min_value=7, max_value=120, value=preferred_history)
+            window_mode = window_column.selectbox(
+                "Historical window",
+                ["Rolling — last N calendar days", "Fixed dates — reproducible"],
+                help=(
+                    "Rolling moves forward with time. Fixed dates keep the historical period unchanged, "
+                    "which is best for comparing manual setting changes."
+                ),
+            )
             timeframe = timeframe_column.selectbox(
                 "Candle interval", supported_timeframes, index=supported_timeframes.index(preferred_timeframe)
             )
+
+            fixed_start = None
+            fixed_end = None
+            if window_mode.startswith("Rolling"):
+                history_days = st.slider("Calendar days of history", min_value=7, max_value=120, value=preferred_history)
+            else:
+                last_completed_day = utc_now().astimezone(ET).date() - timedelta(days=1)
+                default_fixed_end = last_completed_day
+                default_fixed_start = last_completed_day - timedelta(days=max(1, preferred_history - 1))
+                fixed_dates = st.columns(2)
+                fixed_start = fixed_dates[0].date_input(
+                    "Fixed start date",
+                    value=default_fixed_start,
+                    max_value=last_completed_day,
+                )
+                fixed_end = fixed_dates[1].date_input(
+                    "Fixed end date",
+                    value=default_fixed_end,
+                    max_value=last_completed_day,
+                )
+                history_days = max(1, (fixed_end - fixed_start).days + 1)
+                st.caption(f"Fixed historical span: {history_days} calendar day(s).")
             settings_columns = st.columns(4)
             starting_cash = settings_columns[0].number_input(
                 "Starting cash ($)", min_value=100.0,
@@ -2128,13 +2027,13 @@ with backtest_tab:
                 step=1.0,
             )
             default_stop = settings_columns[3].number_input(
-                "Fallback stop (%)", min_value=0.1, max_value=30.0,
+                "Fallback stop (%) — only if strategy has no saved stop", min_value=0.1, max_value=30.0,
                 value=max(0.1, min(30.0, safe_float(optimized_profile.get("default_stop_pct"), 2.0) or 2.0)),
                 step=0.1,
             )
             friction_columns = st.columns(4)
             default_ratio = friction_columns[0].number_input(
-                "Fallback reward/risk", min_value=0.2, max_value=10.0,
+                "Fallback reward/risk — only if strategy has no saved target", min_value=0.2, max_value=10.0,
                 value=max(0.2, min(10.0, safe_float(optimized_profile.get("default_reward_risk"), 2.0) or 2.0)),
                 step=0.1,
             )
@@ -2217,12 +2116,39 @@ with backtest_tab:
                     "can use up to roughly one quarter of the configured risk/allocation ceiling; extended-hours entries are smaller."
                 )
 
-            run_requested = st.form_submit_button("Run historical backtest", use_container_width=True)
+            actual_stop_preview = saved_stop_rule if saved_stop_rule is not None else float(default_stop)
+            actual_reward_preview = saved_reward_rule if saved_reward_rule is not None else float(default_ratio)
+            stop_preview_source = "saved strategy rule — fallback is NOT used" if saved_stop_rule is not None else "fallback input"
+            reward_preview_source = "saved strategy rule — fallback is NOT used" if saved_reward_rule is not None else "fallback input"
+            st.info(
+                f"Actual settings this backtest will use → Stop: {actual_stop_preview:.2f}% ({stop_preview_source}) · "
+                f"Reward/risk: {actual_reward_preview:.2f}x ({reward_preview_source})"
+            )
+            manual_run_requested = st.form_submit_button("Run historical backtest", width="stretch")
+
+        replay_payload = None
+        if st.session_state.pop("backtest_replay_requested", False):
+            replay_payload = st.session_state.pop("backtest_replay_payload", None)
+        run_requested = bool(manual_run_requested or replay_payload)
+        if replay_payload:
+            replay_settings = replay_payload.get("settings") or {}
+            tickers_raw = ", ".join(replay_payload.get("tickers") or [])
+            timeframe = str(replay_payload.get("timeframe") or timeframe)
+            starting_cash = safe_float(replay_settings.get("starting_cash"), starting_cash) or starting_cash
+            risk_per_trade = safe_float(replay_settings.get("risk_per_trade_pct"), risk_per_trade) or risk_per_trade
+            position_cap = safe_float(replay_settings.get("max_position_pct"), position_cap) or position_cap
+            default_stop = safe_float(replay_settings.get("default_stop_pct"), default_stop) or default_stop
+            default_ratio = safe_float(replay_settings.get("default_reward_risk"), default_ratio) or default_ratio
+            spread_bps = safe_float(replay_settings.get("spread_bps"), spread_bps) or 0.0
+            slippage_bps = safe_float(replay_settings.get("slippage_bps"), slippage_bps) or 0.0
+            order_fee = safe_float(replay_settings.get("fee_per_order"), order_fee) or 0.0
+            history_days = int(safe_float(replay_payload.get("history_days"), history_days) or history_days)
+            st.info("Re-running the exact saved candle window and settings from the selected history record.")
 
         if run_requested:
             st.button(
                 "🧪 Running historical backtest…",
-                use_container_width=True,
+                width="stretch",
                 disabled=True,
                 key="historical_backtest_busy_state",
             )
@@ -2278,9 +2204,27 @@ with backtest_tab:
                     market = client()
                     # Basic Alpaca accounts can retrieve consolidated history, but not
                     # its most recent 15 minutes. A 16-minute buffer stays compatible.
-                    delay = 16 if market.historical_feed == "sip" and market.live_feed != "sip" else 1
-                    end = utc_now() - timedelta(minutes=delay)
-                    start = end - timedelta(days=int(history_days))
+                    if replay_payload and replay_payload.get("start_iso") and replay_payload.get("end_iso"):
+                        try:
+                            start = datetime.fromisoformat(str(replay_payload["start_iso"]).replace("Z", "+00:00"))
+                            end = datetime.fromisoformat(str(replay_payload["end_iso"]).replace("Z", "+00:00"))
+                        except (TypeError, ValueError) as replay_error:
+                            raise AppError("The saved historical window could not be read. Run a new backtest first.") from replay_error
+                        history_days_for_record = int(safe_float(replay_payload.get("history_days"), history_days) or history_days)
+                        window_label_for_record = str(replay_payload.get("window_label") or "Exact saved window")
+                    elif window_mode.startswith("Fixed"):
+                        if fixed_start is None or fixed_end is None or fixed_start > fixed_end:
+                            raise AppError("The fixed start date must be on or before the fixed end date.")
+                        start = datetime.combine(fixed_start, datetime.min.time(), tzinfo=ET)
+                        end = datetime.combine(fixed_end + timedelta(days=1), datetime.min.time(), tzinfo=ET)
+                        history_days_for_record = (fixed_end - fixed_start).days + 1
+                        window_label_for_record = f"Fixed {fixed_start.isoformat()} → {fixed_end.isoformat()}"
+                    else:
+                        delay = 16 if market.historical_feed == "sip" and market.live_feed != "sip" else 1
+                        end = utc_now() - timedelta(minutes=delay)
+                        start = end - timedelta(days=int(history_days))
+                        history_days_for_record = int(history_days)
+                        window_label_for_record = f"Rolling last {int(history_days)} calendar days"
                     backtest_bar.progress(
                         0.18,
                         text=backtest_monitor.text(0.18, "Downloading Alpaca historical candles"),
@@ -2308,10 +2252,65 @@ with backtest_tab:
                         str(chosen.get("id") or ""),
                         results,
                         timeframe=timeframe,
-                        history_days=int(history_days),
+                        history_days=int(history_days_for_record),
                     )
+
+                    actual_stop_used = saved_stop_rule if saved_stop_rule is not None else float(default_stop)
+                    actual_reward_used = saved_reward_rule if saved_reward_rule is not None else float(default_ratio)
+                    stop_source = "saved strategy rule" if saved_stop_rule is not None else "fallback input"
+                    reward_source = "saved strategy rule" if saved_reward_rule is not None else "fallback input"
+                    end_display = (end.astimezone(ET) - timedelta(seconds=1)).date().isoformat()
+                    run_record = {
+                        "tested_at": isoformat_utc(utc_now()),
+                        "tickers": list(tickers),
+                        "timeframe": str(timeframe),
+                        "history_days": int(history_days_for_record),
+                        "window_label": window_label_for_record,
+                        "start_iso": isoformat_utc(start),
+                        "end_iso": isoformat_utc(end),
+                        "start_date": start.astimezone(ET).date().isoformat(),
+                        "end_date": end_display,
+                        "actual_stop_pct": float(actual_stop_used),
+                        "actual_reward_risk": float(actual_reward_used),
+                        "stop_source": stop_source,
+                        "reward_source": reward_source,
+                        "settings": {
+                            "starting_cash": float(starting_cash),
+                            "risk_per_trade_pct": float(risk_per_trade),
+                            "max_position_pct": float(position_cap),
+                            "default_stop_pct": float(default_stop),
+                            "default_reward_risk": float(default_ratio),
+                            "spread_bps": float(spread_bps),
+                            "slippage_bps": float(slippage_bps),
+                            "fee_per_order": float(order_fee),
+                        },
+                        "results": [
+                            {
+                                "symbol": str(result.get("symbol") or "?"),
+                                "sessions": int(safe_float(result.get("sessions"), 0) or 0),
+                                "trades": int(safe_float((result.get("metrics") or {}).get("trade_count"), 0) or 0),
+                                "net_pnl": safe_float((result.get("metrics") or {}).get("net_pnl"), 0.0) or 0.0,
+                                "holdout_trades": int(safe_float((result.get("out_of_sample") or {}).get("trade_count"), 0) or 0),
+                                "holdout_pnl": safe_float((result.get("out_of_sample") or {}).get("net_pnl"), 0.0) or 0.0,
+                            }
+                            for result in results
+                        ],
+                    }
                     st.session_state["backtest_results"] = results
                     st.session_state["backtest_strategy_id"] = chosen.get("id")
+                    st.session_state["backtest_run_context"] = run_record
+
+                    previous_history = list(chosen.get("backtest_run_history") or [])
+                    try:
+                        store.update_strategy(
+                            str(chosen.get("id") or ""),
+                            {"backtest_run_history": [run_record, *previous_history][:20]},
+                        )
+                    except AppError as history_error:
+                        st.warning(
+                            "The backtest completed and the results below are still available, but the extra run-history "
+                            f"record could not be saved permanently: {history_error}"
+                        )
                     st.session_state["backtest_price_bars"] = {
                         symbol: all_bars.get(symbol, [])
                         for symbol in tickers
@@ -2325,6 +2324,15 @@ with backtest_tab:
         results = st.session_state.get("backtest_results") or []
         if results:
             section("Backtest results", "Historical results are hypothetical. Holdout results were not used to define the in-sample segment.")
+            active_run_context = st.session_state.get("backtest_run_context") or {}
+            if active_run_context:
+                st.caption(
+                    f'Tested window: {active_run_context.get("window_label") or "—"} · '
+                    f'Actual stop used: {safe_float(active_run_context.get("actual_stop_pct"), 0.0):.2f}% '
+                    f'({active_run_context.get("stop_source") or "—"}) · '
+                    f'Actual reward/risk used: {safe_float(active_run_context.get("actual_reward_risk"), 0.0):.2f}x '
+                    f'({active_run_context.get("reward_source") or "—"})'
+                )
             summary = []
             for result in results:
                 metrics = result["metrics"]
@@ -2342,7 +2350,7 @@ with backtest_tab:
                         "Holdout P/L": money(holdout["net_pnl"]),
                     }
                 )
-            st.dataframe(pd.DataFrame(summary), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(summary), hide_index=True, width="stretch")
             lookup = {result["symbol"]: result for result in results}
             detail_symbol = st.selectbox("Show detailed results for", list(lookup), key="backtest_detail")
             detail = lookup[detail_symbol]
@@ -2389,7 +2397,7 @@ with backtest_tab:
                 equity_figure.update_yaxes(gridcolor="rgba(105,135,170,0.13)", tickprefix="$")
                 st.plotly_chart(
                     equity_figure,
-                    use_container_width=True,
+                    width="stretch",
                     config={"displaylogo": False, "scrollZoom": True},
                     key=f"backtest_equity_curve_{detail_symbol}",
                 )
@@ -2406,7 +2414,7 @@ with backtest_tab:
                     chart_timeframe,
                 )
                 st.markdown("**Simulated trade log**")
-                st.dataframe(pd.DataFrame(detail["trades"]), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(detail["trades"]), width="stretch", hide_index=True)
             else:
                 st.info("No historical trades met this strategy's current measurable rules for the selected period.")
             if detail["limitations"]:
@@ -2668,13 +2676,13 @@ with optimizer_tab:
 
             optimization_requested = st.form_submit_button(
                 "Find the best strategy and settings for this stock",
-                use_container_width=True,
+                width="stretch",
             )
 
         if optimization_requested:
             st.button(
                 "⚙️ Optimizing…",
-                use_container_width=True,
+                width="stretch",
                 disabled=True,
                 key="stock_optimizer_busy_state",
             )
@@ -3129,7 +3137,7 @@ with optimizer_tab:
                         "Max drawdown": percent(optimized_behavior_metrics.get("max_drawdown_pct")),
                     },
                 ]
-                st.dataframe(pd.DataFrame(comparison_rows), hide_index=True, use_container_width=True)
+                st.dataframe(pd.DataFrame(comparison_rows), hide_index=True, width="stretch")
                 behavior_delta = safe_float(behavior_comparison.get("net_pnl_delta"), 0.0) or 0.0
                 if behavior_delta > 0:
                     st.success(f"Optimized entry behavior improved full-window simulated P/L by {money(behavior_delta)} versus the original behavior.")
@@ -3154,7 +3162,7 @@ with optimizer_tab:
                             "Combinations tested": interval_result.get("variants_tested", 0),
                         }
                     )
-                st.dataframe(pd.DataFrame(interval_rows), hide_index=True, use_container_width=True)
+                st.dataframe(pd.DataFrame(interval_rows), hide_index=True, width="stretch")
 
             section("Strategy rankings", ("Every strategy is ranked by full-window historical P/L after broad rule and sizing sweeps." if historical_fit_mode else "Every strategy is tested using stock-specific rules, position sizing, and realistic costs; only the overall winner receives a final holdout test."))
             rankings_table = []
@@ -3185,7 +3193,7 @@ with optimizer_tab:
                         "Combinations": candidate.get("variants_tested", 0),
                     }
                 )
-            st.dataframe(pd.DataFrame(rankings_table), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(rankings_table), hide_index=True, width="stretch")
 
             labels = {
                 f'{index}. {candidate.get("strategy_name") or "Unnamed strategy"} '
@@ -3221,7 +3229,7 @@ with optimizer_tab:
                     }
                     for field_name, values in adjusted_execution.items()
                 )
-                st.dataframe(pd.DataFrame(changed_rows), hide_index=True, use_container_width=True)
+                st.dataframe(pd.DataFrame(changed_rows), hide_index=True, width="stretch")
             else:
                 st.info("The original strategy settings already performed best among the combinations tested.")
             for limitation in inspected.get("limitations") or []:
@@ -3267,7 +3275,7 @@ with optimizer_tab:
             elif st.button(
                 f"Save optimized {optimized_symbol} strategy",
                 key=f"save_optimized_{optimized_symbol}_{inspected.get('source_strategy_id', 'unknown')}",
-                use_container_width=True,
+                width="stretch",
                 disabled=save_blocked_for_sample or not bool(custom_optimized_name),
             ):
                 try:
@@ -3436,11 +3444,11 @@ with scanner_tab:
             active_enabled = source_columns[1].checkbox("Include most-active stocks", value=False)
             news_enabled = source_columns[2].checkbox("Check recent news", value=True)
             candidate_count = source_columns[3].number_input("Candidates per screener", min_value=5, max_value=50, value=20, step=5)
-            scan_requested = st.form_submit_button("Run fresh strategy scan", use_container_width=True)
+            scan_requested = st.form_submit_button("Run fresh strategy scan", width="stretch")
         if scan_requested:
             st.button(
                 "🔎 Scanning…",
-                use_container_width=True,
+                width="stretch",
                 disabled=True,
                 key="full_lab_live_scan_busy_state",
             )
@@ -3492,7 +3500,7 @@ with scanner_tab:
                         "VWAP": "Above" if metrics.get("above_vwap") else "Below / unavailable",
                     }
                 )
-            st.dataframe(pd.DataFrame(summary_rows), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(summary_rows), hide_index=True, width="stretch")
 
             section("Best current setups", "MATCH means measured rules passed. VERIFY means a chart-specific trigger still needs confirmation.")
             for item in results[:15]:
@@ -3521,7 +3529,7 @@ with scanner_tab:
                         for rule in best["checks"]
                     ]
                     if checks:
-                        st.dataframe(pd.DataFrame(checks), hide_index=True, use_container_width=True)
+                        st.dataframe(pd.DataFrame(checks), hide_index=True, width="stretch")
                     for article in (metrics.get("news") or [])[:3]:
                         title = str(article.get("headline") or "News item")
                         url = article.get("url")
@@ -3561,7 +3569,7 @@ with paper_tab:
         paper_target = details[1].number_input("Target price ($), optional", min_value=0.0, value=float(prefill.get("target_price") or 0.0), step=0.01, format="%.4f")
         paper_strategy = details[2].text_input("Strategy name", value=str(prefill.get("strategy_name") or ""))
         paper_notes = st.text_area("Trade notes", height=80, placeholder="Why is this setup valid? What would invalidate it?")
-        add_position = st.form_submit_button("Save paper position", use_container_width=True)
+        add_position = st.form_submit_button("Save paper position", width="stretch")
     if add_position:
         try:
             store.add_position(
@@ -3622,8 +3630,8 @@ with paper_tab:
                 edit_target = more[1].number_input("Target ($)", min_value=0.0, value=float(safe_float(position.get("target_price"), 0.0) or 0.0), step=0.01, format="%.4f")
                 edit_notes = st.text_area("Notes", value=str(position.get("notes") or ""), height=75)
                 button_a, button_b = st.columns(2)
-                save_edits = button_a.form_submit_button("Save edits", use_container_width=True)
-                close_trade = button_b.form_submit_button("Close paper trade", use_container_width=True)
+                save_edits = button_a.form_submit_button("Save edits", width="stretch")
+                close_trade = button_b.form_submit_button("Close paper trade", width="stretch")
             if save_edits or close_trade:
                 try:
                     update = {"quantity": edit_quantity, "entry_price": edit_entry, "stop_price": edit_stop or None, "target_price": edit_target or None, "notes": edit_notes}
@@ -3660,14 +3668,14 @@ with settings_tab:
         if store.restored_on_startup:
             st.success("This app automatically recovered its saved library from your private cloud backup.")
         backup_left, backup_right = st.columns(2)
-        if backup_left.button("Back up current library now", key="sync_private_github_backup", use_container_width=True):
+        if backup_left.button("Back up current library now", key="sync_private_github_backup", width="stretch"):
             try:
                 store.sync_cloud_backup()
                 st.success("Your current library was saved to the private GitHub backup.")
                 st.rerun()
             except AppError as error:
                 st.error(str(error))
-        if backup_right.button("Restore latest cloud backup", key="restore_private_github_backup", use_container_width=True):
+        if backup_right.button("Restore latest cloud backup", key="restore_private_github_backup", width="stretch"):
             try:
                 store.restore_cloud_backup()
                 st.success("The latest private GitHub cloud backup was restored.")
@@ -3718,7 +3726,7 @@ with settings_tab:
                                 f' · Holdout {money(checkpoint_test.get("holdout_net_pnl"))}'
                             )
                         st.markdown(f"- {label}")
-                if st.button("Restore deleted item", key=f'restore_deleted_{recovered["id"]}', use_container_width=True):
+                if st.button("Restore deleted item", key=f'restore_deleted_{recovered["id"]}', width="stretch"):
                     try:
                         store.restore_recovery_item(recovered["id"])
                         st.rerun()
@@ -3746,7 +3754,7 @@ with settings_tab:
             list(backup_options),
             key="automatic_strategy_backup",
         )
-        if st.button("Restore selected automatic backup", key="restore_automatic_backup", use_container_width=True):
+        if st.button("Restore selected automatic backup", key="restore_automatic_backup", width="stretch"):
             try:
                 store.restore_automatic_backup(backup_options[selected_backup_label]["id"])
                 st.rerun()
@@ -3793,7 +3801,7 @@ with settings_tab:
         "Download an additional personal backup whenever you want. Configured private GitHub cloud storage also saves changes automatically.",
     )
     export_data = json.dumps(library, indent=2, default=str).encode("utf-8")
-    st.download_button("Download strategy and paper-trade backup", data=export_data, file_name="youtube_strategy_library_backup.json", mime="application/json", use_container_width=True)
+    st.download_button("Download strategy and paper-trade backup", data=export_data, file_name="youtube_strategy_library_backup.json", mime="application/json", width="stretch")
     imported = st.file_uploader("Import a previously exported strategy backup", type=["json"])
     if imported is not None and st.button("Merge imported backup into this app", key="import_backup"):
         try:

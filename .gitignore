@@ -1,0 +1,8 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.streamlit/secrets.toml
+.youtube_strategy_data/
+.trading_intelligence_data/
+youtube-strategy-lab/
+trading-intelligence-lab/

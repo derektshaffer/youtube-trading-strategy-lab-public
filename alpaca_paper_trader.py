@@ -93,15 +93,21 @@ class AlpacaPaperTrader:
 
     def account(self) -> dict[str, Any]:
         result = self._request("/v2/account")
-        return result if isinstance(result, dict) else {}
+        if not isinstance(result, dict):
+            raise PaperTradeError("Alpaca paper trading returned an invalid account response.")
+        return result
 
     def clock(self) -> dict[str, Any]:
         result = self._request("/v2/clock")
-        return result if isinstance(result, dict) else {}
+        if not isinstance(result, dict):
+            raise PaperTradeError("Alpaca paper trading returned an invalid market-clock response.")
+        return result
 
     def positions(self) -> list[dict[str, Any]]:
         result = self._request("/v2/positions")
-        return result if isinstance(result, list) else []
+        if not isinstance(result, list) or any(not isinstance(item, dict) for item in result):
+            raise PaperTradeError("Alpaca paper trading returned an invalid positions response.")
+        return result
 
     def orders(
         self,
@@ -121,7 +127,9 @@ class AlpacaPaperTrader:
                 "nested": "true" if nested else "false",
             },
         )
-        return result if isinstance(result, list) else []
+        if not isinstance(result, list) or any(not isinstance(item, dict) for item in result):
+            raise PaperTradeError("Alpaca paper trading returned an invalid orders response.")
+        return result
 
     @staticmethod
     def _stock_price(value: float) -> tuple[float, str]:
