@@ -1048,6 +1048,53 @@ def inject_research_glass_theme() -> None:
             box-shadow: 0 0 12px rgba(72,215,145,.14) !important;
         }
 
+        /* ---------- Top utility rail ---------- */
+        .til-top-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            min-height: 38px;
+            padding: 0 3px;
+            color: #6688a0;
+            font-size: .58rem;
+            font-weight: 850;
+            letter-spacing: .12em;
+        }
+        .til-top-status strong {
+            color: #53e49a;
+            font-weight: 900;
+        }
+        .til-top-status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 999px;
+            background: #4ce795;
+            box-shadow: 0 0 10px rgba(76,231,149,.68);
+        }
+        .st-key-til_workspace_search {
+            margin-bottom: .25rem !important;
+        }
+        .st-key-til_workspace_search input {
+            min-height: 38px !important;
+            border: 1px solid rgba(79,194,244,.24) !important;
+            border-radius: 7px !important;
+            color: #dff5ff !important;
+            background:
+                linear-gradient(180deg, rgba(7,25,42,.92), rgba(5,17,29,.92)) !important;
+            box-shadow:
+                inset 0 1px 0 rgba(255,255,255,.02),
+                0 0 18px rgba(57,189,245,.03) !important;
+        }
+        .st-key-til_workspace_search input:focus {
+            border-color: rgba(82,216,255,.58) !important;
+            box-shadow:
+                0 0 0 2px rgba(82,216,255,.07),
+                0 0 20px rgba(58,204,255,.08) !important;
+        }
+        .st-key-til_workspace_search input::placeholder {
+            color: #67879d !important;
+        }
+
         /* ---------- Trading Intelligence premium component system ---------- */
 
         /* Replace Streamlit's multipage list with our in-app app switcher. */
