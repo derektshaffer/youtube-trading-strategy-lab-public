@@ -852,6 +852,8 @@ class GeminiVideoAnalyzer:
             raw_strategy["source_url"] = normalized_url
             raw_strategy["source_title"] = str(parsed.get("video_title") or "YouTube video")
             raw_strategy["creator"] = str(parsed.get("creator") or "Unknown creator")
+            raw_strategy["source_claim_status"] = "unverified_source_claim"
+            raw_strategy["source_role"] = "hypothesis_generator"
             raw_strategy["analyzed_at"] = parsed["analyzed_at"]
             raw_strategy["machine_rules"] = normalize_machine_rules(raw_strategy.get("machine_rules"))
             raw_strategy["confidence"] = max(0, min(100, safe_float(raw_strategy.get("confidence"), 0.0) or 0.0))
