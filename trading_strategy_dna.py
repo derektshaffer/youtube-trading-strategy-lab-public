@@ -447,12 +447,32 @@ STRONG_STRUCTURE_CONCEPTS = {
     "multi-day avwap continuation",
 }
 
+# These concepts change the actual mechanism/context enough that sharing a generic trigger
+# (for example, "VWAP reclaim") is not sufficient to call two strategies the same blueprint.
+EXCLUSIVE_STRUCTURE_CONCEPTS = {
+    "previous-day high breakout",
+    "mean-reversion reversal",
+    "compression / pinch",
+    "avwap handoff",
+    "short-squeeze reclaim",
+    "ipo day-one avwap",
+    "multi-day avwap continuation",
+}
+
 
 def _strong_structure_set(strategy: dict[str, Any]) -> set[str]:
     return {
         value
         for value in _structure_set(strategy)
         if value in STRONG_STRUCTURE_CONCEPTS
+    }
+
+
+def _exclusive_structure_set(strategy: dict[str, Any]) -> set[str]:
+    return {
+        value
+        for value in _structure_set(strategy)
+        if value in EXCLUSIVE_STRUCTURE_CONCEPTS
     }
 
 
@@ -625,6 +645,7 @@ def build_strategy_families(
         best_score = 0.0
         strategy_structure = _structure_set(strategy)
         strategy_strong = _strong_structure_set(strategy)
+        strategy_exclusive = _exclusive_structure_set(strategy)
         category = re.sub(r"[^a-z0-9]+", " ", str(strategy.get("category") or "").casefold()).strip()
         for index, family in enumerate(families):
             representative = family[0]
@@ -632,9 +653,16 @@ def build_strategy_families(
                 continue
             family_structure = set().union(*(_structure_set(member) for member in family))
             family_strong = set().union(*(_strong_structure_set(member) for member in family))
+            family_exclusive = set().union(*(_exclusive_structure_set(member) for member in family))
             rep_category = re.sub(
                 r"[^a-z0-9]+", " ", str(representative.get("category") or "").casefold()
             ).strip()
+
+            # Exclusive mechanism/context tags must match exactly. This prevents a short-squeeze,
+            # IPO day-one, multi-day continuation, handoff, pinch, or mean-reversion setup from
+            # disappearing into a broader family just because both happen to use a VWAP reclaim.
+            if strategy_exclusive != family_exclusive:
+                continue
 
             # Strong mechanism tags are blueprint-defining. A bull-flag/EMA pullback should not
             # merge with an AVWAP pinch or mean-reversion setup just because both mention support.
