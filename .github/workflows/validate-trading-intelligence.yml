@@ -18,6 +18,8 @@ on:
       - "trading_auto_research.py"
       - "trading_research_orchestrator.py"
       - "cloud_research_worker.py"
+      - "distributed_stock_finder.py"
+      - ".github/workflows/distributed-stock-finder.yml"
       - "test_trading_research_orchestrator.py"
       - "trading_validation_core.py"
       - "trading_market_discovery.py"
@@ -51,6 +53,8 @@ on:
       - "trading_auto_research.py"
       - "trading_research_orchestrator.py"
       - "cloud_research_worker.py"
+      - "distributed_stock_finder.py"
+      - ".github/workflows/distributed-stock-finder.yml"
       - "test_trading_research_orchestrator.py"
       - "trading_validation_core.py"
       - "youtube_strategy_engine.py"
@@ -90,6 +94,7 @@ jobs:
           python -m py_compile trading_auto_research.py
           python -m py_compile trading_research_orchestrator.py
           python -m py_compile cloud_research_worker.py
+          python -m py_compile distributed_stock_finder.py
           python -m py_compile trading_validation_core.py
           python -m py_compile trading_market_discovery.py
           python -m py_compile trading_catalyst_core.py
