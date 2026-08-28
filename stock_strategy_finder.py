@@ -359,6 +359,7 @@ def run_stock_strategy_finder(
     progress: Callable[[int, int, str], None] | None = None,
     resume_state: dict[str, Any] | None = None,
     checkpoint: Callable[[dict[str, Any]], None] | None = None,
+    parallel_workers: int = 1,
 ) -> dict[str, Any]:
     total_started = perf_counter()
     stage_timings: dict[str, float] = {}
@@ -400,6 +401,7 @@ def run_stock_strategy_finder(
         progress=progress,
         resume_state=resume_state,
         checkpoint=checkpoint,
+        parallel_workers=parallel_workers,
     )
     stage_timings["optimization"] = round(perf_counter() - optimization_started, 3)
 
@@ -480,6 +482,8 @@ def run_stock_strategy_finder(
         "unique_configurations_tested": int(optimization.get("unique_configurations_tested") or 0),
         "configuration_history": list(optimization.get("configuration_history") or []),
         "stage_timings_seconds": stage_timings,
+        "parallel_workers": int(optimization.get("parallel_workers") or parallel_workers or 1),
+        "parallelized_by": optimization.get("parallelized_by") or "none",
     }
 
 
@@ -669,6 +673,8 @@ def finder_summary_to_report(summary: dict[str, Any]) -> dict[str, Any]:
         "technical_skips": summary.get("technical_skips") or [],
         "estimated_work": summary.get("estimated_work") or {},
         "stage_timings_seconds": summary.get("stage_timings_seconds") or {},
+        "parallel_workers": int(summary.get("parallel_workers") or 1),
+        "parallelized_by": summary.get("parallelized_by") or "none",
         "optimization": {"winner": winner},
         "walk_forward": {"summary": summary.get("walk_forward_summary") or {}},
         "robustness": summary.get("robustness") or {},
@@ -728,6 +734,8 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
         "technical_skips": report.get("technical_skips") or [],
         "estimated_work": report.get("estimated_work") or {},
         "stage_timings_seconds": report.get("stage_timings_seconds") or {},
+        "parallel_workers": int(report.get("parallel_workers") or 1),
+        "parallelized_by": report.get("parallelized_by") or "none",
         "robustness": report.get("robustness") or {},
         "parameter_stability": report.get("parameter_stability") or {},
         "walk_forward_summary": (report.get("walk_forward") or {}).get("summary") or {},
