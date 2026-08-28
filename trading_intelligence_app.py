@@ -556,6 +556,75 @@ def source_label(strategy: dict[str, Any]) -> str:
     return f"{kind} · {strategy.get('source_title') or 'Unknown source'}"
 
 
+def _source_page_count(source: dict[str, Any]) -> int:
+    metadata = source.get("extraction_metadata") or {}
+    for value in (
+        metadata.get("pages"),
+        source.get("pages"),
+        source.get("page_count"),
+    ):
+        try:
+            if value is not None:
+                return max(0, int(value))
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def _source_is_complete(source: dict[str, Any]) -> bool:
+    if bool(source.get("analysis_incomplete")) or bool(source.get("analysis_in_progress")):
+        return False
+    stage = str(source.get("analysis_stage") or "complete").strip().casefold()
+    return stage in {"complete", "completed"} or bool(source.get("recovered_from_strategies"))
+
+
+def _source_file_badge(source: dict[str, Any]) -> tuple[str, str]:
+    source_type = str(source.get("source_type") or "document").strip().casefold()
+    filename = str(source.get("filename") or "")
+    suffix = Path(filename).suffix.strip(".").upper()
+    if source_type == "youtube":
+        return "▶", "VIDEO"
+    if suffix:
+        return "▤", suffix[:6]
+    if source_type in {"book_or_document", "book"}:
+        return "▤", "DOC"
+    return "◇", "SOURCE"
+
+
+def render_recent_source_cards(source_items: list[dict[str, Any]]) -> None:
+    if not source_items:
+        return
+    recent = sorted(
+        source_items,
+        key=lambda item: str(item.get("analyzed_at") or item.get("checkpointed_at") or ""),
+        reverse=True,
+    )[:3]
+    cards: list[str] = []
+    for source in recent:
+        icon, kind = _source_file_badge(source)
+        title = html.escape(str(source.get("title") or source.get("filename") or "Untitled source"))
+        author = html.escape(str(source.get("author") or "Unknown creator"))
+        pages = _source_page_count(source)
+        meta = f"{pages:,} pages · {kind}" if pages else kind
+        status = "PROCESSED" if _source_is_complete(source) else "IN PROGRESS"
+        status_class = "ready" if _source_is_complete(source) else "working"
+        cards.append(
+            '<div class="til-source-card">'
+            f'<div class="til-source-fileicon">{icon}</div>'
+            '<div class="til-source-main">'
+            f'<div class="til-source-title">{title}</div>'
+            f'<div class="til-source-author">{author}</div>'
+            f'<div class="til-source-meta">{meta}</div>'
+            '</div>'
+            f'<div class="til-source-status {status_class}">◆ {status}</div>'
+            '</div>'
+        )
+    st.markdown(
+        '<div class="til-recent-source-grid">' + "".join(cards) + '</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def upsert_strategy_record(
     data: dict[str, Any],
     strategy: dict[str, Any],
