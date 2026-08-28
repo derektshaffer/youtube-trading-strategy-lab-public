@@ -1178,6 +1178,89 @@ if module == "Stock Strategy Finder":
         unsafe_allow_html=True,
     )
 
+    @st.fragment(run_every="30s")
+    def render_global_cloud_finder_activity() -> None:
+        """Always show active cloud Finder work, regardless of current dropdowns."""
+        try:
+            fresh_library = load_library()
+        except AppError as exc:
+            st.error(f"Cloud research status could not refresh: {exc}")
+            return
+
+        active_jobs = [
+            item
+            for item in fresh_library.get("research_queue") or []
+            if isinstance(item, dict)
+            and str(item.get("type") or "") == "stock_finder"
+            and str(item.get("status") or "") in {"queued", "running", "retry"}
+        ]
+        if not active_jobs:
+            return
+
+        active_jobs.sort(
+            key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""),
+            reverse=True,
+        )
+        st.markdown("### Active cloud research")
+        for index, job in enumerate(active_jobs[:4]):
+            payload = dict(job.get("payload") or {})
+            symbol = str(payload.get("symbol") or "Stock").strip().upper()
+            profile_name = str(payload.get("profile") or "Research").strip()
+            status = str(job.get("status") or "queued").replace("_", " ").upper()
+            total_shards = int(payload.get("distributed_shards_total") or 0)
+            completed_shards = len(
+                {
+                    int(value)
+                    for value in payload.get("distributed_shards_completed") or []
+                    if str(value).lstrip("-").isdigit()
+                }
+            )
+            stage = str(payload.get("distributed_stage") or "queued").replace("_", " ").title()
+            message = str(payload.get("distributed_message") or "").strip()
+            progress_value = safe_float(payload.get("distributed_progress"), None)
+            if progress_value is None:
+                if status == "QUEUED":
+                    progress_value = 0.02
+                elif total_shards > 0:
+                    progress_value = 0.10 + 0.75 * min(1.0, completed_shards / total_shards)
+                else:
+                    progress_value = 0.06
+            progress_value = max(0.01, min(0.99, float(progress_value)))
+            shard_text = (
+                f" · {completed_shards}/{total_shards} shards complete"
+                if total_shards > 0
+                else ""
+            )
+            st.markdown(
+                (
+                    '<div class="til-finder-notice til-finder-cloud-note">'
+                    f'<div class="til-finder-notice-title">☁ {html.escape(symbol)} · {html.escape(profile_name)} '
+                    f'· CLOUD {html.escape(status)} · SAFE TO CLOSE YOUR COMPUTER</div>'
+                    '<div class="til-finder-notice-body">'
+                    'This cloud run is independent of the stock/search-depth controls below. '
+                    'Changing those controls or leaving this page does not stop it.'
+                    f'{html.escape(shard_text)}'
+                    '</div></div>'
+                ),
+                unsafe_allow_html=True,
+            )
+            progress_label = (
+                f"{symbol} {profile_name}: {progress_value * 100:.0f}% · {stage}{shard_text}"
+            )
+            if message:
+                progress_label += f" · {message}"
+            st.progress(
+                progress_value,
+                text=progress_label,
+            )
+            if index < min(3, len(active_jobs) - 1):
+                st.caption("")
+
+        if len(active_jobs) > 4:
+            st.caption(f"{len(active_jobs) - 4} additional cloud Finder job(s) are also queued.")
+
+    render_global_cloud_finder_activity()
+
     finder_a, finder_b = st.columns([1.15, 1.0])
     with finder_a:
         finder_symbol = st.text_input(
@@ -1318,6 +1401,14 @@ if module == "Stock Strategy Finder":
             f"No completed {finder_symbol} {finder_profile.name} Finder result is saved yet."
         )
 
+    active_cloud_finders = [
+        item
+        for item in library.get("research_queue") or []
+        if isinstance(item, dict)
+        and str(item.get("type") or "") == "stock_finder"
+        and str(item.get("status") or "") in {"queued", "running", "retry"}
+    ]
+
     active_cloud_finder = next(
         (
             item
@@ -1330,97 +1421,36 @@ if module == "Stock Strategy Finder":
         ),
         None,
     )
-    @st.fragment(run_every="30s")
-    def render_cloud_finder_monitor(symbol: str, profile_name: str) -> None:
-        try:
-            fresh_library = load_library()
-        except AppError as exc:
-            st.error(f"Cloud status could not refresh: {exc}")
-            return
-
-        live_job = next(
+    if active_cloud_finder:
+        st.markdown(
             (
-                item
-                for item in fresh_library.get("research_queue") or []
-                if isinstance(item, dict)
-                and str(item.get("type") or "") == "stock_finder"
-                and str(item.get("status") or "") in {"queued", "running", "retry"}
-                and str((item.get("payload") or {}).get("symbol") or "").upper() == symbol
-                and str((item.get("payload") or {}).get("profile") or "") == profile_name
+                '<div class="til-finder-notice til-finder-cloud-note">'
+                '<div class="til-finder-notice-title">☁ THIS SELECTION MATCHES THE ACTIVE CLOUD RUN</div>'
+                f'<div class="til-finder-notice-body">{html.escape(finder_symbol)} {html.escape(finder_profile.name)} '
+                'is the cloud research job shown in Active cloud research above. '
+                'The controls below are locked while that job is active.'
+                '</div></div>'
             ),
-            None,
+            unsafe_allow_html=True,
         )
-        completed = latest_completed_finder_report(
-            fresh_library,
-            symbol,
-            profile_name,
+    elif active_cloud_finders:
+        other = dict(active_cloud_finders[0] or {})
+        other_payload = dict(other.get("payload") or {})
+        other_symbol = str(other_payload.get("symbol") or "Stock").upper()
+        other_profile = str(other_payload.get("profile") or "Research")
+        st.markdown(
+            (
+                '<div class="til-finder-notice til-finder-checkpoint-note">'
+                '<div class="til-finder-notice-title">CURRENT CONTROLS ARE A SEPARATE RESEARCH REQUEST</div>'
+                f'<div class="til-finder-notice-body">You are viewing {html.escape(finder_symbol)} '
+                f'{html.escape(finder_profile.name)}, while {html.escape(other_symbol)} '
+                f'{html.escape(other_profile)} is already active in the cloud above. '
+                'That cloud run continues even if you change these controls or leave this page.'
+                '</div></div>'
+            ),
+            unsafe_allow_html=True,
         )
-
-        if live_job:
-            status = str(live_job.get("status") or "queued").replace("_", " ").upper()
-            payload = dict(live_job.get("payload") or {})
-            total_shards = int(payload.get("distributed_shards_total") or 0)
-            completed_shards = len(
-                {
-                    int(value)
-                    for value in payload.get("distributed_shards_completed") or []
-                    if str(value).lstrip("-").isdigit()
-                }
-            )
-            stage = str(payload.get("distributed_stage") or "queued").replace("_", " ").title()
-            message = str(payload.get("distributed_message") or "").strip()
-            progress_value = safe_float(payload.get("distributed_progress"), None)
-            if progress_value is None:
-                if status == "QUEUED":
-                    progress_value = 0.02
-                elif total_shards > 0:
-                    progress_value = 0.10 + 0.75 * min(1.0, completed_shards / total_shards)
-                else:
-                    progress_value = 0.06
-            progress_value = max(0.01, min(0.99, float(progress_value)))
-            shard_text = (
-                f" · {completed_shards}/{total_shards} shards complete"
-                if total_shards > 0
-                else ""
-            )
-            st.markdown(
-                (
-                    '<div class="til-finder-notice til-finder-cloud-note">'
-                    f'<div class="til-finder-notice-title">☁ CLOUD {html.escape(status)} · SAFE TO CLOSE YOUR COMPUTER</div>'
-                    f'<div class="til-finder-notice-body">{html.escape(symbol)} {html.escape(profile_name)} '
-                    'is running independently of this browser. You can close the browser, put your Mac to sleep, '
-                    f'or shut it down.{html.escape(shard_text)}</div>'
-                    '</div>'
-                ),
-                unsafe_allow_html=True,
-            )
-            progress_label = f"Cloud progress: {progress_value * 100:.0f}% · {stage}{shard_text}"
-            if message:
-                progress_label += f" · {message}"
-            st.progress(progress_value, text=progress_label)
-            return
-
-        distributed = dict((completed or {}).get("distributed") or {})
-        if completed and distributed.get("enabled"):
-            generated_at = str(completed.get("generated_at") or "")
-            loaded_marker = str(st.session_state.get("til_cloud_completed_marker") or "")
-            st.markdown(
-                (
-                    '<div class="til-finder-notice til-finder-complete-note">'
-                    '<div class="til-finder-notice-title">☁ CLOUD RESEARCH COMPLETE · RESULTS SAVED</div>'
-                    f'<div class="til-finder-notice-body">{html.escape(symbol)} {html.escape(profile_name)} '
-                    'finished in the cloud. The shard results were merged, then the final untouched holdout, '
-                    'walk-forward, and parameter-stability checks were completed. The result is saved permanently '
-                    'and appears below in this Finder.</div>'
-                    '</div>'
-                ),
-                unsafe_allow_html=True,
-            )
-            if generated_at and generated_at != loaded_marker:
-                st.session_state["til_cloud_completed_marker"] = generated_at
-                st.rerun()
-            return
-
+    else:
         st.markdown(
             (
                 '<div class="til-finder-notice til-finder-local-note">'
@@ -1432,11 +1462,6 @@ if module == "Stock Strategy Finder":
             ),
             unsafe_allow_html=True,
         )
-
-    render_cloud_finder_monitor(
-        finder_symbol,
-        finder_profile.name,
-    )
 
     cloud_col, local_col = st.columns([1.0, 1.35])
     with cloud_col:
