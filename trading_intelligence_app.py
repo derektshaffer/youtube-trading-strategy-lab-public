@@ -985,17 +985,64 @@ if module == "Overview":
 
 
 elif module == "Knowledge Sources":
-    st.caption(
-        "Upload a source you have lawful access to. The AI extracts trading hypotheses and short "
-        "evidence references; it does not reproduce the book or treat the author's claims as validated."
+    total_pages = sum(_source_page_count(item) for item in sources)
+    completed_sources = sum(1 for item in sources if _source_is_complete(item))
+    source_processing_pct = (
+        int(round(100.0 * completed_sources / len(sources)))
+        if sources
+        else 0
+    )
+    validated_family_count = sum(
+        1
+        for item in canonical_strategies
+        if str(item.get("validation_status") or "").lower() == "validated"
+    )
+
+    st.markdown(
+        (
+            '<div class="til-kpi-grid">'
+            '<div class="til-kpi til-kpi-cyan">'
+            '<div class="til-kpi-icon">▤</div>'
+            '<div><div class="til-kpi-label">TOTAL SOURCES</div>'
+            f'<div class="til-kpi-value">{len(sources):,}</div>'
+            '<div class="til-kpi-note">durable evidence library</div></div></div>'
+            '<div class="til-kpi til-kpi-blue">'
+            '<div class="til-kpi-icon">≋</div>'
+            '<div><div class="til-kpi-label">PAGES PROCESSED</div>'
+            f'<div class="til-kpi-value">{total_pages:,}</div>'
+            '<div class="til-kpi-note">from saved documents</div></div></div>'
+            '<div class="til-kpi til-kpi-green">'
+            '<div class="til-kpi-icon">✦</div>'
+            '<div><div class="til-kpi-label">EXTRACTED IDEAS</div>'
+            f'<div class="til-kpi-value">{len(source_strategies):,}</div>'
+            '<div class="til-kpi-note">research hypotheses retained</div></div></div>'
+            '<div class="til-kpi til-kpi-purple">'
+            '<div class="til-kpi-icon">◇</div>'
+            '<div><div class="til-kpi-label">VALIDATED FAMILIES</div>'
+            f'<div class="til-kpi-value">{validated_family_count:,}</div>'
+            '<div class="til-kpi-note">passed current validation gate</div></div></div>'
+            '</div>'
+        ),
+        unsafe_allow_html=True,
     )
 
     storage = persistence_summary()
     if storage.get("healthy"):
-        st.success(
-            "Permanent library storage verified: "
-            f"{storage.get('repository')} · {storage.get('path')}. "
-            "Book progress is checkpointed to GitHub as the AI works."
+        repository = html.escape(str(storage.get("repository") or "GitHub"))
+        backup_path = html.escape(str(storage.get("path") or "intelligence library"))
+        st.markdown(
+            (
+                '<div class="til-sync-banner">'
+                '<div class="til-sync-icon">i</div>'
+                '<div class="til-sync-copy">'
+                f'<div class="til-sync-title">Permanent library storage verified: <strong>{repository}</strong> · {backup_path}</div>'
+                '<div class="til-sync-sub">All source progress is checkpointed safely as the AI works.</div>'
+                '</div>'
+                '<div class="til-sync-badge"><span></span> SYNCED</div>'
+                '<div class="til-github-mark">⌘</div>'
+                '</div>'
+            ),
+            unsafe_allow_html=True,
         )
     elif storage.get("configured"):
         st.error(
@@ -1012,300 +1059,197 @@ elif module == "Knowledge Sources":
             "Local Streamlit files can disappear when the app sleeps or restarts."
         )
 
-    uploaded = st.file_uploader(
-        "Book or research document",
-        type=["pdf", "txt", "md", "markdown"],
-        help="PDF, TXT, and Markdown are supported in the first version.",
-    )
-    a, b = st.columns(2)
-    title = a.text_input(
-        "Title (optional)",
-        placeholder="AI will detect it when possible",
-        help="You can leave this blank. The AI will use the source itself to identify the title when it can.",
-    )
-    author = b.text_input(
-        "Author / creator (optional)",
-        placeholder="AI will detect it when possible",
-        help="You can leave this blank. The AI will identify the author/creator when the source clearly supports it.",
-    )
-    focus = st.text_area(
-        "Optional research focus",
-        placeholder="Leave blank to extract every strategy and trading principle the AI can find.",
-        height=90,
-    )
-    autopilot_prepare = st.checkbox(
-        "AI Autopilot — automatically prepare every extracted strategy for backtesting",
-        value=True,
-        help=(
-            "After extraction, AI translates defensible qualitative ideas into machine-testable research "
-            "assumptions. Those assumptions stay clearly separate from rules explicitly stated by the author."
-        ),
-    )
-    if autopilot_prepare:
-        st.caption(
-            "Autopilot only prepares research hypotheses. It does not label anything profitable or validated; "
-            "historical testing and unseen-data validation still make that determination."
+    main_col, rail_col = st.columns([4.45, 1.18], gap="large")
+    with main_col:
+        st.markdown(
+            """
+            <div class="til-panel-heading">
+              <div>
+                <div class="til-panel-title">Upload a new source</div>
+                <div class="til-panel-sub">Books, PDFs, research notes, and text sources become evidence-grounded strategy hypotheses.</div>
+              </div>
+              <div class="til-panel-chip">AI INGESTION</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
-    autopilot_research = st.checkbox(
-        "Continue automatically into historical opportunity discovery + validation",
-        value=True,
-        disabled=not autopilot_prepare,
-        help=(
-            "After extraction, the Lab builds its own stock universe, finds historical opportunities, "
-            "selects research finalists, optimizes them, runs holdout/walk-forward checks, tests frozen "
-            "rules across multiple stocks, and saves the results automatically."
-        ),
-    )
-    if autopilot_research and autopilot_prepare:
-        st.caption(
-            "No ticker or optimizer setup is required. The broad scan is cheap; deeper intraday testing "
-            "is automatically limited to the strongest research finalists."
+        uploaded = st.file_uploader(
+            "Book or research document",
+            type=["pdf", "txt", "md", "markdown"],
+            help="PDF, TXT, and Markdown are supported in the first version.",
         )
+        a, b = st.columns(2)
+        title = a.text_input(
+            "Title (optional)",
+            placeholder="AI will detect it when possible",
+            help="You can leave this blank. The AI will use the source itself to identify the title when it can.",
+        )
+        author = b.text_input(
+            "Author / creator (optional)",
+            placeholder="AI will detect it when possible",
+            help="You can leave this blank. The AI will identify the author/creator when the source clearly supports it.",
+        )
+        focus = st.text_area(
+            "Optional research focus",
+            placeholder="Leave blank to extract every strategy and trading principle the AI can find.",
+            height=90,
+        )
+        autopilot_prepare = st.checkbox(
+            "AI Autopilot — automatically prepare every extracted strategy for backtesting",
+            value=True,
+            help=(
+                "After extraction, AI translates defensible qualitative ideas into machine-testable research "
+                "assumptions. Those assumptions stay clearly separate from rules explicitly stated by the author."
+            ),
+        )
+        if autopilot_prepare:
+            st.caption(
+                "Autopilot only prepares research hypotheses. It does not label anything profitable or validated; "
+                "historical testing and unseen-data validation still make that determination."
+            )
+        autopilot_research = st.checkbox(
+            "Continue automatically into historical opportunity discovery + validation",
+            value=True,
+            disabled=not autopilot_prepare,
+            help=(
+                "After extraction, the Lab builds its own stock universe, finds historical opportunities, "
+                "selects research finalists, optimizes them, runs holdout/walk-forward checks, tests frozen "
+                "rules across multiple stocks, and saves the results automatically."
+            ),
+        )
+        if autopilot_research and autopilot_prepare:
+            st.caption(
+                "No ticker or optimizer setup is required. The broad scan is cheap; deeper intraday testing "
+                "is automatically limited to the strongest research finalists."
+            )
 
-    can_analyze = uploaded is not None and bool(storage.get("healthy"))
-    if uploaded is not None and not storage.get("healthy"):
-        st.warning(
-            "Analysis is temporarily disabled until permanent GitHub storage is healthy. "
-            "This prevents a long book run from being lost if Streamlit restarts."
-        )
-    analyze_slot = st.empty()
-    analyze = analyze_slot.button(
-        "🧠 Analyze source and extract strategies",
-        type="primary",
-        use_container_width=True,
-        disabled=not can_analyze,
-        key="til_analyze_source",
-    )
-
-    if analyze and uploaded is not None:
-        analyze_slot.button(
-            "🧠 Analyzing…",
+        can_analyze = uploaded is not None and bool(storage.get("healthy"))
+        if uploaded is not None and not storage.get("healthy"):
+            st.warning(
+                "Analysis is temporarily disabled until permanent GitHub storage is healthy. "
+                "This prevents a long book run from being lost if Streamlit restarts."
+            )
+        analyze_slot = st.empty()
+        analyze = analyze_slot.button(
+            "🧠 Analyze source and extract strategies",
             type="primary",
             use_container_width=True,
-            disabled=True,
-            key="til_analyze_source_busy",
+            disabled=not can_analyze,
+            key="til_analyze_source",
         )
-        task_monitor = long_task_monitor("knowledge_source_analysis")
-        task_bar = st.progress(
-            0.01,
-            text=task_monitor.text(0.01, "Preparing source…"),
-        )
-        try:
-            payload = uploaded.getvalue()
-            text, metadata = extract_source_text(uploaded.name, payload)
-            update_task_bar(task_bar, task_monitor, 0.03, "Readable source text extracted")
-            ingest_id = hashlib.sha256(payload).hexdigest()[:24]
 
-            current_library = intelligence_store().load_latest()
-            existing_source = next(
-                (
-                    item
-                    for item in current_library.get("knowledge_sources") or []
-                    if str(item.get("ingest_id") or "") == ingest_id
-                ),
-                None,
+        if analyze and uploaded is not None:
+            analyze_slot.button(
+                "🧠 Analyzing…",
+                type="primary",
+                use_container_width=True,
+                disabled=True,
+                key="til_analyze_source_busy",
             )
-            resume_state = None
-            if existing_source:
-                resume_state = dict(existing_source)
-                source_id = str(existing_source.get("id") or "")
-                resume_state["strategies"] = [
-                    item
-                    for item in current_library.get("strategies") or []
-                    if str(item.get("source_id") or "") == source_id
-                ]
-            else:
-                pending_analysis = {
-                    "id": f"pending-{ingest_id}",
-                    "source_type": "book_or_document",
-                    "title": title.strip() or uploaded.name,
-                    "author": author.strip(),
-                    "summary": "Analysis started. Completed sections will be saved automatically.",
-                    "analyzed_at": utc_now().isoformat(),
-                    "chunk_count": 0,
-                    "checkpoint_version": 0,
-                    "completed_section_indices": [],
-                    "completed_sections": 0,
-                    "analysis_incomplete": True,
-                    "failed_sections": [],
-                    "strategies": [],
-                }
-                save_ingestion_checkpoint(
-                    pending_analysis,
-                    filename=uploaded.name,
-                    extraction_metadata=metadata,
-                    ingest_id=ingest_id,
-                    stage="reading",
+            task_monitor = long_task_monitor("knowledge_source_analysis")
+            task_bar = st.progress(
+                0.01,
+                text=task_monitor.text(0.01, "Preparing source…"),
+            )
+            try:
+                payload = uploaded.getvalue()
+                text, metadata = extract_source_text(uploaded.name, payload)
+                update_task_bar(task_bar, task_monitor, 0.03, "Readable source text extracted")
+                ingest_id = hashlib.sha256(payload).hexdigest()[:24]
+
+                current_library = intelligence_store().load_latest()
+                existing_source = next(
+                    (
+                        item
+                        for item in current_library.get("knowledge_sources") or []
+                        if str(item.get("ingest_id") or "") == ingest_id
+                    ),
+                    None,
                 )
+                resume_state = None
+                if existing_source:
+                    resume_state = dict(existing_source)
+                    source_id = str(existing_source.get("id") or "")
+                    resume_state["strategies"] = [
+                        item
+                        for item in current_library.get("strategies") or []
+                        if str(item.get("source_id") or "") == source_id
+                    ]
+                else:
+                    pending_analysis = {
+                        "id": f"pending-{ingest_id}",
+                        "source_type": "book_or_document",
+                        "title": title.strip() or uploaded.name,
+                        "author": author.strip(),
+                        "summary": "Analysis started. Completed sections will be saved automatically.",
+                        "analyzed_at": utc_now().isoformat(),
+                        "chunk_count": 0,
+                        "checkpoint_version": 0,
+                        "completed_section_indices": [],
+                        "completed_sections": 0,
+                        "analysis_incomplete": True,
+                        "failed_sections": [],
+                        "strategies": [],
+                    }
+                    save_ingestion_checkpoint(
+                        pending_analysis,
+                        filename=uploaded.name,
+                        extraction_metadata=metadata,
+                        ingest_id=ingest_id,
+                        stage="reading",
+                    )
 
-            analyzer = GeminiBookAnalyzer(
-                setting("GEMINI_API_KEY"),
-                setting("GEMINI_BOOK_MODEL", DEFAULT_GEMINI_BOOK_MODEL),
-                fallback_api_key=setting("GEMINI_PAID_API_KEY", ""),
-                fallback_model=setting("GEMINI_BOOK_FALLBACK_MODEL", "gemini-3.5-flash"),
-                specialist_model=setting(
-                    "GEMINI_BOOK_SPECIALIST_MODEL",
-                    DEFAULT_GEMINI_BOOK_SPECIALIST_MODEL,
-                ),
-            )
-            page_note = ""
-            if metadata.get("pages"):
-                page_note = f" · {int(metadata.get('pages') or 0)} pages"
-            update_task_bar(
-                task_bar,
-                task_monitor,
-                0.06,
-                "File ready"
-                + page_note
-                + " · preparing AI reading batches",
-            )
-
-            def on_progress(index: int, total: int, message: str | None = None) -> None:
-                local_fraction = (index - 1) / max(1, total)
+                analyzer = GeminiBookAnalyzer(
+                    setting("GEMINI_API_KEY"),
+                    setting("GEMINI_BOOK_MODEL", DEFAULT_GEMINI_BOOK_MODEL),
+                    fallback_api_key=setting("GEMINI_PAID_API_KEY", ""),
+                    fallback_model=setting("GEMINI_BOOK_FALLBACK_MODEL", "gemini-3.5-flash"),
+                    specialist_model=setting(
+                        "GEMINI_BOOK_SPECIALIST_MODEL",
+                        DEFAULT_GEMINI_BOOK_SPECIALIST_MODEL,
+                    ),
+                )
+                page_note = ""
+                if metadata.get("pages"):
+                    page_note = f" · {int(metadata.get('pages') or 0)} pages"
                 update_task_bar(
                     task_bar,
                     task_monitor,
-                    0.08 + 0.48 * min(1.0, max(0.0, local_fraction)),
-                    message or f"Analyzing source section {index} of {total}…",
+                    0.06,
+                    "File ready"
+                    + page_note
+                    + " · preparing AI reading batches",
                 )
 
-            def on_checkpoint(partial_analysis: dict[str, Any]) -> None:
-                save_ingestion_checkpoint(
-                    partial_analysis,
-                    filename=uploaded.name,
-                    extraction_metadata=metadata,
-                    ingest_id=ingest_id,
-                    stage="reading",
-                )
-
-            analysis = analyzer.analyze(
-                text,
-                title=title.strip(),
-                author=author.strip(),
-                focus=focus,
-                progress_callback=on_progress,
-                checkpoint_callback=on_checkpoint,
-                resume_state=resume_state,
-            )
-
-            # Extraction itself is valuable work. Save it before the Rule Compiler or market research starts.
-            save_ingestion_checkpoint(
-                analysis,
-                filename=uploaded.name,
-                extraction_metadata=metadata,
-                ingest_id=ingest_id,
-                stage="extracted",
-            )
-            completion_text = "Strategy extraction complete"
-            if analysis.get("analysis_incomplete"):
-                completion_text = (
-                    f"Partial extraction saved · {int(analysis.get('completed_sections') or 0)} of "
-                    f"{int(analysis.get('chunk_count') or 0)} sections completed"
-                )
-            if analysis.get("specialist_used"):
-                specialist_sections = ", ".join(
-                    str(value) for value in analysis.get("specialist_sections") or []
-                )
-                completion_text += (
-                    f" · {analysis.get('specialist_model')} specialist review"
-                    + (f" on section(s) {specialist_sections}" if specialist_sections else "")
-                )
-            if analysis.get("model_fallback_used"):
-                completion_text += f" · reliability fallback used: {analysis.get('model')}"
-            if analysis.get("paid_fallback_used"):
-                completion_text += " · backup API key used"
-            update_task_bar(task_bar, task_monitor, 0.58, completion_text)
-            if analysis.get("analysis_incomplete"):
-                failed_numbers = [
-                    str(item.get("section"))
-                    for item in analysis.get("failed_sections") or []
-                    if isinstance(item, dict) and item.get("section") is not None
-                ]
-                st.warning(
-                    "Gemini remained unavailable for "
-                    + (", ".join(f"section {value}" for value in failed_numbers) if failed_numbers else "part of the source")
-                    + ". Everything else was saved. Historical validation is paused so an incomplete "
-                    "book cannot be mistaken for a fully extracted strategy source. Re-running the same "
-                    "source resumes only the missing work."
-                )
-
-            if autopilot_prepare and analysis.get("strategies"):
-                prep_status = st.status(
-                    "AI Autopilot is translating strategies into testable research rules…",
-                    expanded=True,
-                )
-                compiler = GeminiRuleCompiler(
-                    setting("GEMINI_API_KEY"),
-                    setting("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
-                    fallback_api_key=setting("GEMINI_PAID_API_KEY", ""),
-                )
-
-                def on_prepare(index: int, total: int, strategy_name: str) -> None:
-                    message = f"Preparing {index} of {total}: {strategy_name}"
-                    prep_status.write(message)
+                def on_progress(index: int, total: int, message: str | None = None) -> None:
+                    local_fraction = (index - 1) / max(1, total)
                     update_task_bar(
                         task_bar,
                         task_monitor,
-                        0.58 + 0.14 * min(1.0, index / max(1, total)),
-                        message,
+                        0.08 + 0.48 * min(1.0, max(0.0, local_fraction)),
+                        message or f"Analyzing source section {index} of {total}…",
                     )
 
-                analysis["strategies"] = prepare_strategies_with_ai(
-                    list(analysis.get("strategies") or []),
-                    compiler,
-                    minimum_confidence=65.0,
-                    progress_callback=on_prepare,
+                def on_checkpoint(partial_analysis: dict[str, Any]) -> None:
+                    save_ingestion_checkpoint(
+                        partial_analysis,
+                        filename=uploaded.name,
+                        extraction_metadata=metadata,
+                        ingest_id=ingest_id,
+                        stage="reading",
+                    )
+
+                analysis = analyzer.analyze(
+                    text,
+                    title=title.strip(),
+                    author=author.strip(),
+                    focus=focus,
+                    progress_callback=on_progress,
+                    checkpoint_callback=on_checkpoint,
+                    resume_state=resume_state,
                 )
-                prepared = list(analysis.get("strategies") or [])
-                applied = sum(
-                    int((item.get("autopilot_preparation") or {}).get("suggestions_auto_applied") or 0)
-                    for item in prepared
-                )
-                ready = sum(
-                    1
-                    for item in prepared
-                    if (item.get("research_readiness") or {}).get("label") == "ready_for_backtest"
-                )
-                prep_status.update(
-                    label=(
-                        f"AI Autopilot prepared {len(prepared)} strategies · "
-                        f"{applied} research assumptions added · {ready} ready for backtesting"
-                    ),
-                    state="complete",
-                    expanded=False,
-                )
-                update_task_bar(
-                    task_bar,
-                    task_monitor,
-                    0.72,
-                    "AI rule preparation complete",
-                )
-                analysis["autopilot_summary"] = {
-                    "enabled": True,
-                    "strategies_prepared": len(prepared),
-                    "research_assumptions_added": applied,
-                    "ready_for_backtest": ready,
-                }
-                save_ingestion_checkpoint(
-                    analysis,
-                    filename=uploaded.name,
-                    extraction_metadata=metadata,
-                    ingest_id=ingest_id,
-                    stage="prepared",
-                )
-            else:
-                for item in analysis.get("strategies") or []:
-                    item["research_readiness"] = research_readiness(item)
-                analysis["autopilot_summary"] = {
-                    "enabled": False,
-                    "strategies_prepared": 0,
-                    "research_assumptions_added": 0,
-                    "ready_for_backtest": sum(
-                        1
-                        for item in analysis.get("strategies") or []
-                        if (item.get("research_readiness") or {}).get("label") == "ready_for_backtest"
-                    ),
-                }
+
+                # Extraction itself is valuable work. Save it before the Rule Compiler or market research starts.
                 save_ingestion_checkpoint(
                     analysis,
                     filename=uploaded.name,
@@ -1313,194 +1257,353 @@ elif module == "Knowledge Sources":
                     ingest_id=ingest_id,
                     stage="extracted",
                 )
-
-            analysis["autonomous_research_summary"] = {
-                "completed": False,
-                "status": "pending" if autopilot_research and autopilot_prepare else "not_requested",
-            }
-            save_ingestion_checkpoint(
-                analysis,
-                filename=uploaded.name,
-                extraction_metadata=metadata,
-                ingest_id=ingest_id,
-                stage="prepared" if autopilot_prepare else "extracted",
-            )
-            # Rebuild the canonical family layer now that this source is saved. New ideas join
-            # existing blueprints automatically instead of becoming another manual research queue.
-            data = load_library()
-
-            autonomous_report = None
-            autonomous_error = ""
-            if (
-                autopilot_research
-                and autopilot_prepare
-                and analysis.get("strategies")
-                and not analysis.get("analysis_incomplete")
-            ):
-                new_source_strategy_ids = {
-                    str(item.get("id") or "")
-                    for item in analysis.get("strategies") or []
-                    if isinstance(item, dict) and item.get("id")
-                }
-                affected_families = [
-                    item
-                    for item in data.get("strategies") or []
-                    if str(item.get("source_type") or "").lower() == "canonical_family"
-                    and new_source_strategy_ids.intersection(
-                        {str(value) for value in item.get("source_strategy_ids") or []}
+                completion_text = "Strategy extraction complete"
+                if analysis.get("analysis_incomplete"):
+                    completion_text = (
+                        f"Partial extraction saved · {int(analysis.get('completed_sections') or 0)} of "
+                        f"{int(analysis.get('chunk_count') or 0)} sections completed"
                     )
-                ]
+                if analysis.get("specialist_used"):
+                    specialist_sections = ", ".join(
+                        str(value) for value in analysis.get("specialist_sections") or []
+                    )
+                    completion_text += (
+                        f" · {analysis.get('specialist_model')} specialist review"
+                        + (f" on section(s) {specialist_sections}" if specialist_sections else "")
+                    )
+                if analysis.get("model_fallback_used"):
+                    completion_text += f" · reliability fallback used: {analysis.get('model')}"
+                if analysis.get("paid_fallback_used"):
+                    completion_text += " · backup API key used"
+                update_task_bar(task_bar, task_monitor, 0.58, completion_text)
+                if analysis.get("analysis_incomplete"):
+                    failed_numbers = [
+                        str(item.get("section"))
+                        for item in analysis.get("failed_sections") or []
+                        if isinstance(item, dict) and item.get("section") is not None
+                    ]
+                    st.warning(
+                        "Gemini remained unavailable for "
+                        + (", ".join(f"section {value}" for value in failed_numbers) if failed_numbers else "part of the source")
+                        + ". Everything else was saved. Historical validation is paused so an incomplete "
+                        "book cannot be mistaken for a fully extracted strategy source. Re-running the same "
+                        "source resumes only the missing work."
+                    )
 
-                # Canonical families can still contain qualitative gaps. Let the same compiler
-                # prepare those automatically before historical research, then persist the prepared
-                # family record so the user never has to resolve each source variation manually.
-                prepared_families = []
-                for family_item in affected_families:
-                    prepared_family = dict(family_item)
-                    if (
-                        (prepared_family.get("research_readiness") or research_readiness(prepared_family)).get("label")
-                        != "ready_for_backtest"
-                    ):
-                        prepared_family = prepare_strategies_with_ai(
-                            [prepared_family],
-                            compiler,
-                            minimum_confidence=65.0,
-                        )[0]
-                    prepared_family["research_readiness"] = research_readiness(prepared_family)
-                    prepared_families.append(prepared_family)
-                    data = upsert_strategy_record(data, prepared_family)
-
-                if prepared_families:
-                    intelligence_store().save(data)
-
-                ready_for_deep = [
-                    item
-                    for item in prepared_families
-                    if (item.get("research_readiness") or {}).get("label") == "ready_for_backtest"
-                ]
-                if ready_for_deep:
-                    auto_status = st.status(
-                        "Historical Research Autopilot is building its own stock universe…",
+                if autopilot_prepare and analysis.get("strategies"):
+                    prep_status = st.status(
+                        "AI Autopilot is translating strategies into testable research rules…",
                         expanded=True,
                     )
-                    nested_estimator = AutonomousResearchProgressEstimator()
+                    compiler = GeminiRuleCompiler(
+                        setting("GEMINI_API_KEY"),
+                        setting("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
+                        fallback_api_key=setting("GEMINI_PAID_API_KEY", ""),
+                    )
 
-                    def on_nested_research(message: str) -> None:
-                        auto_status.write(message)
-                        nested_fraction = nested_estimator.update(message)
+                    def on_prepare(index: int, total: int, strategy_name: str) -> None:
+                        message = f"Preparing {index} of {total}: {strategy_name}"
+                        prep_status.write(message)
                         update_task_bar(
                             task_bar,
                             task_monitor,
-                            0.72 + 0.25 * nested_fraction,
+                            0.58 + 0.14 * min(1.0, index / max(1, total)),
                             message,
                         )
 
-                    try:
-                        autonomous_report = run_autonomous_research(
-                            market_client(),
-                            ready_for_deep,
-                            progress=on_nested_research,
-                        )
-                        data = merge_autonomous_research_into_library(data, autonomous_report)
-                        intelligence_store().save(data)
-                        validated_count = sum(
+                    analysis["strategies"] = prepare_strategies_with_ai(
+                        list(analysis.get("strategies") or []),
+                        compiler,
+                        minimum_confidence=65.0,
+                        progress_callback=on_prepare,
+                    )
+                    prepared = list(analysis.get("strategies") or [])
+                    applied = sum(
+                        int((item.get("autopilot_preparation") or {}).get("suggestions_auto_applied") or 0)
+                        for item in prepared
+                    )
+                    ready = sum(
+                        1
+                        for item in prepared
+                        if (item.get("research_readiness") or {}).get("label") == "ready_for_backtest"
+                    )
+                    prep_status.update(
+                        label=(
+                            f"AI Autopilot prepared {len(prepared)} strategies · "
+                            f"{applied} research assumptions added · {ready} ready for backtesting"
+                        ),
+                        state="complete",
+                        expanded=False,
+                    )
+                    update_task_bar(
+                        task_bar,
+                        task_monitor,
+                        0.72,
+                        "AI rule preparation complete",
+                    )
+                    analysis["autopilot_summary"] = {
+                        "enabled": True,
+                        "strategies_prepared": len(prepared),
+                        "research_assumptions_added": applied,
+                        "ready_for_backtest": ready,
+                    }
+                    save_ingestion_checkpoint(
+                        analysis,
+                        filename=uploaded.name,
+                        extraction_metadata=metadata,
+                        ingest_id=ingest_id,
+                        stage="prepared",
+                    )
+                else:
+                    for item in analysis.get("strategies") or []:
+                        item["research_readiness"] = research_readiness(item)
+                    analysis["autopilot_summary"] = {
+                        "enabled": False,
+                        "strategies_prepared": 0,
+                        "research_assumptions_added": 0,
+                        "ready_for_backtest": sum(
                             1
-                            for item in autonomous_report.get("results") or []
-                            if item.get("validation_status") == "validated"
+                            for item in analysis.get("strategies") or []
+                            if (item.get("research_readiness") or {}).get("label") == "ready_for_backtest"
+                        ),
+                    }
+                    save_ingestion_checkpoint(
+                        analysis,
+                        filename=uploaded.name,
+                        extraction_metadata=metadata,
+                        ingest_id=ingest_id,
+                        stage="extracted",
+                    )
+
+                analysis["autonomous_research_summary"] = {
+                    "completed": False,
+                    "status": "pending" if autopilot_research and autopilot_prepare else "not_requested",
+                }
+                save_ingestion_checkpoint(
+                    analysis,
+                    filename=uploaded.name,
+                    extraction_metadata=metadata,
+                    ingest_id=ingest_id,
+                    stage="prepared" if autopilot_prepare else "extracted",
+                )
+                # Rebuild the canonical family layer now that this source is saved. New ideas join
+                # existing blueprints automatically instead of becoming another manual research queue.
+                data = load_library()
+
+                autonomous_report = None
+                autonomous_error = ""
+                if (
+                    autopilot_research
+                    and autopilot_prepare
+                    and analysis.get("strategies")
+                    and not analysis.get("analysis_incomplete")
+                ):
+                    new_source_strategy_ids = {
+                        str(item.get("id") or "")
+                        for item in analysis.get("strategies") or []
+                        if isinstance(item, dict) and item.get("id")
+                    }
+                    affected_families = [
+                        item
+                        for item in data.get("strategies") or []
+                        if str(item.get("source_type") or "").lower() == "canonical_family"
+                        and new_source_strategy_ids.intersection(
+                            {str(value) for value in item.get("source_strategy_ids") or []}
                         )
-                        analysis["autonomous_research_summary"] = {
-                            "completed": True,
-                            "generated_at": autonomous_report.get("generated_at"),
-                            "deep_strategies_tested": autonomous_report.get("deep_strategies_tested"),
-                            "validated": validated_count,
-                            "universe_source": (autonomous_report.get("universe") or {}).get("source"),
-                        }
-                        auto_status.update(
-                            label=(
-                                f"Historical Research Autopilot complete · "
-                                f"{int(autonomous_report.get('deep_strategies_tested') or 0)} finalists tested · "
-                                f"{validated_count} passed the full gate"
-                            ),
-                            state="complete",
-                            expanded=False,
+                    ]
+
+                    # Canonical families can still contain qualitative gaps. Let the same compiler
+                    # prepare those automatically before historical research, then persist the prepared
+                    # family record so the user never has to resolve each source variation manually.
+                    prepared_families = []
+                    for family_item in affected_families:
+                        prepared_family = dict(family_item)
+                        if (
+                            (prepared_family.get("research_readiness") or research_readiness(prepared_family)).get("label")
+                            != "ready_for_backtest"
+                        ):
+                            prepared_family = prepare_strategies_with_ai(
+                                [prepared_family],
+                                compiler,
+                                minimum_confidence=65.0,
+                            )[0]
+                        prepared_family["research_readiness"] = research_readiness(prepared_family)
+                        prepared_families.append(prepared_family)
+                        data = upsert_strategy_record(data, prepared_family)
+
+                    if prepared_families:
+                        intelligence_store().save(data)
+
+                    ready_for_deep = [
+                        item
+                        for item in prepared_families
+                        if (item.get("research_readiness") or {}).get("label") == "ready_for_backtest"
+                    ]
+                    if ready_for_deep:
+                        auto_status = st.status(
+                            "Historical Research Autopilot is building its own stock universe…",
+                            expanded=True,
                         )
-                        st.session_state["til_auto_research_result"] = autonomous_report
-                    except AppError as exc:
-                        autonomous_error = str(exc)
+                        nested_estimator = AutonomousResearchProgressEstimator()
+
+                        def on_nested_research(message: str) -> None:
+                            auto_status.write(message)
+                            nested_fraction = nested_estimator.update(message)
+                            update_task_bar(
+                                task_bar,
+                                task_monitor,
+                                0.72 + 0.25 * nested_fraction,
+                                message,
+                            )
+
+                        try:
+                            autonomous_report = run_autonomous_research(
+                                market_client(),
+                                ready_for_deep,
+                                progress=on_nested_research,
+                            )
+                            data = merge_autonomous_research_into_library(data, autonomous_report)
+                            intelligence_store().save(data)
+                            validated_count = sum(
+                                1
+                                for item in autonomous_report.get("results") or []
+                                if item.get("validation_status") == "validated"
+                            )
+                            analysis["autonomous_research_summary"] = {
+                                "completed": True,
+                                "generated_at": autonomous_report.get("generated_at"),
+                                "deep_strategies_tested": autonomous_report.get("deep_strategies_tested"),
+                                "validated": validated_count,
+                                "universe_source": (autonomous_report.get("universe") or {}).get("source"),
+                            }
+                            auto_status.update(
+                                label=(
+                                    f"Historical Research Autopilot complete · "
+                                    f"{int(autonomous_report.get('deep_strategies_tested') or 0)} finalists tested · "
+                                    f"{validated_count} passed the full gate"
+                                ),
+                                state="complete",
+                                expanded=False,
+                            )
+                            st.session_state["til_auto_research_result"] = autonomous_report
+                        except AppError as exc:
+                            autonomous_error = str(exc)
+                            analysis["autonomous_research_summary"] = {
+                                "completed": False,
+                                "error": autonomous_error,
+                            }
+                            auto_status.update(
+                                label="Strategy extraction saved; historical Autopilot could not complete",
+                                state="error",
+                                expanded=False,
+                            )
+                    else:
+                        autonomous_error = (
+                            "The newly affected strategy families still do not have enough machine-testable "
+                            "entry/filter rules for deep historical research. Their source ideas and family "
+                            "membership were saved, and AI can revisit them as more sources are added."
+                        )
                         analysis["autonomous_research_summary"] = {
                             "completed": False,
                             "error": autonomous_error,
                         }
-                        auto_status.update(
-                            label="Strategy extraction saved; historical Autopilot could not complete",
-                            state="error",
-                            expanded=False,
-                        )
-                else:
-                    autonomous_error = (
-                        "The newly affected strategy families still do not have enough machine-testable "
-                        "entry/filter rules for deep historical research. Their source ideas and family "
-                        "membership were saved, and AI can revisit them as more sources are added."
-                    )
-                    analysis["autonomous_research_summary"] = {
-                        "completed": False,
-                        "error": autonomous_error,
-                    }
 
-            update_task_bar(task_bar, task_monitor, 0.985, "Saving final source and strategy records")
-            save_ingestion_checkpoint(
-                analysis,
-                filename=uploaded.name,
-                extraction_metadata=metadata,
-                ingest_id=ingest_id,
-                stage="partial" if analysis.get("analysis_incomplete") else "complete",
-            )
-            complete_task_bar(
-                task_bar,
-                task_monitor,
-                "Source analysis complete" if not analysis.get("analysis_incomplete") else "Partial source analysis saved",
-            )
-            st.session_state["til_last_analysis"] = analysis
-            source_name = analysis.get("title") or title.strip() or uploaded.name
-            autopilot_summary = analysis.get("autopilot_summary") or {}
-            message = (
-                f"Extracted {len(analysis.get('strategies') or [])} strategy hypotheses from "
-                f"{source_name}."
-            )
-            if autopilot_summary.get("enabled"):
-                message += (
-                    f" AI Autopilot added {int(autopilot_summary.get('research_assumptions_added') or 0)} "
-                    f"clearly labeled research assumptions and marked "
-                    f"{int(autopilot_summary.get('ready_for_backtest') or 0)} strategies ready for backtesting."
+                update_task_bar(task_bar, task_monitor, 0.985, "Saving final source and strategy records")
+                save_ingestion_checkpoint(
+                    analysis,
+                    filename=uploaded.name,
+                    extraction_metadata=metadata,
+                    ingest_id=ingest_id,
+                    stage="partial" if analysis.get("analysis_incomplete") else "complete",
                 )
-            if analysis.get("analysis_incomplete"):
-                message += (
-                    f" {int(analysis.get('completed_sections') or 0)} of "
-                    f"{int(analysis.get('chunk_count') or 0)} source sections were saved; "
-                    "historical validation is intentionally paused until extraction is complete."
+                complete_task_bar(
+                    task_bar,
+                    task_monitor,
+                    "Source analysis complete" if not analysis.get("analysis_incomplete") else "Partial source analysis saved",
                 )
-            elif autonomous_report:
-                validated_count = sum(
-                    1
-                    for item in autonomous_report.get("results") or []
-                    if item.get("validation_status") == "validated"
+                st.session_state["til_last_analysis"] = analysis
+                source_name = analysis.get("title") or title.strip() or uploaded.name
+                autopilot_summary = analysis.get("autopilot_summary") or {}
+                message = (
+                    f"Extracted {len(analysis.get('strategies') or [])} strategy hypotheses from "
+                    f"{source_name}."
                 )
-                message += (
-                    f" The AI family manager consolidated the new ideas into the strategy library, then "
-                    f"deep-tested {int(autonomous_report.get('deep_strategies_tested') or 0)} affected family finalist(s); "
-                    f"{validated_count} passed the full autonomous validation gate."
-                )
-            st.success(message)
-            if autonomous_error:
-                st.warning("Historical Autopilot note: " + autonomous_error)
-            st.rerun()
-        except AppError as exc:
-            st.error(str(exc))
-        except Exception as exc:
-            st.error(f"Source analysis failed: {exc}")
+                if autopilot_summary.get("enabled"):
+                    message += (
+                        f" AI Autopilot added {int(autopilot_summary.get('research_assumptions_added') or 0)} "
+                        f"clearly labeled research assumptions and marked "
+                        f"{int(autopilot_summary.get('ready_for_backtest') or 0)} strategies ready for backtesting."
+                    )
+                if analysis.get("analysis_incomplete"):
+                    message += (
+                        f" {int(analysis.get('completed_sections') or 0)} of "
+                        f"{int(analysis.get('chunk_count') or 0)} source sections were saved; "
+                        "historical validation is intentionally paused until extraction is complete."
+                    )
+                elif autonomous_report:
+                    validated_count = sum(
+                        1
+                        for item in autonomous_report.get("results") or []
+                        if item.get("validation_status") == "validated"
+                    )
+                    message += (
+                        f" The AI family manager consolidated the new ideas into the strategy library, then "
+                        f"deep-tested {int(autonomous_report.get('deep_strategies_tested') or 0)} affected family finalist(s); "
+                        f"{validated_count} passed the full autonomous validation gate."
+                    )
+                st.success(message)
+                if autonomous_error:
+                    st.warning("Historical Autopilot note: " + autonomous_error)
+                st.rerun()
+            except AppError as exc:
+                st.error(str(exc))
+            except Exception as exc:
+                st.error(f"Source analysis failed: {exc}")
+
+
+    with rail_col:
+        st.markdown(
+            (
+                '<div class="til-rail-card til-coverage-card">'
+                '<div class="til-rail-title">Your Evidence Library</div>'
+                f'<div class="til-gauge" style="--coverage:{source_processing_pct * 3.6}deg">'
+                '<div class="til-gauge-inner">'
+                f'<div class="til-gauge-value">{source_processing_pct}%</div>'
+                '<div class="til-gauge-label">SOURCE<br>PROCESSING</div>'
+                '</div></div>'
+                f'<div class="til-coverage-state">{"Strong foundation" if source_processing_pct >= 70 else "Building foundation"}</div>'
+                f'<div class="til-coverage-copy">{completed_sources} of {len(sources)} saved sources are fully processed.</div>'
+                '<svg class="til-rail-spark" viewBox="0 0 160 34" aria-hidden="true">'
+                '<polyline points="2,27 24,24 46,26 67,21 91,23 113,16 137,18 158,7" fill="none" stroke="#45dfa0" stroke-width="2"/>'
+                '<g fill="#64ddff"><circle cx="24" cy="24" r="2"/><circle cx="91" cy="23" r="2"/><circle cx="158" cy="7" r="2"/></g>'
+                '</svg>'
+                '</div>'
+                '<div class="til-rail-card til-quality-card">'
+                '<div class="til-rail-title">Source Quality Guide</div>'
+                '<div class="til-quality-row high"><span class="til-quality-icon">◇</span><div><strong>High Quality</strong><small>Books, academic papers, primary research</small></div></div>'
+                '<div class="til-quality-row medium"><span class="til-quality-icon">⊙</span><div><strong>Useful Context</strong><small>Videos, interviews, experienced practitioners</small></div></div>'
+                '<div class="til-quality-row low"><span class="til-quality-icon">△</span><div><strong>Needs Verification</strong><small>Unverified claims, social posts, opinions</small></div></div>'
+                '</div>'
+                '<div class="til-rail-card til-system-card">'
+                '<div class="til-rail-title">Research Pipeline</div>'
+                '<div class="til-pipeline-row"><span>01</span><b>Extract</b><em>source ideas</em></div>'
+                '<div class="til-pipeline-row"><span>02</span><b>Consolidate</b><em>strategy families</em></div>'
+                '<div class="til-pipeline-row"><span>03</span><b>Test</b><em>historical robustness</em></div>'
+                '<div class="til-pipeline-row"><span>04</span><b>Validate</b><em>unseen data</em></div>'
+                '</div>'
+            ),
+            unsafe_allow_html=True,
+        )
 
     if sources:
-        st.markdown("### Saved sources")
+        st.markdown(
+            '<div class="til-section-row"><div><div class="til-section-kicker">RECENT SOURCES</div>'
+            '<div class="til-section-title">Evidence added to the library</div></div>'
+            '<div class="til-section-line"></div></div>',
+            unsafe_allow_html=True,
+        )
+        render_recent_source_cards(sources)
+        st.markdown("### Saved source details")
         st.caption(
             "This is the master research-source catalog. Books, PDFs, YouTube videos, and future "
             "research sources stay here even when they were originally analyzed by an older version of the Lab."
