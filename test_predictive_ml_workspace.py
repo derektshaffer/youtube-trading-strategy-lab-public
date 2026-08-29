@@ -63,9 +63,13 @@ def test_predictive_ml_workspace_separates_hours_and_runs_symbol_holdout():
 
 def test_predictive_ml_results_render_without_forced_rerun():
     block = _pattern_validation_block()
+    compact_start = block.index("compact_ml_evaluation = {")
     result_store = block.index('st.session_state["til_predictive_ml_result"] = {')
     result_reader = block.index('stored_ml_result = st.session_state.get("til_predictive_ml_result")')
-    between = block[result_store:result_reader]
-    assert "st.rerun()" not in between
-    assert 'if key != "predictions"' in between
-    assert "Predictive ML results are ready below." in between
+    result_path = block[compact_start:result_reader]
+    assert compact_start < result_store < result_reader
+    assert "st.rerun()" not in result_path
+    assert 'if key != "predictions"' in result_path
+    assert '"evaluation": compact_ml_evaluation' in result_path
+    assert '"generalization": compact_ml_generalization' in result_path
+    assert "Predictive ML results are ready below." in result_path
