@@ -103,6 +103,34 @@ class CatalystPointInTimeTests(unittest.TestCase):
         news_ranked = next(item for item in ranked if item["evidence_type"] == "news")
         self.assertGreater(abs(sec_ranked["effective_score"]), abs(news_ranked["effective_score"]))
 
+
+
+    def test_generic_earnings_headline_is_specific_but_not_directional(self):
+        item = classify_catalyst(
+            {
+                "created_at": "2026-08-29T17:00:00Z",
+                "headline": "Company reports quarterly results",
+                "summary": "",
+            }
+        )
+        self.assertTrue(item["is_specific_catalyst"])
+        self.assertTrue(item["direction_requires_context"])
+        self.assertEqual(item["score"], 0.0)
+        self.assertFalse(item["is_positive"])
+        self.assertFalse(item["is_negative"])
+
+    def test_merger_headline_does_not_assume_bullish_direction(self):
+        item = classify_catalyst(
+            {
+                "created_at": "2026-08-29T17:00:00Z",
+                "headline": "Company announces merger agreement",
+                "summary": "",
+            }
+        )
+        self.assertTrue(item["is_specific_catalyst"])
+        self.assertEqual(item["category"], "merger / acquisition")
+        self.assertEqual(item["score"], 0.0)
+
     def test_legacy_rows_without_catalyst_enrichment_keep_old_behavior(self):
         rules = normalize_machine_rules({"catalyst_required": True})
         legacy = {"close": 10.0, "clock_minute": 600}
