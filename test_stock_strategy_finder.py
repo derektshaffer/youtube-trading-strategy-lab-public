@@ -321,6 +321,7 @@ class FinderPersistenceTests(unittest.TestCase):
         self.assertTrue(restored.get("restored_from_library"))
         self.assertEqual(restored["winner_strategy_name"], source["name"])
         self.assertEqual(restored["timeframe"], "5Min")
+        self.assertEqual(restored["strategy_fidelity_engine_version"], 1)
         self.assertEqual(restored["optimization"]["winner"]["holdout_metrics"]["net_pnl"], 40)
 
         completed_checkpoint = finder.latest_finder_checkpoint(merged, "SDOT", "Deep")
