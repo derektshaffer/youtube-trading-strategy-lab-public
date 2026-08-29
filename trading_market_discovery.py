@@ -268,8 +268,8 @@ def scan_market_strategies(
 
         comparisons.sort(
             key=lambda item: (
-                str(item.get("validation_status") or "").lower() == "validated",
                 status_rank.get(str(item.get("status") or "").upper(), 0),
+                str(item.get("validation_status") or "").lower() == "validated",
                 float(item.get("robustness_score") or 0),
                 float(item.get("score") or 0),
             ),
@@ -304,8 +304,8 @@ def scan_market_strategies(
 
     results.sort(
         key=lambda item: (
-            str(item.get("validation_status") or "").lower() == "validated",
             status_rank.get(str(item.get("status") or "").upper(), 0),
+            str(item.get("validation_status") or "").lower() == "validated",
             float(item.get("robustness_score") or 0),
             float(item.get("score") or 0),
             float((item.get("metrics") or {}).get("relative_volume") or 0),
