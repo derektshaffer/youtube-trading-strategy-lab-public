@@ -421,6 +421,7 @@ def build_cross_stock_training_dataset(
     profit_target_pct: float = 1.0,
     stop_loss_pct: float = 0.75,
     session_mode: str = "regular",
+    observation_stride_bars: int = 1,
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Build one supervised dataset across many symbols from a single batched bar load.
@@ -510,6 +511,7 @@ def build_cross_stock_training_dataset(
             require_full_horizon=require_full_horizon,
             profit_target_pct=float(clean_profit_target),
             stop_loss_pct=float(clean_stop_loss),
+            observation_stride_bars=observation_stride_bars,
         )
         if progress:
             progress(
@@ -590,6 +592,7 @@ def build_cross_stock_training_dataset(
         "profit_target_pct": float(clean_profit_target),
         "stop_loss_pct": float(clean_stop_loss),
         "barrier_same_bar_policy": "stop_first_conservative",
+        "observation_stride_bars": max(1, int(observation_stride_bars)),
         "session_mode": clean_session_mode,
         "session_window_et": {
             "regular": "09:30-16:00",
@@ -610,6 +613,8 @@ def build_cross_stock_training_dataset(
             "Trade-quality labels count an upside target only when it is reached before the "
             "downside barrier; same-candle target/stop ambiguity is scored conservatively as stop first. "
             f"Market-hours regime: {clean_session_mode}; regular, premarket, and after-hours rows are never mixed. "
+            f"Supervised observations are sampled every {max(1, int(observation_stride_bars))} bar(s) while "
+            "all causal features still use every underlying candle. "
             "Context features use current/past bars plus completed prior sessions only. Historical float and "
             "catalyst-profile fields are intentionally excluded until point-in-time coverage is trustworthy."
         ),
