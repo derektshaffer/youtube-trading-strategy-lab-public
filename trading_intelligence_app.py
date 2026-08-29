@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 import hashlib
 from copy import deepcopy
 import html
@@ -18,6 +19,8 @@ import streamlit as st
 from app_access import require_app_access
 from finder_report_persistence import latest_completed_finder_report
 from hot_deploy_imports import load_current_source_module
+from market_feature_scorecards import run_detector_scorecards
+from market_feature_validation import DETECTOR_SPECS
 from trading_app_runtime import market_client, setting
 from trading_glass_theme import inject_research_glass_theme
 
@@ -915,6 +918,7 @@ WORKSPACE_SECTIONS = [
     "Validation",
     "Universe Research",
     "Market Discovery",
+    "Pattern Validation",
     "Catalyst Intelligence",
     "Stock Analyzer",
     "Live / Paper",
@@ -934,6 +938,7 @@ WORKSPACE_DISPLAY_LABELS = {
     "Validation": "8. Validation",
     "Universe Research": "9. Market Universe",
     "Market Discovery": "10. Market Discovery",
+    "Pattern Validation": "10A. Pattern Validation",
     "Catalyst Intelligence": "11. Catalyst Intelligence",
     "Stock Analyzer": "12. Stock Analyzer",
     "Live / Paper": "13. Paper & Live Trading",
@@ -1023,6 +1028,12 @@ WORKSPACE_PAGE_META = {
         "title": "Find Stocks Worth Watching",
         "subtitle": "Search the current market for stocks that match the conditions of validated or research-ready strategies.",
     },
+    "Pattern Validation": {
+        "step": "10A",
+        "group": "Market Research",
+        "title": "Pattern Validation",
+        "subtitle": "Replay market-behavior detectors causally across historical stocks before allowing those observations to affect live rankings.",
+    },
     "Catalyst Intelligence": {
         "step": "11",
         "group": "Market Research",
@@ -1058,7 +1069,7 @@ WORKSPACE_NAV_GROUPS = [
     ),
     (
         "MARKET RESEARCH",
-        ["Universe Research", "Market Discovery", "Catalyst Intelligence", "Stock Analyzer"],
+        ["Universe Research", "Market Discovery", "Pattern Validation", "Catalyst Intelligence", "Stock Analyzer"],
     ),
     ("EXECUTION", ["Live / Paper"]),
     ("OPERATIONS", ["System Health"]),
@@ -1078,6 +1089,7 @@ WORKSPACE_NAV_ICONS = {
     "Validation": "✓",
     "Universe Research": "◎",
     "Market Discovery": "⌖",
+    "Pattern Validation": "▦",
     "Catalyst Intelligence": "ϟ",
     "Stock Analyzer": "⌕",
     "Live / Paper": "↗",
@@ -1276,6 +1288,7 @@ with st.sidebar:
         "Strategy Lab",
         "Validation",
         "Universe Research",
+        "Pattern Validation",
         "Catalyst Intelligence",
         "System Health",
     ]
@@ -6340,6 +6353,232 @@ elif module == "Validation":
             "Validation history is evidence tracking, not a leaderboard. Large historical P/L with weak "
             "holdout or walk-forward behavior should rank below a smaller but more stable result."
         )
+
+
+
+elif module == "Pattern Validation":
+    st.caption(
+        "Advanced detector audit. The Lab replays historical candles one at a time so every "
+        "VWAP, breakout, bounce, pullback, and stair-step event is recorded only when it was "
+        "actually knowable. These results remain observational and do not change live scores."
+    )
+
+    pv_cols = st.columns([1.8, 1.0, 1.0])
+    pattern_symbols_text = pv_cols[0].text_input(
+        "Stocks to validate",
+        value=str(st.session_state.get("til_pattern_validation_symbols") or "SDOT REAX"),
+        help="Keep this targeted here; broad multi-stock validation can use the same backend in cloud batches.",
+        key="til_pattern_validation_symbols_input",
+    )
+    pattern_days = int(
+        pv_cols[1].slider(
+            "History (days)",
+            1,
+            10,
+            3,
+            1,
+            key="til_pattern_validation_days",
+        )
+    )
+    pv_cols[2].metric("Resolution", "1 minute")
+    pattern_symbols = [
+        token.strip().upper()
+        for token in pattern_symbols_text.replace(",", " ").split()
+        if token.strip()
+    ][:5]
+
+    detector_labels = {
+        str(spec.get("label") or key): key
+        for key, spec in DETECTOR_SPECS.items()
+    }
+    default_detector_labels = list(detector_labels)[:]
+    with st.expander("Choose detectors", expanded=False):
+        selected_detector_labels = st.multiselect(
+            "Historical detector scorecards",
+            list(detector_labels),
+            default=default_detector_labels,
+            key="til_pattern_validation_detectors",
+            label_visibility="collapsed",
+        )
+    selected_detectors = [
+        detector_labels[label]
+        for label in selected_detector_labels
+        if label in detector_labels
+    ]
+
+    st.info(
+        "This view is deliberately bounded to 5 stocks and 10 days because causal replay is much "
+        "more rigorous than a normal indicator calculation: each historical candle is processed "
+        "as if later candles do not exist."
+    )
+
+    pattern_slot = st.empty()
+    run_pattern_validation = pattern_slot.button(
+        "▦ Run historical pattern validation",
+        type="primary",
+        width="stretch",
+        disabled=not pattern_symbols or not selected_detectors,
+        key="til_run_pattern_validation",
+    )
+    if run_pattern_validation:
+        pattern_slot.button(
+            "▦ Validating patterns…",
+            type="primary",
+            width="stretch",
+            disabled=True,
+            key="til_run_pattern_validation_busy",
+        )
+        st.session_state["til_pattern_validation_symbols"] = " ".join(pattern_symbols)
+        pattern_monitor = long_task_monitor("pattern_detector_validation")
+        pattern_bar = st.progress(
+            0.03,
+            text=pattern_monitor.text(0.03, "Preparing causal detector replay…"),
+        )
+        try:
+            status_box = st.status("Preparing historical detector replay…", expanded=True)
+            progress_state = {"replayed": 0}
+
+            def pattern_validation_progress(message: str) -> None:
+                status_box.write(message)
+                text = str(message or "")
+                fraction = 0.12
+                if text.startswith("Loading historical"):
+                    fraction = 0.18
+                elif text.startswith("Replaying detector history"):
+                    progress_state["replayed"] += 1
+                    fraction = min(
+                        0.92,
+                        0.22
+                        + 0.70
+                        * progress_state["replayed"]
+                        / max(1, len(pattern_symbols)),
+                    )
+                update_task_bar(
+                    pattern_bar,
+                    pattern_monitor,
+                    fraction,
+                    text or "Validating detector history",
+                )
+
+            validation_end = utc_now()
+            validation_start = validation_end - timedelta(days=pattern_days)
+            scorecards = run_detector_scorecards(
+                market_client(),
+                pattern_symbols,
+                start=validation_start,
+                end=validation_end,
+                timeframe="1Min",
+                horizons=(5, 15, 30),
+                swing_radius=3,
+                detectors=selected_detectors,
+                max_pages=80,
+                progress=pattern_validation_progress,
+            )
+            st.session_state["til_pattern_validation_result"] = {
+                "symbols": pattern_symbols,
+                "days": pattern_days,
+                "detectors": selected_detectors,
+                "report": scorecards,
+            }
+            status_box.update(
+                label=(
+                    f"Pattern validation complete · "
+                    f"{scorecards.get('symbols_with_data', 0)} stocks with data"
+                ),
+                state="complete",
+                expanded=False,
+            )
+            complete_task_bar(
+                pattern_bar,
+                pattern_monitor,
+                "Historical pattern validation complete",
+            )
+            st.rerun()
+        except AppError as exc:
+            st.error(str(exc))
+        except Exception as exc:
+            st.error(f"Pattern validation failed: {exc}")
+
+    stored_pattern_result = st.session_state.get("til_pattern_validation_result") or {}
+    pattern_report = stored_pattern_result.get("report") or {}
+    if pattern_report:
+        st.divider()
+        st.markdown("### Detector scorecards")
+        total_events = sum(
+            int((item or {}).get("event_count") or 0)
+            for item in (pattern_report.get("summary") or {}).values()
+        )
+        evidence_counts = Counter(
+            str((item or {}).get("sample_quality") or "SPARSE")
+            for item in (pattern_report.get("summary") or {}).values()
+        )
+        score_cols = st.columns(4)
+        score_cols[0].metric("Stocks with data", int(pattern_report.get("symbols_with_data") or 0))
+        score_cols[1].metric("Sessions replayed", int(pattern_report.get("sessions_analyzed") or 0))
+        score_cols[2].metric("Pattern events", total_events)
+        score_cols[3].metric(
+            "Moderate / broad evidence",
+            int(evidence_counts.get("MODERATE", 0) + evidence_counts.get("BROAD", 0)),
+        )
+
+        score_rows = []
+        for detector, item in (pattern_report.get("summary") or {}).items():
+            horizons = item.get("horizons") or {}
+            h5 = horizons.get("5") or {}
+            h15 = horizons.get("15") or {}
+            h30 = horizons.get("30") or {}
+            score_rows.append(
+                {
+                    "Detector": item.get("label") or detector,
+                    "Sample": item.get("sample_quality"),
+                    "Events": int(item.get("event_count") or 0),
+                    "Stocks": int(item.get("symbols_with_events") or 0),
+                    "Sessions": int(item.get("sessions_with_events") or 0),
+                    "5m avg return %": safe_float(h5.get("avg_return_pct")),
+                    "15m avg return %": safe_float(h15.get("avg_return_pct")),
+                    "30m avg return %": safe_float(h30.get("avg_return_pct")),
+                    "15m directional hit %": safe_float(h15.get("directional_hit_pct")),
+                    "15m directional return %": safe_float(h15.get("avg_directional_return_pct")),
+                    "Avg MFE %": safe_float(item.get("avg_max_favorable_excursion_pct")),
+                    "Avg MAE %": safe_float(item.get("avg_max_adverse_excursion_pct")),
+                }
+            )
+
+        if score_rows:
+            st.dataframe(
+                pd.DataFrame(score_rows),
+                width="stretch",
+                hide_index=True,
+            )
+            st.caption(
+                "SPARSE / LIMITED / MODERATE / BROAD describes sample breadth only. "
+                "Directional hit rate is shown only for detectors with an expected bullish or bearish direction. "
+                "Nothing on this page automatically becomes a trading rule."
+            )
+        else:
+            st.info(
+                "No selected detector produced a completed causal event in this historical window. "
+                "Increase the history window or use stocks that actually exhibited the pattern."
+            )
+
+        by_symbol = list(pattern_report.get("by_symbol") or [])
+        if by_symbol:
+            with st.expander("Coverage by stock", expanded=False):
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            {
+                                "Stock": item.get("symbol"),
+                                "Bars replayed": int(item.get("bars") or 0),
+                                "Sessions": int(item.get("sessions") or 0),
+                                "Pattern events": int(item.get("event_count") or 0),
+                            }
+                            for item in by_symbol
+                        ]
+                    ),
+                    width="stretch",
+                    hide_index=True,
+                )
 
 
 elif module == "Catalyst Intelligence":
