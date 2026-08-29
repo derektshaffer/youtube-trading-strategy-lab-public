@@ -92,6 +92,16 @@ def test_run_backfill_reuses_causal_dataset_and_validation_stack():
         "predictions": [{"probability": 0.55}],
     }
     model = {
+        "id": "logistic-1",
+        "model_type": "portable_numeric_logistic_regression",
+        "status": "READY_FOR_SHADOW_SCORING",
+        "shadow_scoring_enabled": True,
+        "research_only": True,
+        "affects_live_ranking": False,
+    }
+    boosted_model = {
+        "id": "boosted-1",
+        "model_type": "portable_gradient_boosted_trees",
         "status": "READY_FOR_SHADOW_SCORING",
         "shadow_scoring_enabled": True,
         "research_only": True,
@@ -114,7 +124,11 @@ def test_run_backfill_reuses_causal_dataset_and_validation_stack():
         backfill,
         "build_portable_probability_model",
         return_value=model,
-    ) as portable:
+    ) as portable, patch.object(
+        backfill,
+        "build_boosted_probability_model",
+        return_value=boosted_model,
+    ) as boosted:
         result = backfill.run_predictive_ml_backfill(
             FakeMarket(),
             {},
@@ -130,6 +144,7 @@ def test_run_backfill_reuses_causal_dataset_and_validation_stack():
     assert baseline.call_count == 1
     assert held_out.call_count == 1
     assert portable.call_count == 1
+    assert boosted.call_count == 1
     kwargs = build_dataset.call_args.kwargs
     assert kwargs["timeframe"] == "1Min"
     assert kwargs["session_limit"] == 30
@@ -140,6 +155,12 @@ def test_run_backfill_reuses_causal_dataset_and_validation_stack():
     assert "predictions" not in result["evaluation"]
     assert "predictions" not in result["generalization"]
     assert result["probability_model"]["shadow_scoring_enabled"] is True
+    assert [item["id"] for item in result["probability_models"]] == [
+        "logistic-1",
+        "boosted-1",
+    ]
+    assert result["boosted_probability_model"]["model_type"] == "portable_gradient_boosted_trees"
+    assert result["model_suite_version"] == backfill.MODEL_SUITE_VERSION
     assert result["ticker_specific"]["status"] == "SKIPPED_FOR_SPEED"
     assert result["research_only"] is True
     assert result["affects_live_ranking"] is False
@@ -160,3 +181,4 @@ def test_worker_and_ui_are_wired_for_automatic_backfill():
     assert "Automatic ML backfill" in app
     assert 'PREDICTIVE_ML_BACKFILL_TRADING_DAYS' in workflow
     assert 'predictive_ml_backfill.py' in workflow
+    assert 'predictive_boosted_probability_model.py' in workflow
