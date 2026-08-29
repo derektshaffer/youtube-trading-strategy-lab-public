@@ -494,7 +494,7 @@ def chunk_source_text(
     return chunks
 
 
-NATIVE_RULE_SCHEMA_VERSION = 5
+NATIVE_RULE_SCHEMA_VERSION = 6
 
 
 def upgrade_native_strategy_rules(strategy: dict[str, Any]) -> dict[str, Any]:
@@ -1192,7 +1192,11 @@ RULE_COMPILER_SCHEMA: dict[str, Any] = {
                     "source_requirement": {"type": "string"},
                     "target_rule": {
                         "type": "string",
-                        "enum": list(MACHINE_RULE_SCHEMA["properties"].keys()),
+                        "enum": [
+                            name
+                            for name in MACHINE_RULE_SCHEMA["properties"].keys()
+                            if name != "scale_out_stages"
+                        ],
                     },
                     "proposed_value": {"type": "string"},
                     "is_research_assumption": {"type": "boolean"},
@@ -1252,9 +1256,11 @@ Strict rules:
   "trail the stop" without a percentage, a proposed trailing_stop_pct is a RESEARCH ASSUMPTION.
 - A source-stated "move stop to breakeven at X R" maps to move_stop_to_breakeven_at_r. If the
   trigger is qualitative, any proposed R threshold is a RESEARCH ASSUMPTION.
-- A source-stated partial exit maps to scale_out_fraction_pct (percent of the original position)
-  and scale_out_at_r (R-multiple for the first partial). If either value is qualitative or omitted,
-  proposed values are RESEARCH ASSUMPTIONS and should be varied by the optimizer.
+- A source-stated single partial exit maps to scale_out_fraction_pct (percent of the original
+  position) and scale_out_at_r (R-multiple for the first partial). If either value is qualitative
+  or omitted, proposed values are RESEARCH ASSUMPTIONS and should be varied by the optimizer.
+  Do not flatten a source-authored multi-stage scale-out sequence into one assumed partial; preserve
+  that sequence in the extracted strategy so the staged backtester can execute it faithfully.
 - Never pretend tape-based exits or discretionary momentum-failure selling are supported by a
   fixed target. Keep unsupported exit mechanics unmapped.
 - Do not add require_pullback_breakout unless the source explicitly requires breakout/confirmation
@@ -1672,11 +1678,19 @@ def strategy_semantic_coverage(strategy: dict[str, Any]) -> dict[str, Any]:
             "move the stop to entry",
         )
     ):
+        breakeven_keys = (
+            ("move_stop_to_breakeven_after_scale_out",)
+            if rules.get("move_stop_to_breakeven_after_scale_out") is True
+            else ("move_stop_to_breakeven_at_r",)
+        )
         add(
             "Move stop to breakeven",
-            ("move_stop_to_breakeven_at_r",),
+            breakeven_keys,
             dimension="exit",
-            limitation="The backtester needs the R-multiple that activates the breakeven stop.",
+            limitation=(
+                "The backtester needs either an explicit R trigger or an explicit instruction "
+                "to move to breakeven after a partial exit."
+            ),
         )
     if any(
         phrase in exit_text
@@ -1697,14 +1711,47 @@ def strategy_semantic_coverage(strategy: dict[str, Any]) -> dict[str, Any]:
             dimension="exit",
         )
     if any(phrase in exit_text for phrase in ("scale out", "scaling out", "partial profit", "take partial")):
+        scale_keys = (
+            ("scale_out_stages",)
+            if rules.get("scale_out_stages")
+            else ("scale_out_fraction_pct", "scale_out_at_r")
+        )
         add(
             "Scale-out / partial-profit management",
-            ("scale_out_fraction_pct", "scale_out_at_r"),
+            scale_keys,
             dimension="exit",
             limitation=(
-                "Partial exits require both a position fraction and an R-multiple trigger. "
-                "When the source omits either value, the Lab may test clearly labeled research assumptions."
+                "Partial exits require explicit stage fractions and triggers. When the source "
+                "omits them, the Lab may test clearly labeled research assumptions."
             ),
+        )
+
+    if "vwap" in exit_text and any(
+        phrase in exit_text
+        for phrase in ("trail under vwap", "trail below vwap", "trail the remainder under vwap", "trail the rest under vwap")
+    ):
+        add(
+            "Trail remainder beneath VWAP",
+            ("trail_below_vwap",),
+            dimension="exit",
+        )
+    if "ema" in exit_text and any(
+        phrase in exit_text
+        for phrase in ("trail under the ema", "trail below the ema", "trail the remainder under the ema", "trail the rest under the ema")
+    ):
+        add(
+            "Trail remainder beneath fast EMA",
+            ("fast_ema_period", "trail_below_fast_ema"),
+            dimension="exit",
+        )
+    if "anchored vwap" in exit_text and any(
+        phrase in exit_text
+        for phrase in ("trail under", "trail below", "trail the remainder", "trail the rest")
+    ):
+        add(
+            "Trail remainder beneath anchored VWAP",
+            ("avwap_anchor_mode", "trail_below_avwap"),
+            dimension="exit",
         )
     if any(
         phrase in exit_text
@@ -1902,8 +1949,14 @@ PAPER_EXECUTION_UNSUPPORTED_DYNAMIC_EXITS = {
     "move_stop_to_breakeven_at_r": "Move-to-breakeven management",
     "scale_out_fraction_pct": "Partial-profit / scale-out management",
     "scale_out_at_r": "Partial-profit / scale-out management",
+    "scale_out_stages": "Multi-stage partial-profit management",
+    "move_stop_to_breakeven_after_scale_out": "Post-partial breakeven management",
+    "trail_below_vwap": "VWAP-trailing stop management",
+    "trail_below_fast_ema": "Fast-EMA-trailing stop management",
+    "trail_below_avwap": "Anchored-VWAP-trailing stop management",
     "exit_below_vwap": "VWAP-loss exit",
     "exit_below_fast_ema": "Fast-EMA-loss exit",
+    "exit_below_avwap": "Anchored-VWAP-loss exit",
 }
 
 
@@ -1968,8 +2021,14 @@ def research_readiness(strategy: dict[str, Any]) -> dict[str, Any]:
         "move_stop_to_breakeven_at_r",
         "scale_out_fraction_pct",
         "scale_out_at_r",
+        "scale_out_stages",
+        "move_stop_to_breakeven_after_scale_out",
+        "trail_below_vwap",
+        "trail_below_fast_ema",
+        "trail_below_avwap",
         "exit_below_vwap",
         "exit_below_fast_ema",
+        "exit_below_avwap",
     }
     entry_rules = [key for key in rules if key not in non_entry_fields]
     evidence_count = len(
