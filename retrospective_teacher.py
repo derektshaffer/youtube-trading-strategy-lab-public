@@ -17,10 +17,13 @@ from typing import Any
 
 import pandas as pd
 
-from youtube_strategy_engine import bars_to_frame, safe_float
+from anchored_vwap_engine import apply_multi_anchor_avwap_teacher_features
+from causal_volume_profile import apply_causal_volume_profile_features
+from indicator_cross_validation import cross_validate_indicators
+from youtube_strategy_engine import add_indicators, bars_to_frame, safe_float
 
 
-RETROSPECTIVE_TEACHER_VERSION = 1
+RETROSPECTIVE_TEACHER_VERSION = 2
 
 
 def _iso(value: Any) -> str:
@@ -126,8 +129,25 @@ def _causal_feature_snapshot(frame: pd.DataFrame, position: int) -> dict[str, An
     for name in (
         "avwap_distance_pct",
         "relative_volume",
+        "volume_surge",
         "day_change_pct",
         "spread_pct",
+        "atr_14",
+        "fast_ema_distance_pct",
+        "vp_distance_to_poc_pct",
+        "vp_value_area_location",
+        "vp_poc_volume_share",
+        "vp_value_area_width_pct",
+        "vp_profile_entropy",
+        "volume_climax_ratio",
+        "range_expansion_ratio",
+        "upper_wick_fraction",
+        "lower_wick_fraction",
+        "upper_exhaustion_pressure",
+        "lower_exhaustion_pressure",
+        "multi_avwap_active_count",
+        "multi_avwap_spread_pct",
+        "multi_avwap_price_distance_pct",
     ):
         if name in row.index:
             features[name] = safe_float(row.get(name))
@@ -289,6 +309,144 @@ def label_breakout_outcomes(
     return examples
 
 
+def label_volume_exhaustion_outcomes(
+    frame: pd.DataFrame,
+    *,
+    outcome_bars: int = 8,
+    pressure_threshold: float = 65.0,
+    reversal_move_pct: float = 1.5,
+) -> list[dict[str, Any]]:
+    """Use future bars only to label whether causal exhaustion pressure reversed."""
+    outcome_bars = max(2, int(outcome_bars))
+    pressure_threshold = min(100.0, max(1.0, float(pressure_threshold)))
+    reversal_move_pct = max(0.1, float(reversal_move_pct))
+    examples: list[dict[str, Any]] = []
+
+    for _, session in frame.groupby("session", sort=False):
+        positions = list(session.index)
+        for local_pos in range(1, len(positions) - outcome_bars):
+            event_pos = positions[local_pos]
+            previous_pos = positions[local_pos - 1]
+            upper = safe_float(frame.at[event_pos, "upper_exhaustion_pressure"])
+            lower = safe_float(frame.at[event_pos, "lower_exhaustion_pressure"])
+            previous_upper = safe_float(frame.at[previous_pos, "upper_exhaustion_pressure"], 0.0) or 0.0
+            previous_lower = safe_float(frame.at[previous_pos, "lower_exhaustion_pressure"], 0.0) or 0.0
+            direction = ""
+            pressure = None
+            if (
+                upper is not None
+                and upper >= pressure_threshold
+                and previous_upper < pressure_threshold
+                and (lower is None or upper >= lower)
+            ):
+                direction = "upper"
+                pressure = upper
+            elif (
+                lower is not None
+                and lower >= pressure_threshold
+                and previous_lower < pressure_threshold
+            ):
+                direction = "lower"
+                pressure = lower
+            if not direction:
+                continue
+
+            future_positions = positions[
+                local_pos + 1 : local_pos + outcome_bars + 1
+            ]
+            close = float(frame.at[event_pos, "close"])
+            if close <= 0 or not future_positions:
+                continue
+            if direction == "upper":
+                future_low = float(frame.loc[future_positions, "low"].min())
+                reversal_pct = ((close / future_low) - 1.0) * 100.0 if future_low > 0 else 0.0
+            else:
+                future_high = float(frame.loc[future_positions, "high"].max())
+                reversal_pct = ((future_high / close) - 1.0) * 100.0
+
+            reversed_enough = reversal_pct >= reversal_move_pct
+            label = (
+                f"{direction}_exhaustion_reversal"
+                if reversed_enough
+                else f"{direction}_exhaustion_no_reversal"
+            )
+            examples.append(
+                _teacher_example(
+                    frame,
+                    event_pos=event_pos,
+                    known_pos=future_positions[-1],
+                    outcome_end_pos=future_positions[-1],
+                    label=label,
+                    metadata={
+                        "pressure": round(float(pressure or 0.0), 4),
+                        "best_reversal_pct": round(reversal_pct, 4),
+                        "outcome_bars": outcome_bars,
+                    },
+                )
+            )
+    return examples
+
+
+def label_multi_avwap_pinch_outcomes(
+    frame: pd.DataFrame,
+    *,
+    outcome_bars: int = 12,
+    expansion_move_pct: float = 1.5,
+) -> list[dict[str, Any]]:
+    """Label what happened after a causally known multi-AVWAP compression."""
+    outcome_bars = max(2, int(outcome_bars))
+    expansion_move_pct = max(0.1, float(expansion_move_pct))
+    examples: list[dict[str, Any]] = []
+
+    for _, session in frame.groupby("session", sort=False):
+        positions = list(session.index)
+        for local_pos in range(1, len(positions) - outcome_bars):
+            event_pos = positions[local_pos]
+            previous_pos = positions[local_pos - 1]
+            pinch = bool(frame.at[event_pos, "multi_avwap_pinch"])
+            prior_pinch = bool(frame.at[previous_pos, "multi_avwap_pinch"])
+            if not pinch or prior_pinch:
+                continue
+            future_positions = positions[
+                local_pos + 1 : local_pos + outcome_bars + 1
+            ]
+            close = float(frame.at[event_pos, "close"])
+            if close <= 0 or not future_positions:
+                continue
+            future_high = float(frame.loc[future_positions, "high"].max())
+            future_low = float(frame.loc[future_positions, "low"].min())
+            upside = ((future_high / close) - 1.0) * 100.0
+            downside = ((close / future_low) - 1.0) * 100.0 if future_low > 0 else 0.0
+            if max(upside, downside) < expansion_move_pct:
+                label = "avwap_pinch_no_expansion"
+            elif upside >= downside:
+                label = "avwap_pinch_upside_expansion"
+            else:
+                label = "avwap_pinch_downside_expansion"
+            examples.append(
+                _teacher_example(
+                    frame,
+                    event_pos=event_pos,
+                    known_pos=future_positions[-1],
+                    outcome_end_pos=future_positions[-1],
+                    label=label,
+                    metadata={
+                        "upside_move_pct": round(upside, 4),
+                        "downside_move_pct": round(downside, 4),
+                        "active_avwaps": int(
+                            safe_float(frame.at[event_pos, "multi_avwap_active_count"], 0)
+                            or 0
+                        ),
+                        "spread_pct": safe_float(
+                            frame.at[event_pos, "multi_avwap_spread_pct"]
+                        ),
+                        "outcome_bars": outcome_bars,
+                    },
+                )
+            )
+    return examples
+
+
 def validate_no_lookahead(examples: list[dict[str, Any]]) -> None:
     """Raise if any teacher example leaks future information into its features."""
     for index, example in enumerate(examples):
@@ -334,6 +492,29 @@ def build_retrospective_teacher_run(
     if frame.empty:
         raise ValueError("No usable bars were available for retrospective learning.")
 
+    # Build every learner feature causally before future-derived labels are assigned.
+    frame = add_indicators(
+        frame,
+        {
+            "machine_rules": {
+                "fast_ema_period": 9,
+                "slow_ema_period": 20,
+                "breakout_lookback_bars": breakout_lookback_bars,
+            }
+        },
+    )
+    frame = apply_causal_volume_profile_features(
+        frame,
+        lookback_bars=60,
+        bins=24,
+        value_area_pct=0.70,
+    )
+    frame = apply_multi_anchor_avwap_teacher_features(
+        frame,
+        confirm_bars=max(1, swing_confirmation_bars),
+        pinch_threshold_pct=0.35,
+    )
+
     swing_examples = label_confirmed_swings(
         frame,
         left_bars=swing_confirmation_bars,
@@ -346,8 +527,24 @@ def build_retrospective_teacher_run(
         outcome_bars=breakout_outcome_bars,
         success_move_pct=breakout_success_move_pct,
     )
+    exhaustion_examples = label_volume_exhaustion_outcomes(
+        frame,
+        outcome_bars=max(4, min(20, breakout_outcome_bars)),
+        pressure_threshold=65.0,
+        reversal_move_pct=max(0.5, breakout_success_move_pct * 0.75),
+    )
+    avwap_pinch_examples = label_multi_avwap_pinch_outcomes(
+        frame,
+        outcome_bars=max(4, min(30, breakout_outcome_bars)),
+        expansion_move_pct=max(0.5, breakout_success_move_pct * 0.75),
+    )
     examples = sorted(
-        [*swing_examples, *breakout_examples],
+        [
+            *swing_examples,
+            *breakout_examples,
+            *exhaustion_examples,
+            *avwap_pinch_examples,
+        ],
         key=lambda item: (str(item.get("event_time") or ""), str(item.get("label") or "")),
     )
     validate_no_lookahead(examples)
@@ -370,6 +567,18 @@ def build_retrospective_teacher_run(
         "end": _iso(frame.iloc[-1]["timestamp"]),
         "label_counts": dict(counts),
         "precursor_feature_medians": precursor_medians,
+        "feature_layers": {
+            "price_volume_vwap": "causal",
+            "volume_profile": "60-bar causal HLC3-volume approximation",
+            "volume_exhaustion": "causal pressure features; future used only for reversal labels",
+            "multi_anchor_avwap": "causal confirmed anchors; future used only for expansion labels",
+        },
+        "indicator_cross_validation": cross_validate_indicators(
+            rows,
+            ema_period=9,
+            atr_window=14,
+            include_extended_hours=include_extended_hours,
+        ),
         "causality_policy": {
             "future_data_allowed_for": "retrospective labels and outcome measurement only",
             "future_data_forbidden_for": "predictive features, entries, exits, scores, and backtests",
