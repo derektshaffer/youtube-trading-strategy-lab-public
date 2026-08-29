@@ -73,3 +73,13 @@ def test_predictive_ml_results_render_without_forced_rerun():
     assert '"evaluation": compact_ml_evaluation' in result_path
     assert '"generalization": compact_ml_generalization' in result_path
     assert "Predictive ML results are ready below." in result_path
+
+def test_predictive_ml_workspace_exposes_causal_archetype_context():
+    block = _pattern_validation_block()
+    assert "archetype_transfer_walk_forward_logistic_baseline" in block
+    assert "Also run within-vs-across archetype transfer validation" in block
+    assert "Causal stock context" in block
+    assert "Within-archetype vs across-archetype transfer" in block
+    assert "Historical float and catalyst-profile" in block
+    assert "same held-out-stock rows" in block.lower()
+
