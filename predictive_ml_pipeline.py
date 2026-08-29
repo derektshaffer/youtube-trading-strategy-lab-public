@@ -542,6 +542,25 @@ def build_cross_stock_training_dataset(
             str(row.get("symbol") or ""),
         )
     )
+    archetype_distribution: dict[str, dict[str, Any]] = {}
+    for row in records:
+        archetype = str(row.get("feature__context_archetype") or "unknown")
+        item = archetype_distribution.setdefault(
+            archetype,
+            {"rows": 0, "symbols": set()},
+        )
+        item["rows"] += 1
+        if row.get("symbol"):
+            item["symbols"].add(str(row.get("symbol")))
+    archetype_summary = [
+        {
+            "archetype": archetype,
+            "rows": int(item["rows"]),
+            "symbol_count": len(item["symbols"]),
+            "symbols": sorted(item["symbols"]),
+        }
+        for archetype, item in sorted(archetype_distribution.items())
+    ]
     return {
         "causal_replay": True,
         "symbols_requested": len(clean),
@@ -570,6 +589,7 @@ def build_cross_stock_training_dataset(
         "feature_columns": sorted(feature_columns),
         "context_feature_columns": list(CONTEXT_FEATURE_COLUMNS),
         "archetype_column": "feature__context_archetype",
+        "archetype_distribution": archetype_summary,
         "label_columns": sorted(label_columns),
         "records": records,
         "by_symbol": by_symbol,
