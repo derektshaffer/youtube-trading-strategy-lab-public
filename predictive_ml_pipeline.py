@@ -96,6 +96,25 @@ def _filter_rows_by_market_session(
     return selected
 
 
+BEHAVIOR_CONTEXT_FEATURE_COLUMNS: tuple[str, ...] = (
+    "feature__context_prior_above_vwap_rate",
+    "feature__context_prior_vwap_reclaim_rate",
+    "feature__context_prior_vwap_rejection_rate",
+    "feature__context_prior_vwap_retest_hold_rate",
+    "feature__context_prior_breakout_hold_rate",
+    "feature__context_prior_breakout_fail_rate",
+    "feature__context_prior_bounce2_rate",
+    "feature__context_prior_bounce3_rate",
+    "feature__context_prior_late_bounce_weakening_rate",
+    "feature__context_prior_bounce_strengthening_rate",
+    "feature__context_prior_stair_step_up_rate",
+    "feature__context_prior_strong_pullback_rate",
+    "feature__context_prior_volume_acceleration_median",
+    "feature__context_prior_pullback_depth_median",
+    "feature__context_prior_bounce_recovery_median",
+    "feature__context_prior_breakout_extension_median",
+)
+
 CONTEXT_FEATURE_COLUMNS: tuple[str, ...] = (
     "feature__context_prior_session_count",
     "feature__context_typical_price",
@@ -114,16 +133,21 @@ CONTEXT_FEATURE_COLUMNS: tuple[str, ...] = (
     "feature__context_volume_behavior",
     "feature__context_pattern_personality",
     "feature__context_archetype",
+    *BEHAVIOR_CONTEXT_FEATURE_COLUMNS,
 )
 
-# Continuous stock-similarity inputs. These are deliberately limited to lagged,
-# numeric context built from completed prior sessions so similarity weighting
-# cannot peek at later bars in the held-out session.
-SIMILARITY_CONTEXT_COLUMNS: tuple[str, ...] = (
+# Continuous stock-similarity inputs. Scale/liquidity context remains available,
+# but v2 is dominated by lagged numeric behavior fingerprints calculated only
+# from completed prior sessions.
+SCALE_SIMILARITY_CONTEXT_COLUMNS: tuple[str, ...] = (
     "feature__context_typical_price",
     "feature__context_typical_range_pct",
     "feature__context_typical_dollar_volume",
     "feature__context_typical_bar_dollar_volume",
+)
+SIMILARITY_CONTEXT_COLUMNS: tuple[str, ...] = (
+    *SCALE_SIMILARITY_CONTEXT_COLUMNS,
+    *BEHAVIOR_CONTEXT_FEATURE_COLUMNS,
 )
 _SIMILARITY_LOG_COLUMNS = {
     "feature__context_typical_price",
@@ -371,6 +395,127 @@ def _causal_context_by_session_bar(
     return context
 
 
+def _behavior_rate(
+    rows: list[dict[str, Any]],
+    feature: str,
+    *,
+    equals: Any = True,
+    eligible: Callable[[dict[str, Any]], bool] | None = None,
+) -> float | None:
+    selected = [
+        row for row in rows
+        if eligible is None or eligible(row)
+    ]
+    values = [row.get(feature) for row in selected if row.get(feature) is not None]
+    if not values:
+        return None
+    return float(sum(value == equals for value in values) / len(values))
+
+
+def _behavior_median(rows: list[dict[str, Any]], feature: str) -> float | None:
+    return _median_number([row.get(feature) for row in rows])
+
+
+def _session_behavior_summary(rows: list[dict[str, Any]]) -> dict[str, float | None]:
+    retest_eligible = lambda row: bool(row.get("feature__vwap_retest_recent"))
+    breakout_eligible = lambda row: str(row.get("feature__breakout_state") or "") in {
+        "testing", "holding", "failed"
+    }
+    late_bounce_eligible = lambda row: bool(
+        row.get("feature__bounce_2_present") or row.get("feature__bounce_3_present")
+    )
+    pullback_eligible = lambda row: row.get("feature__pullback_quality") is not None
+    return {
+        "feature__context_prior_above_vwap_rate": _behavior_rate(
+            rows, "feature__price_above_vwap"
+        ),
+        "feature__context_prior_vwap_reclaim_rate": _behavior_rate(
+            rows, "feature__vwap_reclaim_recent"
+        ),
+        "feature__context_prior_vwap_rejection_rate": _behavior_rate(
+            rows, "feature__vwap_rejection_recent"
+        ),
+        "feature__context_prior_vwap_retest_hold_rate": _behavior_rate(
+            rows,
+            "feature__vwap_retest_held",
+            eligible=retest_eligible,
+        ),
+        "feature__context_prior_breakout_hold_rate": _behavior_rate(
+            rows,
+            "feature__breakout_state",
+            equals="holding",
+            eligible=breakout_eligible,
+        ),
+        "feature__context_prior_breakout_fail_rate": _behavior_rate(
+            rows,
+            "feature__breakout_state",
+            equals="failed",
+            eligible=breakout_eligible,
+        ),
+        "feature__context_prior_bounce2_rate": _behavior_rate(
+            rows, "feature__bounce_2_present"
+        ),
+        "feature__context_prior_bounce3_rate": _behavior_rate(
+            rows, "feature__bounce_3_present"
+        ),
+        "feature__context_prior_late_bounce_weakening_rate": _behavior_rate(
+            rows,
+            "feature__bounce_structural_weakening",
+            eligible=late_bounce_eligible,
+        ),
+        "feature__context_prior_bounce_strengthening_rate": _behavior_rate(
+            rows,
+            "feature__bounce_structural_strengthening",
+            eligible=late_bounce_eligible,
+        ),
+        "feature__context_prior_stair_step_up_rate": _behavior_rate(
+            rows, "feature__stair_step_up"
+        ),
+        "feature__context_prior_strong_pullback_rate": _behavior_rate(
+            rows,
+            "feature__pullback_quality",
+            equals="strong",
+            eligible=pullback_eligible,
+        ),
+        "feature__context_prior_volume_acceleration_median": _behavior_median(
+            rows, "feature__volume_acceleration_ratio"
+        ),
+        "feature__context_prior_pullback_depth_median": _behavior_median(
+            rows, "feature__pullback_depth_pct_of_impulse"
+        ),
+        "feature__context_prior_bounce_recovery_median": _behavior_median(
+            rows, "feature__latest_bounce_recovery_pct"
+        ),
+        "feature__context_prior_breakout_extension_median": _behavior_median(
+            rows, "feature__breakout_max_extension_pct"
+        ),
+    }
+
+
+def _lagged_behavior_context_by_session(
+    records: list[dict[str, Any]],
+    *,
+    prior_session_lookback: int = 5,
+) -> dict[str, dict[str, Any]]:
+    """Build a stock behavior fingerprint using completed prior sessions only."""
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in records or []:
+        session = str(row.get("session") or "")
+        if session:
+            grouped.setdefault(session, []).append(row)
+    summaries: list[dict[str, float | None]] = []
+    context: dict[str, dict[str, Any]] = {}
+    lookback = max(1, int(prior_session_lookback))
+    for session in sorted(grouped):
+        prior = summaries[-lookback:]
+        context[session] = {
+            column: _median_number([item.get(column) for item in prior])
+            for column in BEHAVIOR_CONTEXT_FEATURE_COLUMNS
+        }
+        summaries.append(_session_behavior_summary(grouped[session]))
+    return context
+
+
 def _pattern_personality(record: dict[str, Any]) -> str:
     if bool(record.get("feature__bounce_structural_strengthening")) or bool(
         record.get("feature__bounce_3_present")
@@ -398,9 +543,12 @@ def _attach_context_features(
     session_mode: str,
 ) -> None:
     context = _causal_context_by_session_bar(rows, session_mode=session_mode)
+    behavior_context = _lagged_behavior_context_by_session(report.get("records") or [])
     for record in report.get("records") or []:
-        key = (str(record.get("session") or ""), int(record.get("bar_index") or 0))
+        session_key = str(record.get("session") or "")
+        key = (session_key, int(record.get("bar_index") or 0))
         values = dict(context.get(key) or {})
+        values.update(behavior_context.get(session_key) or {})
         atr_pct = _number(record.get("feature__atr_pct"))
         acceleration = _number(record.get("feature__volume_acceleration_ratio"))
         if acceleration is None:
@@ -1385,9 +1533,12 @@ def similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline(
     """Compare continuous similarity weighting with an unweighted held-out baseline.
 
     The held-out stock is never used in training. Each test session gets a target
-    similarity profile from lagged context values that were computed only from
-    completed prior sessions. All eligible training rows remain available; rows
-    with more similar prior-session behavior simply receive more model weight.
+    similarity profile from lagged scale/liquidity context plus a behavioral
+    fingerprint computed only from completed prior sessions. The fingerprint
+    summarizes VWAP interaction, breakouts, bounce sequences, pullbacks,
+    stair-step structure, and volume acceleration. All eligible training rows
+    remain available; rows with more similar prior-session behavior simply
+    receive more model weight.
     """
     records = [dict(row) for row in dataset.get("records") or [] if isinstance(row, dict)]
     normalized_target_mode = str(target_mode or "").strip().lower()
@@ -1705,6 +1856,7 @@ def similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline(
             "hard_archetype_not_used_for_training_selection": True,
             "hard_archetype_removed_from_model_inputs": True,
             "similarity_profile_uses_completed_prior_sessions": True,
+            "similarity_profile_includes_prior_session_market_behavior": True,
             "min_train_sessions": min_train_sessions,
             "test_sessions_per_fold": test_sessions_per_fold,
             "embargo_sessions": embargo_sessions,
@@ -1714,9 +1866,10 @@ def similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline(
         "note": (
             "This validation replaces hard archetype gating with smooth behavioral similarity weights. "
             "No training stock is discarded solely for belonging to a different category; more similar "
-            "historical rows influence the logistic model more strongly. Similarity uses lagged numeric "
-            "context from completed prior sessions only, and each held-out stock remains completely absent "
-            "from its training data."
+            "historical rows influence the logistic model more strongly. Similarity v2 combines lagged "
+            "scale/liquidity context with prior-session VWAP, breakout, bounce, pullback, stair-step, "
+            "and volume-acceleration behavior. Every similarity input is derived from completed prior "
+            "sessions only, and each held-out stock remains completely absent from its training data."
         ),
     }
 
