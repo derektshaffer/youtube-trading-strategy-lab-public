@@ -6532,7 +6532,7 @@ elif module == "Pattern Validation":
                 start=validation_start,
                 end=validation_end,
                 timeframe="1Min",
-                horizons=(5, 15, 30),
+                horizons=(ml_horizon,),
                 swing_radius=3,
                 detectors=selected_detectors,
                 max_pages=80,
@@ -6803,7 +6803,9 @@ elif module == "Pattern Validation":
             f"before -{ml_stop_loss_pct:.2f}% within the selected horizon. If both levels are "
             "touched in the same 1-minute candle, the downside level wins conservatively because "
             f"intrabar ordering is unknown. Market-hours regime: {ml_session_choice}. "
-            "Trading days means actual U.S. market sessions; weekends and market holidays do not count."
+            "Trading days means actual U.S. market sessions; weekends and market holidays do not count. "
+            "For interactive ML runs, predictions are sampled every 5 one-minute bars to reduce memory, "
+            "while every underlying 1-minute candle still feeds the causal feature calculations."
         )
     else:
         st.info(
@@ -6899,6 +6901,7 @@ elif module == "Pattern Validation":
                 profit_target_pct=ml_profit_target_pct,
                 stop_loss_pct=ml_stop_loss_pct,
                 session_mode=ml_session_mode,
+                observation_stride_bars=5,
                 progress=ml_research_progress,
             )
             update_task_bar(
@@ -6916,53 +6919,9 @@ elif module == "Pattern Validation":
                 embargo_sessions=1,
                 min_train_rows=250,
             )
-            update_task_bar(
-                ml_bar,
-                ml_monitor,
-                0.92,
-                "Running held-out-stock walk-forward generalization test…",
-            )
-            ml_generalization = leave_one_symbol_out_walk_forward_logistic_baseline(
-                ml_dataset,
-                target_horizon=ml_horizon,
-                target_mode=ml_target_mode,
-                min_train_sessions=8,
-                test_sessions_per_fold=2,
-                embargo_sessions=1,
-                min_train_rows=250,
-                min_test_rows=25,
-            )
-            ml_archetype_validation = {}
-            if ml_run_archetype_transfer:
-                update_task_bar(
-                    ml_bar,
-                    ml_monitor,
-                    0.96,
-                    "Comparing within-archetype vs across-archetype transfer…",
-                )
-                ml_archetype_validation = archetype_transfer_walk_forward_logistic_baseline(
-                    ml_dataset,
-                    target_horizon=ml_horizon,
-                    target_mode=ml_target_mode,
-                    min_train_sessions=8,
-                    test_sessions_per_fold=2,
-                    embargo_sessions=1,
-                    min_train_rows=200,
-                    min_test_rows=20,
-                )
             compact_ml_evaluation = {
                 key: value
                 for key, value in ml_evaluation.items()
-                if key != "predictions"
-            }
-            compact_ml_generalization = {
-                key: value
-                for key, value in ml_generalization.items()
-                if key != "predictions"
-            }
-            compact_ml_archetype_validation = {
-                key: value
-                for key, value in ml_archetype_validation.items()
                 if key != "predictions"
             }
             completed_ml_result = {
@@ -6981,9 +6940,51 @@ elif module == "Pattern Validation":
                     if key not in {"records"}
                 },
                 "evaluation": compact_ml_evaluation,
-                "generalization": compact_ml_generalization,
-                "archetype_validation": compact_ml_archetype_validation,
+                "generalization": {
+                    "status": "PENDING",
+                    "reason": "Baseline saved; held-out-stock validation has not finished yet.",
+                },
+                "archetype_validation": {},
+                "completed_at": utc_now().isoformat(),
+                "checkpoint_stage": "baseline_complete",
             }
+            st.session_state["til_predictive_ml_result"] = completed_ml_result
+            try:
+                persist_predictive_ml_result(completed_ml_result)
+                st.session_state["til_predictive_ml_persist_error"] = ""
+                ml_status.write(
+                    "Baseline result saved durably. Running stricter held-out-stock validation…"
+                )
+            except AppError as exc:
+                st.session_state["til_predictive_ml_persist_error"] = str(exc)
+                ml_status.write(
+                    "Baseline finished, but the durable checkpoint could not be saved: "
+                    + str(exc)
+                )
+
+            update_task_bar(
+                ml_bar,
+                ml_monitor,
+                0.92,
+                "Running held-out-stock walk-forward generalization test…",
+            )
+            ml_generalization = leave_one_symbol_out_walk_forward_logistic_baseline(
+                ml_dataset,
+                target_horizon=ml_horizon,
+                target_mode=ml_target_mode,
+                min_train_sessions=8,
+                test_sessions_per_fold=2,
+                embargo_sessions=1,
+                min_train_rows=250,
+                min_test_rows=25,
+            )
+            compact_ml_generalization = {
+                key: value
+                for key, value in ml_generalization.items()
+                if key != "predictions"
+            }
+            completed_ml_result["generalization"] = compact_ml_generalization
+            completed_ml_result["checkpoint_stage"] = "generalization_complete"
             completed_ml_result["completed_at"] = utc_now().isoformat()
             st.session_state["til_predictive_ml_result"] = completed_ml_result
             try:
@@ -6991,6 +6992,39 @@ elif module == "Pattern Validation":
                 st.session_state["til_predictive_ml_persist_error"] = ""
             except AppError as exc:
                 st.session_state["til_predictive_ml_persist_error"] = str(exc)
+
+            ml_archetype_validation = {}
+            if ml_run_archetype_transfer:
+                update_task_bar(
+                    ml_bar,
+                    ml_monitor,
+                    0.96,
+                    "Comparing within-archetype vs across-archetype transfer…",
+                )
+                ml_archetype_validation = archetype_transfer_walk_forward_logistic_baseline(
+                    ml_dataset,
+                    target_horizon=ml_horizon,
+                    target_mode=ml_target_mode,
+                    min_train_sessions=8,
+                    test_sessions_per_fold=2,
+                    embargo_sessions=1,
+                    min_train_rows=200,
+                    min_test_rows=20,
+                )
+                compact_ml_archetype_validation = {
+                    key: value
+                    for key, value in ml_archetype_validation.items()
+                    if key != "predictions"
+                }
+                completed_ml_result["archetype_validation"] = compact_ml_archetype_validation
+                completed_ml_result["checkpoint_stage"] = "archetype_complete"
+                completed_ml_result["completed_at"] = utc_now().isoformat()
+                st.session_state["til_predictive_ml_result"] = completed_ml_result
+                try:
+                    persist_predictive_ml_result(completed_ml_result)
+                    st.session_state["til_predictive_ml_persist_error"] = ""
+                except AppError as exc:
+                    st.session_state["til_predictive_ml_persist_error"] = str(exc)
 
             ml_status.update(
                 label=(
