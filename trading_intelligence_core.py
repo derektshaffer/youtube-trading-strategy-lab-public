@@ -490,7 +490,7 @@ def chunk_source_text(
     return chunks
 
 
-NATIVE_RULE_SCHEMA_VERSION = 4
+NATIVE_RULE_SCHEMA_VERSION = 5
 
 
 def upgrade_native_strategy_rules(strategy: dict[str, Any]) -> dict[str, Any]:
@@ -777,6 +777,180 @@ def upgrade_native_strategy_rules(strategy: dict[str, Any]) -> dict[str, Any]:
                 })
                 changed = True
 
+    ai_options = {
+        str(name): list(values)
+        for name, values in (item.get("ai_candidate_rule_options") or {}).items()
+        if isinstance(values, list)
+    }
+    assumptions = list(item.get("compiler_assumptions") or [])
+
+    def add_native_assumption(
+        rule_name: str,
+        value: Any,
+        options: list[Any],
+        source_requirement: str,
+        rationale: str,
+    ) -> None:
+        nonlocal changed
+        parsed = normalize_machine_rules({rule_name: value}).get(rule_name)
+        if parsed is None:
+            return
+        if rules.get(rule_name) is None and overrides.get(rule_name) is None:
+            overrides[rule_name] = parsed
+            changed = True
+        clean_options: list[Any] = []
+        for raw_option in options:
+            option = normalize_machine_rules({rule_name: raw_option}).get(rule_name)
+            if option is not None and option not in clean_options:
+                clean_options.append(option)
+        if clean_options:
+            ai_options[rule_name] = clean_options
+        if not any(
+            isinstance(record, dict)
+            and record.get("target_rule") == rule_name
+            and str(record.get("accepted_by") or "") == "native-exit-management-research"
+            for record in assumptions
+        ):
+            assumptions.append(
+                {
+                    "target_rule": rule_name,
+                    "value": parsed,
+                    "source_requirement": source_requirement,
+                    "rationale": rationale,
+                    "confidence": 90.0,
+                    "accepted_at": _utc_iso(),
+                    "model": "native-rule-upgrade",
+                    "accepted_by": "native-exit-management-research",
+                    "is_research_assumption": True,
+                }
+            )
+
+    scale_language = any(
+        phrase in exit_text
+        for phrase in ("scale out", "scaling out", "partial profit", "take partial")
+    )
+    if scale_language:
+        if rules.get("scale_out_fraction_pct") is None:
+            fraction_value = None
+            fraction_basis = ""
+            half_language = any(
+                phrase in exit_text
+                for phrase in ("half the position", "half position", "sell half", "take half")
+            )
+            if half_language:
+                fraction_value = 50.0
+                fraction_basis = "Saved source text explicitly says to exit half of the position."
+            else:
+                percent_match = (
+                    re.search(
+                        r"(?:scale out|scaling out|partial profit|take partial)[^\.]{0,50}(\d+(?:\.\d+)?)\s*%",
+                        exit_text,
+                    )
+                    or re.search(
+                        r"(\d+(?:\.\d+)?)\s*%[^\.]{0,50}(?:scale out|scaling out|partial profit|take partial)",
+                        exit_text,
+                    )
+                )
+                if percent_match:
+                    fraction_value = safe_float(percent_match.group(1))
+                    fraction_basis = "Saved source text explicitly states the partial-exit position percentage."
+            normalized_fraction = normalize_machine_rules(
+                {"scale_out_fraction_pct": fraction_value}
+            ).get("scale_out_fraction_pct")
+            if normalized_fraction is not None:
+                rules["scale_out_fraction_pct"] = normalized_fraction
+                explicit_migrations.append(
+                    {
+                        "rule": "scale_out_fraction_pct",
+                        "value": normalized_fraction,
+                        "basis": fraction_basis,
+                    }
+                )
+                changed = True
+            else:
+                add_native_assumption(
+                    "scale_out_fraction_pct",
+                    50.0,
+                    [25.0, 33.3, 50.0, 66.7, 75.0],
+                    "The source explicitly requires taking partial profits / scaling out but does not quantify the position fraction.",
+                    (
+                        "50% is only a neutral optimizer seed. The Lab tests a broad set of partial-exit "
+                        "fractions and does not attribute any of them to the source author."
+                    ),
+                )
+
+        if rules.get("scale_out_at_r") is None:
+            scale_r_match = (
+                re.search(
+                    r"(?:scale out|scaling out|partial profit|take partial)[^\.]{0,70}(\d+(?:\.\d+)?)\s*r\b",
+                    exit_text,
+                )
+                or re.search(
+                    r"(\d+(?:\.\d+)?)\s*r\b[^\.]{0,70}(?:scale out|scaling out|partial profit|take partial)",
+                    exit_text,
+                )
+            )
+            scale_r_value = safe_float(scale_r_match.group(1)) if scale_r_match else None
+            normalized_scale_r = normalize_machine_rules(
+                {"scale_out_at_r": scale_r_value}
+            ).get("scale_out_at_r")
+            if normalized_scale_r is not None:
+                rules["scale_out_at_r"] = normalized_scale_r
+                explicit_migrations.append(
+                    {
+                        "rule": "scale_out_at_r",
+                        "value": normalized_scale_r,
+                        "basis": "Saved source text explicitly states the R-multiple for taking the partial exit.",
+                    }
+                )
+                changed = True
+            else:
+                add_native_assumption(
+                    "scale_out_at_r",
+                    1.0,
+                    [0.5, 0.75, 1.0, 1.5, 2.0],
+                    "The source explicitly requires taking partial profits / scaling out but does not quantify the first partial target.",
+                    (
+                        "1R is only a neutral optimizer seed. The Lab tests multiple R-based partial targets "
+                        "and keeps them labeled as research assumptions."
+                    ),
+                )
+
+    qualitative_trailing = any(
+        phrase in exit_text for phrase in ("trailing stop", "trail the stop", "trail stop")
+    )
+    if qualitative_trailing and rules.get("trailing_stop_pct") is None:
+        add_native_assumption(
+            "trailing_stop_pct",
+            3.0,
+            [1.0, 2.0, 3.0, 5.0, 8.0],
+            "The source explicitly requires trailing the stop but does not give a percentage trail.",
+            (
+                "3% is only a neutral optimizer seed. The Lab tests several trailing distances and "
+                "does not present the chosen value as author-stated."
+            ),
+        )
+
+    qualitative_breakeven = (
+        "breakeven" in exit_text or "break even" in exit_text or "break-even" in exit_text
+    )
+    if qualitative_breakeven and rules.get("move_stop_to_breakeven_at_r") is None:
+        add_native_assumption(
+            "move_stop_to_breakeven_at_r",
+            1.0,
+            [0.5, 0.75, 1.0, 1.5, 2.0],
+            "The source explicitly says to move the stop to breakeven but does not quantify the trigger.",
+            (
+                "1R is only a neutral optimizer seed. The Lab tests multiple activation thresholds and "
+                "keeps the entire range labeled as research assumptions."
+            ),
+        )
+
+    if ai_options:
+        item["ai_candidate_rule_options"] = ai_options
+    if assumptions:
+        item["compiler_assumptions"] = assumptions[-150:]
+
     item["machine_rules"] = rules
     if overrides:
         item["research_rule_overrides"] = normalize_machine_rules(overrides)
@@ -960,8 +1134,11 @@ Strict rules:
   "trail the stop" without a percentage, a proposed trailing_stop_pct is a RESEARCH ASSUMPTION.
 - A source-stated "move stop to breakeven at X R" maps to move_stop_to_breakeven_at_r. If the
   trigger is qualitative, any proposed R threshold is a RESEARCH ASSUMPTION.
-- Never pretend scale-outs/partial exits, tape-based exits, or discretionary momentum-failure
-  selling are supported by a fixed target. Keep unsupported exit mechanics unmapped.
+- A source-stated partial exit maps to scale_out_fraction_pct (percent of the original position)
+  and scale_out_at_r (R-multiple for the first partial). If either value is qualitative or omitted,
+  proposed values are RESEARCH ASSUMPTIONS and should be varied by the optimizer.
+- Never pretend tape-based exits or discretionary momentum-failure selling are supported by a
+  fixed target. Keep unsupported exit mechanics unmapped.
 - Do not add require_pullback_breakout unless the source explicitly requires breakout/confirmation
   after the pullback.
 - Keep tape-reading, Level 2, float, borrow, proprietary indicators, subjective catalyst quality,
@@ -1404,9 +1581,12 @@ def strategy_semantic_coverage(strategy: dict[str, Any]) -> dict[str, Any]:
     if any(phrase in exit_text for phrase in ("scale out", "scaling out", "partial profit", "take partial")):
         add(
             "Scale-out / partial-profit management",
+            ("scale_out_fraction_pct", "scale_out_at_r"),
             dimension="exit",
-            modeled_override=False,
-            limitation="Partial exits are preserved from the source but are not yet executed by the deterministic backtester.",
+            limitation=(
+                "Partial exits require both a position fraction and an R-multiple trigger. "
+                "When the source omits either value, the Lab may test clearly labeled research assumptions."
+            ),
         )
     if any(
         phrase in exit_text
@@ -1565,6 +1745,8 @@ def strategy_integrity_report(strategy: dict[str, Any]) -> dict[str, Any]:
 PAPER_EXECUTION_UNSUPPORTED_DYNAMIC_EXITS = {
     "trailing_stop_pct": "Trailing-stop management",
     "move_stop_to_breakeven_at_r": "Move-to-breakeven management",
+    "scale_out_fraction_pct": "Partial-profit / scale-out management",
+    "scale_out_at_r": "Partial-profit / scale-out management",
     "exit_below_vwap": "VWAP-loss exit",
     "exit_below_fast_ema": "Fast-EMA-loss exit",
 }
@@ -1627,6 +1809,8 @@ def research_readiness(strategy: dict[str, Any]) -> dict[str, Any]:
         "max_hold_minutes",
         "trailing_stop_pct",
         "move_stop_to_breakeven_at_r",
+        "scale_out_fraction_pct",
+        "scale_out_at_r",
         "exit_below_vwap",
         "exit_below_fast_ema",
     }
