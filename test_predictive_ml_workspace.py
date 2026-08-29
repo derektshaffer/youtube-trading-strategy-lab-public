@@ -25,3 +25,11 @@ def test_predictive_ml_workspace_is_bounded_for_interactive_use():
     assert 'max_pages=120' in block
     assert '[:5]' in block
     assert '"ML history (days)"' in block
+
+
+def test_predictive_ml_workspace_respects_alpaca_sip_delay():
+    block = _pattern_validation_block()
+    assert 'historical_feed' in block
+    assert 'timedelta(minutes=16)' in block
+    assert 'current Alpaca entitlement' in block
+    assert 'build_cross_stock_training_dataset(\n                ml_market,' in block
