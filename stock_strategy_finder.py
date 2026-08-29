@@ -36,6 +36,9 @@ from youtube_strategy_engine import (
 )
 
 
+STRATEGY_FIDELITY_ENGINE_VERSION = 1
+
+
 @dataclass(frozen=True)
 class StockSearchProfile:
     name: str
@@ -493,6 +496,7 @@ def complete_stock_strategy_finder_from_optimization(
 
     return {
         "version": "stock-strategy-finder-v1",
+        "strategy_fidelity_engine_version": STRATEGY_FIDELITY_ENGINE_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "symbol": str(symbol or "").strip().upper(),
         "profile": asdict(profile),
@@ -774,6 +778,7 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
         "symbol": symbol,
         "profile": (report.get("profile") or {}).get("name"),
         "profile_details": report.get("profile") or {},
+        "strategy_fidelity_engine_version": int(report.get("strategy_fidelity_engine_version") or 0),
         "search_policy": report.get("search_policy") or {},
         "verdict": report.get("verdict") or {},
         "winner_strategy_name": report.get("winner_strategy_name"),
