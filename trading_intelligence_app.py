@@ -745,6 +745,8 @@ def friendly_rule_text(rule_name: str, value: Any) -> str:
         "pullback_touch_tolerance_pct": f"Count a pullback as touching/near the fast EMA within **{number}%**.",
         "max_pullback_number": f"Only allow the first **{number} EMA pullback(s)** in the sequence.",
         "stop_ema_buffer_pct": f"Place the structural stop **{number}% below the fast EMA**.",
+        "trailing_stop_pct": f"Trail the remaining position by **{number}%** from the highest price reached.",
+        "move_stop_to_breakeven_at_r": f"Move the stop to **breakeven after {number}R** of favorable movement.",
         "breakout_lookback_bars": f"Require a breakout above the prior **{number} candles**.",
         "opening_range_minutes": f"Use the first **{number} minutes** to define the opening range.",
         "volume_surge_ratio": f"Require a volume surge of at least **{number}× normal**.",
@@ -769,6 +771,8 @@ def friendly_rule_text(rule_name: str, value: Any) -> str:
         "require_fast_ema_pullback": "Require a **recent pullback to the fast EMA**.",
         "require_pullback_breakout": "Require **breakout confirmation after the pullback**.",
         "stop_below_fast_ema": "Use a **structural stop below the fast EMA**.",
+        "exit_below_vwap": "Exit the position when price **closes below VWAP**.",
+        "exit_below_fast_ema": "Exit the position when price **closes below the fast EMA**.",
         "catalyst_required": "Require a **qualifying news catalyst**.",
     }
     if key in boolean_templates:
