@@ -7009,11 +7009,35 @@ elif module == "Pattern Validation":
         if isinstance(library.get("research_system"), dict)
         else {}
     ) or {}
-    shadow_latest = (
-        shadow_monitor.get("latest_model")
-        if isinstance(shadow_monitor.get("latest_model"), dict)
+    shadow_registry = (
+        (library.get("research_system") or {}).get("predictive_model_registry")
+        if isinstance(library.get("research_system"), dict)
         else {}
+    ) or {}
+    shadow_models_by_id = {
+        str(item.get("model_id") or ""): item
+        for item in shadow_monitor.get("models") or []
+        if isinstance(item, dict) and str(item.get("model_id") or "").strip()
+    }
+    shadow_champion_id = str(shadow_registry.get("champion_model_id") or "").strip()
+    shadow_latest = (
+        shadow_models_by_id.get(shadow_champion_id)
+        or (
+            shadow_monitor.get("latest_model")
+            if isinstance(shadow_monitor.get("latest_model"), dict)
+            else {}
+        )
     )
+    if shadow_registry.get("champion_model_id"):
+        registry_status = str(
+            shadow_registry.get("status") or "CHAMPION_PROVISIONAL"
+        ).replace("_", " ").title()
+        challenger_count = len(shadow_registry.get("challenger_model_ids") or [])
+        st.caption(
+            "🏆 Shadow model registry · "
+            f"{registry_status} · {challenger_count} compatible challenger(s) · "
+            + str(shadow_registry.get("decision_reason") or "")
+        )
     if shadow_latest:
         shadow_status = str(shadow_latest.get("status") or "COLLECTING").upper()
         monitor_icon = {
@@ -7051,7 +7075,9 @@ elif module == "Pattern Validation":
             )
             st.caption(
                 "Live shadow predictions are deduplicated into 30-minute stock decision points "
-                "before evaluation, so repeated scanner refreshes do not masquerade as independent evidence."
+                "before evaluation, so repeated scanner refreshes do not masquerade as independent evidence. "
+                "Validated challengers are scored on those same decisions and cannot replace the champion "
+                "until they show enough breadth and a material live advantage."
             )
             for reason in list(shadow_latest.get("reasons") or [])[:3]:
                 st.write("• " + str(reason))
