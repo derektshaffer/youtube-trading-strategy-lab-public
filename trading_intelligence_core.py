@@ -1299,7 +1299,45 @@ def strategy_semantic_coverage(strategy: dict[str, Any]) -> dict[str, Any]:
                 dimension="risk",
             )
 
+    if any(
+        phrase in risk_text
+        for phrase in ("below pullback low", "below the pullback low", "structure stop", "technical stop")
+    ) and not re.search(r"below[^\.]{0,50}(?:\d{1,3}\s*)?ema", risk_text):
+        add(
+            "Structure/pullback-low stop",
+            dimension="risk",
+            modeled_override=False,
+            limitation="The backtester does not yet maintain the source-defined pullback/structure low as a dynamic stop level.",
+        )
+    if any(phrase in risk_text for phrase in ("stop below vwap", "vwap stop")):
+        add(
+            "VWAP-anchored stop",
+            dimension="risk",
+            modeled_override=False,
+            limitation="A VWAP close-loss exit is supported, but an intrabar stop anchored directly to VWAP is not yet modeled.",
+        )
+
     # Exit / position-management fidelity.
+    if (
+        re.search(r"(?:target|take profit|profit target)[^\.]{0,80}\b\d+(?:\.\d+)?\s*r\b", exit_text)
+        or re.search(r"\b\d+(?:\.\d+)?\s*r\b[^\.]{0,80}(?:target|take profit|profit target)", exit_text)
+    ):
+        add(
+            "Explicit R-multiple profit target",
+            ("reward_risk",),
+            dimension="exit",
+        )
+    if any(
+        phrase in exit_text
+        for phrase in ("sell at resistance", "exit at resistance", "target resistance", "sell into a resistance")
+    ):
+        add(
+            "Structure/resistance profit target",
+            dimension="exit",
+            modeled_override=False,
+            limitation="The backtester does not yet track a source-defined resistance level as a dynamic profit target.",
+        )
+
     if any(phrase in exit_text for phrase in ("trailing stop", "trail the stop", "trail stop")):
         add(
             "Trailing-stop exit",
@@ -1357,6 +1395,40 @@ def strategy_semantic_coverage(strategy: dict[str, Any]) -> dict[str, Any]:
             dimension="exit",
             modeled_override=False,
             limitation="Historical OHLCV alone does not yet reproduce the source's discretionary momentum-exit decision.",
+        )
+
+    if any(
+        phrase in text
+        for phrase in ("high of day break", "high-of-day break", "hod break", "break the high of day")
+    ):
+        add(
+            "High-of-day breakout trigger",
+            dimension="structure",
+            modeled_override=False,
+            limitation="The current generic lookback breakout is not the same as a causal session high-of-day breakout.",
+        )
+    if "premarket high" in text and any(
+        phrase in text for phrase in ("break", "breakout", "over", "above")
+    ):
+        add(
+            "Premarket-high breakout trigger",
+            dimension="structure",
+            modeled_override=False,
+            limitation="The backtester does not yet expose the premarket session high as a dedicated breakout level.",
+        )
+    if any(phrase in text for phrase in ("short interest", "heavily shorted", "short squeeze")):
+        add(
+            "Historical short-interest / squeeze context",
+            dimension="universe",
+            modeled_override=False,
+            limitation="Point-in-time historical short-interest data is not currently part of the backtest dataset.",
+        )
+    if any(phrase in text for phrase in ("premarket gap", "gap up", "gapper")) and re.search(r"\b\d+(?:\.\d+)?\s*%", text):
+        add(
+            "Premarket gap-percentage filter",
+            dimension="universe",
+            modeled_override=False,
+            limitation="The current day-change rule is not a dedicated prior-close-to-premarket-gap measurement.",
         )
 
     # Universe / execution requirements that the current historical dataset cannot reproduce.
