@@ -139,3 +139,31 @@ def test_similarity_validator_import_survives_stale_streamlit_module_cache():
         "similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline"
         in source
     )
+
+
+def test_predictive_ml_workspace_compares_three_model_architectures():
+    source = Path("trading_intelligence_app.py").read_text(encoding="utf-8")
+    block = _pattern_validation_block()
+    assert "ticker_specific_walk_forward_logistic_baseline" in source
+    assert "Testing ticker-specific walk-forward models" in block
+    assert 'completed_ml_result["ticker_specific"] = compact_ml_ticker_specific' in block
+    assert 'ml_ticker_specific = stored_ml_result.get("ticker_specific") or {}' in block
+    assert "#### Model architecture comparison" in block
+    assert "Pooled chronological" in block
+    assert "Ticker-specific" in block
+    assert "Held-out stock" in block
+    assert "Own-history AUC" in block
+    assert "Other-stocks AUC" in block
+    assert "Own minus other AUC" in block
+    assert "training_uses_same_symbol_only" not in block
+
+
+def test_ticker_specific_validator_import_survives_stale_streamlit_cache():
+    source = Path("trading_intelligence_app.py").read_text(encoding="utf-8")
+    assert "except AttributeError:" in source
+    assert "_current_predictive_ml_pipeline_for_ticker = load_current_source_module(" in source
+    assert (
+        "_current_predictive_ml_pipeline_for_ticker."
+        "ticker_specific_walk_forward_logistic_baseline"
+        in source
+    )

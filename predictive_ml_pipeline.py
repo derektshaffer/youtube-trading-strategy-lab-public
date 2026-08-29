@@ -1116,6 +1116,196 @@ def walk_forward_logistic_baseline(
         ),
     }
 
+
+def ticker_specific_walk_forward_logistic_baseline(
+    dataset: dict[str, Any],
+    *,
+    target_horizon: int = 15,
+    target_mode: str = "target_before_stop",
+    min_train_sessions: int = 8,
+    test_sessions_per_fold: int = 2,
+    embargo_sessions: int = 1,
+    min_train_rows: int = 150,
+) -> dict[str, Any]:
+    """Train a separate chronological model for each ticker using only its own past.
+
+    This is the complement to leave-one-symbol-out validation. Every ticker is
+    evaluated only on later sessions, with an embargo, but its training rows come
+    exclusively from earlier sessions of that same ticker. No other ticker is
+    allowed into that symbol's model.
+    """
+    records = [dict(row) for row in dataset.get("records") or [] if isinstance(row, dict)]
+    if not records:
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "reason": "No supervised rows are available.",
+        }
+
+    symbols = sorted(
+        {
+            str(row.get("symbol") or "").strip().upper()
+            for row in records
+            if str(row.get("symbol") or "").strip()
+        }
+    )
+    if not symbols:
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "reason": "No symbols are present in the supervised dataset.",
+        }
+
+    by_symbol: list[dict[str, Any]] = []
+    all_actual: list[int] = []
+    all_probability: list[float] = []
+    weighted_naive_brier_sum = 0.0
+    weighted_naive_rows = 0
+    all_predictions: list[dict[str, Any]] = []
+
+    for symbol in symbols:
+        symbol_dataset = {
+            key: value
+            for key, value in dataset.items()
+            if key != "records"
+        }
+        symbol_dataset["records"] = [
+            row
+            for row in records
+            if str(row.get("symbol") or "").strip().upper() == symbol
+        ]
+        report = walk_forward_logistic_baseline(
+            symbol_dataset,
+            target_horizon=target_horizon,
+            target_mode=target_mode,
+            min_train_sessions=min_train_sessions,
+            test_sessions_per_fold=test_sessions_per_fold,
+            embargo_sessions=embargo_sessions,
+            min_train_rows=min_train_rows,
+        )
+        if str(report.get("status") or "") != "EVALUATED":
+            by_symbol.append(
+                {
+                    "symbol": symbol,
+                    "status": "INSUFFICIENT_DATA",
+                    "reason": report.get("reason"),
+                    "session_count": int(report.get("session_count") or 0),
+                    "fold_count": 0,
+                    "oos_rows": 0,
+                    "roc_auc": None,
+                    "brier_skill_vs_naive": None,
+                }
+            )
+            continue
+
+        oos_rows = int(report.get("oos_rows") or 0)
+        naive_brier = _number(report.get("naive_brier_score"))
+        if naive_brier is not None and oos_rows > 0:
+            weighted_naive_brier_sum += float(naive_brier) * oos_rows
+            weighted_naive_rows += oos_rows
+
+        symbol_predictions = []
+        for item in report.get("predictions") or []:
+            prediction = dict(item)
+            prediction["model_symbol"] = symbol
+            symbol_predictions.append(prediction)
+            all_predictions.append(prediction)
+            all_actual.append(1 if bool(prediction.get("actual")) else 0)
+            probability = _number(prediction.get("probability"))
+            if probability is not None:
+                all_probability.append(float(probability))
+
+        by_symbol.append(
+            {
+                "symbol": symbol,
+                "status": "EVALUATED",
+                "session_count": int(report.get("session_count") or 0),
+                "fold_count": int(report.get("fold_count") or 0),
+                "oos_rows": oos_rows,
+                "oos_positive_rate": _number(report.get("oos_positive_rate")),
+                "roc_auc": _number(report.get("roc_auc")),
+                "brier_score": _number(report.get("brier_score")),
+                "naive_brier_score": naive_brier,
+                "brier_skill_vs_naive": _number(report.get("brier_skill_vs_naive")),
+                "accuracy": _number(report.get("accuracy")),
+                "folds": report.get("folds") or [],
+            }
+        )
+
+    if not all_predictions or len(all_probability) != len(all_actual):
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "reason": "No ticker-specific walk-forward fold met the minimum history requirements.",
+            "symbol_count": len(symbols),
+            "by_symbol": by_symbol,
+        }
+
+    model_brier = float(brier_score_loss(all_actual, all_probability))
+    naive_brier = (
+        weighted_naive_brier_sum / weighted_naive_rows
+        if weighted_naive_rows > 0
+        else None
+    )
+    symbol_aucs = [
+        float(value)
+        for value in (_number(item.get("roc_auc")) for item in by_symbol)
+        if value is not None
+    ]
+    symbol_skills = [
+        float(value)
+        for value in (_number(item.get("brier_skill_vs_naive")) for item in by_symbol)
+        if value is not None
+    ]
+    return {
+        "status": "EVALUATED",
+        "validation_type": "ticker_specific_expanding_walk_forward",
+        "model_type": "logistic_regression",
+        "target_mode": str(target_mode or "").strip().lower(),
+        "target_horizon": int(target_horizon),
+        "symbol_count": len(symbols),
+        "symbols_evaluated": sum(
+            1 for item in by_symbol if item.get("status") == "EVALUATED"
+        ),
+        "oos_rows": len(all_actual),
+        "roc_auc": _safe_auc(all_actual, all_probability),
+        "macro_roc_auc": (
+            float(sum(symbol_aucs) / len(symbol_aucs)) if symbol_aucs else None
+        ),
+        "brier_score": model_brier,
+        "naive_brier_score": naive_brier,
+        "brier_skill_vs_naive": (
+            None
+            if naive_brier is None or naive_brier <= 0
+            else 1.0 - (model_brier / naive_brier)
+        ),
+        "macro_brier_skill_vs_naive": (
+            float(sum(symbol_skills) / len(symbol_skills))
+            if symbol_skills
+            else None
+        ),
+        "accuracy": float(
+            accuracy_score(
+                all_actual,
+                [int(value >= 0.5) for value in all_probability],
+            )
+        ),
+        "by_symbol": by_symbol,
+        "predictions": all_predictions,
+        "split_policy": {
+            "type": "same_symbol_expanding_session_walk_forward",
+            "training_uses_same_symbol_only": True,
+            "future_sessions_only": True,
+            "min_train_sessions": max(2, int(min_train_sessions)),
+            "test_sessions_per_fold": max(1, int(test_sessions_per_fold)),
+            "embargo_sessions": max(0, int(embargo_sessions)),
+            "min_train_rows": max(1, int(min_train_rows)),
+        },
+        "note": (
+            "Each ticker gets its own model. Training uses only earlier sessions of "
+            "that same ticker; testing uses later unseen sessions. No rows from other "
+            "tickers are allowed into the ticker-specific model."
+        ),
+    }
+
+
 def leave_one_symbol_out_walk_forward_logistic_baseline(
     dataset: dict[str, Any],
     *,
