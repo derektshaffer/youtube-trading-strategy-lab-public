@@ -443,6 +443,7 @@ def build_supervised_feature_rows(
     require_full_horizon: bool = True,
     profit_target_pct: float = 1.0,
     stop_loss_pct: float = 0.75,
+    observation_stride_bars: int = 1,
 ) -> dict[str, Any]:
     """Build leakage-safe supervised-learning rows from historical candles.
 
@@ -453,6 +454,7 @@ def build_supervised_feature_rows(
     """
     clean_horizons = tuple(sorted({max(1, int(value)) for value in horizons}))
     max_horizon = max(clean_horizons, default=0)
+    observation_stride_bars = max(1, int(observation_stride_bars))
     clean_profit_target = _number(profit_target_pct)
     clean_stop_loss = _number(stop_loss_pct)
     if clean_profit_target is None or clean_profit_target <= 0:
@@ -474,7 +476,7 @@ def build_supervised_feature_rows(
         if len(feature_frame) != len(session_rows):
             raise ValueError("Causal feature frame did not preserve historical row count.")
 
-        for index in range(len(session_rows)):
+        for index in range(0, len(session_rows), observation_stride_bars):
             if require_full_horizon and index + max_horizon >= len(session_rows):
                 continue
             outcomes = _event_outcomes(
@@ -536,6 +538,7 @@ def build_supervised_feature_rows(
         "profit_target_pct": float(clean_profit_target),
         "stop_loss_pct": float(clean_stop_loss),
         "barrier_same_bar_policy": "stop_first_conservative",
+        "observation_stride_bars": observation_stride_bars,
         "row_count": len(records),
         "feature_columns": sorted(feature_names),
         "label_columns": sorted(label_names),
@@ -546,7 +549,9 @@ def build_supervised_feature_rows(
             "label__ are calculated only from bars after the observation timestamp. "
             "Trade-quality labels ask whether the upside target was reached before the "
             "downside limit; if both are touched in one candle, the downside limit wins "
-            "conservatively because intrabar ordering is unknown."
+            "conservatively because intrabar ordering is unknown. "
+            f"Supervised observations are sampled every {observation_stride_bars} bar(s), "
+            "while causal features still use every underlying candle."
         ),
     }
 

@@ -474,3 +474,57 @@ def test_archetype_transfer_requires_populated_multiple_archetypes():
     assert report["status"] == "INSUFFICIENT_DATA"
     assert "At least two populated archetypes" in report["reason"]
 
+
+
+def test_cross_stock_dataset_emits_granular_per_stock_progress():
+    market = FakeMarket(
+        {
+            "AAA": [_bar(24, i, 10.0 + i * 0.03) for i in range(10)],
+            "BBB": [_bar(25, i, 20.0 + i * 0.02) for i in range(10)],
+        }
+    )
+    messages = []
+    build_cross_stock_training_dataset(
+        market,
+        ["AAA", "BBB"],
+        start="2026-08-24",
+        end="2026-08-26",
+        horizons=(1,),
+        swing_radius=1,
+        progress=messages.append,
+    )
+    assert any("ML stock 1/2 · calculating causal features for AAA" in item for item in messages)
+    assert any("ML stock 1/2 · adding causal context for AAA" in item for item in messages)
+    assert any("ML stock 1/2 · finished AAA" in item for item in messages)
+    assert any("ML stock 2/2 · calculating causal features for BBB" in item for item in messages)
+    assert any("ML stock 2/2 · finished BBB" in item for item in messages)
+
+
+def test_cross_stock_dataset_observation_stride_reduces_rows():
+    market = FakeMarket(
+        {
+            "AAA": [_bar(24, i, 10.0 + i * 0.03) for i in range(20)],
+            "BBB": [_bar(25, i, 20.0 + i * 0.02) for i in range(20)],
+        }
+    )
+    full = build_cross_stock_training_dataset(
+        market,
+        ["AAA", "BBB"],
+        start="2026-08-24",
+        end="2026-08-26",
+        horizons=(1,),
+        swing_radius=1,
+        observation_stride_bars=1,
+    )
+    sampled = build_cross_stock_training_dataset(
+        market,
+        ["AAA", "BBB"],
+        start="2026-08-24",
+        end="2026-08-26",
+        horizons=(1,),
+        swing_radius=1,
+        observation_stride_bars=5,
+    )
+    assert sampled["observation_stride_bars"] == 5
+    assert sampled["row_count"] < full["row_count"]
+    assert sampled["row_count"] <= (full["row_count"] + 4) // 5 + 2

@@ -66,13 +66,18 @@ def test_predictive_ml_results_render_without_forced_rerun():
     compact_start = block.index("compact_ml_evaluation = {")
     result_build = block.index("completed_ml_result = {")
     result_store = block.index('st.session_state["til_predictive_ml_result"] = completed_ml_result')
+    generalization_update = block.index(
+        'completed_ml_result["generalization"] = compact_ml_generalization',
+        result_store,
+    )
     result_reader = block.index('stored_ml_result = st.session_state.get("til_predictive_ml_result")')
     result_path = block[compact_start:result_reader]
-    assert compact_start < result_build < result_store < result_reader
+    assert compact_start < result_build < result_store < generalization_update < result_reader
     assert "st.rerun()" not in result_path
     assert 'if key != "predictions"' in result_path
     assert '"evaluation": compact_ml_evaluation' in result_path
-    assert '"generalization": compact_ml_generalization' in result_path
+    assert '"status": "PENDING"' in result_path
+    assert 'completed_ml_result["generalization"] = compact_ml_generalization' in result_path
     assert "Predictive ML results are ready below." in result_path
 
 def test_predictive_ml_workspace_exposes_causal_archetype_context():
@@ -96,3 +101,27 @@ def test_predictive_ml_results_are_persisted_and_restored_after_restart():
     assert 'ml_result_source = "durable"' in block
     assert "restored from durable storage" in block
     assert 'if key != "predictions"' in block
+
+
+def test_predictive_ml_progress_has_per_stock_substeps():
+    block = _pattern_validation_block()
+    assert 'text.startswith("ML stock ")' in block
+    assert '"adding causal context" in text' in block
+    assert '"finished " in text' in block
+    assert 'completed_units = max(0.0, (stock_index - 1) + phase)' in block
+
+
+def test_predictive_ml_workspace_reduces_memory_and_checkpoints_baseline():
+    block = _pattern_validation_block()
+    dataset_call = block.index("ml_dataset = build_cross_stock_training_dataset(")
+    baseline_call = block.index("ml_evaluation = walk_forward_logistic_baseline(", dataset_call)
+    baseline_save = block.index("persist_predictive_ml_result(completed_ml_result)", baseline_call)
+    generalization_call = block.index(
+        "ml_generalization = leave_one_symbol_out_walk_forward_logistic_baseline(",
+        baseline_save,
+    )
+    assert "horizons=(ml_horizon,)" in block[dataset_call:baseline_call]
+    assert "observation_stride_bars=5" in block[dataset_call:baseline_call]
+    assert baseline_call < baseline_save < generalization_call
+    assert '"checkpoint_stage": "baseline_complete"' in block[baseline_call:generalization_call]
+    assert "Baseline result saved durably." in block[baseline_call:generalization_call]

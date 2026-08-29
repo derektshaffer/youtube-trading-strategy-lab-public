@@ -237,3 +237,30 @@ def test_same_bar_target_and_stop_is_scored_conservatively_as_stop():
     assert first["label__target_before_stop_1bar"] is False
     assert first["label__barrier_outcome_1bar"] == "stop"
 
+
+
+def test_supervised_rows_can_sample_observations_without_changing_causal_features():
+    rows = _breakout_session(29)
+    full = build_supervised_feature_rows(
+        rows,
+        horizons=(1,),
+        swing_radius=1,
+        require_full_horizon=True,
+        observation_stride_bars=1,
+    )
+    sampled = build_supervised_feature_rows(
+        rows,
+        horizons=(1,),
+        swing_radius=1,
+        require_full_horizon=True,
+        observation_stride_bars=2,
+    )
+    assert sampled["observation_stride_bars"] == 2
+    assert sampled["row_count"] < full["row_count"]
+    full_by_index = {int(row["bar_index"]): row for row in full["records"]}
+    for row in sampled["records"]:
+        index = int(row["bar_index"])
+        assert index % 2 == 0
+        for key, value in row.items():
+            if key.startswith("feature__"):
+                assert value == full_by_index[index][key]
