@@ -2855,6 +2855,60 @@ elif module == "Retrospective Learning":
         else:
             st.warning("This run did not find any events that met the current teacher definitions.")
 
+        feature_layers = dict(selected_teacher_run.get("feature_layers") or {})
+        indicator_check = dict(
+            selected_teacher_run.get("indicator_cross_validation") or {}
+        )
+        if feature_layers:
+            st.markdown("### Learning layers used")
+            st.caption(
+                "Every layer below is computed causally at the event timestamp. "
+                "Future bars are used only to decide the retrospective outcome label."
+            )
+            layer_rows = [
+                {
+                    "Feature layer": str(name).replace("_", " ").title(),
+                    "How it is used": description,
+                }
+                for name, description in feature_layers.items()
+            ]
+            st.dataframe(pd.DataFrame(layer_rows), width="stretch", hide_index=True)
+
+        if indicator_check:
+            indicator_passed = bool(indicator_check.get("passed"))
+            if indicator_passed:
+                st.success(
+                    "Indicator consistency check passed: the Lab's equivalent EMA, ATR, "
+                    "and session-VWAP calculations matched their independent references."
+                )
+            else:
+                st.error(
+                    "Indicator consistency check found a mismatch. Treat this teaching run "
+                    "as diagnostic until the calculation difference is resolved."
+                )
+            with st.expander("Indicator cross-validation details", expanded=not indicator_passed):
+                validation_rows = []
+                for indicator_name, detail in (
+                    indicator_check.get("checks") or {}
+                ).items():
+                    validation_rows.append(
+                        {
+                            "Indicator": str(indicator_name).replace("_", " ").upper(),
+                            "Reference": detail.get("external_reference"),
+                            "Definition": detail.get("definition"),
+                            "Passed": bool(detail.get("passed")),
+                            "Max absolute difference": detail.get("max_abs_difference"),
+                            "Note": detail.get("note") or "",
+                        }
+                    )
+                if validation_rows:
+                    st.dataframe(
+                        pd.DataFrame(validation_rows),
+                        width="stretch",
+                        hide_index=True,
+                    )
+                st.caption(str(indicator_check.get("policy") or ""))
+
         st.markdown("### Causal precursor summaries")
         st.caption(
             "These are descriptive medians of features measured **at the event**, before the future "
