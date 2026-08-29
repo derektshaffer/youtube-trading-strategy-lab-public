@@ -1755,5 +1755,87 @@ class StreamlitSmokeTests(unittest.TestCase):
             self.assertTrue(any(name == "markdown" for name, _ in fake_streamlit.rendered))
 
 
+class DynamicExitBacktestTests(unittest.TestCase):
+    def test_dynamic_exit_rules_normalize(self):
+        rules = engine.normalize_machine_rules(
+            {
+                "trailing_stop_pct": "5",
+                "move_stop_to_breakeven_at_r": "1.5",
+                "exit_below_vwap": "true",
+                "exit_below_fast_ema": True,
+            }
+        )
+        self.assertEqual(rules["trailing_stop_pct"], 5.0)
+        self.assertEqual(rules["move_stop_to_breakeven_at_r"], 1.5)
+        self.assertTrue(rules["exit_below_vwap"])
+        self.assertTrue(rules["exit_below_fast_ema"])
+
+    def test_trailing_stop_updates_causally_and_can_exit_next_bar(self):
+        rows = [
+            bar(18, 0, 10.0, 10.1, 9.9, 10.0),
+            bar(18, 1, 10.0, 11.0, 9.9, 10.9),
+            bar(18, 2, 10.8, 10.9, 10.4, 10.5),
+        ]
+        strategy = simple_strategy(
+            stop_loss_pct=20,
+            reward_risk=None,
+            trailing_stop_pct=5,
+        )
+        result = engine.run_backtest(
+            rows,
+            strategy,
+            "TEST",
+            engine.BacktestSettings(
+                spread_bps=0,
+                slippage_bps=0,
+                max_concurrent_positions=1,
+                allow_extended_hours=False,
+            ),
+        )
+        self.assertEqual(result["metrics"]["trade_count"], 1)
+        trade = result["trades"][0]
+        self.assertEqual(trade["reason"], "Stop loss")
+        self.assertIsNone(trade["target_price"])
+        self.assertGreater(trade["pnl"], 0)
+
+    def test_breakeven_rule_moves_stop_after_r_trigger(self):
+        rows = [
+            bar(18, 0, 10.0, 10.1, 9.9, 10.0),
+            bar(18, 1, 10.0, 11.2, 9.9, 11.0),
+            bar(18, 2, 10.5, 10.6, 9.8, 10.0),
+        ]
+        strategy = simple_strategy(
+            stop_loss_pct=10,
+            reward_risk=None,
+            move_stop_to_breakeven_at_r=1.0,
+        )
+        result = engine.run_backtest(
+            rows,
+            strategy,
+            "TEST",
+            engine.BacktestSettings(
+                spread_bps=0,
+                slippage_bps=0,
+                max_concurrent_positions=1,
+                allow_extended_hours=False,
+            ),
+        )
+        trade = result["trades"][0]
+        self.assertEqual(trade["reason"], "Stop loss")
+        self.assertAlmostEqual(trade["pnl"], 0.0, places=6)
+
+    def test_optimizer_does_not_inject_fixed_target_into_dynamic_exit_source(self):
+        strategy = simple_strategy(
+            reward_risk=None,
+            trailing_stop_pct=4.0,
+        )
+        variants = engine.generate_strategy_variants(strategy, maximum=40)
+        self.assertGreater(len(variants), 1)
+        self.assertTrue(all(item.get("reward_risk") is None for item in variants))
+        self.assertTrue(any(item.get("trailing_stop_pct") != 4.0 for item in variants))
+
+
+
+
 if __name__ == "__main__":
     unittest.main()
