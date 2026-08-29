@@ -132,6 +132,7 @@ def scan_strategy_universe(
             enriched["chart_checks"] = chart_trigger_checks(chart_rows[symbol], strategy)
 
         market_features = build_market_features(chart_rows.get(symbol, []))
+        enriched["market_features"] = dict(market_features.get("features") or {})
         signal = match_strategy(enriched, strategy)
         results.append(
             {
@@ -171,8 +172,8 @@ def scan_market_strategies(
 
     Market data is downloaded once per stock universe, then every compatible
     strategy is evaluated against that same snapshot/chart/catalyst context.
-    The new market-feature layer is observational here: it is calculated once
-    per stock and returned to callers, but does not change strategy scores yet.
+    Causal market features are calculated once per stock and shared by every
+    strategy so live matching uses the same feature vocabulary as backtesting.
     """
     clean = parse_symbols(symbols)
     if not clean:
@@ -249,6 +250,7 @@ def scan_market_strategies(
                 enriched["has_catalyst"] = bool(news_by_symbol.get(symbol))
             if chart_rows.get(symbol) and _needs_chart_data(strategy):
                 enriched["chart_checks"] = chart_trigger_checks(chart_rows[symbol], strategy)
+            enriched["market_features"] = dict(market_features.get("features") or {})
 
             signal = match_strategy(enriched, strategy)
             validation_status = str(
@@ -399,6 +401,7 @@ def analyze_stock_strategies(
             enriched["has_catalyst"] = bool(news_items)
         if intraday_rows and _needs_chart_data(strategy):
             enriched["chart_checks"] = chart_trigger_checks(intraday_rows, strategy)
+        enriched["market_features"] = dict(market_features.get("features") or {})
         signal = match_strategy(enriched, strategy)
         validation_status = str(strategy.get("validation_status") or "unvalidated")
         validation = (
