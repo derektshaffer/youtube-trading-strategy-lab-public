@@ -40,6 +40,20 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
                 self.assertEqual(run_module.call_count, 2)
                 run_module.assert_called_with(module_name, run_name="__main__")
 
+    def test_trading_intelligence_refreshes_storage_before_health_snapshot(self):
+        source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        self.assertLess(
+            source.index("library = load_library()"),
+            source.index("persistence_snapshot = intelligence_store().persistence_status"),
+        )
+
+    def test_stock_finder_surfaces_recent_completed_cloud_runs_independent_of_depth(self):
+        source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        self.assertIn("Recent completed cloud research", source)
+        self.assertIn("stock_strategy_finder_runs", source)
+        self.assertIn("latest_symbol_finder_result", source)
+        self.assertIn("Open {completed_symbol} {completed_profile} result", source)
+
     def test_streamlit_version_supports_locked_sidebar(self):
         requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
         self.assertIn("streamlit>=1.59,<2", requirements)
