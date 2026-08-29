@@ -1445,7 +1445,17 @@ def strategy_semantic_coverage(strategy: dict[str, Any]) -> dict[str, Any]:
             modeled_override=False,
             limitation="Point-in-time historical short-interest data is not currently part of the backtest dataset.",
         )
-    if any(phrase in text for phrase in ("premarket gap", "gap up", "gapper")) and re.search(r"\b\d+(?:\.\d+)?\s*%", text):
+    explicit_gap_pct = (
+        re.search(
+            r"(?:premarket\s+gap|gap(?:ped)?\s+up|gapper)[^\.]{0,60}\b\d+(?:\.\d+)?\s*%",
+            text,
+        )
+        or re.search(
+            r"\b\d+(?:\.\d+)?\s*%[^\.]{0,60}(?:premarket\s+gap|gap(?:ped)?\s+up|gapper)",
+            text,
+        )
+    )
+    if explicit_gap_pct:
         add(
             "Premarket gap-percentage filter",
             dimension="universe",
