@@ -1,5 +1,7 @@
 name: Strategy Integrity Audit
 
+# Re-run after causal AVWAP v1 changes so the aggregate report reflects the
+# upgraded source-to-backtester vocabulary.
 on:
   push:
     branches: [main]
