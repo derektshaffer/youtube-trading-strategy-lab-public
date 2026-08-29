@@ -9,15 +9,17 @@ from live_learning import (
 )
 
 
-def scan_result(symbol="SDOT", price=10.0):
+def scan_result(symbol="SDOT", price=10.0, trade_timestamp=None):
+    metrics = {
+        "price": price,
+        "relative_volume": 4.2,
+        "vwap": 9.8,
+    }
+    if trade_timestamp is not None:
+        metrics["trade_timestamp"] = trade_timestamp
     return {
         "symbol": symbol,
-        "metrics": {
-            "price": price,
-            "relative_volume": 4.2,
-            "vwap": 9.8,
-            "trade_timestamp": "2026-08-29T17:00:00Z",
-        },
+        "metrics": metrics,
         "market_features": {
             "features": {
                 "vwap_hold_bars": 3,
@@ -52,6 +54,18 @@ def test_build_shadow_observation_is_research_only_and_causal_feature_named():
     assert not any(key.startswith("label__") for key in item["features"])
     assert item["research_only"] is True
     assert item["affects_live_ranking"] is False
+
+
+def test_market_trade_timestamp_wins_over_late_scan_completion_time():
+    completed = datetime(2026, 8, 29, 15, 9, tzinfo=timezone.utc)
+    item = build_shadow_observation(
+        scan_result(trade_timestamp="2026-08-29T15:02:14Z"),
+        source="market_discovery",
+        observed_at=completed,
+    )
+    assert item is not None
+    assert item["observed_at"] == "2026-08-29T15:02:14Z"
+    assert item["feature_cutoff"] == "2026-08-29T15:02:14Z"
 
 
 def test_merge_deduplicates_same_symbol_and_five_minute_bucket():
