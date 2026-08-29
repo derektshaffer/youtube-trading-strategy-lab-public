@@ -116,6 +116,22 @@ CONTEXT_FEATURE_COLUMNS: tuple[str, ...] = (
     "feature__context_archetype",
 )
 
+# Continuous stock-similarity inputs. These are deliberately limited to lagged,
+# numeric context built from completed prior sessions so similarity weighting
+# cannot peek at later bars in the held-out session.
+SIMILARITY_CONTEXT_COLUMNS: tuple[str, ...] = (
+    "feature__context_typical_price",
+    "feature__context_typical_range_pct",
+    "feature__context_typical_dollar_volume",
+    "feature__context_typical_bar_dollar_volume",
+)
+_SIMILARITY_LOG_COLUMNS = {
+    "feature__context_typical_price",
+    "feature__context_typical_range_pct",
+    "feature__context_typical_dollar_volume",
+    "feature__context_typical_bar_dollar_volume",
+}
+
 
 def _median_number(values: list[Any]) -> float | None:
     clean = sorted(value for value in (_number(item) for item in values) if value is not None)
@@ -1256,6 +1272,454 @@ def leave_one_symbol_out_walk_forward_logistic_baseline(
             "generalization test than the ordinary walk-forward baseline."
         ),
     }
+
+
+def _similarity_transform(column: str, value: Any) -> float | None:
+    number = _number(value)
+    if number is None:
+        return None
+    if column in _SIMILARITY_LOG_COLUMNS:
+        return math.log1p(max(0.0, number))
+    return number
+
+
+def _continuous_similarity_weights(
+    train: pd.DataFrame,
+    target_row: pd.Series,
+    *,
+    similarity_columns: list[str],
+    bandwidth: float,
+    min_weight: float,
+) -> tuple[pd.Series, dict[str, Any]]:
+    """Return smooth row weights from robust distance to one held-out stock profile."""
+    bandwidth = max(0.05, float(bandwidth))
+    min_weight = min(1.0, max(0.0, float(min_weight)))
+    active: list[tuple[str, float, float]] = []
+
+    for column in similarity_columns:
+        if column not in train.columns or column not in target_row.index:
+            continue
+        target_value = _similarity_transform(column, target_row.get(column))
+        if target_value is None:
+            continue
+        values = [
+            transformed
+            for transformed in (
+                _similarity_transform(column, value)
+                for value in train[column].tolist()
+            )
+            if transformed is not None
+        ]
+        if len(values) < 2:
+            continue
+        series = pd.Series(values, dtype=float)
+        q25 = float(series.quantile(0.25))
+        q75 = float(series.quantile(0.75))
+        scale = (q75 - q25) / 1.349 if q75 > q25 else float(series.std(ddof=0))
+        if not math.isfinite(scale) or scale <= 1e-9:
+            scale = max(abs(float(series.median())) * 0.1, 1e-6)
+        active.append((column, target_value, scale))
+
+    if len(active) < 2:
+        weights = pd.Series([1.0] * len(train), index=train.index, dtype=float)
+        return weights, {
+            "active_similarity_columns": [item[0] for item in active],
+            "bandwidth": bandwidth,
+            "min_weight": min_weight,
+            "effective_weighted_rows": float(weights.sum()),
+        }
+
+    raw_weights: list[float] = []
+    for _, row in train.iterrows():
+        squared_distance = 0.0
+        observed = 0
+        missing = 0
+        for column, target_value, scale in active:
+            value = _similarity_transform(column, row.get(column))
+            if value is None:
+                missing += 1
+                continue
+            z_score = (value - target_value) / scale
+            squared_distance += min(64.0, z_score * z_score)
+            observed += 1
+        if observed < 2:
+            similarity = min_weight
+        else:
+            mean_squared_distance = squared_distance / float(observed)
+            missing_penalty = (missing / float(len(active))) * 4.0
+            similarity = math.exp(
+                -0.5 * (mean_squared_distance + missing_penalty) / (bandwidth * bandwidth)
+            )
+            similarity = max(min_weight, min(1.0, similarity))
+        raw_weights.append(similarity)
+
+    weights = pd.Series(raw_weights, index=train.index, dtype=float)
+    mean_weight = float(weights.mean()) if len(weights) else 1.0
+    if mean_weight > 0:
+        weights = weights / mean_weight
+    return weights, {
+        "active_similarity_columns": [item[0] for item in active],
+        "bandwidth": bandwidth,
+        "min_weight": min_weight,
+        "effective_weighted_rows": float(weights.sum()),
+        "raw_weight_mean": mean_weight,
+        "raw_weight_min": float(min(raw_weights)) if raw_weights else None,
+        "raw_weight_max": float(max(raw_weights)) if raw_weights else None,
+    }
+
+
+def similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline(
+    dataset: dict[str, Any],
+    *,
+    target_horizon: int = 15,
+    target_mode: str = "target_before_stop",
+    similarity_columns: tuple[str, ...] = SIMILARITY_CONTEXT_COLUMNS,
+    similarity_bandwidth: float = 0.75,
+    minimum_similarity_weight: float = 0.03,
+    min_train_sessions: int = 8,
+    test_sessions_per_fold: int = 2,
+    embargo_sessions: int = 1,
+    min_train_rows: int = 250,
+    min_test_rows: int = 20,
+) -> dict[str, Any]:
+    """Compare continuous similarity weighting with an unweighted held-out baseline.
+
+    The held-out stock is never used in training. Each test session gets a target
+    similarity profile from lagged context values that were computed only from
+    completed prior sessions. All eligible training rows remain available; rows
+    with more similar prior-session behavior simply receive more model weight.
+    """
+    records = [dict(row) for row in dataset.get("records") or [] if isinstance(row, dict)]
+    normalized_target_mode = str(target_mode or "").strip().lower()
+    if normalized_target_mode == "positive_return":
+        target = f"label__positive_return_{int(target_horizon)}bar"
+        target_description = (
+            f"Price closes above the observation price after {int(target_horizon)} bars."
+        )
+    elif normalized_target_mode == "target_before_stop":
+        target = f"label__target_before_stop_{int(target_horizon)}bar"
+        profit_target_pct = _number(dataset.get("profit_target_pct"))
+        stop_loss_pct = _number(dataset.get("stop_loss_pct"))
+        target_description = (
+            f"Price reaches +{profit_target_pct:g}% before -{stop_loss_pct:g}% "
+            f"within {int(target_horizon)} bars."
+            if profit_target_pct is not None and stop_loss_pct is not None
+            else f"Configured upside barrier is reached before the downside barrier within {int(target_horizon)} bars."
+        )
+    else:
+        raise ValueError("target_mode must be 'positive_return' or 'target_before_stop'.")
+
+    feature_columns = sorted(
+        column for column in (dataset.get("feature_columns") or [])
+        if str(column).startswith("feature__")
+    )
+    # The failed hard-archetype label is intentionally excluded from this model.
+    model_features = [
+        column for column in feature_columns
+        if column != "feature__context_archetype"
+    ]
+    usable_similarity_columns = [
+        column for column in similarity_columns if column in model_features
+    ]
+    if not records or not model_features:
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "reason": "No supervised rows or usable feature columns are available.",
+            "target_mode": normalized_target_mode,
+            "target": target,
+        }
+    if len(usable_similarity_columns) < 2:
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "reason": "At least two continuous lagged context features are required for similarity weighting.",
+            "target_mode": normalized_target_mode,
+            "target": target,
+            "similarity_columns": usable_similarity_columns,
+        }
+
+    frame = pd.DataFrame(records)
+    required = {"symbol", "session", target, *usable_similarity_columns}
+    if not required.issubset(frame.columns):
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "reason": "Dataset is missing symbol, session, target, or continuous similarity context.",
+            "target_mode": normalized_target_mode,
+            "target": target,
+        }
+    frame = frame[
+        frame[target].notna()
+        & frame["session"].notna()
+        & frame["symbol"].notna()
+    ].copy()
+    if frame.empty:
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "reason": "No rows have symbol, session, and target labels.",
+            "target_mode": normalized_target_mode,
+            "target": target,
+        }
+
+    frame[target] = frame[target].astype(bool).astype(int)
+    frame["_session_key"] = frame["session"].astype(str)
+    frame["_symbol_key"] = frame["symbol"].astype(str).str.upper()
+    frame["_time_key"] = pd.to_datetime(frame.get("timestamp"), utc=True, errors="coerce")
+    frame = frame.sort_values(
+        ["_session_key", "_time_key", "_symbol_key"],
+        na_position="last",
+    ).reset_index(drop=True)
+
+    sessions = sorted(frame["_session_key"].unique().tolist())
+    symbols = sorted(frame["_symbol_key"].unique().tolist())
+    min_train_sessions = max(2, int(min_train_sessions))
+    test_sessions_per_fold = max(1, int(test_sessions_per_fold))
+    embargo_sessions = max(0, int(embargo_sessions))
+    min_train_rows = max(1, int(min_train_rows))
+    min_test_rows = max(1, int(min_test_rows))
+
+    if len(symbols) < 2:
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "reason": "At least two symbols are required for similarity-weighted held-out validation.",
+            "symbol_count": len(symbols),
+            "target_mode": normalized_target_mode,
+            "target": target,
+        }
+    if len(sessions) < min_train_sessions + embargo_sessions + test_sessions_per_fold:
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "reason": "Not enough market sessions for similarity-weighted walk-forward validation.",
+            "session_count": len(sessions),
+            "target_mode": normalized_target_mode,
+            "target": target,
+        }
+
+    numeric, categorical = _feature_types(frame, model_features)
+    prepared = _prepare_feature_frame(frame, numeric, categorical)
+
+    paired_rows: list[dict[str, Any]] = []
+    slice_reports: list[dict[str, Any]] = []
+    test_start_initial = min_train_sessions + embargo_sessions
+
+    for held_out_symbol in symbols:
+        test_start = test_start_initial
+        while test_start < len(sessions):
+            test_sessions = sessions[test_start : test_start + test_sessions_per_fold]
+            if not test_sessions:
+                break
+            train_end = max(0, test_start - embargo_sessions)
+            train_sessions = sessions[:train_end]
+            if len(train_sessions) < min_train_sessions:
+                test_start += test_sessions_per_fold
+                continue
+
+            train = prepared[
+                prepared["_session_key"].isin(train_sessions)
+                & prepared["_symbol_key"].ne(held_out_symbol)
+            ]
+            held_out_test = prepared[
+                prepared["_session_key"].isin(test_sessions)
+                & prepared["_symbol_key"].eq(held_out_symbol)
+            ]
+            if len(train) < min_train_rows or train[target].nunique() < 2:
+                test_start += test_sessions_per_fold
+                continue
+
+            baseline_pipeline = _baseline_pipeline(numeric, categorical)
+            baseline_pipeline.fit(train[model_features], train[target])
+
+            for test_session in test_sessions:
+                test = held_out_test[held_out_test["_session_key"].eq(test_session)]
+                if len(test) < min_test_rows:
+                    continue
+                target_row = test.sort_values("_time_key", na_position="last").iloc[0]
+                weights, weight_info = _continuous_similarity_weights(
+                    train,
+                    target_row,
+                    similarity_columns=usable_similarity_columns,
+                    bandwidth=similarity_bandwidth,
+                    min_weight=minimum_similarity_weight,
+                )
+                if not weight_info.get("active_similarity_columns"):
+                    continue
+
+                similarity_pipeline = _baseline_pipeline(numeric, categorical)
+                similarity_pipeline.fit(
+                    train[model_features],
+                    train[target],
+                    model__sample_weight=weights.to_numpy(),
+                )
+
+                baseline_probability = baseline_pipeline.predict_proba(test[model_features])[:, 1]
+                similarity_probability = similarity_pipeline.predict_proba(test[model_features])[:, 1]
+                actual = test[target].astype(int).tolist()
+                naive_probability = float(train[target].mean())
+                naive = [naive_probability] * len(actual)
+
+                symbol_weight_means = (
+                    pd.DataFrame(
+                        {
+                            "symbol": train["_symbol_key"],
+                            "weight": weights,
+                        }
+                    )
+                    .groupby("symbol", sort=False)["weight"]
+                    .mean()
+                    .sort_values(ascending=False)
+                )
+                top_similar_symbols = [
+                    {
+                        "symbol": str(symbol),
+                        "mean_training_weight": float(weight),
+                    }
+                    for symbol, weight in symbol_weight_means.head(5).items()
+                ]
+
+                baseline_brier = float(brier_score_loss(actual, baseline_probability))
+                similarity_brier = float(brier_score_loss(actual, similarity_probability))
+                naive_brier = float(brier_score_loss(actual, naive))
+                slice_reports.append(
+                    {
+                        "held_out_symbol": held_out_symbol,
+                        "test_session": test_session,
+                        "train_sessions": len(train_sessions),
+                        "train_rows": len(train),
+                        "test_rows": len(test),
+                        "baseline_roc_auc": _safe_auc(actual, baseline_probability.tolist()),
+                        "similarity_roc_auc": _safe_auc(actual, similarity_probability.tolist()),
+                        "baseline_brier_score": baseline_brier,
+                        "similarity_brier_score": similarity_brier,
+                        "naive_brier_score": naive_brier,
+                        "baseline_brier_skill_vs_naive": (
+                            None if naive_brier <= 0 else 1.0 - (baseline_brier / naive_brier)
+                        ),
+                        "similarity_brier_skill_vs_naive": (
+                            None if naive_brier <= 0 else 1.0 - (similarity_brier / naive_brier)
+                        ),
+                        "active_similarity_columns": weight_info.get("active_similarity_columns"),
+                        "top_similar_symbols": top_similar_symbols,
+                    }
+                )
+                for (_, row), base_prob, sim_prob in zip(
+                    test.iterrows(),
+                    baseline_probability,
+                    similarity_probability,
+                ):
+                    paired_rows.append(
+                        {
+                            "held_out_symbol": held_out_symbol,
+                            "session": row.get("session"),
+                            "timestamp": row.get("timestamp"),
+                            "actual": int(row[target]),
+                            "baseline_probability": float(base_prob),
+                            "similarity_probability": float(sim_prob),
+                            "naive_probability": naive_probability,
+                        }
+                    )
+            test_start += test_sessions_per_fold
+
+    if not paired_rows:
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "reason": "No similarity-weighted held-out fold met the minimum requirements.",
+            "symbol_count": len(symbols),
+            "session_count": len(sessions),
+            "target_mode": normalized_target_mode,
+            "target": target,
+        }
+
+    def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
+        actual = [int(row["actual"]) for row in rows]
+        baseline_probability = [float(row["baseline_probability"]) for row in rows]
+        similarity_probability = [float(row["similarity_probability"]) for row in rows]
+        naive_probability = [float(row["naive_probability"]) for row in rows]
+        baseline_brier = float(brier_score_loss(actual, baseline_probability))
+        similarity_brier = float(brier_score_loss(actual, similarity_probability))
+        naive_brier = float(brier_score_loss(actual, naive_probability))
+        baseline_auc = _safe_auc(actual, baseline_probability)
+        similarity_auc = _safe_auc(actual, similarity_probability)
+        return {
+            "oos_rows": len(rows),
+            "positive_rate": float(sum(actual) / len(actual)),
+            "baseline_roc_auc": baseline_auc,
+            "similarity_roc_auc": similarity_auc,
+            "similarity_minus_baseline_auc": (
+                None
+                if baseline_auc is None or similarity_auc is None
+                else similarity_auc - baseline_auc
+            ),
+            "baseline_brier_score": baseline_brier,
+            "similarity_brier_score": similarity_brier,
+            "similarity_minus_baseline_brier": similarity_brier - baseline_brier,
+            "naive_brier_score": naive_brier,
+            "baseline_brier_skill_vs_naive": (
+                None if naive_brier <= 0 else 1.0 - (baseline_brier / naive_brier)
+            ),
+            "similarity_brier_skill_vs_naive": (
+                None if naive_brier <= 0 else 1.0 - (similarity_brier / naive_brier)
+            ),
+        }
+
+    by_symbol: list[dict[str, Any]] = []
+    for symbol in sorted({str(row["held_out_symbol"]) for row in paired_rows}):
+        subset = [row for row in paired_rows if row["held_out_symbol"] == symbol]
+        item = {"symbol": symbol}
+        item.update(summarize(subset))
+        by_symbol.append(item)
+
+    overall = summarize(paired_rows)
+    return {
+        "status": "EVALUATED",
+        "validation_type": "similarity_weighted_leave_one_symbol_out_walk_forward",
+        "model_type": "logistic_regression",
+        "target": target,
+        "target_mode": normalized_target_mode,
+        "target_description": target_description,
+        "target_horizon": int(target_horizon),
+        "profit_target_pct": _number(dataset.get("profit_target_pct")),
+        "stop_loss_pct": _number(dataset.get("stop_loss_pct")),
+        "session_mode": dataset.get("session_mode"),
+        "symbol_count": len(symbols),
+        "held_out_symbols": symbols,
+        "session_count": len(sessions),
+        "feature_count": len(model_features),
+        "similarity_columns": usable_similarity_columns,
+        "similarity_bandwidth": float(similarity_bandwidth),
+        "minimum_similarity_weight": float(minimum_similarity_weight),
+        "paired_oos_rows": overall["oos_rows"],
+        "baseline_roc_auc": overall["baseline_roc_auc"],
+        "similarity_roc_auc": overall["similarity_roc_auc"],
+        "similarity_minus_baseline_auc": overall["similarity_minus_baseline_auc"],
+        "baseline_brier_score": overall["baseline_brier_score"],
+        "similarity_brier_score": overall["similarity_brier_score"],
+        "similarity_minus_baseline_brier": overall["similarity_minus_baseline_brier"],
+        "naive_brier_score": overall["naive_brier_score"],
+        "baseline_brier_skill_vs_naive": overall["baseline_brier_skill_vs_naive"],
+        "similarity_brier_skill_vs_naive": overall["similarity_brier_skill_vs_naive"],
+        "by_symbol": by_symbol,
+        "slices": slice_reports,
+        "predictions": paired_rows,
+        "split_policy": {
+            "type": "held_out_symbol_plus_time_forward_continuous_similarity_weighting",
+            "held_out_symbol_never_in_training": True,
+            "all_eligible_training_rows_retained": True,
+            "hard_archetype_not_used_for_training_selection": True,
+            "hard_archetype_removed_from_model_inputs": True,
+            "similarity_profile_uses_completed_prior_sessions": True,
+            "min_train_sessions": min_train_sessions,
+            "test_sessions_per_fold": test_sessions_per_fold,
+            "embargo_sessions": embargo_sessions,
+            "min_train_rows": min_train_rows,
+            "min_test_rows_per_session": min_test_rows,
+        },
+        "note": (
+            "This validation replaces hard archetype gating with smooth behavioral similarity weights. "
+            "No training stock is discarded solely for belonging to a different category; more similar "
+            "historical rows influence the logistic model more strongly. Similarity uses lagged numeric "
+            "context from completed prior sessions only, and each held-out stock remains completely absent "
+            "from its training data."
+        ),
+    }
+
 
 def archetype_transfer_walk_forward_logistic_baseline(
     dataset: dict[str, Any],
