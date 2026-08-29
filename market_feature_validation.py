@@ -265,6 +265,16 @@ def _summarize_events(
     return summary
 
 
+def summarize_detector_events(
+    events: list[dict[str, Any]],
+    *,
+    horizons: tuple[int, ...] = DEFAULT_HORIZONS,
+) -> dict[str, Any]:
+    """Public aggregation helper for detector scorecards."""
+    clean_horizons = tuple(sorted({max(1, int(value)) for value in horizons}))
+    return _summarize_events(events, horizons=clean_horizons)
+
+
 def run_detector_event_study(
     rows: list[dict[str, Any]],
     *,
