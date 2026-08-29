@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from copy import deepcopy
 import html
 import inspect
 import os
@@ -370,26 +371,66 @@ def intelligence_store() -> StrategyStore:
     return build_intelligence_store()
 
 
-def load_library() -> dict[str, Any]:
+LIBRARY_CLOUD_REFRESH_SECONDS = 20.0
+_LIBRARY_RENDER_CACHE_KEY = "_til_library_render_cache"
+_LIBRARY_LAST_CLOUD_REFRESH_KEY = "_til_library_last_cloud_refresh_monotonic"
+
+
+def load_library(*, force_cloud_refresh: bool = False) -> dict[str, Any]:
+    """Load the unified library without paying full cloud/rebuild cost on every rerun.
+
+    Streamlit reruns the entire script for ordinary UI interactions. The durable
+    GitHub library can be large, so downloading it and rebuilding canonical
+    strategy families on every click makes navigation unnecessarily slow.
+
+    Normal reruns reuse a prepared session snapshot when the local saved version
+    has not changed. Cloud reconciliation is refreshed at a short interval, and
+    callers that are about to coordinate cloud work can force a fresh read.
+    """
     store = intelligence_store()
-    try:
-        data = store.load_latest()
-    except AppError as exc:
-        # Streamlit Cloud can retain a local working copy while the durable
-        # private GitHub library is updated by another app run/worker. The
-        # store correctly refuses to guess which divergent copy should win.
-        # For the unified Trading Intelligence workspace, recover by preserving
-        # the current local file in StrategyStore's automatic backups, restoring
-        # the durable private GitHub copy, and continuing instead of blocking
-        # the entire UI.
-        conflict_marker = (
-            "Both the local Trading Lab library and the private GitHub library changed "
-            "since their last shared version."
-        )
-        if conflict_marker not in str(exc):
-            raise
-        data = store.restore_cloud_backup()
-        st.session_state["_til_cloud_conflict_recovered"] = True
+    now = time.monotonic()
+    cached = st.session_state.get(_LIBRARY_RENDER_CACHE_KEY)
+    last_cloud_refresh = float(
+        st.session_state.get(_LIBRARY_LAST_CLOUD_REFRESH_KEY) or 0.0
+    )
+    cloud_refresh_due = (
+        force_cloud_refresh
+        or not isinstance(cached, dict)
+        or now - last_cloud_refresh >= LIBRARY_CLOUD_REFRESH_SECONDS
+    )
+
+    if not cloud_refresh_due and isinstance(cached, dict):
+        local = store.load()
+        cached_updated_at = str(cached.get("updated_at") or "")
+        local_updated_at = str(local.get("updated_at") or "")
+        cached_data = cached.get("data")
+        if (
+            cached_updated_at == local_updated_at
+            and isinstance(cached_data, dict)
+        ):
+            return deepcopy(cached_data)
+        data = local
+    else:
+        try:
+            data = store.load_latest()
+            st.session_state[_LIBRARY_LAST_CLOUD_REFRESH_KEY] = now
+        except AppError as exc:
+            # Streamlit Cloud can retain a local working copy while the durable
+            # private GitHub library is updated by another app run/worker. The
+            # store correctly refuses to guess which divergent copy should win.
+            # For the unified Trading Intelligence workspace, recover by preserving
+            # the current local file in StrategyStore's automatic backups, restoring
+            # the durable private GitHub copy, and continuing instead of blocking
+            # the entire UI.
+            conflict_marker = (
+                "Both the local Trading Lab library and the private GitHub library changed "
+                "since their last shared version."
+            )
+            if conflict_marker not in str(exc):
+                raise
+            data = store.restore_cloud_backup()
+            st.session_state["_til_cloud_conflict_recovered"] = True
+            st.session_state[_LIBRARY_LAST_CLOUD_REFRESH_KEY] = now
 
     data.setdefault("knowledge_sources", [])
     data.setdefault("strategies", [])
@@ -463,11 +504,17 @@ def load_library() -> dict[str, Any]:
 
     if legacy_changed or sources_changed or canonical_changed:
         try:
-            store.save(data)
+            data = store.save(data)
         except AppError:
-            # Keep the repaired/consolidated library visible for this session. Storage health
-            # surfaces any cloud-write problem and the migration retries on the next load.
-            pass
+            # save() writes the repaired local copy before attempting cloud backup.
+            # Keep that local version/cache coherent even if the permanent backup
+            # needs to recover on a later synchronization.
+            data = store.load()
+
+    st.session_state[_LIBRARY_RENDER_CACHE_KEY] = {
+        "updated_at": str(data.get("updated_at") or ""),
+        "data": deepcopy(data),
+    }
     return data
 
 
@@ -1293,7 +1340,7 @@ if module == "Stock Strategy Finder":
     def render_global_cloud_finder_activity() -> None:
         """Always show active cloud Finder work, regardless of current dropdowns."""
         try:
-            fresh_library = load_library()
+            fresh_library = load_library(force_cloud_refresh=True)
         except AppError as exc:
             st.error(f"Cloud research status could not refresh: {exc}")
             return
@@ -1821,7 +1868,7 @@ if module == "Stock Strategy Finder":
         }
         try:
             queued_library, queued_job = enqueue_research_job(
-                load_library(),
+                load_library(force_cloud_refresh=True),
                 "stock_finder",
                 queue_payload,
                 priority=90 if finder_profile.name == "Very Deep" else 75,
@@ -1838,7 +1885,7 @@ if module == "Stock Strategy Finder":
                 "trading_research_orchestrator"
             )
             queued_library, queued_job = _research_orchestrator.enqueue_research_job(
-                load_library(),
+                load_library(force_cloud_refresh=True),
                 "stock_finder",
                 queue_payload,
                 priority=90 if finder_profile.name == "Very Deep" else 75,
@@ -4299,7 +4346,7 @@ elif module == "AI Research Autopilot":
             width="stretch",
             key="til_seed_continuous_research",
         ):
-            queued_library, added_jobs = seed_continuous_research_cycle(load_library())
+            queued_library, added_jobs = seed_continuous_research_cycle(load_library(force_cloud_refresh=True))
             if added_jobs:
                 intelligence_store().save(queued_library)
                 st.success(
@@ -4311,7 +4358,8 @@ elif module == "AI Research Autopilot":
                 st.info("Today's continuous research cycle is already queued.")
     with queue_refresh_col:
         st.caption(
-            "The scheduled cloud worker checks the durable queue independently of this browser session."
+            "Runs automatically once per UTC day. The hourly cloud worker keeps processing the durable queue. "
+            "Use the button only when you want to seed today's cycle immediately."
         )
 
     recent_queue = [
