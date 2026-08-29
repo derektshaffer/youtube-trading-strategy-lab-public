@@ -34,6 +34,33 @@ def _symbol_batches(
 
 
 
+def merge_momentum_candidate_universe(
+    gainers: list[str],
+    most_active: list[str],
+    *,
+    limit: int,
+) -> list[str]:
+    """Interleave ranked gainers and active names without duplicates."""
+    first = parse_symbols(gainers)
+    second = parse_symbols(most_active)
+    cap = max(1, min(MAX_LIVE_SCAN_SYMBOLS, int(limit)))
+    result: list[str] = []
+    seen: set[str] = set()
+    longest = max(len(first), len(second))
+    for index in range(longest):
+        for source in (first, second):
+            if index >= len(source):
+                continue
+            symbol = source[index]
+            if symbol in seen:
+                continue
+            seen.add(symbol)
+            result.append(symbol)
+            if len(result) >= cap:
+                return result
+    return result
+
+
 def _needs_chart_data(strategy: dict[str, Any]) -> bool:
     rules = normalize_machine_rules(strategy.get("machine_rules"))
     return any(
