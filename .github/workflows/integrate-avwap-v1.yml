@@ -1,0 +1,49 @@
+name: Integrate Causal AVWAP v1
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/scripts/integrate_avwap_v1.py"
+      - ".github/workflows/integrate-avwap-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Apply AVWAP integration
+        run: python .github/scripts/integrate_avwap_v1.py
+      - name: Compile AVWAP integration
+        run: |
+          python -m py_compile anchored_vwap_engine.py
+          python -m py_compile youtube_strategy_engine.py
+          python -m py_compile trading_intelligence_core.py
+          python -m py_compile live_strategy_runner_page.py
+      - name: Run focused AVWAP tests
+        run: python -m unittest test_anchored_vwap_engine.py test_avwap_integration.py -q
+      - name: Commit integrated engine
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No integration changes were necessary."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add youtube_strategy_engine.py trading_intelligence_core.py live_strategy_runner_page.py .github/workflows/validate-trading-intelligence.yml
+          git commit -m "Integrate causal AVWAP research engine"
+          git push origin HEAD:main
