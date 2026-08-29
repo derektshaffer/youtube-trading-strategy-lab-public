@@ -1834,6 +1834,93 @@ class DynamicExitBacktestTests(unittest.TestCase):
         self.assertTrue(all(item.get("reward_risk") is None for item in variants))
         self.assertTrue(any(item.get("trailing_stop_pct") != 4.0 for item in variants))
 
+    def test_scale_out_stages_normalize_sort_and_preserve_remainder(self):
+        rules = engine.normalize_machine_rules(
+            {
+                "scale_out_stages": [
+                    {"fraction_pct": 25, "at_r": 2},
+                    {"fraction_pct": 25, "at_r": 1},
+                    {"fraction_pct": 60, "at_r": 3},
+                    {"fraction_pct": 10, "at_r": -1},
+                ],
+                "move_stop_to_breakeven_after_scale_out": True,
+                "trail_below_vwap": True,
+            }
+        )
+        self.assertEqual(
+            rules["scale_out_stages"],
+            [
+                {"fraction_pct": 25.0, "at_r": 1.0},
+                {"fraction_pct": 25.0, "at_r": 2.0},
+            ],
+        )
+        self.assertTrue(rules["move_stop_to_breakeven_after_scale_out"])
+        self.assertTrue(rules["trail_below_vwap"])
+
+    def test_multi_stage_scale_out_executes_and_moves_remainder_to_breakeven(self):
+        rows = [
+            bar(18, 0, 10.0, 10.1, 9.9, 10.0),
+            bar(18, 1, 10.0, 12.2, 9.5, 12.0),
+            bar(18, 2, 10.2, 10.3, 9.8, 10.0),
+        ]
+        strategy = simple_strategy(
+            stop_loss_pct=10,
+            reward_risk=None,
+            scale_out_stages=[
+                {"fraction_pct": 25, "at_r": 1},
+                {"fraction_pct": 25, "at_r": 2},
+            ],
+            move_stop_to_breakeven_after_scale_out=True,
+        )
+        result = engine.run_backtest(
+            rows,
+            strategy,
+            "TEST",
+            engine.BacktestSettings(
+                spread_bps=0,
+                slippage_bps=0,
+                max_concurrent_positions=1,
+                allow_extended_hours=False,
+            ),
+        )
+        self.assertEqual(result["metrics"]["trade_count"], 1)
+        trade = result["trades"][0]
+        self.assertEqual(trade["reason"], "Stop loss")
+        self.assertEqual(len(trade["partial_exits"]), 2)
+        self.assertIn("stage 1", trade["partial_exits"][0]["reason"].lower())
+        self.assertIn("stage 2", trade["partial_exits"][1]["reason"].lower())
+        self.assertGreater(trade["scaled_out_quantity"], 0)
+        self.assertGreater(trade["pnl"], 0)
+        self.assertGreater(trade["max_favorable_excursion_pct"], 0)
+        self.assertGreaterEqual(trade["max_adverse_excursion_pct"], 0)
+        self.assertEqual(trade["management_event_count"], 2)
+        attribution = result["exit_attribution"]
+        self.assertIn("Stop loss", attribution["final_exit_reasons"])
+        self.assertEqual(len(attribution["partial_exit_reasons"]), 2)
+        self.assertGreater(attribution["partial_exit_net_pnl"], 0)
+
+    def test_legacy_single_scale_out_remains_supported(self):
+        rules = engine.normalize_machine_rules(
+            {"scale_out_fraction_pct": 50, "scale_out_at_r": 1}
+        )
+        self.assertEqual(
+            engine.configured_scale_out_stages(rules),
+            [{"fraction_pct": 50.0, "at_r": 1.0}],
+        )
+
+    def test_optimizer_preserves_no_fixed_target_for_staged_exit_policy(self):
+        strategy = simple_strategy(
+            reward_risk=None,
+            scale_out_stages=[
+                {"fraction_pct": 25, "at_r": 1},
+                {"fraction_pct": 25, "at_r": 2},
+            ],
+            trail_below_vwap=True,
+        )
+        variants = engine.generate_strategy_variants(strategy, maximum=40)
+        self.assertGreater(len(variants), 1)
+        self.assertTrue(all(item.get("reward_risk") is None for item in variants))
+        self.assertTrue(all(item.get("scale_out_stages") for item in variants))
 
 
 
