@@ -13,6 +13,7 @@ from predictive_ml_pipeline import (
     load_training_dataset,
     save_training_dataset,
     similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline,
+    ticker_specific_walk_forward_logistic_baseline,
     walk_forward_logistic_baseline,
 )
 
@@ -709,3 +710,76 @@ def test_cross_stock_dataset_observation_stride_reduces_rows():
     assert sampled["observation_stride_bars"] == 5
     assert sampled["row_count"] < full["row_count"]
     assert sampled["row_count"] <= (full["row_count"] + 4) // 5 + 2
+
+
+def _opposite_ticker_relationship_dataset(session_count: int = 12, rows_per_session: int = 20) -> dict:
+    records = []
+    for symbol in ("AAA", "BBB"):
+        for session_index in range(session_count):
+            day = session_index + 1
+            session = f"2026-08-{day:02d}"
+            for row_index in range(rows_per_session):
+                signal = float(row_index % 2)
+                target = bool(signal) if symbol == "AAA" else not bool(signal)
+                records.append(
+                    {
+                        "symbol": symbol,
+                        "session": session,
+                        "timestamp": f"{session}T14:{row_index:02d}:00Z",
+                        "feature__signal": signal,
+                        "label__target_before_stop_1bar": target,
+                    }
+                )
+    return {
+        "feature_columns": ["feature__signal"],
+        "label_columns": ["label__target_before_stop_1bar"],
+        "profit_target_pct": 1.0,
+        "stop_loss_pct": 0.75,
+        "records": records,
+    }
+
+
+def test_ticker_specific_walk_forward_learns_each_stocks_own_history():
+    dataset = _opposite_ticker_relationship_dataset()
+    own = ticker_specific_walk_forward_logistic_baseline(
+        dataset,
+        target_horizon=1,
+        target_mode="target_before_stop",
+        min_train_sessions=4,
+        test_sessions_per_fold=2,
+        embargo_sessions=1,
+        min_train_rows=50,
+    )
+    held_out = leave_one_symbol_out_walk_forward_logistic_baseline(
+        dataset,
+        target_horizon=1,
+        target_mode="target_before_stop",
+        min_train_sessions=4,
+        test_sessions_per_fold=2,
+        embargo_sessions=1,
+        min_train_rows=50,
+        min_test_rows=10,
+    )
+    assert own["status"] == "EVALUATED"
+    assert own["split_policy"]["training_uses_same_symbol_only"] is True
+    assert own["split_policy"]["future_sessions_only"] is True
+    assert own["roc_auc"] is not None and own["roc_auc"] > 0.95
+    assert own["macro_roc_auc"] is not None and own["macro_roc_auc"] > 0.95
+    assert all(item["roc_auc"] > 0.95 for item in own["by_symbol"] if item["status"] == "EVALUATED")
+    assert held_out["status"] == "EVALUATED"
+    assert held_out["roc_auc"] is not None and held_out["roc_auc"] < 0.05
+    assert own["roc_auc"] - held_out["roc_auc"] > 0.9
+
+
+def test_ticker_specific_walk_forward_refuses_too_little_same_stock_history():
+    dataset = _opposite_ticker_relationship_dataset(session_count=4, rows_per_session=10)
+    report = ticker_specific_walk_forward_logistic_baseline(
+        dataset,
+        target_horizon=1,
+        target_mode="target_before_stop",
+        min_train_sessions=4,
+        test_sessions_per_fold=1,
+        embargo_sessions=1,
+        min_train_rows=20,
+    )
+    assert report["status"] == "INSUFFICIENT_DATA"
