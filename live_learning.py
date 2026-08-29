@@ -154,6 +154,12 @@ def build_shadow_observation(
         best_status = first.get("status")
         best_score = first.get("score")
 
+    ml_prediction = (
+        result.get("ml_prediction")
+        if isinstance(result.get("ml_prediction"), dict)
+        else {}
+    )
+
     return {
         "id": _observation_id(symbol, observed, bucket_minutes),
         "symbol": symbol,
@@ -191,6 +197,12 @@ def build_shadow_observation(
             "robustness_score": _number(result.get("robustness_score")),
             "has_catalyst": result.get("has_catalyst"),
             "news_count": int(result.get("news_count") or 0),
+            "ml_probability": _number(ml_prediction.get("probability")),
+            "ml_raw_probability": _number(ml_prediction.get("raw_probability")),
+            "ml_model_id": ml_prediction.get("model_id"),
+            "ml_target": ml_prediction.get("target"),
+            "ml_target_description": ml_prediction.get("target_description"),
+            "ml_feature_coverage": _number(ml_prediction.get("feature_coverage")),
         },
         "outcomes": {},
         "outcome_status": "PENDING",
