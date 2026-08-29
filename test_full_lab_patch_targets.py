@@ -86,6 +86,16 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, source)
 
+    def test_strategy_integrity_audit_is_available_in_advanced_ui(self):
+        source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        core = (ROOT / "trading_intelligence_core.py").read_text(encoding="utf-8")
+        finder = (ROOT / "stock_strategy_finder.py").read_text(encoding="utf-8")
+        self.assertIn("Strategy Integrity Audit", source)
+        self.assertIn("Requirement-by-requirement mapping", source)
+        self.assertIn("strategy_integrity_report", source)
+        self.assertIn("def strategy_integrity_report", core)
+        self.assertIn("strategy fidelity audit failed", finder)
+
     def test_continuous_research_button_is_clearly_manual(self):
         source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
         self.assertIn("Run today's research cycle now", source)
