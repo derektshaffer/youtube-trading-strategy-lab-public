@@ -1053,13 +1053,11 @@ def inject_research_glass_theme() -> None:
         }
 
         /* ---------- Concept-match layout overrides ---------- */
-        /* Keep Streamlit's header shell just tall enough for the sidebar
-           reopen control. Hiding the entire header traps users when a browser
-           remembers the sidebar as collapsed. Hide the unrelated Cloud chrome
-           instead of removing the header itself. */
+        /* The app uses Streamlit's native locked sidebar state on desktop, so
+           the Cloud header can stay hidden without trapping navigation. */
         [data-testid="stHeader"] {
-            height: 2.75rem !important;
-            min-height: 2.75rem !important;
+            height: 0 !important;
+            min-height: 0 !important;
             background: transparent !important;
             border: 0 !important;
             box-shadow: none !important;
@@ -1072,29 +1070,8 @@ def inject_research_glass_theme() -> None:
             visibility: hidden !important;
         }
         .stApp > header {
-            height: 2.75rem !important;
-            min-height: 2.75rem !important;
-        }
-
-        /* Streamlit has used more than one test id for the collapsed-sidebar
-           control across releases. Keep every known variant visible and above
-           the custom product shell. */
-        [data-testid="stSidebarCollapsedControl"],
-        [data-testid="collapsedControl"] {
-            display: flex !important;
-            visibility: visible !important;
-            opacity: 1 !important;
-            position: fixed !important;
-            top: .55rem !important;
-            left: .55rem !important;
-            z-index: 1000000 !important;
-            pointer-events: auto !important;
-        }
-
-        /* Once navigation is open, do not make it easy to accidentally hide
-           the app's primary workflow rail again. */
-        [data-testid="stSidebarCollapseButton"] {
-            display: none !important;
+            height: 0 !important;
+            min-height: 0 !important;
         }
 
         /* Match the mockup proportions more closely. */
