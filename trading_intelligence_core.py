@@ -1561,6 +1561,57 @@ def strategy_integrity_report(strategy: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+
+PAPER_EXECUTION_UNSUPPORTED_DYNAMIC_EXITS = {
+    "trailing_stop_pct": "Trailing-stop management",
+    "move_stop_to_breakeven_at_r": "Move-to-breakeven management",
+    "exit_below_vwap": "VWAP-loss exit",
+    "exit_below_fast_ema": "Fast-EMA-loss exit",
+}
+
+
+def paper_execution_fidelity(strategy: dict[str, Any]) -> dict[str, Any]:
+    """Check whether Paper Auto can execute the same management as the research model.
+
+    Paper Auto currently submits an Alpaca bracket order with one stop and one fixed
+    target. Dynamic exits can be backtested now, but must remain deployment-blocked
+    until the live runner actively manages those positions.
+    """
+    effective = effective_strategy_for_live(strategy)
+    rules = normalize_machine_rules(effective.get("machine_rules"))
+    unsupported = [
+        label
+        for rule_name, label in PAPER_EXECUTION_UNSUPPORTED_DYNAMIC_EXITS.items()
+        if rules.get(rule_name) is not None and rules.get(rule_name) is not False
+    ]
+    if unsupported:
+        return {
+            "status": "blocked",
+            "label": "PAPER EXECUTION DOES NOT MATCH BACKTEST",
+            "unsupported_management": unsupported,
+            "reason": (
+                "The historical model uses dynamic trade management that the current Paper Auto "
+                "runner cannot reproduce with its fixed Alpaca bracket order."
+            ),
+        }
+    if rules.get("reward_risk") is None:
+        return {
+            "status": "blocked",
+            "label": "NO FAITHFUL PAPER TARGET",
+            "unsupported_management": [],
+            "reason": (
+                "The strategy has no fixed reward/risk target and Paper Auto currently requires "
+                "one fixed target for its bracket order."
+            ),
+        }
+    return {
+        "status": "ready",
+        "label": "PAPER EXECUTION COMPATIBLE",
+        "unsupported_management": [],
+        "reason": "Current stop/target management can be represented by the paper bracket order.",
+    }
+
+
 def research_readiness(strategy: dict[str, Any]) -> dict[str, Any]:
     """Describe whether a strategy is mechanically testable without implying that it has edge."""
     effective = effective_strategy_for_research(strategy)
