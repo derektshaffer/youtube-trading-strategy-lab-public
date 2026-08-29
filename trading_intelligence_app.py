@@ -105,6 +105,7 @@ from trading_intelligence_core import (
     prepare_strategies_with_ai,
     reconcile_knowledge_sources,
     research_readiness,
+    strategy_integrity_report,
     upgrade_native_strategy_rules,
 )
 from trading_universe_research import cross_stock_generalization
@@ -885,6 +886,7 @@ WORKSPACE_SECTIONS = [
     "Knowledge Sources",
     "AI Research Autopilot",
     "Strategy Library",
+    "Strategy Integrity",
     "Strategy DNA",
     "Make Strategy Testable",
     "Strategy Lab",
@@ -903,6 +905,7 @@ WORKSPACE_DISPLAY_LABELS = {
     "Knowledge Sources": "2. Knowledge Sources",
     "AI Research Autopilot": "3. AI Research Autopilot",
     "Strategy Library": "4. Strategy Library",
+    "Strategy Integrity": "4A. Strategy Integrity Audit",
     "Strategy DNA": "5. Strategy Blueprint",
     "Make Strategy Testable": "6. Rule Builder",
     "Strategy Lab": "7. Strategy Lab",
@@ -949,6 +952,12 @@ WORKSPACE_PAGE_META = {
         "group": "Strategy Development",
         "title": "Strategy Library",
         "subtitle": "Review the organized strategy families that AI has extracted and consolidated from your sources.",
+    },
+    "Strategy Integrity": {
+        "step": "04A",
+        "group": "Strategy Development",
+        "title": "Strategy Integrity Audit",
+        "subtitle": "Verify that each source strategy is faithfully represented by the machine rules and backtester before trusting optimization results.",
     },
     "Strategy DNA": {
         "step": "05",
@@ -1017,7 +1026,7 @@ WORKSPACE_NAV_GROUPS = [
     ("RESEARCH", ["Overview", "Knowledge Sources", "AI Research Autopilot"]),
     (
         "STRATEGY DEVELOPMENT",
-        ["Strategy Library", "Strategy DNA", "Make Strategy Testable", "Strategy Lab", "Validation"],
+        ["Strategy Library", "Strategy Integrity", "Strategy DNA", "Make Strategy Testable", "Strategy Lab", "Validation"],
     ),
     (
         "MARKET RESEARCH",
@@ -1033,6 +1042,7 @@ WORKSPACE_NAV_ICONS = {
     "Knowledge Sources": "◇",
     "AI Research Autopilot": "✦",
     "Strategy Library": "▤",
+    "Strategy Integrity": "⚖",
     "Strategy DNA": "◇",
     "Make Strategy Testable": "≣",
     "Strategy Lab": "⬡",
@@ -1230,6 +1240,7 @@ with st.sidebar:
 
     advanced_sections = [
         "Strategy Library",
+        "Strategy Integrity",
         "Strategy DNA",
         "Make Strategy Testable",
         "Strategy Lab",
@@ -3656,6 +3667,168 @@ elif module == "Strategy Library":
                     st.session_state["til_selected_strategy_id"] = str(family.get("id") or "")
                     st.session_state["til_navigate_to"] = "Make Strategy Testable"
                     st.rerun()
+
+
+elif module == "Strategy Integrity":
+    st.caption(
+        "This audit asks a different question from validation: **is the backtester actually testing the strategy the source described?** "
+        "A profitable backtest is not meaningful if important entry, universe, execution, risk, or exit logic was silently dropped."
+    )
+
+    integrity_reports: dict[str, dict[str, Any]] = {}
+    integrity_rows: list[dict[str, Any]] = []
+    for strategy in managed_strategies:
+        report = strategy_integrity_report(strategy)
+        strategy_id = str(strategy.get("id") or strategy.get("name") or "")
+        integrity_reports[strategy_id] = report
+        dimensions = report.get("dimension_summary") or {}
+        integrity_rows.append(
+            {
+                "Strategy family": strategy.get("name") or "Unnamed strategy",
+                "Fidelity": report.get("label"),
+                "Coverage %": safe_float(report.get("coverage_pct"), 0.0) or 0.0,
+                "Modeled requirements": int(report.get("modeled_count") or 0),
+                "Requirements found": int(report.get("requirement_count") or 0),
+                "Critical gaps": int(report.get("critical_missing_count") or 0),
+                "Exit gaps": int((dimensions.get("exit") or {}).get("missing") or 0),
+                "Universe gaps": int((dimensions.get("universe") or {}).get("missing") or 0),
+                "Execution gaps": int((dimensions.get("execution") or {}).get("missing") or 0),
+                "Validation": strategy.get("validation_status") or "unvalidated",
+            }
+        )
+
+    if not integrity_rows:
+        st.info("No strategy families are available to audit yet.")
+    else:
+        faithful = sum(1 for row in integrity_rows if row["Fidelity"] == "FULLY MODELED FOR CURRENT REQUIREMENTS")
+        partial = sum(1 for row in integrity_rows if row["Fidelity"] == "PARTIALLY MODELED")
+        blocked = sum(1 for row in integrity_rows if row["Fidelity"] == "IMPORTANT LOGIC NOT MODELED")
+        average_coverage = sum(float(row["Coverage %"]) for row in integrity_rows) / max(1, len(integrity_rows))
+
+        audit_cols = st.columns(4)
+        audit_cols[0].metric("Fully modeled", faithful)
+        audit_cols[1].metric("Partially modeled", partial)
+        audit_cols[2].metric("Important gaps", blocked)
+        audit_cols[3].metric("Average fidelity", f"{average_coverage:.1f}%")
+
+        if blocked:
+            st.error(
+                f"{blocked} strategy {'family has' if blocked == 1 else 'families have'} important source logic "
+                "the deterministic backtester cannot currently reproduce. Finder searches now exclude those "
+                "families instead of testing a misleading simplified imitation."
+            )
+        elif partial:
+            st.warning(
+                "Some strategies are only partially represented. Review the gaps before treating historical "
+                "results as evidence about the original source strategy."
+            )
+        else:
+            st.success("The currently detected defining requirements are represented by the backtester.")
+
+        audit_frame = pd.DataFrame(integrity_rows).sort_values(
+            by=["Critical gaps", "Coverage %"],
+            ascending=[False, True],
+        )
+        st.dataframe(audit_frame, width="stretch", hide_index=True)
+
+        strategy_options = {
+            f"{row['Strategy family']} · {row['Fidelity']} · {row['Coverage %']:.0f}%": row
+            for row in integrity_rows
+        }
+        selected_label = st.selectbox(
+            "Inspect strategy fidelity",
+            list(strategy_options),
+            key="til_integrity_strategy",
+        )
+        selected_row = strategy_options[selected_label]
+        selected_strategy = next(
+            (
+                item
+                for item in managed_strategies
+                if str(item.get("name") or "Unnamed strategy") == str(selected_row["Strategy family"])
+            ),
+            managed_strategies[0],
+        )
+        selected_id = str(selected_strategy.get("id") or selected_strategy.get("name") or "")
+        report = integrity_reports.get(selected_id) or strategy_integrity_report(selected_strategy)
+
+        st.markdown(f"### {selected_strategy.get('name') or 'Unnamed strategy'}")
+        fidelity_cols = st.columns(4)
+        fidelity_cols[0].metric("Fidelity", report.get("label"))
+        fidelity_cols[1].metric("Coverage", f"{safe_float(report.get('coverage_pct'), 0.0):.1f}%")
+        fidelity_cols[2].metric("Requirements modeled", f"{int(report.get('modeled_count') or 0)}/{int(report.get('requirement_count') or 0)}")
+        fidelity_cols[3].metric("Critical gaps", int(report.get("critical_missing_count") or 0))
+
+        source_ids = {
+            str(value)
+            for value in selected_strategy.get("source_strategy_ids") or []
+            if str(value).strip()
+        }
+        contributing = [
+            item for item in source_strategies
+            if str(item.get("id") or "") in source_ids
+        ]
+        if contributing:
+            with st.expander(f"Source strategies consolidated into this family · {len(contributing)}", expanded=False):
+                for item in contributing:
+                    st.write(
+                        f"**{item.get('name') or 'Unnamed'}** · "
+                        f"{item.get('source_title') or item.get('source_type') or 'Unknown source'}"
+                    )
+
+        source_col, machine_col = st.columns(2)
+        with source_col:
+            st.markdown("#### Source-described behavior")
+            if selected_strategy.get("entry_conditions"):
+                st.write("**Entry**")
+                for value in selected_strategy.get("entry_conditions") or []:
+                    st.write("• " + str(value))
+            if selected_strategy.get("risk_rules"):
+                st.write("**Risk**")
+                for value in selected_strategy.get("risk_rules") or []:
+                    st.write("• " + str(value))
+            if selected_strategy.get("exit_conditions"):
+                st.write("**Exit / trade management**")
+                for value in selected_strategy.get("exit_conditions") or []:
+                    st.write("• " + str(value))
+        with machine_col:
+            st.markdown("#### What the backtester executes")
+            effective_rules = {
+                key: value
+                for key, value in normalize_machine_rules(
+                    effective_strategy_for_research(selected_strategy).get("machine_rules")
+                ).items()
+                if value is not None
+            }
+            if effective_rules:
+                st.json(effective_rules, expanded=False)
+            else:
+                st.warning("No executable machine rules are currently available.")
+
+        requirements = list(report.get("requirements") or [])
+        if requirements:
+            st.markdown("#### Requirement-by-requirement mapping")
+            requirement_rows = []
+            for item in requirements:
+                requirement_rows.append(
+                    {
+                        "Area": str(item.get("dimension") or "entry").replace("_", " ").title(),
+                        "Source requirement": item.get("label"),
+                        "Modeled?": "YES" if item.get("modeled") else "NO",
+                        "Machine rule(s)": ", ".join(str(value) for value in item.get("rule_keys") or []) or "No supported rule",
+                        "Why missing / limitation": item.get("limitation") or "",
+                    }
+                )
+            st.dataframe(pd.DataFrame(requirement_rows), width="stretch", hide_index=True)
+
+        missing = list(report.get("critical_missing_requirements") or [])
+        if missing:
+            st.error(
+                "**Do not interpret optimization results for this family as a faithful test of the original strategy yet.** "
+                "Important missing components: " + "; ".join(str(item) for item in missing)
+            )
+        else:
+            st.info(str(report.get("note") or ""))
 
 
 elif module == "Strategy DNA":
