@@ -307,6 +307,342 @@ def _consolidation_expansion_features(
     )
 
 
+def _vwap_retest_features(frame: pd.DataFrame) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Describe whether a recent VWAP reclaim survived a causal retest."""
+    if len(frame) < 4 or "vwap" not in frame:
+        return (
+            {
+                "vwap_retest_recent": None,
+                "vwap_retest_held": None,
+                "vwap_retest_failed": None,
+                "vwap_retest_distance_atr": None,
+            },
+            {},
+        )
+
+    above = frame["close"] > frame["vwap"]
+    reclaim_indices = [
+        int(frame.index[i])
+        for i in range(1, len(frame))
+        if not bool(above.iloc[i - 1]) and bool(above.iloc[i])
+    ]
+    if not reclaim_indices:
+        return (
+            {
+                "vwap_retest_recent": False,
+                "vwap_retest_held": False,
+                "vwap_retest_failed": False,
+                "vwap_retest_distance_atr": None,
+            },
+            {"reclaim_index": None},
+        )
+
+    reclaim_index = reclaim_indices[-1]
+    post = frame.iloc[reclaim_index + 1 :]
+    if post.empty:
+        return (
+            {
+                "vwap_retest_recent": False,
+                "vwap_retest_held": False,
+                "vwap_retest_failed": False,
+                "vwap_retest_distance_atr": None,
+            },
+            {"reclaim_index": reclaim_index},
+        )
+
+    atr = _number(frame.at[reclaim_index, "atr"]) or _number(frame["atr"].iloc[-1])
+    last_close = float(frame["close"].iloc[-1])
+    tolerance = max((atr or 0.0) * 0.20, last_close * 0.0005)
+    retest_indices: list[int] = []
+    for idx, row in post.iterrows():
+        row_vwap = _number(row.get("vwap"))
+        if row_vwap is not None and float(row["low"]) <= row_vwap + tolerance:
+            retest_indices.append(int(idx))
+
+    if not retest_indices:
+        return (
+            {
+                "vwap_retest_recent": False,
+                "vwap_retest_held": False,
+                "vwap_retest_failed": False,
+                "vwap_retest_distance_atr": None,
+            },
+            {
+                "reclaim_index": reclaim_index,
+                "tolerance": tolerance,
+                "retest_index": None,
+            },
+        )
+
+    retest_index = retest_indices[-1]
+    retest_row = frame.loc[retest_index]
+    retest_vwap = _number(retest_row.get("vwap"))
+    distance_atr = None
+    if retest_vwap is not None and atr is not None and atr > 0:
+        distance_atr = (float(retest_row["low"]) - retest_vwap) / atr
+
+    tail = frame.loc[retest_index:]
+    latest_above = bool(float(frame["close"].iloc[-1]) >= float(frame["vwap"].iloc[-1]))
+    hold_tail = tail.tail(min(2, len(tail)))
+    held = latest_above and bool((hold_tail["close"] >= hold_tail["vwap"]).all())
+    failed = not latest_above
+    return (
+        {
+            "vwap_retest_recent": True,
+            "vwap_retest_held": held,
+            "vwap_retest_failed": failed,
+            "vwap_retest_distance_atr": distance_atr,
+        },
+        {
+            "reclaim_index": reclaim_index,
+            "retest_index": retest_index,
+            "retest_low": float(retest_row["low"]),
+            "retest_vwap": retest_vwap,
+            "tolerance": tolerance,
+            "distance_atr": distance_atr,
+            "latest_above_vwap": latest_above,
+        },
+    )
+
+
+def _pullback_quality_features(
+    frame: pd.DataFrame,
+    swing_highs: list[dict[str, Any]],
+    swing_lows: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Evaluate the latest confirmed high-to-low pullback relative to its prior impulse."""
+    if not swing_highs or len(swing_lows) < 2:
+        return (
+            {
+                "pullback_depth_pct_of_impulse": None,
+                "pullback_higher_low": None,
+                "pullback_volume_ratio": None,
+                "pullback_quality": None,
+            },
+            {},
+        )
+
+    latest_low = swing_lows[-1]
+    preceding_highs = [item for item in swing_highs if int(item["index"]) < int(latest_low["index"])]
+    if not preceding_highs:
+        return (
+            {
+                "pullback_depth_pct_of_impulse": None,
+                "pullback_higher_low": None,
+                "pullback_volume_ratio": None,
+                "pullback_quality": None,
+            },
+            {},
+        )
+    prior_high = preceding_highs[-1]
+    impulse_lows = [item for item in swing_lows if int(item["index"]) < int(prior_high["index"])]
+    if not impulse_lows:
+        return (
+            {
+                "pullback_depth_pct_of_impulse": None,
+                "pullback_higher_low": None,
+                "pullback_volume_ratio": None,
+                "pullback_quality": None,
+            },
+            {},
+        )
+
+    impulse_low = impulse_lows[-1]
+    impulse_low_price = float(impulse_low["price"])
+    high_price = float(prior_high["price"])
+    pullback_low_price = float(latest_low["price"])
+    impulse_size = high_price - impulse_low_price
+    pullback_size = high_price - pullback_low_price
+    depth_ratio = pullback_size / impulse_size if impulse_size > 0 else None
+
+    impulse_segment = frame.iloc[int(impulse_low["index"]) : int(prior_high["index"]) + 1]
+    pullback_segment = frame.iloc[int(prior_high["index"]) : int(latest_low["index"]) + 1]
+    impulse_volume = float(impulse_segment["volume"].mean()) if not impulse_segment.empty else 0.0
+    pullback_volume = float(pullback_segment["volume"].mean()) if not pullback_segment.empty else 0.0
+    volume_ratio = pullback_volume / impulse_volume if impulse_volume > 0 else None
+    higher_low = pullback_low_price > impulse_low_price
+
+    quality = "weak"
+    if depth_ratio is not None:
+        if higher_low and 0.15 <= depth_ratio <= 0.55 and (volume_ratio is None or volume_ratio <= 1.0):
+            quality = "strong"
+        elif higher_low and depth_ratio <= 0.70 and (volume_ratio is None or volume_ratio <= 1.25):
+            quality = "acceptable"
+
+    return (
+        {
+            "pullback_depth_pct_of_impulse": depth_ratio * 100.0 if depth_ratio is not None else None,
+            "pullback_higher_low": higher_low,
+            "pullback_volume_ratio": volume_ratio,
+            "pullback_quality": quality,
+        },
+        {
+            "impulse_low": impulse_low,
+            "prior_high": prior_high,
+            "pullback_low": latest_low,
+            "impulse_size": impulse_size,
+            "pullback_size": pullback_size,
+            "depth_ratio": depth_ratio,
+            "impulse_mean_volume": impulse_volume,
+            "pullback_mean_volume": pullback_volume,
+            "volume_ratio": volume_ratio,
+        },
+    )
+
+
+def _bounce_context_features(bounces: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Add structure/volume context to completed bounce sequences."""
+    if len(bounces) < 2:
+        return (
+            {
+                "bounce_sequence_higher_lows": None,
+                "bounce_sequence_higher_highs": None,
+                "latest_bounce_volume_ratio_vs_prior": None,
+                "bounce_structural_weakening": None,
+                "bounce_structural_strengthening": None,
+            },
+            {},
+        )
+
+    low_prices = [float(item["low_price"]) for item in bounces]
+    high_prices = [float(item["high_price"]) for item in bounces]
+    recoveries = [float(item.get("recovery_pct") or 0.0) for item in bounces]
+    higher_lows = all(b > a for a, b in zip(low_prices, low_prices[1:]))
+    higher_highs = all(b > a for a, b in zip(high_prices, high_prices[1:]))
+
+    prior = bounces[-2]
+    latest = bounces[-1]
+    prior_volume = _number(prior.get("mean_volume"))
+    latest_volume = _number(latest.get("mean_volume"))
+    volume_ratio = (
+        latest_volume / prior_volume
+        if latest_volume is not None and prior_volume is not None and prior_volume > 0
+        else None
+    )
+
+    weakness_signals = 0
+    strength_signals = 0
+    if recoveries[-1] <= recoveries[-2] * 0.85:
+        weakness_signals += 1
+    elif recoveries[-1] >= recoveries[-2] * 1.15:
+        strength_signals += 1
+    if high_prices[-1] <= high_prices[-2]:
+        weakness_signals += 1
+    else:
+        strength_signals += 1
+    if low_prices[-1] <= low_prices[-2]:
+        weakness_signals += 1
+    else:
+        strength_signals += 1
+    if volume_ratio is not None:
+        if volume_ratio <= 0.75:
+            weakness_signals += 1
+        elif volume_ratio >= 1.20:
+            strength_signals += 1
+
+    return (
+        {
+            "bounce_sequence_higher_lows": higher_lows,
+            "bounce_sequence_higher_highs": higher_highs,
+            "latest_bounce_volume_ratio_vs_prior": volume_ratio,
+            "bounce_structural_weakening": weakness_signals >= 2,
+            "bounce_structural_strengthening": strength_signals >= 3,
+        },
+        {
+            "weakness_signals": weakness_signals,
+            "strength_signals": strength_signals,
+            "latest_vs_prior_volume_ratio": volume_ratio,
+            "low_prices": low_prices,
+            "high_prices": high_prices,
+            "recoveries": recoveries,
+        },
+    )
+
+
+def _breakout_quality_features(
+    frame: pd.DataFrame,
+    last_swing_high: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Measure breakout hold/failure only after a swing level was confirmed."""
+    if not last_swing_high:
+        return (
+            {
+                "breakout_above_last_swing_high": None,
+                "failed_breakout_last_swing_high": None,
+                "breakout_state": None,
+                "breakout_hold_bars": None,
+                "breakout_volume_ratio": None,
+                "breakout_max_extension_pct": None,
+            },
+            {},
+        )
+
+    level = float(last_swing_high["price"])
+    start_index = int(last_swing_high["confirmed_at_index"]) + 1
+    after = frame.iloc[start_index:]
+    breakout_indices = [int(idx) for idx, value in after["close"].items() if float(value) > level]
+    if not breakout_indices:
+        return (
+            {
+                "breakout_above_last_swing_high": False,
+                "failed_breakout_last_swing_high": False,
+                "breakout_state": "not_broken",
+                "breakout_hold_bars": 0,
+                "breakout_volume_ratio": None,
+                "breakout_max_extension_pct": None,
+            },
+            {
+                "level": level,
+                "level_timestamp": last_swing_high.get("timestamp"),
+                "first_breakout_index": None,
+            },
+        )
+
+    first_breakout_index = breakout_indices[0]
+    post = frame.loc[first_breakout_index:]
+    latest_above = bool(float(frame["close"].iloc[-1]) > level)
+    hold_bars = 0
+    for value in reversed(post["close"].tolist()):
+        if float(value) <= level:
+            break
+        hold_bars += 1
+
+    state = "failed"
+    if latest_above and hold_bars >= 2:
+        state = "holding"
+    elif latest_above:
+        state = "testing"
+
+    before = frame.iloc[max(0, first_breakout_index - 5) : first_breakout_index]
+    breakout_window = frame.iloc[first_breakout_index : min(len(frame), first_breakout_index + 2)]
+    before_volume = float(before["volume"].mean()) if not before.empty else 0.0
+    breakout_volume = float(breakout_window["volume"].mean()) if not breakout_window.empty else 0.0
+    volume_ratio = breakout_volume / before_volume if before_volume > 0 else None
+    max_extension_pct = ((float(post["high"].max()) / level) - 1.0) * 100.0 if level > 0 else None
+
+    return (
+        {
+            "breakout_above_last_swing_high": latest_above,
+            "failed_breakout_last_swing_high": not latest_above,
+            "breakout_state": state,
+            "breakout_hold_bars": hold_bars,
+            "breakout_volume_ratio": volume_ratio,
+            "breakout_max_extension_pct": max_extension_pct,
+        },
+        {
+            "level": level,
+            "level_timestamp": last_swing_high.get("timestamp"),
+            "first_breakout_index": first_breakout_index,
+            "latest_close_above": latest_above,
+            "hold_bars": hold_bars,
+            "pre_breakout_mean_volume": before_volume,
+            "breakout_mean_volume": breakout_volume,
+            "volume_ratio": volume_ratio,
+            "max_extension_pct": max_extension_pct,
+        },
+    )
+
+
 def build_market_features(
     rows: list[dict[str, Any]],
     *,
@@ -372,6 +708,10 @@ def build_market_features(
         "hold_bars": bars_above,
     }
 
+    vwap_retest_features, vwap_retest_evidence = _vwap_retest_features(frame)
+    result.features.update(vwap_retest_features)
+    result.evidence["vwap_retest"] = vwap_retest_evidence
+
     recent_n = max(2, int(volume_window))
     prior_n = max(recent_n, int(prior_volume_window))
     if len(frame) >= recent_n + prior_n:
@@ -418,6 +758,10 @@ def build_market_features(
     if not bounces:
         result.missing_data.append("completed_bounce_sequence")
 
+    bounce_context_features, bounce_context_evidence = _bounce_context_features(bounces)
+    result.features.update(bounce_context_features)
+    result.evidence["bounce_context"] = bounce_context_evidence
+
     stair_features, stair_evidence = _stair_step_features(swings_high, swings_low)
     result.features.update(stair_features)
     result.evidence["stair_step"] = stair_evidence
@@ -430,23 +774,19 @@ def build_market_features(
     if expansion_features["consolidation_then_expansion_up"] is None:
         result.missing_data.append("consolidation_expansion_history")
 
+    pullback_features, pullback_evidence = _pullback_quality_features(
+        frame, swings_high, swings_low
+    )
+    result.features.update(pullback_features)
+    result.evidence["pullback_quality"] = pullback_evidence
+    if pullback_features["pullback_quality"] is None:
+        result.missing_data.append("confirmed_pullback_sequence")
+
     last_swing_high = swings_high[-1] if swings_high else None
-    if last_swing_high:
-        level = float(last_swing_high["price"])
-        after = frame.iloc[int(last_swing_high["confirmed_at_index"]) + 1 :]
-        broke = bool(not after.empty and (after["close"] > level).any())
-        latest_above = close > level
-        result.features["breakout_above_last_swing_high"] = broke and latest_above
-        result.features["failed_breakout_last_swing_high"] = broke and not latest_above
-        result.evidence["breakout"] = {
-            "level": level,
-            "level_timestamp": last_swing_high.get("timestamp"),
-            "ever_closed_above_after_confirmation": broke,
-            "latest_close_above": latest_above,
-        }
-    else:
-        result.features["breakout_above_last_swing_high"] = None
-        result.features["failed_breakout_last_swing_high"] = None
+    breakout_features, breakout_evidence = _breakout_quality_features(frame, last_swing_high)
+    result.features.update(breakout_features)
+    result.evidence["breakout"] = breakout_evidence
+    if last_swing_high is None:
         result.missing_data.append("confirmed_swing_high")
 
     return result.to_dict()

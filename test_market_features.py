@@ -145,3 +145,90 @@ def test_tight_base_breakout_is_labeled_consolidation_expansion():
     snapshot = build_market_features(rows, swing_radius=1)
     assert snapshot["features"]["consolidation_then_expansion_up"] is True
     assert snapshot["features"]["expansion_volume_ratio"] > 2.0
+
+
+
+def test_breakout_quality_distinguishes_hold_from_single_break():
+    rows = [
+        _bar(0, 10.0, 10.1, 9.9, 10.0, 100),
+        _bar(1, 10.0, 10.2, 9.8, 10.0, 100),
+        _bar(2, 10.0, 10.5, 10.0, 10.4, 120),
+        _bar(3, 10.3, 10.3, 9.9, 10.0, 90),
+        _bar(4, 10.1, 10.7, 10.2, 10.6, 220),
+        _bar(5, 10.6, 10.8, 10.5, 10.7, 240),
+    ]
+    snapshot = build_market_features(rows, swing_radius=1)
+    features = snapshot["features"]
+    assert features["breakout_state"] == "holding"
+    assert features["breakout_above_last_swing_high"] is True
+    assert features["failed_breakout_last_swing_high"] is False
+    assert features["breakout_hold_bars"] == 2
+    assert features["breakout_volume_ratio"] > 1.5
+
+
+def test_breakout_quality_flags_latest_failure_after_break():
+    rows = [
+        _bar(0, 10.0, 10.1, 9.9, 10.0, 100),
+        _bar(1, 10.0, 10.2, 9.8, 10.0, 100),
+        _bar(2, 10.0, 10.5, 10.0, 10.4, 120),
+        _bar(3, 10.3, 10.3, 9.9, 10.0, 90),
+        _bar(4, 10.1, 10.7, 10.2, 10.6, 220),
+        _bar(5, 10.6, 10.8, 10.2, 10.3, 180),
+    ]
+    snapshot = build_market_features(rows, swing_radius=1)
+    assert snapshot["features"]["breakout_state"] == "failed"
+    assert snapshot["features"]["failed_breakout_last_swing_high"] is True
+    assert snapshot["features"]["breakout_hold_bars"] == 0
+
+
+def test_vwap_retest_requires_reclaim_then_touch_and_hold():
+    rows = [
+        _bar(0, 10.0, 10.1, 9.9, 10.0, 100),
+        _bar(1, 10.0, 10.0, 9.7, 9.8, 100),
+        _bar(2, 9.8, 10.4, 9.8, 10.3, 120),
+        _bar(3, 10.3, 10.35, 10.0, 10.2, 110),
+        _bar(4, 10.2, 10.35, 10.15, 10.25, 130),
+    ]
+    snapshot = build_market_features(rows, swing_radius=1)
+    features = snapshot["features"]
+    assert features["vwap_retest_recent"] is True
+    assert features["vwap_retest_held"] is True
+    assert features["vwap_retest_failed"] is False
+    assert snapshot["evidence"]["vwap_retest"]["retest_index"] is not None
+
+
+def test_pullback_quality_uses_depth_higher_low_and_volume_contraction():
+    rows = [
+        _bar(0, 9.2, 9.3, 9.1, 9.2, 200),
+        _bar(1, 9.2, 9.2, 9.0, 9.1, 180),
+        _bar(2, 9.1, 10.0, 9.2, 9.9, 300),
+        _bar(3, 9.9, 11.0, 9.8, 10.8, 350),
+        _bar(4, 10.8, 10.7, 10.3, 10.4, 140),
+        _bar(5, 10.4, 10.5, 10.2, 10.3, 120),
+        _bar(6, 10.3, 10.8, 10.25, 10.7, 150),
+    ]
+    snapshot = build_market_features(rows, swing_radius=1)
+    features = snapshot["features"]
+    assert features["pullback_higher_low"] is True
+    assert 35.0 <= features["pullback_depth_pct_of_impulse"] <= 45.0
+    assert features["pullback_volume_ratio"] < 1.0
+    assert features["pullback_quality"] == "strong"
+
+
+def test_bounce_context_uses_structure_not_only_recovery_percentage():
+    rows = [
+        _bar(0, 10.0, 10.2, 9.9, 10.0, 100),
+        _bar(1, 9.8, 10.0, 9.4, 9.6, 120),
+        _bar(2, 9.6, 10.5, 9.8, 10.4, 220),
+        _bar(3, 10.1, 10.1, 9.6, 9.8, 110),
+        _bar(4, 9.8, 10.4, 9.9, 10.3, 180),
+        _bar(5, 10.0, 10.1, 9.7, 9.9, 105),
+        _bar(6, 9.9, 10.3, 9.9, 10.2, 150),
+        _bar(7, 10.2, 10.2, 10.0, 10.1, 100),
+    ]
+    snapshot = build_market_features(rows, swing_radius=1)
+    features = snapshot["features"]
+    assert features["bounce_sequence_higher_lows"] is True
+    assert features["bounce_sequence_higher_highs"] is False
+    assert features["bounce_structural_weakening"] is True
+    assert snapshot["evidence"]["bounce_context"]["weakness_signals"] >= 2
