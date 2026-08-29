@@ -1936,6 +1936,25 @@ with backtest_tab:
         saved_backtest_rules = normalize_machine_rules(chosen.get("machine_rules"))
         saved_stop_rule = safe_float(saved_backtest_rules.get("stop_loss_pct"))
         saved_reward_rule = safe_float(saved_backtest_rules.get("reward_risk"))
+        dynamic_exit_fields = (
+            "trailing_stop_pct",
+            "move_stop_to_breakeven_at_r",
+            "scale_out_fraction_pct",
+            "scale_out_at_r",
+            "scale_out_stages",
+            "move_stop_to_breakeven_after_scale_out",
+            "trail_below_vwap",
+            "trail_below_fast_ema",
+            "trail_below_avwap",
+            "exit_below_vwap",
+            "exit_below_fast_ema",
+            "exit_below_avwap",
+        )
+        uses_dynamic_exit_plan = any(
+            saved_backtest_rules.get(name) is not None
+            and saved_backtest_rules.get(name) is not False
+            for name in dynamic_exit_fields
+        )
 
         run_history = list(chosen.get("backtest_run_history") or [])
         if run_history:
@@ -1955,10 +1974,16 @@ with backtest_tab:
                         f'{previous_run.get("timeframe") or "?"} · '
                         f'{previous_run.get("window_label") or "Saved window"}'
                     )
+                    previous_reward = safe_float(previous_run.get("actual_reward_risk"))
+                    previous_reward_text = (
+                        f"{previous_reward:.2f}x"
+                        if previous_reward is not None
+                        else "dynamic exit plan"
+                    )
                     row[0].caption(
                         f'Net {money(total_pnl)} · {total_trades} trades · '
                         f'actual stop {safe_float(previous_run.get("actual_stop_pct"), 0.0):.2f}% · '
-                        f'actual reward/risk {safe_float(previous_run.get("actual_reward_risk"), 0.0):.2f}x'
+                        f'actual reward/risk {previous_reward_text}'
                     )
                     if row[1].button(
                         "Re-run exact settings",
@@ -2117,12 +2142,20 @@ with backtest_tab:
                 )
 
             actual_stop_preview = saved_stop_rule if saved_stop_rule is not None else float(default_stop)
-            actual_reward_preview = saved_reward_rule if saved_reward_rule is not None else float(default_ratio)
+            actual_reward_preview = (
+                saved_reward_rule
+                if saved_reward_rule is not None
+                else (None if uses_dynamic_exit_plan else float(default_ratio))
+            )
             stop_preview_source = "saved strategy rule — fallback is NOT used" if saved_stop_rule is not None else "fallback input"
-            reward_preview_source = "saved strategy rule — fallback is NOT used" if saved_reward_rule is not None else "fallback input"
+            if actual_reward_preview is None:
+                reward_preview_text = "dynamic exit plan · no forced fixed target"
+            else:
+                reward_preview_source = "saved strategy rule — fallback is NOT used" if saved_reward_rule is not None else "fallback input"
+                reward_preview_text = f"{actual_reward_preview:.2f}x ({reward_preview_source})"
             st.info(
                 f"Actual settings this backtest will use → Stop: {actual_stop_preview:.2f}% ({stop_preview_source}) · "
-                f"Reward/risk: {actual_reward_preview:.2f}x ({reward_preview_source})"
+                f"Reward/risk: {reward_preview_text}"
             )
             manual_run_requested = st.form_submit_button("Run historical backtest", width="stretch")
 
@@ -2256,9 +2289,17 @@ with backtest_tab:
                     )
 
                     actual_stop_used = saved_stop_rule if saved_stop_rule is not None else float(default_stop)
-                    actual_reward_used = saved_reward_rule if saved_reward_rule is not None else float(default_ratio)
+                    actual_reward_used = (
+                        saved_reward_rule
+                        if saved_reward_rule is not None
+                        else (None if uses_dynamic_exit_plan else float(default_ratio))
+                    )
                     stop_source = "saved strategy rule" if saved_stop_rule is not None else "fallback input"
-                    reward_source = "saved strategy rule" if saved_reward_rule is not None else "fallback input"
+                    reward_source = (
+                        "dynamic exit plan"
+                        if actual_reward_used is None
+                        else ("saved strategy rule" if saved_reward_rule is not None else "fallback input")
+                    )
                     end_display = (end.astimezone(ET) - timedelta(seconds=1)).date().isoformat()
                     run_record = {
                         "tested_at": isoformat_utc(utc_now()),
@@ -2271,7 +2312,11 @@ with backtest_tab:
                         "start_date": start.astimezone(ET).date().isoformat(),
                         "end_date": end_display,
                         "actual_stop_pct": float(actual_stop_used),
-                        "actual_reward_risk": float(actual_reward_used),
+                        "actual_reward_risk": (
+                            float(actual_reward_used)
+                            if actual_reward_used is not None
+                            else None
+                        ),
                         "stop_source": stop_source,
                         "reward_source": reward_source,
                         "settings": {
@@ -2326,11 +2371,17 @@ with backtest_tab:
             section("Backtest results", "Historical results are hypothetical. Holdout results were not used to define the in-sample segment.")
             active_run_context = st.session_state.get("backtest_run_context") or {}
             if active_run_context:
+                context_reward = safe_float(active_run_context.get("actual_reward_risk"))
+                context_reward_text = (
+                    f"{context_reward:.2f}x"
+                    if context_reward is not None
+                    else "dynamic exit plan"
+                )
                 st.caption(
                     f'Tested window: {active_run_context.get("window_label") or "—"} · '
                     f'Actual stop used: {safe_float(active_run_context.get("actual_stop_pct"), 0.0):.2f}% '
                     f'({active_run_context.get("stop_source") or "—"}) · '
-                    f'Actual reward/risk used: {safe_float(active_run_context.get("actual_reward_risk"), 0.0):.2f}x '
+                    f'Actual reward/risk used: {context_reward_text} '
                     f'({active_run_context.get("reward_source") or "—"})'
                 )
             summary = []
@@ -2361,6 +2412,73 @@ with backtest_tab:
             metric_card(stat_columns[2], "Maximum drawdown", percent(all_metrics["max_drawdown_pct"]), "Peak-to-trough simulated loss")
             factor = all_metrics["profit_factor"]
             metric_card(stat_columns[3], "Profit factor", f"{factor:.2f}x" if factor is not None else "—", "Gross gains divided by gross losses")
+
+            with st.expander("Exit behavior analysis", expanded=False):
+                st.caption(
+                    "Final-exit rows group each complete trade by how the remaining position ended. "
+                    "Partial-exit rows show only the P/L realized at that partial. This helps separate "
+                    "entry quality from position-management quality."
+                )
+                detail_trades = list(detail.get("trades") or [])
+                if detail_trades:
+                    mfe_values = [
+                        safe_float(trade.get("max_favorable_excursion_pct"))
+                        for trade in detail_trades
+                    ]
+                    mae_values = [
+                        safe_float(trade.get("max_adverse_excursion_pct"))
+                        for trade in detail_trades
+                    ]
+                    capture_values = [
+                        safe_float(trade.get("mfe_capture_pct"))
+                        for trade in detail_trades
+                    ]
+                    mfe_values = [value for value in mfe_values if value is not None]
+                    mae_values = [value for value in mae_values if value is not None]
+                    capture_values = [value for value in capture_values if value is not None]
+                    analysis_columns = st.columns(3)
+                    analysis_columns[0].metric(
+                        "Avg. favorable excursion",
+                        percent(sum(mfe_values) / len(mfe_values)) if mfe_values else "—",
+                    )
+                    analysis_columns[1].metric(
+                        "Avg. adverse excursion",
+                        percent(sum(mae_values) / len(mae_values)) if mae_values else "—",
+                    )
+                    analysis_columns[2].metric(
+                        "Avg. MFE captured",
+                        percent(sum(capture_values) / len(capture_values)) if capture_values else "—",
+                    )
+
+                attribution = detail.get("exit_attribution") or {}
+                attribution_rows = []
+                for reason, values in (attribution.get("final_exit_reasons") or {}).items():
+                    attribution_rows.append({
+                        "Type": "Final trade exit",
+                        "Mechanism": reason,
+                        "Events": int(safe_float(values.get("trade_count"), 0) or 0),
+                        "Net P/L": money(safe_float(values.get("net_pnl"), 0.0) or 0.0),
+                        "Avg P/L": money(safe_float(values.get("average_pnl"), 0.0) or 0.0),
+                        "Win rate": percent(safe_float(values.get("win_rate_pct"), 0.0) or 0.0),
+                    })
+                for reason, values in (attribution.get("partial_exit_reasons") or {}).items():
+                    attribution_rows.append({
+                        "Type": "Partial exit",
+                        "Mechanism": reason,
+                        "Events": int(safe_float(values.get("event_count"), 0) or 0),
+                        "Net P/L": money(safe_float(values.get("net_pnl"), 0.0) or 0.0),
+                        "Avg P/L": money(safe_float(values.get("average_pnl"), 0.0) or 0.0),
+                        "Win rate": "—",
+                    })
+                if attribution_rows:
+                    st.dataframe(
+                        pd.DataFrame(attribution_rows),
+                        hide_index=True,
+                        width="stretch",
+                    )
+                else:
+                    st.caption("No completed exits are available for attribution in this run.")
+
             equity_points: list[tuple[str, float]] = []
             for point in detail.get("equity_curve") or []:
                 if not isinstance(point, dict):
