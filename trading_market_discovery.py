@@ -511,15 +511,9 @@ def analyze_stock_strategies(
     if metrics is None:
         raise AppError(f"Alpaca returned an incomplete snapshot for {ticker}.")
 
-    any_catalyst = any(
-        normalize_machine_rules(item.get("machine_rules")).get("catalyst_required")
-        for item in usable
-    )
-    news_items: list[dict[str, Any]] = []
-    if any_catalyst:
-        if progress:
-            progress("Checking recent catalysts…")
-        news_items = market.news([ticker], hours=24).get(ticker, [])
+    if progress:
+        progress("Loading recent catalyst context…")
+    news_items: list[dict[str, Any]] = market.news([ticker], hours=24).get(ticker, [])
 
     intraday_rows = _load_intraday_context(
         market,
@@ -576,5 +570,6 @@ def analyze_stock_strategies(
         "metrics": metrics,
         "market_features": market_features,
         "news_count": len(news_items),
+        "news_items": news_items,
         "comparisons": comparisons,
     }
