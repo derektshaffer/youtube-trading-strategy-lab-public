@@ -51,6 +51,18 @@ except AttributeError:
     similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline = (
         _current_predictive_ml_pipeline.similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline
     )
+
+try:
+    ticker_specific_walk_forward_logistic_baseline = (
+        _predictive_ml_pipeline.ticker_specific_walk_forward_logistic_baseline
+    )
+except AttributeError:
+    _current_predictive_ml_pipeline_for_ticker = load_current_source_module(
+        "predictive_ml_pipeline"
+    )
+    ticker_specific_walk_forward_logistic_baseline = (
+        _current_predictive_ml_pipeline_for_ticker.ticker_specific_walk_forward_logistic_baseline
+    )
 from trading_app_runtime import market_client, setting
 from trading_glass_theme import inject_research_glass_theme
 
@@ -6971,6 +6983,10 @@ elif module == "Pattern Validation":
                     "status": "PENDING",
                     "reason": "Baseline saved; held-out-stock validation has not finished yet.",
                 },
+                "ticker_specific": {
+                    "status": "PENDING",
+                    "reason": "Ticker-specific validation has not finished yet.",
+                },
                 "archetype_validation": {},
                 "completed_at": utc_now().isoformat(),
                 "checkpoint_stage": "baseline_complete",
@@ -7012,6 +7028,36 @@ elif module == "Pattern Validation":
             }
             completed_ml_result["generalization"] = compact_ml_generalization
             completed_ml_result["checkpoint_stage"] = "generalization_complete"
+            completed_ml_result["completed_at"] = utc_now().isoformat()
+            st.session_state["til_predictive_ml_result"] = completed_ml_result
+            try:
+                persist_predictive_ml_result(completed_ml_result)
+                st.session_state["til_predictive_ml_persist_error"] = ""
+            except AppError as exc:
+                st.session_state["til_predictive_ml_persist_error"] = str(exc)
+
+            update_task_bar(
+                ml_bar,
+                ml_monitor,
+                0.945,
+                "Testing ticker-specific walk-forward models…",
+            )
+            ml_ticker_specific = ticker_specific_walk_forward_logistic_baseline(
+                ml_dataset,
+                target_horizon=ml_horizon,
+                target_mode=ml_target_mode,
+                min_train_sessions=8,
+                test_sessions_per_fold=2,
+                embargo_sessions=1,
+                min_train_rows=150,
+            )
+            compact_ml_ticker_specific = {
+                key: value
+                for key, value in ml_ticker_specific.items()
+                if key != "predictions"
+            }
+            completed_ml_result["ticker_specific"] = compact_ml_ticker_specific
+            completed_ml_result["checkpoint_stage"] = "ticker_specific_complete"
             completed_ml_result["completed_at"] = utc_now().isoformat()
             st.session_state["til_predictive_ml_result"] = completed_ml_result
             try:
@@ -7127,6 +7173,7 @@ elif module == "Pattern Validation":
     ml_dataset_summary = stored_ml_result.get("dataset_summary") or {}
     ml_evaluation = stored_ml_result.get("evaluation") or {}
     ml_generalization = stored_ml_result.get("generalization") or {}
+    ml_ticker_specific = stored_ml_result.get("ticker_specific") or {}
     ml_similarity_validation = stored_ml_result.get("similarity_validation") or {}
     ml_archetype_validation = stored_ml_result.get("archetype_validation") or {}
     if ml_evaluation:
@@ -7276,6 +7323,129 @@ elif module == "Pattern Validation":
                     "For each row above, that stock was excluded from every training row. "
                     "The model also trained only on earlier market sessions from the other stocks, "
                     "so this tests cross-stock transfer without ticker or future-session leakage."
+                )
+
+            st.markdown("#### Model architecture comparison")
+            if str(ml_ticker_specific.get("status") or "") != "EVALUATED":
+                st.warning(
+                    "Ticker-specific validation could not be evaluated yet: "
+                    + str(
+                        ml_ticker_specific.get("reason")
+                        or "not enough same-stock history for chronological training."
+                    )
+                )
+            else:
+                pooled_auc = safe_float(ml_evaluation.get("roc_auc"))
+                pooled_skill = safe_float(ml_evaluation.get("brier_skill_vs_naive"))
+                ticker_auc = safe_float(ml_ticker_specific.get("roc_auc"))
+                ticker_macro_auc = safe_float(ml_ticker_specific.get("macro_roc_auc"))
+                ticker_skill = safe_float(ml_ticker_specific.get("brier_skill_vs_naive"))
+                held_auc = safe_float(ml_generalization.get("roc_auc"))
+                held_skill = safe_float(ml_generalization.get("brier_skill_vs_naive"))
+
+                architecture_rows = [
+                    {
+                        "Architecture": "Pooled chronological",
+                        "Training source": "Earlier rows from all included stocks",
+                        "ROC AUC": pooled_auc,
+                        "Brier skill": pooled_skill,
+                        "OOS predictions": int(ml_evaluation.get("oos_rows") or 0),
+                    },
+                    {
+                        "Architecture": "Ticker-specific",
+                        "Training source": "Only that ticker's own earlier sessions",
+                        "ROC AUC": ticker_auc,
+                        "Brier skill": ticker_skill,
+                        "OOS predictions": int(ml_ticker_specific.get("oos_rows") or 0),
+                    },
+                    {
+                        "Architecture": "Held-out stock",
+                        "Training source": "Earlier sessions from other stocks only",
+                        "ROC AUC": held_auc,
+                        "Brier skill": held_skill,
+                        "OOS predictions": int(ml_generalization.get("oos_rows") or 0),
+                    },
+                ]
+                st.dataframe(
+                    pd.DataFrame(architecture_rows),
+                    width="stretch",
+                    hide_index=True,
+                )
+                if ticker_macro_auc is not None:
+                    st.caption(
+                        f"Ticker-specific macro AUC across evaluated stocks: {ticker_macro_auc:.3f}. "
+                        "Macro AUC gives each stock equal weight rather than letting the largest ticker dominate."
+                    )
+
+                if (
+                    ticker_auc is not None
+                    and held_auc is not None
+                    and pooled_auc is not None
+                    and ticker_auc > held_auc + 0.03
+                    and ticker_auc >= pooled_auc - 0.01
+                    and ticker_skill is not None
+                    and ticker_skill > 0
+                ):
+                    st.success(
+                        "Ticker-specific history is carrying meaningful predictive information. "
+                        "That supports a shared causal feature engine with stock-specific predictive models "
+                        "rather than forcing one universal cross-stock model."
+                    )
+                elif (
+                    ticker_auc is not None
+                    and pooled_auc is not None
+                    and pooled_auc > ticker_auc + 0.03
+                ):
+                    st.info(
+                        "The pooled chronological model still ranks outcomes better than the ticker-specific "
+                        "models. Stock-specific modeling is not yet clearly superior."
+                    )
+                else:
+                    st.info(
+                        "The architecture comparison is mixed. Use the per-stock comparison below before "
+                        "choosing between pooled and stock-specific models."
+                    )
+
+                held_by_symbol = {
+                    str(item.get("symbol") or ""): item
+                    for item in ml_generalization.get("by_symbol") or []
+                }
+                ticker_rows = []
+                for item in ml_ticker_specific.get("by_symbol") or []:
+                    symbol = str(item.get("symbol") or "")
+                    held_item = held_by_symbol.get(symbol) or {}
+                    own_auc = safe_float(item.get("roc_auc"))
+                    other_auc = safe_float(held_item.get("roc_auc"))
+                    ticker_rows.append(
+                        {
+                            "Stock": symbol,
+                            "Status": item.get("status"),
+                            "Own-history AUC": own_auc,
+                            "Own-history Brier skill": safe_float(
+                                item.get("brier_skill_vs_naive")
+                            ),
+                            "Other-stocks AUC": other_auc,
+                            "Other-stocks Brier skill": safe_float(
+                                held_item.get("brier_skill_vs_naive")
+                            ),
+                            "Own minus other AUC": (
+                                None
+                                if own_auc is None or other_auc is None
+                                else own_auc - other_auc
+                            ),
+                            "Own-history OOS": int(item.get("oos_rows") or 0),
+                        }
+                    )
+                if ticker_rows:
+                    st.dataframe(
+                        pd.DataFrame(ticker_rows),
+                        width="stretch",
+                        hide_index=True,
+                    )
+                st.caption(
+                    "Ticker-specific models never train on another stock. They train only on earlier "
+                    "sessions of the same ticker and are scored on later unseen sessions with the same "
+                    "walk-forward embargo used elsewhere."
                 )
 
             if ml_similarity_validation:
