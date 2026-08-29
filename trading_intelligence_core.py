@@ -734,9 +734,15 @@ def upgrade_native_strategy_rules(strategy: dict[str, Any]) -> dict[str, Any]:
         changed = True
 
     if rules.get("trailing_stop_pct") is None:
-        trailing_match = re.search(
-            r"(?:trailing\s+stop|trail(?:ing)?\s+(?:the\s+)?stop)[^0-9%]{0,30}(\d+(?:\.\d+)?)\s*%",
-            exit_text,
+        trailing_match = (
+            re.search(
+                r"(?:trailing\s+stop|trail(?:ing)?\s+(?:the\s+)?stop)[^0-9%]{0,30}(\d+(?:\.\d+)?)\s*%",
+                exit_text,
+            )
+            or re.search(
+                r"(\d+(?:\.\d+)?)\s*%[^\.]{0,30}(?:trailing\s+stop|trail(?:ing)?\s+(?:the\s+)?stop)",
+                exit_text,
+            )
         )
         if trailing_match:
             normalized_trail = normalize_machine_rules(
