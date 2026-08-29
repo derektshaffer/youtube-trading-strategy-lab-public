@@ -418,6 +418,92 @@ def test_similarity_weighting_beats_pooled_baseline_when_nearby_stocks_share_beh
         }
 
 
+def _synthetic_behavior_similarity_dataset(
+    session_count: int = 12,
+    rows_per_symbol: int = 20,
+) -> dict:
+    records = []
+    symbols = [
+        ("AAA", True, 0.90, 0.10, 0.80, 0.15, 0.70, 1.80),
+        ("AAB", True, 0.85, 0.15, 0.75, 0.20, 0.65, 1.70),
+        ("BBB", False, 0.20, 0.80, 0.15, 0.75, 0.20, 0.65),
+        ("BBC", False, 0.25, 0.75, 0.20, 0.70, 0.25, 0.70),
+    ]
+    for session_index in range(session_count):
+        session = f"2026-08-{session_index + 1:02d}"
+        for (
+            symbol,
+            follows_signal,
+            breakout_hold,
+            breakout_fail,
+            bounce_strength,
+            bounce_weakness,
+            stair_step,
+            volume_acceleration,
+        ) in symbols:
+            for row_index in range(rows_per_symbol):
+                signal = float(row_index % 2)
+                target = bool(signal) if follows_signal else not bool(signal)
+                records.append(
+                    {
+                        "symbol": symbol,
+                        "session": session,
+                        "timestamp": f"{session}T14:{row_index:02d}:00Z",
+                        "feature__signal": signal,
+                        # Deliberately identical scale/liquidity context: only
+                        # the prior-session behavior fingerprint can separate families.
+                        "feature__context_typical_price": 5.0,
+                        "feature__context_typical_range_pct": 8.0,
+                        "feature__context_typical_dollar_volume": 20_000_000.0,
+                        "feature__context_typical_bar_dollar_volume": 80_000.0,
+                        "feature__context_prior_breakout_hold_rate": breakout_hold,
+                        "feature__context_prior_breakout_fail_rate": breakout_fail,
+                        "feature__context_prior_bounce_strengthening_rate": bounce_strength,
+                        "feature__context_prior_late_bounce_weakening_rate": bounce_weakness,
+                        "feature__context_prior_stair_step_up_rate": stair_step,
+                        "feature__context_prior_volume_acceleration_median": volume_acceleration,
+                        "feature__context_archetype": "same_rigid_bucket",
+                        "label__target_before_stop_1bar": target,
+                    }
+                )
+    feature_columns = sorted(
+        key for key in records[0] if key.startswith("feature__")
+    )
+    return {
+        "feature_columns": feature_columns,
+        "label_columns": ["label__target_before_stop_1bar"],
+        "profit_target_pct": 1.0,
+        "stop_loss_pct": 0.75,
+        "records": records,
+    }
+
+
+def test_behavior_similarity_recovers_local_relationship_when_scale_context_is_identical():
+    report = similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline(
+        _synthetic_behavior_similarity_dataset(),
+        target_horizon=1,
+        target_mode="target_before_stop",
+        similarity_bandwidth=0.5,
+        minimum_similarity_weight=0.01,
+        min_train_sessions=4,
+        test_sessions_per_fold=2,
+        embargo_sessions=1,
+        min_train_rows=100,
+        min_test_rows=10,
+    )
+
+    assert report["status"] == "EVALUATED"
+    assert report["similarity_roc_auc"] is not None
+    assert report["baseline_roc_auc"] is not None
+    assert report["similarity_roc_auc"] > 0.95
+    assert report["similarity_minus_baseline_auc"] > 0.3
+    assert report["split_policy"][
+        "similarity_profile_includes_prior_session_market_behavior"
+    ] is True
+    assert "feature__context_prior_breakout_hold_rate" in report["similarity_columns"]
+    assert "feature__context_prior_bounce_strengthening_rate" in report["similarity_columns"]
+
+
 def test_similarity_weighting_requires_continuous_context():
     dataset = _synthetic_similarity_dataset()
     dataset["feature_columns"] = ["feature__signal", "feature__context_archetype"]
@@ -501,6 +587,8 @@ def test_context_features_use_only_current_and_completed_prior_sessions():
     assert first["feature__context_archetype"] != "unknown"
     assert first["feature__context_typical_range_pct"] is not None
     assert first["feature__context_typical_dollar_volume"] is not None
+    assert first["feature__context_prior_above_vwap_rate"] is not None
+    assert "feature__context_prior_breakout_hold_rate" in base["context_feature_columns"]
     assert "feature__context_pattern_personality" in first
     assert base["archetype_column"] == "feature__context_archetype"
     assert base["context_feature_columns"]
