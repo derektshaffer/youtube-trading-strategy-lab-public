@@ -288,18 +288,18 @@ def classify_sec_filing(filing: dict[str, Any]) -> dict[str, Any]:
         severity = "medium"
         specific = True
         rationale = "Form 144 is notice of a proposed sale of restricted or control securities."
-    elif base_form in {"SC 13D", "SC 13D/A"}:
+    elif base_form == "SC 13D":
         category = "active ownership disclosure"
-        score = 3.0
+        score = 0.0
         severity = "medium"
         specific = True
-        rationale = "Schedule 13D can indicate a significant holder with active intent; terms still require review."
-    elif base_form in {"SC 13G", "SC 13G/A"}:
+        rationale = "Schedule 13D can indicate a significant holder with active intent, but the filing alone is not treated as bullish or bearish."
+    elif base_form == "SC 13G":
         category = "significant ownership disclosure"
-        score = 1.0
+        score = 0.0
         severity = "info"
         specific = True
-        rationale = "Schedule 13G reports significant ownership but does not by itself imply activist intent."
+        rationale = "Schedule 13G reports significant ownership but does not by itself imply activist intent or market direction."
     elif base_form == "8-K":
         if "3.02" in items:
             category = "unregistered equity issuance / dilution risk"
@@ -310,19 +310,19 @@ def classify_sec_filing(filing: dict[str, Any]) -> dict[str, Any]:
             rationale = "8-K Item 3.02 reports unregistered sales of equity securities."
         elif "2.02" in items:
             category = "earnings / financial results filing"
-            score = 4.0
+            score = 0.0
             severity = "medium"
             specific = True
-            rationale = "8-K Item 2.02 reports results of operations or financial condition; direction needs the actual results."
+            rationale = "8-K Item 2.02 reports results of operations or financial condition; direction requires the actual results."
         elif "1.01" in items:
             category = "material definitive agreement"
-            score = 4.0
+            score = 0.0
             severity = "medium"
             specific = True
-            rationale = "8-K Item 1.01 reports entry into a material definitive agreement; economic terms still need review."
+            rationale = "8-K Item 1.01 reports entry into a material definitive agreement; economic terms determine direction."
         elif "2.01" in items:
             category = "acquisition / disposition filing"
-            score = 4.0
+            score = 0.0
             severity = "medium"
             specific = True
             rationale = "8-K Item 2.01 reports completion of an acquisition or disposition; transaction terms determine direction."
@@ -378,6 +378,8 @@ def classify_sec_filing(filing: dict[str, Any]) -> dict[str, Any]:
         "score": score,
         "severity": severity,
         "is_specific_catalyst": specific,
+        "is_directional_hint": specific and score != 0,
+        "direction_requires_context": specific and score == 0,
         "is_positive": score > 0,
         "is_negative": score < 0,
         "is_dilution_risk": dilution_risk,
