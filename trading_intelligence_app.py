@@ -20,6 +20,7 @@ from app_access import require_app_access
 from finder_report_persistence import latest_completed_finder_report
 from hot_deploy_imports import load_current_source_module
 from market_feature_scorecards import run_detector_scorecards
+from market_detector_gate import evaluate_scorecard_report
 from market_feature_validation import DETECTOR_SPECS
 from trading_app_runtime import market_client, setting
 from trading_glass_theme import inject_research_glass_theme
@@ -6474,11 +6475,13 @@ elif module == "Pattern Validation":
                 max_pages=80,
                 progress=pattern_validation_progress,
             )
+            evidence_gate = evaluate_scorecard_report(scorecards)
             st.session_state["til_pattern_validation_result"] = {
                 "symbols": pattern_symbols,
                 "days": pattern_days,
                 "detectors": selected_detectors,
                 "report": scorecards,
+                "evidence_gate": evidence_gate,
             }
             status_box.update(
                 label=(
@@ -6501,6 +6504,9 @@ elif module == "Pattern Validation":
 
     stored_pattern_result = st.session_state.get("til_pattern_validation_result") or {}
     pattern_report = stored_pattern_result.get("report") or {}
+    pattern_gate = stored_pattern_result.get("evidence_gate") or (
+        evaluate_scorecard_report(pattern_report) if pattern_report else {}
+    )
     if pattern_report:
         st.divider()
         st.markdown("### Detector scorecards")
@@ -6516,13 +6522,15 @@ elif module == "Pattern Validation":
         score_cols[0].metric("Stocks with data", int(pattern_report.get("symbols_with_data") or 0))
         score_cols[1].metric("Sessions replayed", int(pattern_report.get("sessions_analyzed") or 0))
         score_cols[2].metric("Pattern events", total_events)
+        eligible_detectors = list(pattern_gate.get("eligible_detectors") or [])
         score_cols[3].metric(
-            "Moderate / broad evidence",
-            int(evidence_counts.get("MODERATE", 0) + evidence_counts.get("BROAD", 0)),
+            "Scoring candidates",
+            len(eligible_detectors),
         )
 
         score_rows = []
         for detector, item in (pattern_report.get("summary") or {}).items():
+            gate = (pattern_gate.get("detectors") or {}).get(detector) or {}
             horizons = item.get("horizons") or {}
             h5 = horizons.get("5") or {}
             h15 = horizons.get("15") or {}
@@ -6530,10 +6538,12 @@ elif module == "Pattern Validation":
             score_rows.append(
                 {
                     "Detector": item.get("label") or detector,
+                    "Evidence gate": str(gate.get("status") or "—").replace("_", " ").title(),
                     "Sample": item.get("sample_quality"),
                     "Events": int(item.get("event_count") or 0),
                     "Stocks": int(item.get("symbols_with_events") or 0),
-                    "Sessions": int(item.get("sessions_with_events") or 0),
+                    "Market days": int(item.get("unique_market_days") or 0),
+                    "Max one-stock share %": safe_float(item.get("max_symbol_event_share_pct")),
                     "5m avg return %": safe_float(h5.get("avg_return_pct")),
                     "15m avg return %": safe_float(h15.get("avg_return_pct")),
                     "30m avg return %": safe_float(h30.get("avg_return_pct")),
@@ -6552,14 +6562,25 @@ elif module == "Pattern Validation":
             )
             st.caption(
                 "SPARSE / LIMITED / MODERATE / BROAD describes sample breadth only. "
-                "Directional hit rate is shown only for detectors with an expected bullish or bearish direction. "
-                "Nothing on this page automatically becomes a trading rule."
+                "The evidence gate also requires multi-stock/time breadth, low concentration, a conservative "
+                "95% hit-rate confidence bound, positive multi-horizon behavior, and favorable excursion quality. "
+                "A 'Candidate For Scoring' still does not automatically become a trading rule."
             )
         else:
             st.info(
                 "No selected detector produced a completed causal event in this historical window. "
                 "Increase the history window or use stocks that actually exhibited the pattern."
             )
+
+        gates = pattern_gate.get("detectors") or {}
+        if gates:
+            with st.expander("Why detectors passed or failed the evidence gate", expanded=False):
+                for detector, gate in gates.items():
+                    label = str((DETECTOR_SPECS.get(detector) or {}).get("label") or detector)
+                    status = str(gate.get("status") or "unknown").replace("_", " ").title()
+                    st.markdown(f"**{label} — {status}**")
+                    for reason in gate.get("reasons") or []:
+                        st.write("• " + str(reason))
 
         by_symbol = list(pattern_report.get("by_symbol") or [])
         if by_symbol:
