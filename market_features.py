@@ -233,6 +233,7 @@ def add_causal_market_feature_columns(
         broke_active_high = False
 
         for local_pos, row_index in enumerate(indices):
+            confirmed_high_this_row = False
             pivot_pos = local_pos - radius
             if pivot_pos >= radius:
                 left = pivot_pos - radius
@@ -247,6 +248,7 @@ def add_causal_market_feature_columns(
                     highs.append(pivot_high)
                     active_swing_high = pivot_high
                     broke_active_high = False
+                    confirmed_high_this_row = True
                 if pivot_low <= window_low:
                     lows.append(pivot_low)
 
@@ -257,7 +259,11 @@ def add_causal_market_feature_columns(
             if len(lows) >= 2:
                 low_label = "HL" if lows[-1] > lows[-2] else "LL" if lows[-1] < lows[-2] else "EL"
 
-            if active_swing_high is not None and float(data.at[row_index, "close"]) > active_swing_high:
+            if (
+                active_swing_high is not None
+                and not confirmed_high_this_row
+                and float(data.at[row_index, "close"]) > active_swing_high
+            ):
                 broke_active_high = True
 
             latest_above = bool(
