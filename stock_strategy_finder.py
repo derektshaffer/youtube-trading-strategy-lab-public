@@ -20,7 +20,7 @@ from finder_report_persistence import (
     finder_summary_to_report,
     latest_completed_finder_report,
 )
-from trading_intelligence_core import strategy_integrity_report
+from trading_intelligence_core import paper_execution_fidelity, strategy_integrity_report
 from trading_validation_core import validation_strength, walk_forward_validate
 from youtube_strategy_engine import (
     AppError,
@@ -483,6 +483,24 @@ def complete_stock_strategy_finder_from_optimization(
         3,
     )
     verdict = _verdict(robustness, stability, walk)
+    paper_fidelity = paper_execution_fidelity({
+        **winner_source,
+        "machine_rules": winner.get("optimized_rules") or winner_source.get("machine_rules") or {},
+    })
+    if (
+        str(verdict.get("code") or "") == "ready_for_paper"
+        and str(paper_fidelity.get("status") or "") != "ready"
+    ):
+        verdict = {
+            "code": "historically_robust_execution_gap",
+            "label": "ROBUST HISTORICALLY — PAPER ENGINE NOT YET FAITHFUL",
+            "tone": "warning",
+            "reason": (
+                "The strategy survived the historical robustness gates, but Paper Auto cannot yet "
+                "reproduce the same trade-management rules. Keep it in research/paper-manual mode "
+                "until live execution fidelity is implemented."
+            ),
+        }
     if total_started is not None:
         stage_timings["total"] = round(
             perf_counter() - total_started,
@@ -522,6 +540,7 @@ def complete_stock_strategy_finder_from_optimization(
         "walk_forward": walk,
         "robustness": robustness,
         "parameter_stability": stability,
+        "paper_execution_fidelity": paper_fidelity,
         "verdict": verdict,
         "winner_source_strategy_id": source_id,
         "winner_strategy_name": winner.get("strategy_name"),
@@ -795,6 +814,7 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
         "distributed": report.get("distributed") or {},
         "robustness": report.get("robustness") or {},
         "parameter_stability": report.get("parameter_stability") or {},
+        "paper_execution_fidelity": report.get("paper_execution_fidelity") or {},
         "walk_forward_summary": (report.get("walk_forward") or {}).get("summary") or {},
         "training_metrics": winner.get("training_metrics") or {},
         "validation_metrics": winner.get("validation_metrics") or {},
