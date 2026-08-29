@@ -5,7 +5,10 @@ import unittest
 
 import pandas as pd
 
-from anchored_vwap_engine import apply_anchored_vwap_indicators
+from anchored_vwap_engine import (
+    apply_anchored_vwap_indicators,
+    apply_multi_anchor_avwap_teacher_features,
+)
 
 
 def frame_from(values: list[tuple[float, float, float, float, int]]) -> pd.DataFrame:
@@ -94,6 +97,35 @@ class AnchoredVwapEngineTests(unittest.TestCase):
             result.loc[active[0], "avwap_anchor_reason"],
             "confirmed_higher_low_handoff",
         )
+
+    def test_multi_anchor_teacher_features_wait_for_causal_pivot_confirmation(self):
+        frame = frame_from(
+            [
+                (10.0, 10.2, 9.9, 10.1, 100),
+                (10.1, 10.4, 9.8, 10.0, 100),
+                (10.0, 10.1, 9.4, 9.6, 120),
+                (9.6, 9.9, 9.6, 9.8, 120),
+                (9.8, 10.4, 9.8, 10.3, 150),
+                (10.3, 10.5, 10.0, 10.1, 150),
+                (10.1, 10.2, 9.9, 10.0, 150),
+                (10.0, 10.1, 9.7, 9.8, 160),
+                (9.8, 10.0, 9.8, 9.9, 160),
+            ]
+        )
+        result = apply_multi_anchor_avwap_teacher_features(
+            frame,
+            modes=("swing_low", "swing_high"),
+            confirm_bars=1,
+            pinch_threshold_pct=5.0,
+        )
+        self.assertEqual(int(result.loc[1, "multi_avwap_active_count"]), 0)
+        self.assertTrue(
+            bool((result["multi_avwap_active_count"] >= 2).any()),
+            "Both causal swing AVWAPs should eventually become active.",
+        )
+        first_two = result.index[result["multi_avwap_active_count"] >= 2][0]
+        self.assertGreaterEqual(first_two, 5)
+        self.assertTrue(pd.notna(result.loc[first_two, "multi_avwap_spread_pct"]))
 
     def test_breakout_anchor_activates_only_after_observed_break(self):
         frame = frame_from(
