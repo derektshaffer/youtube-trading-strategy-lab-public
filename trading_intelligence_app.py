@@ -51,6 +51,7 @@ from retrospective_teacher import (
     build_retrospective_teacher_run,
     merge_retrospective_teacher_run,
 )
+from open_source_reference_catalog import reference_rows
 from trading_progress_ui import (
     AutonomousResearchEtaEstimator,
     AutonomousResearchProgressEstimator,
@@ -2893,6 +2894,38 @@ elif module == "Retrospective Learning":
             "No retrospective teaching runs are saved yet. Run one above; results are stored in the "
             "durable Trading Intelligence library so later learning work can build on them."
         )
+
+
+
+    st.divider()
+    st.markdown("### Open-source implementation references")
+    st.caption(
+        "These repositories are **implementation/reference evidence**, not proof that a trading "
+        "strategy works. The Lab can use them to discover missing capabilities, cross-check formulas, "
+        "and design independent tests. Copyleft, Commons-Clause, or unlicensed code stays reference-only "
+        "unless its licensing is explicitly reviewed."
+    )
+    reference_frame = pd.DataFrame(reference_rows())
+    if not reference_frame.empty:
+        st.dataframe(
+            reference_frame[
+                [
+                    "repository",
+                    "category",
+                    "license",
+                    "posture",
+                    "usefulness",
+                    "why",
+                ]
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+    st.info(
+        "**How the AI should use these:** compare implementations, extract concepts, build independent "
+        "causal versions, and use permissively licensed libraries as possible test or dependency candidates "
+        "only after review. A GitHub repository is never treated as profitability evidence."
+    )
 
 
 elif module == "System Health":
