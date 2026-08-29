@@ -65,9 +65,7 @@ class MarketDiscoveryTests(unittest.TestCase):
             }
 
         def fake_match(metrics, strategy):
-            # Market features are deliberately observational at this stage and
-            # must not be injected into the strategy matcher yet.
-            self.assertNotIn("market_features", metrics)
+            self.assertEqual(metrics.get("market_features"), feature_payload["features"])
             if strategy["id"] == "validated":
                 return {"status": "MATCH", "score": 91.0, "unknown": 0, "checks": []}
             return {"status": "WATCH", "score": 84.0, "unknown": 0, "checks": []}
