@@ -3179,6 +3179,36 @@ def bars_to_frame(
     return frame
 
 
+def _wilder_atr_for_session(group: pd.DataFrame, window: int = 14) -> pd.Series:
+    """Session-local Wilder ATR with no overnight-gap contamination."""
+    high = pd.to_numeric(group["high"], errors="coerce")
+    low = pd.to_numeric(group["low"], errors="coerce")
+    close = pd.to_numeric(group["close"], errors="coerce")
+    previous_close = close.shift(1)
+    true_range = pd.concat(
+        [
+            high - low,
+            (high - previous_close).abs(),
+            (low - previous_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    result = pd.Series(float("nan"), index=group.index, dtype="float64")
+    if len(group) < window:
+        return result
+    first_index = group.index[window - 1]
+    first_atr = float(true_range.iloc[:window].mean())
+    result.at[first_index] = first_atr
+    previous_atr = first_atr
+    for local_pos in range(window, len(group)):
+        current_atr = (
+            previous_atr * (window - 1) + float(true_range.iloc[local_pos])
+        ) / float(window)
+        result.at[group.index[local_pos]] = current_atr
+        previous_atr = current_atr
+    return result
+
+
 def resample_intraday_bars(
     rows: list[dict[str, Any]],
     timeframe: str,
@@ -3233,6 +3263,12 @@ def add_indicators(frame: pd.DataFrame, strategy: dict[str, Any]) -> pd.DataFram
     data["previous_bar_close"] = data["close"].shift(1)
     data["previous_high"] = data.groupby("session", sort=False)["high"].shift(1)
     data["previous_vwap"] = data.groupby("session", sort=False)["vwap"].shift(1)
+    data["atr_14"] = float("nan")
+    for _, atr_group in data.groupby("session", sort=False):
+        data.loc[atr_group.index, "atr_14"] = _wilder_atr_for_session(
+            atr_group,
+            window=14,
+        )
 
     # Daily-reference rules use completed regular sessions when available. This keeps
     # prior-day high/change/activity fully known before the current-session entry bar.
