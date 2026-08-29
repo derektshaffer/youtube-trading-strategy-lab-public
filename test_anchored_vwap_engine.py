@@ -124,7 +124,13 @@ class AnchoredVwapEngineTests(unittest.TestCase):
             "Both causal swing AVWAPs should eventually become active.",
         )
         first_two = result.index[result["multi_avwap_active_count"] >= 2][0]
-        self.assertGreaterEqual(first_two, 5)
+        # With one right-side confirmation bar, the synthetic swing high is
+        # confirmed by bar 2 and the swing low by bar 3. Bar 3 is therefore the
+        # first causally valid point where both AVWAPs may coexist.
+        self.assertGreaterEqual(first_two, 3)
+        self.assertTrue(
+            bool((result.loc[: first_two - 1, "multi_avwap_active_count"] < 2).all())
+        )
         self.assertTrue(pd.notna(result.loc[first_two, "multi_avwap_spread_pct"]))
 
     def test_breakout_anchor_activates_only_after_observed_break(self):
