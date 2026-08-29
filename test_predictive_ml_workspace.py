@@ -42,9 +42,20 @@ def test_predictive_ml_workspace_respects_alpaca_sip_delay():
 def test_predictive_ml_workspace_has_broader_five_stock_benchmark_preset():
     block = _pattern_validation_block()
     assert "Load broader 5-stock benchmark" in block
-    assert 'broader_symbols = "SDOT REAX CRMG ACDC FWDI"' in block
+    assert 'broader_symbols = "SDOT RR KULR FCEL ACHR"' in block
     assert 'st.session_state["til_ml_history_days"] = 30' in block
     assert 'st.session_state["til_ml_target_horizon"] = 15' in block
     assert 'st.session_state["til_ml_target_mode_choice"] = "Trade-quality move"' in block
     assert 'st.session_state["til_ml_profit_target_pct"] = 1.0' in block
     assert 'st.session_state["til_ml_stop_loss_pct"] = 0.75' in block
+
+def test_predictive_ml_workspace_separates_hours_and_runs_symbol_holdout():
+    block = _pattern_validation_block()
+    assert '"Regular session"' in block
+    assert '"Premarket"' in block
+    assert '"After-hours"' in block
+    assert "session_mode=ml_session_mode" in block
+    assert "leave_one_symbol_out_walk_forward_logistic_baseline" in block
+    assert '"Held-out-stock generalization"' in block
+    assert "held-out ticker was excluded" not in block.lower()
+
