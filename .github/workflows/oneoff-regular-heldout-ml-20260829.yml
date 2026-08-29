@@ -1,0 +1,43 @@
+name: One-Off Regular Held-Out ML Experiment
+
+on:
+  push:
+    branches:
+      - experiment/regular-heldout-ml-20260829
+
+permissions:
+  contents: read
+
+jobs:
+  run-ml:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+      ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+      ALPACA_LIVE_FEED: ${{ vars.ALPACA_LIVE_FEED || 'iex' }}
+      ALPACA_HISTORICAL_FEED: ${{ vars.ALPACA_HISTORICAL_FEED || 'sip' }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Validate Alpaca secrets
+        shell: bash
+        run: |
+          test -n "$ALPACA_API_KEY"
+          test -n "$ALPACA_SECRET_KEY"
+      - name: Run regular-session held-out ML experiment
+        run: python oneoff_regular_heldout_ml_experiment.py
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: regular-heldout-ml-result
+          path: regular_heldout_ml_result.json
+          retention-days: 7
