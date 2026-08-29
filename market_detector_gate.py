@@ -45,7 +45,11 @@ def evaluate_detector_evidence(
 ) -> dict[str, Any]:
     """Return a strict promotion status; never mutates live scoring by itself."""
     spec = DETECTOR_SPECS.get(detector) or {}
-    direction = int(spec.get("direction") or scorecard.get("direction") or 0)
+    direction = (
+        int(spec["direction"])
+        if "direction" in spec
+        else int(scorecard.get("direction") or 0)
+    )
     reasons: list[str] = []
 
     if direction == 0:
