@@ -696,6 +696,82 @@ def source_challenge_jobs(
     return jobs
 
 
+def retrospective_teacher_challenge_jobs(
+    library: dict[str, Any],
+    *,
+    cycle_date: str,
+    maximum: int = 2,
+) -> list[dict[str, Any]]:
+    """Turn causal teacher observations into independent research questions.
+
+    Teacher runs are descriptive observations, never evidence of profitability.
+    The cloud research worker is asked to challenge whether the observed precursor
+    features have external empirical support and under which regimes they fail.
+    """
+    runs = [
+        dict(item)
+        for item in (library or {}).get("retrospective_learning_runs") or []
+        if isinstance(item, dict) and item.get("label_counts")
+    ]
+    runs.sort(key=lambda item: str(item.get("generated_at") or ""), reverse=True)
+    jobs: list[dict[str, Any]] = []
+    for run in runs[: max(1, int(maximum))]:
+        symbol = str(run.get("symbol") or "").strip().upper()
+        timeframe = str(run.get("timeframe") or "")
+        counts = dict(run.get("label_counts") or {})
+        precursor = dict(run.get("precursor_feature_medians") or {})
+        compact_precursor: dict[str, Any] = {}
+        for label, values in list(precursor.items())[:8]:
+            if not isinstance(values, dict):
+                continue
+            compact_precursor[str(label)] = {
+                str(key): value
+                for key, value in list(values.items())[:12]
+            }
+        context = json.dumps(
+            {
+                "important": (
+                    "These are retrospective labels with causal feature cutoffs from the Lab. "
+                    "They are descriptive observations, NOT validated edges. Challenge them "
+                    "independently and look for confounds, regime dependence, and null results."
+                ),
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "period": {
+                    "start": run.get("start"),
+                    "end": run.get("end"),
+                },
+                "label_counts": counts,
+                "causal_precursor_medians": compact_precursor,
+                "feature_layers": run.get("feature_layers") or {},
+                "causality_policy": run.get("causality_policy") or {},
+            },
+            indent=2,
+            default=str,
+        )
+        topic = (
+            f"Independent evidence check for retrospective causal patterns observed in "
+            f"{symbol or 'a stock'} on {timeframe or 'intraday'} bars. Investigate whether "
+            "volume-profile location, volume exhaustion/climax, VWAP/EMA distance, and "
+            "multi-anchored-VWAP compression have measurable predictive value for reversals "
+            "or continuation. Treat the supplied Lab observations as hypotheses, not proof; "
+            "look specifically for contradictory evidence, alternative explanations, regime "
+            "dependence, transaction-cost effects, and robust out-of-sample tests."
+        )
+        jobs.append(
+            {
+                "topic": topic,
+                "existing_context": context,
+                "origin": "retrospective_teacher",
+                "teacher_symbol": symbol,
+                "teacher_timeframe": timeframe,
+                "teacher_run_generated_at": run.get("generated_at"),
+                "cycle_date": cycle_date,
+            }
+        )
+    return jobs
+
+
 def seed_continuous_research_cycle(
     library: dict[str, Any],
     *,
@@ -703,6 +779,7 @@ def seed_continuous_research_cycle(
     cycle_date: str | None = None,
     maximum_topics: int = 10,
     source_challenge_limit: int = 4,
+    retrospective_challenge_limit: int = 2,
 ) -> tuple[dict[str, Any], int]:
     data = ensure_research_collections(library)
     day = str(cycle_date or datetime.now(UTC).date().isoformat())
@@ -733,6 +810,26 @@ def seed_continuous_research_cycle(
             challenge,
             priority=70,
             dedupe_key=f"source-challenge:{day}:{strategy_id}",
+        )
+        if job:
+            added += 1
+
+    for challenge in retrospective_teacher_challenge_jobs(
+        data,
+        cycle_date=day,
+        maximum=max(1, int(retrospective_challenge_limit)),
+    ):
+        symbol = str(challenge.get("teacher_symbol") or "")
+        timeframe = str(challenge.get("teacher_timeframe") or "")
+        generated_at = str(challenge.get("teacher_run_generated_at") or "")
+        data, job = enqueue_research_job(
+            data,
+            "web_research",
+            challenge,
+            priority=65,
+            dedupe_key=(
+                f"retrospective-teacher:{day}:{symbol}:{timeframe}:{generated_at}"
+            ),
         )
         if job:
             added += 1
