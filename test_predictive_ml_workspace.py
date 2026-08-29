@@ -56,6 +56,6 @@ def test_predictive_ml_workspace_separates_hours_and_runs_symbol_holdout():
     assert '"After-hours"' in block
     assert "session_mode=ml_session_mode" in block
     assert "leave_one_symbol_out_walk_forward_logistic_baseline" in block
-    assert '"Held-out-stock generalization"' in block
+    assert "Held-out-stock generalization" in block
     assert "held-out ticker was excluded" not in block.lower()
 
