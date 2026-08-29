@@ -23,7 +23,7 @@ from sklearn.metrics import accuracy_score, brier_score_loss, log_loss, roc_auc_
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-from market_feature_validation import DEFAULT_HORIZONS, build_supervised_feature_rows
+from market_feature_validation import DEFAULT_HORIZONS, build_supervised_feature_rows, limit_rows_to_recent_market_sessions
 from youtube_strategy_engine import parse_symbols
 
 
@@ -48,6 +48,7 @@ def build_cross_stock_training_dataset(
     swing_radius: int = 3,
     max_pages: int = 80,
     require_full_horizon: bool = True,
+    session_limit: int | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Build one supervised dataset across many symbols from a single batched bar load."""
@@ -81,12 +82,25 @@ def build_cross_stock_training_dataset(
     by_symbol: list[dict[str, Any]] = []
     bars_analyzed = 0
     sessions_analyzed = 0
+    observed_market_sessions: set[str] = set()
 
     for index, symbol in enumerate(clean, start=1):
         rows = list((rows_by_symbol or {}).get(symbol) or [])
+        rows, selected_sessions = limit_rows_to_recent_market_sessions(rows, session_limit)
+        observed_market_sessions.update(
+            session for session in selected_sessions if session != "session-0"
+        )
         bars_analyzed += len(rows)
         if not rows:
-            by_symbol.append({"symbol": symbol, "bars": 0, "sessions": 0, "rows": 0})
+            by_symbol.append(
+                {
+                    "symbol": symbol,
+                    "bars": 0,
+                    "sessions": 0,
+                    "market_sessions": selected_sessions,
+                    "rows": 0,
+                }
+            )
             continue
         if progress:
             progress(f"Building causal ML rows for {symbol} ({index}/{len(clean)})…")
@@ -111,6 +125,7 @@ def build_cross_stock_training_dataset(
                 "symbol": symbol,
                 "bars": len(rows),
                 "sessions": sessions,
+                "market_sessions": selected_sessions,
                 "rows": len(symbol_records),
             }
         )
@@ -122,6 +137,11 @@ def build_cross_stock_training_dataset(
         "symbols_with_data": sum(1 for item in by_symbol if int(item.get("bars") or 0) > 0),
         "bars_analyzed": bars_analyzed,
         "sessions_analyzed": sessions_analyzed,
+        "market_sessions_requested": (
+            max(1, int(session_limit)) if session_limit is not None else None
+        ),
+        "market_sessions_observed": len(observed_market_sessions),
+        "market_session_dates": sorted(observed_market_sessions),
         "timeframe": timeframe,
         "horizons": list(clean_horizons),
         "require_full_horizon": bool(require_full_horizon),
