@@ -6710,10 +6710,18 @@ elif module == "Pattern Validation":
                     text or "Building ML research dataset",
                 )
 
+            ml_market = market_client()
             ml_end = utc_now()
+            if str(getattr(ml_market, "historical_feed", "sip")).lower() == "sip":
+                ml_end -= timedelta(minutes=16)
+                ml_status.write(
+                    "Using a 16-minute SIP historical cutoff required by the current Alpaca entitlement."
+                )
+            else:
+                ml_end -= timedelta(minutes=1)
             ml_start = ml_end - timedelta(days=ml_days)
             ml_dataset = build_cross_stock_training_dataset(
-                market_client(),
+                ml_market,
                 ml_symbols,
                 start=ml_start,
                 end=ml_end,
