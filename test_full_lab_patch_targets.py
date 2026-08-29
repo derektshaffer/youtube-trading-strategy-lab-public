@@ -61,6 +61,31 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
         self.assertIn('st.query_params.get("workspace")', source)
         self.assertIn('st.query_params["workspace"] = module', source)
 
+    def test_market_discovery_scans_all_strategies_automatically(self):
+        source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        market_source = (ROOT / "trading_market_discovery.py").read_text(encoding="utf-8")
+        self.assertIn("scan_market_strategies(", source)
+        self.assertIn("def scan_market_strategies(", market_source)
+        self.assertIn("Automatic strategy coverage", source)
+        self.assertIn("Find the best opportunities now", source)
+        self.assertNotIn('"Strategy to scan for"', source)
+
+    def test_home_and_sidebar_use_goal_based_simple_navigation(self):
+        source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        for marker in (
+            "WHAT DO YOU WANT TO DO?",
+            "Find strategy for a stock",
+            "Analyze a stock now",
+            "Find stocks worth watching",
+            "Add research material",
+            "AI discoveries & research",
+            "Advanced / Research Details",
+            "What do you want to do?",
+            "Find the best strategy for a stock",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, source)
+
     def test_continuous_research_button_is_clearly_manual(self):
         source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
         self.assertIn("Run today's research cycle now", source)
