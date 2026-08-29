@@ -108,7 +108,17 @@ class MarketDiscoveryTests(unittest.TestCase):
 
 
 
-    def test_large_market_scan_is_chunked_without_dropping_symbols(self):
+
+
+    def test_momentum_universe_interleaves_gainers_and_active_without_duplicates(self):
+        merged = discovery.merge_momentum_candidate_universe(
+            ["AAA", "BBB", "CCC"],
+            ["AAA", "DDD", "EEE", "FFF"],
+            limit=6,
+        )
+        self.assertEqual(merged, ["AAA", "BBB", "DDD", "CCC", "EEE", "FFF"])
+        self.assertEqual(len(merged), len(set(merged)))
+\n    def test_large_market_scan_is_chunked_without_dropping_symbols(self):
         market = FakeMarket()
         symbols = [f"S{i:02d}" for i in range(45)]
         strategies = [
