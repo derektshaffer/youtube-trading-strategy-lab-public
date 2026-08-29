@@ -4810,6 +4810,19 @@ def generate_strategy_variants(
         ("min_dollar_volume", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 100.0, 2_000_000_000.0, False),
         ("max_spread_pct", (0.60, 0.80, 1.25, 1.60), 0.01, 50.0, False),
         ("max_vwap_distance_pct", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 0.05, 100.0, False),
+        ("minimum_vwap_hold_bars", (0.50, 0.75, 1.25, 1.50, 2.0), 1.0, 60.0, True),
+        ("min_volume_acceleration_ratio", (0.50, 0.70, 0.85, 1.15, 1.30, 1.60), 0.10, 20.0, False),
+        ("min_atr_pct", (0.50, 0.70, 0.85, 1.15, 1.30, 1.60), 0.05, 100.0, False),
+        ("max_atr_pct", (0.70, 0.85, 1.15, 1.30, 1.60), 0.05, 200.0, False),
+        ("minimum_breakout_hold_bars", (0.50, 0.75, 1.25, 1.50, 2.0), 1.0, 60.0, True),
+        ("min_breakout_volume_ratio", (0.50, 0.70, 0.85, 1.15, 1.30, 1.60), 0.10, 20.0, False),
+        ("minimum_completed_bounces", (0.50, 0.75, 1.25, 1.50), 1.0, 3.0, True),
+        ("min_latest_bounce_recovery_pct", (0.50, 0.70, 0.85, 1.15, 1.30, 1.60), 0.05, 300.0, False),
+        ("min_latest_bounce_volume_ratio", (0.50, 0.70, 0.85, 1.15, 1.30, 1.60), 0.10, 20.0, False),
+        ("max_base_range_atr_ratio", (0.60, 0.80, 1.20, 1.50), 0.10, 20.0, False),
+        ("min_expansion_volume_ratio", (0.50, 0.70, 0.85, 1.15, 1.30, 1.60), 0.10, 20.0, False),
+        ("max_pullback_depth_pct_of_impulse", (0.70, 0.85, 1.15, 1.30, 1.60), 1.0, 200.0, False),
+        ("max_pullback_volume_ratio", (0.70, 0.85, 1.15, 1.30, 1.60), 0.05, 10.0, False),
         ("max_avwap_distance_pct", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 0.05, 100.0, False),
         ("avwap_pivot_confirm_bars", (0.50, 0.75, 1.50, 2.0), 1.0, 10.0, True),
         ("avwap_pullback_tolerance_pct", (0.50, 0.75, 1.25, 1.50, 2.0), 0.05, 10.0, False),
@@ -4970,6 +4983,19 @@ def generate_local_strategy_refinements(
         "min_dollar_volume": ((500_000.0, 250_000.0, 100_000.0, 50_000.0), 100.0, 2_000_000_000.0, False),
         "max_spread_pct": ((0.50, 0.25, 0.10), 0.01, 50.0, False),
         "max_vwap_distance_pct": ((2.0, 1.0, 0.5, 0.25), 0.05, 100.0, False),
+        "minimum_vwap_hold_bars": ((4.0, 2.0, 1.0), 1.0, 60.0, True),
+        "min_volume_acceleration_ratio": ((1.0, 0.5, 0.25, 0.10), 0.10, 20.0, False),
+        "min_atr_pct": ((2.0, 1.0, 0.5, 0.25), 0.05, 100.0, False),
+        "max_atr_pct": ((4.0, 2.0, 1.0, 0.5), 0.05, 200.0, False),
+        "minimum_breakout_hold_bars": ((4.0, 2.0, 1.0), 1.0, 60.0, True),
+        "min_breakout_volume_ratio": ((1.0, 0.5, 0.25, 0.10), 0.10, 20.0, False),
+        "minimum_completed_bounces": ((1.0,), 1.0, 3.0, True),
+        "min_latest_bounce_recovery_pct": ((5.0, 2.0, 1.0, 0.5), 0.05, 300.0, False),
+        "min_latest_bounce_volume_ratio": ((0.50, 0.25, 0.10), 0.10, 20.0, False),
+        "max_base_range_atr_ratio": ((1.0, 0.5, 0.25, 0.10), 0.10, 20.0, False),
+        "min_expansion_volume_ratio": ((1.0, 0.5, 0.25, 0.10), 0.10, 20.0, False),
+        "max_pullback_depth_pct_of_impulse": ((10.0, 5.0, 2.0, 1.0), 1.0, 200.0, False),
+        "max_pullback_volume_ratio": ((0.50, 0.25, 0.10), 0.05, 10.0, False),
         "max_avwap_distance_pct": ((2.0, 1.0, 0.5, 0.25), 0.05, 100.0, False),
         "avwap_pivot_confirm_bars": ((2.0, 1.0), 1.0, 10.0, True),
         "avwap_pullback_tolerance_pct": ((0.75, 0.50, 0.25, 0.10), 0.05, 10.0, False),
@@ -5003,6 +5029,19 @@ def generate_local_strategy_refinements(
         "min_dollar_volume": ((100_000.0, 50_000.0, 25_000.0), 100.0, 2_000_000_000.0, False),
         "max_spread_pct": ((0.10, 0.05, 0.02), 0.01, 50.0, False),
         "max_vwap_distance_pct": ((0.50, 0.25, 0.10), 0.05, 100.0, False),
+        "minimum_vwap_hold_bars": ((2.0, 1.0), 1.0, 60.0, True),
+        "min_volume_acceleration_ratio": ((0.25, 0.10, 0.05), 0.10, 20.0, False),
+        "min_atr_pct": ((0.50, 0.25, 0.10), 0.05, 100.0, False),
+        "max_atr_pct": ((1.0, 0.50, 0.25), 0.05, 200.0, False),
+        "minimum_breakout_hold_bars": ((2.0, 1.0), 1.0, 60.0, True),
+        "min_breakout_volume_ratio": ((0.25, 0.10, 0.05), 0.10, 20.0, False),
+        "minimum_completed_bounces": ((1.0,), 1.0, 3.0, True),
+        "min_latest_bounce_recovery_pct": ((1.0, 0.50, 0.25), 0.05, 300.0, False),
+        "min_latest_bounce_volume_ratio": ((0.25, 0.10, 0.05), 0.10, 20.0, False),
+        "max_base_range_atr_ratio": ((0.25, 0.10, 0.05), 0.10, 20.0, False),
+        "min_expansion_volume_ratio": ((0.25, 0.10, 0.05), 0.10, 20.0, False),
+        "max_pullback_depth_pct_of_impulse": ((5.0, 2.0, 1.0), 1.0, 200.0, False),
+        "max_pullback_volume_ratio": ((0.25, 0.10, 0.05), 0.05, 10.0, False),
         "max_avwap_distance_pct": ((0.50, 0.25, 0.10), 0.05, 100.0, False),
         "avwap_pivot_confirm_bars": ((1.0,), 1.0, 10.0, True),
         "avwap_pullback_tolerance_pct": ((0.25, 0.10, 0.05), 0.05, 10.0, False),
@@ -7467,6 +7506,7 @@ def match_strategy(metrics: dict[str, Any], strategy: dict[str, Any]) -> dict[st
     rules = normalize_machine_rules(strategy.get("machine_rules"))
     checks: list[dict[str, Any]] = []
     chart_checks = metrics.get("chart_checks") if isinstance(metrics.get("chart_checks"), dict) else {}
+    market_features = metrics.get("market_features") if isinstance(metrics.get("market_features"), dict) else {}
 
     def check(label: str, actual: Any, required: Any, compare: Callable[[float, float], bool]) -> None:
         if required is None:
@@ -7477,6 +7517,13 @@ def match_strategy(metrics: dict[str, Any], strategy: dict[str, Any]) -> dict[st
         else:
             status = "pass" if compare(actual_float, float(required)) else "fail"
         checks.append({"label": label, "actual": actual, "required": required, "status": status})
+
+    def check_market_flag(label: str, feature: str, rule: str, expected: bool) -> None:
+        if rules.get(rule) is not True:
+            return
+        actual = market_features.get(feature)
+        status = "unknown" if actual is None else ("pass" if bool(actual) is expected else "fail")
+        checks.append({"label": label, "actual": actual, "required": expected, "status": status})
 
     check("Minimum price", metrics.get("price"), rules.get("min_price"), lambda actual, expected: actual >= expected)
     check("Maximum price", metrics.get("price"), rules.get("max_price"), lambda actual, expected: actual <= expected)
@@ -7497,6 +7544,55 @@ def match_strategy(metrics: dict[str, Any], strategy: dict[str, Any]) -> dict[st
     )
     check("Maximum spread %", metrics.get("spread_pct"), rules.get("max_spread_pct"), lambda actual, expected: actual <= expected)
     check("Maximum VWAP extension %", metrics.get("vwap_distance_pct"), rules.get("max_vwap_distance_pct"), lambda actual, expected: actual <= expected)
+    for label, feature, rule, comparator in (
+        ("VWAP hold bars", "vwap_hold_bars", "minimum_vwap_hold_bars", lambda a, b: a >= b),
+        ("Volume acceleration ratio", "volume_acceleration_ratio", "min_volume_acceleration_ratio", lambda a, b: a >= b),
+        ("Minimum ATR %", "atr_pct", "min_atr_pct", lambda a, b: a >= b),
+        ("Maximum ATR %", "atr_pct", "max_atr_pct", lambda a, b: a <= b),
+        ("Breakout hold bars", "breakout_hold_bars", "minimum_breakout_hold_bars", lambda a, b: a >= b),
+        ("Breakout volume ratio", "breakout_volume_ratio", "min_breakout_volume_ratio", lambda a, b: a >= b),
+        ("Completed bounce count", "completed_bounce_count", "minimum_completed_bounces", lambda a, b: a >= b),
+        ("Latest bounce recovery %", "latest_bounce_recovery_pct", "min_latest_bounce_recovery_pct", lambda a, b: a >= b),
+        ("Latest bounce volume ratio", "latest_bounce_volume_ratio_vs_prior", "min_latest_bounce_volume_ratio", lambda a, b: a >= b),
+        ("Maximum base range / ATR", "base_range_atr_ratio", "max_base_range_atr_ratio", lambda a, b: a <= b),
+        ("Expansion volume ratio", "expansion_volume_ratio", "min_expansion_volume_ratio", lambda a, b: a >= b),
+        ("Maximum pullback depth %", "pullback_depth_pct_of_impulse", "max_pullback_depth_pct_of_impulse", lambda a, b: a <= b),
+        ("Maximum pullback volume ratio", "pullback_volume_ratio", "max_pullback_volume_ratio", lambda a, b: a <= b),
+    ):
+        check(label, market_features.get(feature), rules.get(rule), comparator)
+
+    for label, feature, rule, expected in (
+        ("VWAP reclaim held", "vwap_reclaim_recent", "require_vwap_reclaim_hold", True),
+        ("No recent VWAP rejection", "vwap_rejection_recent", "avoid_vwap_rejection", False),
+        ("VWAP retest held", "vwap_retest_held", "require_vwap_retest_held", True),
+        ("No failed VWAP retest", "vwap_retest_failed", "avoid_vwap_retest_failed", False),
+        ("Volume accelerating", "volume_accelerating", "require_volume_accelerating", True),
+        ("Confirmed HH/HL uptrend", "uptrend_structure", "require_uptrend_structure", True),
+        ("Confirmed-swing breakout", "breakout_above_last_swing_high", "require_breakout_above_confirmed_swing_high", True),
+        ("No failed confirmed-swing breakout", "failed_breakout_last_swing_high", "avoid_failed_breakout", False),
+        ("Bounce #2 present", "bounce_2_present", "require_bounce_2_present", True),
+        ("Bounce #3 present", "bounce_3_present", "require_bounce_3_present", True),
+        ("No bounce deterioration", "bounce_deteriorating", "avoid_bounce_deterioration", False),
+        ("Bounce strengthening", "bounce_strengthening", "require_bounce_strengthening", True),
+        ("Bounce sequence higher lows", "bounce_sequence_higher_lows", "require_bounce_sequence_higher_lows", True),
+        ("Bounce sequence higher highs", "bounce_sequence_higher_highs", "require_bounce_sequence_higher_highs", True),
+        ("No structural bounce weakening", "bounce_structural_weakening", "avoid_bounce_structural_weakening", False),
+        ("Structural bounce strengthening", "bounce_structural_strengthening", "require_bounce_structural_strengthening", True),
+        ("Stair-step up", "stair_step_up", "require_stair_step_up", True),
+        ("No stair-step down", "stair_step_down", "avoid_stair_step_down", False),
+        ("Consolidation → expansion up", "consolidation_then_expansion_up", "require_consolidation_expansion_up", True),
+        ("No consolidation → expansion down", "consolidation_then_expansion_down", "avoid_consolidation_expansion_down", False),
+        ("Pullback forms a higher low", "pullback_higher_low", "require_pullback_higher_low", True),
+    ):
+        check_market_flag(label, feature, rule, expected)
+    if rules.get("require_strong_pullback") is True:
+        actual = market_features.get("pullback_quality")
+        checks.append({
+            "label": "Strong pullback quality",
+            "actual": actual,
+            "required": "strong",
+            "status": "unknown" if actual is None else ("pass" if actual == "strong" else "fail"),
+        })
     if rules.get("above_vwap") is not None:
         required = bool(rules["above_vwap"])
         actual = bool(metrics.get("above_vwap")) if metrics.get("vwap") is not None else None
