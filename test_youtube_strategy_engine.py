@@ -1228,7 +1228,62 @@ class CloudDestinationBindingTests(unittest.TestCase):
 
 
 class CloudBackupFirstWriteTests(unittest.TestCase):
-    def test_large_library_uses_git_data_api_with_fast_forward_ref_update(self):
+    def test_large_library_git_push_round_trip_against_local_bare_repository(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            remote = root / "remote.git"
+            source.mkdir()
+
+            def git(*arguments, cwd=None):
+                return engine.subprocess.run(
+                    ["git", *arguments],
+                    cwd=str(cwd) if cwd else None,
+                    capture_output=True,
+                    check=True,
+                    text=True,
+                ).stdout
+
+            git("init", "-b", "main", cwd=source)
+            git("config", "user.name", "Test", cwd=source)
+            git("config", "user.email", "test@example.com", cwd=source)
+            path = "trading-intelligence-lab/intelligence_library.json"
+            target = source / path
+            target.parent.mkdir(parents=True)
+            old_data = {"strategies": [], "updated_at": "2026-08-28T23:40:00Z"}
+            target.write_text(json.dumps(old_data, indent=2), encoding="utf-8")
+            git("add", "--", path, cwd=source)
+            git("commit", "-m", "Initial backup", cwd=source)
+            current_sha = git("hash-object", "--", path, cwd=source).strip()
+            git("clone", "--bare", str(source), str(remote))
+
+            cloud = engine.GitHubCloudBackup(
+                "owner/private-backups",
+                "token",
+                branch="main",
+                path=path,
+            )
+            new_data = {
+                "strategies": [],
+                "updated_at": "2026-08-29T00:30:00Z",
+                "large": "x" * (engine.GITHUB_CONTENTS_API_SAFE_BYTES + 1),
+            }
+            current = {"library": old_data, "sha": current_sha}
+            with patch.object(cloud, "read_library", return_value=current), patch.object(
+                cloud,
+                "_git_clone_url",
+                return_value=remote.as_uri(),
+            ):
+                saved = cloud.save_library(
+                    new_data,
+                    previous_updated_at=old_data["updated_at"],
+                )
+
+            expected = json.dumps(new_data, indent=2, default=str, allow_nan=False)
+            self.assertEqual(git("show", f"main:{path}", cwd=remote), expected)
+            self.assertEqual(saved["sha"], git("rev-parse", f"main:{path}", cwd=remote).strip())
+
+    def test_large_library_uses_shallow_non_forced_git_push(self):
         cloud = engine.GitHubCloudBackup(
             "owner/private-backups",
             "token",
@@ -1236,11 +1291,7 @@ class CloudBackupFirstWriteTests(unittest.TestCase):
             path="trading-intelligence-lab/intelligence_library.json",
         )
         current_sha = "a" * 40
-        head_sha = "b" * 40
-        base_tree_sha = "c" * 40
         blob_sha = "d" * 40
-        tree_sha = "e" * 40
-        commit_sha = "f" * 40
         data = {
             "strategies": [],
             "updated_at": "2026-08-28T23:50:00Z",
@@ -1251,42 +1302,38 @@ class CloudBackupFirstWriteTests(unittest.TestCase):
             "sha": current_sha,
         }
 
-        def request(url, *, method="GET", payload=None, missing_ok=False):
-            if "/git/ref/heads/main" in url:
-                return {"object": {"sha": head_sha}}
-            if "/contents/" in url:
-                return {"sha": current_sha}
-            if url.endswith(f"/git/commits/{head_sha}"):
-                return {"tree": {"sha": base_tree_sha}}
-            if url.endswith("/git/blobs"):
-                self.assertEqual(method, "POST")
-                self.assertEqual(payload["encoding"], "base64")
-                return {"sha": blob_sha}
-            if url.endswith("/git/trees"):
-                self.assertEqual(payload["base_tree"], base_tree_sha)
-                self.assertEqual(payload["tree"][0]["sha"], blob_sha)
-                return {"sha": tree_sha}
-            if url.endswith("/git/commits"):
-                self.assertEqual(payload["parents"], [head_sha])
-                return {"sha": commit_sha}
-            if "/git/refs/heads/main" in url:
-                self.assertEqual(method, "PATCH")
-                self.assertEqual(payload, {"sha": commit_sha, "force": False})
-                return {"object": {"sha": commit_sha}}
-            self.fail(f"Unexpected request: {method} {url}")
+        observed = {"commands": [], "saved": b""}
+
+        def git_run(command, **kwargs):
+            observed["commands"].append(command)
+            if command[1] == "clone":
+                checkout = Path(command[-1])
+                target = checkout / cloud.path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("old", encoding="utf-8")
+                return engine.subprocess.CompletedProcess(command, 0, "", "")
+            if command[1:3] == ["hash-object", "--"]:
+                prior_hashes = sum(1 for item in observed["commands"] if item[1:3] == ["hash-object", "--"])
+                value = current_sha if prior_hashes == 1 else blob_sha
+                return engine.subprocess.CompletedProcess(command, 0, value + "\n", "")
+            if command[1] == "add":
+                observed["saved"] = (Path(kwargs["cwd"]) / cloud.path).read_bytes()
+            return engine.subprocess.CompletedProcess(command, 0, "", "")
 
         with patch.object(cloud, "read_library", return_value=current), patch.object(
-            cloud,
-            "_request",
-            side_effect=request,
-        ) as mocked:
+            engine.subprocess,
+            "run",
+            side_effect=git_run,
+        ):
             saved = cloud.save_library(
                 data,
                 previous_updated_at="2026-08-28T23:40:00Z",
             )
 
         self.assertEqual(saved["sha"], blob_sha)
-        self.assertTrue(any(call.kwargs.get("method") == "PATCH" for call in mocked.call_args_list))
+        self.assertEqual(observed["saved"], json.dumps(data, indent=2, default=str, allow_nan=False).encode("utf-8"))
+        push = next(command for command in observed["commands"] if command[1] == "push")
+        self.assertEqual(push, ["git", "push", "origin", "HEAD:refs/heads/main"])
 
     def test_large_library_stops_if_blob_changed_before_commit(self):
         cloud = engine.GitHubCloudBackup(
@@ -1304,14 +1351,21 @@ class CloudBackupFirstWriteTests(unittest.TestCase):
             "updated_at": "2026-08-28T23:50:00Z",
             "large": "x" * (engine.GITHUB_CONTENTS_API_SAFE_BYTES + 1),
         }
-        responses = [
-            {"object": {"sha": "b" * 40}},
-            {"sha": "9" * 40},
-        ]
+        def git_run(command, **kwargs):
+            if command[1] == "clone":
+                checkout = Path(command[-1])
+                target = checkout / cloud.path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("changed", encoding="utf-8")
+                return engine.subprocess.CompletedProcess(command, 0, "", "")
+            if command[1:3] == ["hash-object", "--"]:
+                return engine.subprocess.CompletedProcess(command, 0, "9" * 40 + "\n", "")
+            return engine.subprocess.CompletedProcess(command, 0, "", "")
+
         with patch.object(cloud, "read_library", return_value=current), patch.object(
-            cloud,
-            "_request",
-            side_effect=responses,
+            engine.subprocess,
+            "run",
+            side_effect=git_run,
         ):
             with self.assertRaisesRegex(engine.AppError, "changed while"):
                 cloud.save_library(
