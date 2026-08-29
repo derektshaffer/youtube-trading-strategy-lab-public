@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from market_feature_validation import (
     DEFAULT_HORIZONS,
+    limit_rows_to_recent_market_sessions,
     run_detector_event_study,
     summarize_detector_events,
 )
@@ -35,6 +36,7 @@ def run_detector_scorecards(
     swing_radius: int = 3,
     detectors: list[str] | None = None,
     max_pages: int = 40,
+    session_limit: int | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Replay detector events across multiple stocks using one batched bar request."""
@@ -63,15 +65,24 @@ def run_detector_scorecards(
     by_symbol: list[dict[str, Any]] = []
     total_bars = 0
     total_sessions = 0
+    observed_market_sessions: set[str] = set()
 
     for index, symbol in enumerate(clean, start=1):
         rows = list((rows_by_symbol or {}).get(symbol) or [])
+        rows, selected_sessions = limit_rows_to_recent_market_sessions(
+            rows,
+            session_limit,
+        )
+        observed_market_sessions.update(
+            session for session in selected_sessions if session != "session-0"
+        )
         if not rows:
             by_symbol.append(
                 {
                     "symbol": symbol,
                     "bars": 0,
                     "sessions": 0,
+                    "market_sessions": selected_sessions,
                     "event_count": 0,
                     "detector_counts": {},
                 }
@@ -103,6 +114,7 @@ def run_detector_scorecards(
                 "symbol": symbol,
                 "bars": bars,
                 "sessions": sessions,
+                "market_sessions": selected_sessions,
                 "event_count": len(symbol_events),
                 "detector_counts": dict(detector_counts),
             }
@@ -147,6 +159,11 @@ def run_detector_scorecards(
         "symbols_with_data": sum(1 for item in by_symbol if int(item.get("bars") or 0) > 0),
         "bars_analyzed": total_bars,
         "sessions_analyzed": total_sessions,
+        "market_sessions_requested": (
+            max(1, int(session_limit)) if session_limit is not None else None
+        ),
+        "market_sessions_observed": len(observed_market_sessions),
+        "market_session_dates": sorted(observed_market_sessions),
         "timeframe": timeframe,
         "horizons": list(sorted({max(1, int(value)) for value in horizons})),
         "events": all_events,
