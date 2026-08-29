@@ -6633,6 +6633,26 @@ elif module == "Pattern Validation":
         "Every reported model metric is out-of-sample. This research does not change scanner rankings, "
         "strategy approval, Paper Auto, or live trading."
     )
+    ml_preset_cols = st.columns([1.35, 2.65])
+    if ml_preset_cols[0].button(
+        "Load broader 5-stock benchmark",
+        width="stretch",
+        key="til_load_broader_ml_benchmark",
+    ):
+        broader_symbols = "SDOT REAX CRMG ACDC FWDI"
+        st.session_state["til_ml_symbols"] = broader_symbols
+        st.session_state["til_ml_symbols_input"] = broader_symbols
+        st.session_state["til_ml_history_days"] = 30
+        st.session_state["til_ml_target_horizon"] = 15
+        st.session_state["til_ml_target_mode_choice"] = "Trade-quality move"
+        st.session_state["til_ml_profit_target_pct"] = 1.0
+        st.session_state["til_ml_stop_loss_pct"] = 0.75
+        st.rerun()
+    ml_preset_cols[1].caption(
+        "Broader benchmark preset: SDOT · REAX · CRMG · ACDC · FWDI · "
+        "30 trading days · 15-minute horizon · +1.00% before -0.75%."
+    )
+
     ml_cols = st.columns([1.7, 0.9, 0.9, 1.0])
     ml_symbols_text = ml_cols[0].text_input(
         "ML research stocks",
