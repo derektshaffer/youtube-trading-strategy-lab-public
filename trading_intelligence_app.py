@@ -6893,7 +6893,7 @@ elif module == "Pattern Validation":
                 start=ml_start,
                 end=ml_end,
                 timeframe="1Min",
-                horizons=(5, 15, 30),
+                horizons=(ml_horizon,),
                 swing_radius=3,
                 max_pages=120,
                 require_full_horizon=True,
