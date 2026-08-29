@@ -238,3 +238,76 @@ def apply_anchored_vwap_indicators(
         & (data["close"] >= data["avwap"])
     )
     return data
+
+
+TEACHER_MULTI_AVWAP_MODES: tuple[str, ...] = (
+    "swing_low",
+    "swing_high",
+    "higher_low_handoff",
+    "lower_high_handoff",
+    "breakout_bar",
+    "previous_day_high_break",
+)
+
+
+def apply_multi_anchor_avwap_teacher_features(
+    frame: pd.DataFrame,
+    *,
+    modes: tuple[str, ...] = TEACHER_MULTI_AVWAP_MODES,
+    confirm_bars: int = 2,
+    pinch_threshold_pct: float = 0.35,
+) -> pd.DataFrame:
+    """Attach multiple causal AVWAPs for retrospective-teacher research.
+
+    Each component AVWAP obeys the same causal activation rules as the live
+    deterministic engine. A swing anchor is not visible until its right-side
+    confirmation bars have closed.
+    """
+    data = frame.copy().sort_values("timestamp").reset_index(drop=True)
+    clean_modes = tuple(
+        mode
+        for mode in modes
+        if str(mode or "") in SUPPORTED_AVWAP_ANCHOR_MODES
+    )
+    confirm_bars = min(20, max(1, int(confirm_bars)))
+    pinch_threshold_pct = min(10.0, max(0.01, float(pinch_threshold_pct)))
+
+    avwap_columns: list[str] = []
+    for mode in clean_modes:
+        rules = {
+            "avwap_anchor_mode": mode,
+            "avwap_pivot_confirm_bars": confirm_bars,
+            "avwap_pullback_tolerance_pct": 0.5,
+        }
+        enriched = apply_anchored_vwap_indicators(data, rules)
+        column = f"teacher_avwap_{mode}"
+        data[column] = pd.to_numeric(enriched["avwap"], errors="coerce")
+        avwap_columns.append(column)
+
+    if not avwap_columns:
+        data["multi_avwap_active_count"] = 0
+        data["multi_avwap_spread_pct"] = float("nan")
+        data["multi_avwap_center"] = float("nan")
+        data["multi_avwap_price_distance_pct"] = float("nan")
+        data["multi_avwap_pinch"] = False
+        return data
+
+    values = data[avwap_columns]
+    active_count = values.notna().sum(axis=1)
+    minimum = values.min(axis=1, skipna=True)
+    maximum = values.max(axis=1, skipna=True)
+    center = values.mean(axis=1, skipna=True)
+    spread_pct = ((maximum - minimum).div(center.replace(0, float("nan")))) * 100.0
+
+    data["multi_avwap_active_count"] = active_count.astype(int)
+    data["multi_avwap_spread_pct"] = spread_pct.where(active_count >= 2)
+    data["multi_avwap_center"] = center.where(active_count >= 2)
+    data["multi_avwap_price_distance_pct"] = (
+        (data["close"].div(data["multi_avwap_center"]) - 1.0) * 100.0
+    ).where(active_count >= 2)
+    data["multi_avwap_pinch"] = (
+        (active_count >= 2)
+        & data["multi_avwap_spread_pct"].notna()
+        & (data["multi_avwap_spread_pct"] <= pinch_threshold_pct)
+    )
+    return data
