@@ -282,6 +282,8 @@ class MarketDiscoveryTests(unittest.TestCase):
 
         self.assertIn("market_features", result)
         self.assertEqual(result["market_features"]["features"]["bar_count"], 2)
+        self.assertEqual(result["news_items"], [])
+        self.assertEqual(market.news_calls, 1)
         self.assertEqual([call[1] for call in market.bar_calls], ["1Day", "1Min"])
 
 

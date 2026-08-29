@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime, timedelta, timezone
+import re
 from typing import Any, Callable
 
 import pandas as pd
@@ -53,14 +54,21 @@ CATALYST_RULES: tuple[tuple[str, float, tuple[str, ...]], ...] = (
         ("investigation", "subpoena", "lawsuit", "class action", "sec charges", "fraud"),
     ),
     (
-        "FDA / clinical catalyst",
+        "FDA approval / clearance",
         9.0,
         (
             "fda approval",
+            "fda approves",
             "fda clears",
             "fda clearance",
             "breakthrough therapy",
             "fast track designation",
+        ),
+    ),
+    (
+        "clinical trial update",
+        0.0,
+        (
             "phase 1",
             "phase 2",
             "phase 3",
@@ -71,7 +79,7 @@ CATALYST_RULES: tuple[tuple[str, float, tuple[str, ...]], ...] = (
     ),
     (
         "merger / acquisition",
-        9.0,
+        0.0,
         (
             "merger",
             "acquisition",
@@ -84,7 +92,7 @@ CATALYST_RULES: tuple[tuple[str, float, tuple[str, ...]], ...] = (
     ),
     (
         "major commercial deal",
-        7.0,
+        6.0,
         (
             "purchase order",
             "contract award",
@@ -96,18 +104,25 @@ CATALYST_RULES: tuple[tuple[str, float, tuple[str, ...]], ...] = (
         ),
     ),
     (
-        "earnings / guidance",
+        "positive earnings / guidance",
         6.0,
+        (
+            "raises guidance",
+            "raised guidance",
+            "beats estimates",
+            "beat estimates",
+            "record revenue",
+            "record quarterly revenue",
+        ),
+    ),
+    (
+        "earnings / financial results",
+        0.0,
         (
             "earnings",
             "quarterly results",
             "financial results",
-            "raises guidance",
-            "raised guidance",
             "revenue guidance",
-            "beats estimates",
-            "record revenue",
-            "profit",
         ),
     ),
     (
@@ -121,7 +136,6 @@ CATALYST_RULES: tuple[tuple[str, float, tuple[str, ...]], ...] = (
         ("upgraded", "upgrade", "price target raised", "raises price target", "initiates coverage"),
     ),
 )
-
 
 def _article_timestamp(article: dict[str, Any]) -> datetime | None:
     raw = article.get("created_at") or article.get("published_at") or article.get("updated_at")
@@ -148,7 +162,13 @@ def classify_catalyst(article: dict[str, Any]) -> dict[str, Any]:
             matches.append({"category": category, "score": score, "keywords": found})
 
     if matches:
-        strongest = max(matches, key=lambda item: abs(float(item["score"])))
+        strongest = max(
+            matches,
+            key=lambda item: (
+                abs(float(item["score"])),
+                len(item.get("keywords") or []),
+            ),
+        )
         category = strongest["category"]
         score = float(strongest["score"])
         keywords = strongest["keywords"]
@@ -158,6 +178,7 @@ def classify_catalyst(article: dict[str, Any]) -> dict[str, Any]:
         keywords = []
 
     published = _article_timestamp(article)
+    fingerprint_text = re.sub(r"[^a-z0-9]+", " ", headline.casefold()).strip()
     return {
         "headline": headline,
         "summary": summary,
@@ -168,9 +189,120 @@ def classify_catalyst(article: dict[str, Any]) -> dict[str, Any]:
         "category": category,
         "score": score,
         "keywords": keywords,
-        "is_specific_catalyst": bool(score),
+        "is_specific_catalyst": bool(matches),
+        "is_directional_hint": bool(matches) and score != 0,
+        "direction_requires_context": bool(matches) and score == 0,
         "is_positive": score > 0,
         "is_negative": score < 0,
+        "is_dilution_risk": category == "offering / dilution risk",
+        "is_structural_risk": category in {
+            "offering / dilution risk",
+            "delisting / reverse split risk",
+            "bankruptcy / severe distress",
+            "legal / regulatory risk",
+        },
+        "evidence_type": "news",
+        "source_quality": "news",
+        "fingerprint": fingerprint_text,
+    }
+
+
+def catalyst_freshness(
+    published_at: Any,
+    *,
+    as_of: datetime | None = None,
+) -> dict[str, Any]:
+    """Return explicit age/freshness without claiming the market has or has not priced it in."""
+    published = _article_timestamp({"published_at": published_at})
+    reference = as_of or datetime.now(timezone.utc)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    reference = reference.astimezone(timezone.utc)
+    if published is None:
+        return {
+            "age_hours": None,
+            "freshness": "unknown",
+            "freshness_weight": 0.0,
+        }
+    age_hours = max(0.0, (reference - published).total_seconds() / 3600.0)
+    if age_hours <= 2:
+        label, weight = "breaking", 1.0
+    elif age_hours <= 24:
+        label, weight = "fresh", 0.9
+    elif age_hours <= 72:
+        label, weight = "recent", 0.65
+    elif age_hours <= 168:
+        label, weight = "aging", 0.4
+    else:
+        label, weight = "stale", 0.2
+    return {
+        "age_hours": age_hours,
+        "freshness": label,
+        "freshness_weight": weight,
+    }
+
+
+def rank_catalyst_evidence(
+    news_items: list[dict[str, Any]],
+    sec_items: list[dict[str, Any]] | None = None,
+    *,
+    as_of: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Combine deterministic news + SEC evidence with freshness and duplicate awareness."""
+    reference = as_of or datetime.now(timezone.utc)
+    combined: list[dict[str, Any]] = []
+    for raw in [*(news_items or []), *((sec_items or []))]:
+        item = dict(raw)
+        freshness = catalyst_freshness(item.get("published_at"), as_of=reference)
+        item.update(freshness)
+        score = safe_float(item.get("score"), 0.0) or 0.0
+        source_weight = 1.0 if str(item.get("evidence_type") or "") == "sec_filing" else 0.85
+        item["effective_score"] = score * float(freshness["freshness_weight"]) * source_weight
+        fingerprint = str(item.get("fingerprint") or "").strip()
+        if not fingerprint:
+            headline = str(item.get("headline") or item.get("primaryDocDescription") or "").casefold()
+            fingerprint = re.sub(r"[^a-z0-9]+", " ", headline).strip()
+        item["fingerprint"] = fingerprint
+        combined.append(item)
+
+    combined.sort(key=lambda item: str(item.get("published_at") or ""), reverse=True)
+    seen: set[str] = set()
+    for item in combined:
+        fingerprint = str(item.get("fingerprint") or "")
+        if fingerprint and fingerprint in seen:
+            item["novelty"] = "repeat"
+            item["novelty_weight"] = 0.5
+            item["effective_score"] = (safe_float(item.get("effective_score"), 0.0) or 0.0) * 0.5
+        else:
+            item["novelty"] = "new"
+            item["novelty_weight"] = 1.0
+            if fingerprint:
+                seen.add(fingerprint)
+
+    combined.sort(
+        key=lambda item: (
+            abs(safe_float(item.get("effective_score"), 0.0) or 0.0),
+            str(item.get("published_at") or ""),
+        ),
+        reverse=True,
+    )
+    return combined
+
+
+def catalyst_intelligence_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
+    specific = [item for item in items if item.get("is_specific_catalyst")]
+    dilution = [item for item in specific if item.get("is_dilution_risk")]
+    fresh = [
+        item for item in specific
+        if str(item.get("freshness") or "") in {"breaking", "fresh"}
+    ]
+    return {
+        "evidence_items": len(items),
+        "specific_catalysts": len(specific),
+        "fresh_specific_catalysts": len(fresh),
+        "dilution_risks": len(dilution),
+        "positive_catalysts": sum(1 for item in specific if item.get("is_positive")),
+        "negative_catalysts": sum(1 for item in specific if item.get("is_negative")),
     }
 
 

@@ -47,9 +47,16 @@ run_stock_strategy_finder = _stock_strategy_finder.run_stock_strategy_finder
 search_profile = _stock_strategy_finder.search_profile
 selected_strategies_for_profile = _stock_strategy_finder.selected_strategies_for_profile
 from trading_catalyst_core import (
+    catalyst_intelligence_summary,
     classify_catalyst,
     enrich_bars_with_point_in_time_catalysts,
     historical_news,
+    rank_catalyst_evidence,
+)
+from sec_catalyst_intelligence import (
+    SecEdgarClient,
+    classify_recent_sec_filings,
+    sec_filing_summary,
 )
 from trading_market_discovery import (
     LIVE_SCAN_BATCH_SIZE,
@@ -6824,11 +6831,20 @@ elif module == "Pattern Validation":
 
 elif module == "Catalyst Intelligence":
     st.caption(
-        "Inspect the same timestamped historical news taxonomy used by catalyst-aware backtests. "
-        "Generic articles are kept visible but do not receive a catalyst score."
+        "Combine timestamped market news with primary-source SEC EDGAR filings. "
+        "The system keeps source timestamps and filing evidence visible, distinguishes fresh vs stale items, "
+        "and flags dilution/offering risk conservatively without claiming a filing caused the price move."
     )
 
-    cat_cols = st.columns([1.1, 1.0, 2.0])
+    sec_user_agent = setting("SEC_USER_AGENT")
+    if not sec_user_agent:
+        st.warning(
+            "SEC filing intelligence is built but not enabled yet because SEC_USER_AGENT is missing from Streamlit Secrets. "
+            "News intelligence will still work. To enable EDGAR, add a descriptive app/company name plus a real contact email "
+            "to SEC_USER_AGENT so requests comply with SEC fair-access guidance."
+        )
+
+    cat_cols = st.columns([1.0, 1.0, 2.1])
     catalyst_ticker = cat_cols[0].text_input(
         "Catalyst ticker",
         value=str(st.session_state.get("til_catalyst_ticker") or "SDOT"),
@@ -6836,13 +6852,13 @@ elif module == "Catalyst Intelligence":
     ).strip().upper()
     catalyst_days = int(cat_cols[1].slider("History", 7, 180, 30, 1, key="til_catalyst_days"))
     cat_cols[2].caption(
-        "The classifier is deliberately conservative. It identifies event categories from headline/summary "
-        "keywords; it does not claim the event caused the subsequent price move."
+        "News uses a deterministic event taxonomy. SEC evidence uses form + 8-K item semantics. "
+        "Primary documents remain linked so ambiguous filings can be inspected instead of guessed."
     )
 
     catalyst_slot = st.empty()
     load_catalysts = catalyst_slot.button(
-        "📰 Load + classify historical catalysts",
+        "📰 Load news + SEC catalyst intelligence",
         type="primary",
         width="stretch",
         disabled=not catalyst_ticker,
@@ -6850,7 +6866,7 @@ elif module == "Catalyst Intelligence":
     )
     if load_catalysts:
         catalyst_slot.button(
-            "📰 Loading…",
+            "📰 Researching catalyst evidence…",
             type="primary",
             width="stretch",
             disabled=True,
@@ -6859,22 +6875,24 @@ elif module == "Catalyst Intelligence":
         catalyst_monitor = long_task_monitor("historical_catalyst_research")
         catalyst_bar = st.progress(
             0.03,
-            text=catalyst_monitor.text(0.03, f"Preparing {catalyst_ticker} catalyst history…"),
+            text=catalyst_monitor.text(0.03, f"Preparing {catalyst_ticker} catalyst intelligence…"),
         )
         try:
             st.session_state["til_catalyst_ticker"] = catalyst_ticker
             market = market_client()
             cat_end = utc_now()
             cat_start = cat_end - timedelta(days=catalyst_days)
-            status_box = st.status(f"Loading {catalyst_ticker} historical news…", expanded=True)
+            status_box = st.status(f"Loading {catalyst_ticker} market news…", expanded=True)
+
             def catalyst_page_progress(page: int) -> None:
                 status_box.write(f"Historical news page {page}…")
                 update_task_bar(
                     catalyst_bar,
                     catalyst_monitor,
-                    0.05 + 0.78 * min(1.0, page / 60.0),
+                    0.05 + 0.48 * min(1.0, page / 60.0),
                     f"Historical news page {page}",
                 )
+
             raw_articles = historical_news(
                 market,
                 [catalyst_ticker],
@@ -6886,90 +6904,212 @@ elif module == "Catalyst Intelligence":
             update_task_bar(
                 catalyst_bar,
                 catalyst_monitor,
-                0.88,
-                f"Classifying {len(raw_articles)} historical news items",
+                0.56,
+                f"Classifying {len(raw_articles)} news items",
             )
-            classified = [classify_catalyst(item) for item in raw_articles]
-            classified.sort(key=lambda item: str(item.get("published_at") or ""), reverse=True)
+            classified_news = [classify_catalyst(item) for item in raw_articles]
+
+            classified_sec: list[dict[str, Any]] = []
+            sec_payload: dict[str, Any] = {}
+            sec_error = ""
+            if sec_user_agent:
+                status_box.write("Loading primary-source SEC filing history…")
+                update_task_bar(
+                    catalyst_bar,
+                    catalyst_monitor,
+                    0.68,
+                    "Loading SEC EDGAR filing evidence",
+                )
+                try:
+                    sec_payload = SecEdgarClient(sec_user_agent).recent_filings(
+                        catalyst_ticker,
+                        days=catalyst_days,
+                        limit=250,
+                        as_of=cat_end,
+                    )
+                    classified_sec = classify_recent_sec_filings(sec_payload)
+                except AppError as exc:
+                    sec_error = str(exc)
+                    status_box.write("SEC evidence unavailable: " + sec_error)
+
+            update_task_bar(
+                catalyst_bar,
+                catalyst_monitor,
+                0.84,
+                "Ranking fresh, novel, and primary-source evidence",
+            )
+            ranked_evidence = rank_catalyst_evidence(
+                classified_news,
+                classified_sec,
+                as_of=cat_end,
+            )
+            evidence_summary = catalyst_intelligence_summary(ranked_evidence)
+            sec_summary = sec_filing_summary(classified_sec)
+
             st.session_state["til_catalyst_result"] = {
                 "symbol": catalyst_ticker,
                 "days": catalyst_days,
-                "articles": classified,
+                "news_articles": classified_news,
+                "sec_filings": classified_sec,
+                "evidence": ranked_evidence,
+                "summary": evidence_summary,
+                "sec_summary": sec_summary,
+                "sec_company": {
+                    "name": sec_payload.get("company_name"),
+                    "cik": sec_payload.get("cik"),
+                } if sec_payload else {},
+                "sec_error": sec_error,
+                "sec_enabled": bool(sec_user_agent),
             }
             status_box.update(
-                label=f"{len(classified)} historical news items classified",
+                label=(
+                    f"Catalyst intelligence complete · {len(classified_news)} news · "
+                    f"{len(classified_sec)} SEC filings"
+                ),
                 state="complete",
                 expanded=False,
             )
             complete_task_bar(
                 catalyst_bar,
                 catalyst_monitor,
-                "Catalyst history complete",
+                "Catalyst intelligence complete",
             )
             st.rerun()
         except AppError as exc:
             st.error(str(exc))
         except Exception as exc:
-            st.error(f"Catalyst history failed: {exc}")
+            st.error(f"Catalyst intelligence failed: {exc}")
 
     catalyst_result = st.session_state.get("til_catalyst_result") or {}
     if catalyst_result and catalyst_result.get("symbol") == catalyst_ticker:
-        classified = list(catalyst_result.get("articles") or [])
-        specific = [item for item in classified if item.get("is_specific_catalyst")]
-        positive = [item for item in specific if item.get("is_positive")]
-        negative = [item for item in specific if item.get("is_negative")]
+        evidence = list(catalyst_result.get("evidence") or [])
+        summary = catalyst_result.get("summary") or {}
+        sec_summary = catalyst_result.get("sec_summary") or {}
+        sec_company = catalyst_result.get("sec_company") or {}
 
         st.divider()
-        summary_cols = st.columns(4)
-        summary_cols[0].metric("News items", len(classified))
-        summary_cols[1].metric("Specific catalysts", len(specific))
-        summary_cols[2].metric("Positive categories", len(positive))
-        summary_cols[3].metric("Negative/risk categories", len(negative))
+        if sec_company.get("name"):
+            st.caption(
+                f"SEC entity: {sec_company.get('name')} · CIK {sec_company.get('cik') or '—'}"
+            )
+        if catalyst_result.get("sec_error"):
+            st.warning("SEC evidence could not be loaded for this run: " + str(catalyst_result.get("sec_error")))
+
+        summary_cols = st.columns(5)
+        summary_cols[0].metric("Evidence items", int(summary.get("evidence_items") or 0))
+        summary_cols[1].metric("Fresh catalysts", int(summary.get("fresh_specific_catalysts") or 0))
+        summary_cols[2].metric("SEC filings", int(sec_summary.get("filings") or 0))
+        summary_cols[3].metric("Dilution flags", int(summary.get("dilution_risks") or 0))
+        summary_cols[4].metric("High-severity SEC", int(sec_summary.get("high_severity_filings") or 0))
 
         filter_mode = st.radio(
             "Show",
-            ["Specific catalysts", "All news", "Positive only", "Negative / risk only"],
+            [
+                "Highest relevance",
+                "Fresh only",
+                "SEC filings",
+                "News only",
+                "Dilution / offering risk",
+                "All evidence",
+            ],
             horizontal=True,
+            key="til_catalyst_evidence_filter",
         )
-        if filter_mode == "Specific catalysts":
-            visible = specific
-        elif filter_mode == "Positive only":
-            visible = positive
-        elif filter_mode == "Negative / risk only":
-            visible = negative
+        if filter_mode == "Fresh only":
+            visible = [
+                item for item in evidence
+                if str(item.get("freshness") or "") in {"breaking", "fresh"}
+                and item.get("is_specific_catalyst")
+            ]
+        elif filter_mode == "SEC filings":
+            visible = [item for item in evidence if item.get("evidence_type") == "sec_filing"]
+        elif filter_mode == "News only":
+            visible = [item for item in evidence if item.get("evidence_type") == "news"]
+        elif filter_mode == "Dilution / offering risk":
+            visible = [item for item in evidence if item.get("is_dilution_risk")]
+        elif filter_mode == "All evidence":
+            visible = evidence
         else:
-            visible = classified
+            visible = [
+                item for item in evidence
+                if item.get("is_specific_catalyst")
+            ][:40]
 
-        table_rows = [
-            {
-                "Published (UTC)": item.get("published_at"),
-                "Category": item.get("category"),
-                "Score": safe_float(item.get("score"), 0.0) or 0.0,
-                "Headline": item.get("headline"),
-                "Source": item.get("source"),
-            }
-            for item in visible
-        ]
+        table_rows = []
+        for item in visible:
+            evidence_type = "SEC" if item.get("evidence_type") == "sec_filing" else "News"
+            table_rows.append(
+                {
+                    "Type": evidence_type,
+                    "Published (UTC)": item.get("published_at"),
+                    "Freshness": str(item.get("freshness") or "unknown").title(),
+                    "Novelty": str(item.get("novelty") or "—").title(),
+                    "Category": item.get("category"),
+                    "Base score": safe_float(item.get("score"), 0.0) or 0.0,
+                    "Effective score": safe_float(item.get("effective_score"), 0.0) or 0.0,
+                    "Form": item.get("form") if evidence_type == "SEC" else None,
+                    "8-K items": ", ".join(item.get("items_list") or []) if evidence_type == "SEC" else None,
+                    "Headline / filing": item.get("headline"),
+                    "Source": item.get("source"),
+                }
+            )
+
         if table_rows:
             st.dataframe(pd.DataFrame(table_rows), width="stretch", hide_index=True)
-            inspect_labels = {
-                f"{item.get('published_at') or 'Unknown time'} · {item.get('category')} · {str(item.get('headline') or '')[:70]}": item
-                for item in visible
-            }
-            selected_article = inspect_labels[st.selectbox("Inspect catalyst", list(inspect_labels))]
-            st.markdown(f"### {selected_article.get('category')}")
-            st.write(selected_article.get("headline") or "No headline")
-            if selected_article.get("summary"):
-                st.write(selected_article.get("summary"))
-            st.caption(
-                f"Published: {selected_article.get('published_at') or '—'} · "
-                f"Source: {selected_article.get('source') or '—'} · "
-                f"Classifier score: {safe_float(selected_article.get('score'), 0.0):+.1f}"
-            )
-            if selected_article.get("keywords"):
-                st.write("Matched terms: " + ", ".join(str(x) for x in selected_article.get("keywords") or []))
+            inspect_labels = {}
+            for index, item in enumerate(visible):
+                label = (
+                    f"{'SEC' if item.get('evidence_type') == 'sec_filing' else 'News'} · "
+                    f"{item.get('published_at') or 'Unknown time'} · {item.get('category')} · "
+                    f"{str(item.get('headline') or '')[:60]}"
+                )
+                inspect_labels[f"{label} · #{index + 1}"] = item
+            selected_item = inspect_labels[
+                st.selectbox(
+                    "Inspect catalyst evidence",
+                    list(inspect_labels),
+                    key="til_catalyst_inspect_evidence",
+                )
+            ]
+
+            st.markdown(f"### {selected_item.get('category')}")
+            st.write(selected_item.get("headline") or "No headline / filing description")
+            if selected_item.get("summary"):
+                st.write(selected_item.get("summary"))
+            if selected_item.get("rationale"):
+                st.info(str(selected_item.get("rationale")))
+
+            detail_bits = [
+                f"Published: {selected_item.get('published_at') or '—'}",
+                f"Freshness: {str(selected_item.get('freshness') or 'unknown').title()}",
+                f"Novelty: {str(selected_item.get('novelty') or '—').title()}",
+                f"Source: {selected_item.get('source') or '—'}",
+                f"Base score: {safe_float(selected_item.get('score'), 0.0):+.1f}",
+                f"Freshness-adjusted evidence: {safe_float(selected_item.get('effective_score'), 0.0):+.1f}",
+            ]
+            st.caption(" · ".join(detail_bits))
+
+            if selected_item.get("evidence_type") == "sec_filing":
+                sec_details = []
+                if selected_item.get("form"):
+                    sec_details.append(f"Form {selected_item.get('form')}")
+                if selected_item.get("items_list"):
+                    sec_details.append("8-K items " + ", ".join(selected_item.get("items_list") or []))
+                if selected_item.get("accessionNumber"):
+                    sec_details.append("Accession " + str(selected_item.get("accessionNumber")))
+                if sec_details:
+                    st.write("SEC evidence: " + " · ".join(sec_details))
+            elif selected_item.get("keywords"):
+                st.write(
+                    "Matched terms: "
+                    + ", ".join(str(x) for x in selected_item.get("keywords") or [])
+                )
+
+            source_url = str(selected_item.get("url") or "").strip()
+            if source_url:
+                st.link_button("Open source evidence", source_url)
         else:
-            st.info("No articles match this catalyst filter in the selected period.")
+            st.info("No catalyst evidence matches this filter in the selected period.")
 
 
 elif module == "Market Discovery":
@@ -7400,6 +7540,48 @@ elif module == "Stock Analyzer":
                     analyzer_strategies,
                     progress=stock_analysis_progress,
                 )
+
+                analyzer_as_of = utc_now()
+                analyzer_news = [
+                    classify_catalyst(item)
+                    for item in (analysis.get("news_items") or [])
+                    if isinstance(item, dict)
+                ]
+                analyzer_sec_filings: list[dict[str, Any]] = []
+                analyzer_sec_error = ""
+                analyzer_sec_user_agent = setting("SEC_USER_AGENT")
+                if analyzer_sec_user_agent:
+                    status_box.write("Checking SEC EDGAR for recent filing risk and catalysts…")
+                    update_task_bar(
+                        analyzer_bar,
+                        analyzer_monitor,
+                        0.86,
+                        "Checking SEC filing evidence",
+                    )
+                    try:
+                        analyzer_sec_payload = SecEdgarClient(
+                            analyzer_sec_user_agent
+                        ).recent_filings(
+                            analyzer_ticker,
+                            days=30,
+                            limit=100,
+                            as_of=analyzer_as_of,
+                        )
+                        analyzer_sec_filings = classify_recent_sec_filings(analyzer_sec_payload)
+                    except AppError as exc:
+                        analyzer_sec_error = str(exc)
+                        status_box.write("SEC evidence unavailable: " + analyzer_sec_error)
+
+                analyzer_evidence = rank_catalyst_evidence(
+                    analyzer_news,
+                    analyzer_sec_filings,
+                    as_of=analyzer_as_of,
+                )
+                analysis["catalyst_evidence"] = analyzer_evidence
+                analysis["catalyst_summary"] = catalyst_intelligence_summary(analyzer_evidence)
+                analysis["sec_summary"] = sec_filing_summary(analyzer_sec_filings)
+                analysis["sec_error"] = analyzer_sec_error
+                analysis["sec_enabled"] = bool(analyzer_sec_user_agent)
                 st.session_state["til_stock_analysis"] = analysis
                 status_box.update(label=f"{analyzer_ticker} analysis complete", state="complete", expanded=False)
                 complete_task_bar(analyzer_bar, analyzer_monitor, f"{analyzer_ticker} analysis complete")
@@ -7422,7 +7604,55 @@ elif module == "Stock Analyzer":
             rvol = safe_float(metrics.get("relative_volume"))
             market_cols[2].metric("RVOL", f"{rvol:.2f}×" if rvol is not None else "—")
             market_cols[3].metric("Spread", f"{safe_float(metrics.get('spread_pct'), 0.0):.2f}%")
-            market_cols[4].metric("Recent catalyst items", int(stock_result.get("news_count") or 0))
+            catalyst_summary = stock_result.get("catalyst_summary") or {}
+            sec_summary = stock_result.get("sec_summary") or {}
+            market_cols[4].metric(
+                "Fresh catalysts",
+                int(catalyst_summary.get("fresh_specific_catalysts") or 0),
+            )
+
+            catalyst_evidence = list(stock_result.get("catalyst_evidence") or [])
+            specific_evidence = [
+                item for item in catalyst_evidence if item.get("is_specific_catalyst")
+            ]
+            dilution_evidence = [
+                item for item in specific_evidence if item.get("is_dilution_risk")
+            ]
+            fresh_dilution = [
+                item for item in dilution_evidence
+                if str(item.get("freshness") or "") in {"breaking", "fresh", "recent"}
+            ]
+
+            if fresh_dilution:
+                strongest_dilution = max(
+                    fresh_dilution,
+                    key=lambda item: abs(safe_float(item.get("effective_score"), 0.0) or 0.0),
+                )
+                st.warning(
+                    "Fresh dilution / offering evidence detected: "
+                    f"{strongest_dilution.get('category')} · "
+                    f"{strongest_dilution.get('headline') or 'source evidence available'}"
+                )
+
+            if specific_evidence or stock_result.get("sec_error"):
+                with st.expander("Catalyst + SEC evidence", expanded=bool(fresh_dilution)):
+                    st.caption(
+                        f"{len(specific_evidence)} specific catalyst items · "
+                        f"{int(sec_summary.get('filings') or 0)} SEC filings reviewed · "
+                        f"{len(dilution_evidence)} dilution-risk flags."
+                    )
+                    if stock_result.get("sec_error"):
+                        st.caption("SEC evidence unavailable for this run: " + str(stock_result.get("sec_error")))
+                    for item in specific_evidence[:8]:
+                        icon = "⚠️" if item.get("is_dilution_risk") else (
+                            "▲" if item.get("is_positive") else "▼" if item.get("is_negative") else "•"
+                        )
+                        source_type = "SEC" if item.get("evidence_type") == "sec_filing" else "News"
+                        st.write(
+                            f"{icon} **{source_type} · {item.get('category')}** — "
+                            f"{item.get('headline') or 'Evidence'} "
+                            f"({str(item.get('freshness') or 'unknown').title()})"
+                        )
 
             if comparisons:
                 best = comparisons[0]
