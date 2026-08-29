@@ -126,3 +126,16 @@ def test_predictive_ml_workspace_reduces_memory_and_checkpoints_baseline():
     assert baseline_call < baseline_save < generalization_call
     assert '"checkpoint_stage": "baseline_complete"' in block[baseline_call:generalization_call]
     assert "Baseline result saved durably." in block[baseline_call:generalization_call]
+
+
+def test_similarity_validator_import_survives_stale_streamlit_module_cache():
+    source = Path("trading_intelligence_app.py").read_text(encoding="utf-8")
+    assert "from predictive_ml_pipeline import (" not in source
+    assert "import predictive_ml_pipeline as _predictive_ml_pipeline" in source
+    assert "except AttributeError:" in source
+    assert 'load_current_source_module(\n        "predictive_ml_pipeline"\n    )' in source
+    assert (
+        "_current_predictive_ml_pipeline."
+        "similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline"
+        in source
+    )
