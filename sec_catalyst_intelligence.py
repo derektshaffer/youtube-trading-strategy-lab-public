@@ -61,7 +61,7 @@ def _sec_json(url: str, user_agent: str, *, timeout: int = 35) -> Any:
         headers={
             "User-Agent": agent,
             "Accept": "application/json",
-            "Accept-Encoding": "gzip, deflate",
+            "Accept-Encoding": "gzip",
         },
         method="GET",
     )
