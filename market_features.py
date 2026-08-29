@@ -127,6 +127,160 @@ def _structure_label(swings: list[dict[str, Any]], *, high: bool) -> str | None:
     return "HL" if current > previous else "LL" if current < previous else "EL"
 
 
+
+MARKET_FEATURE_COLUMNS: tuple[str, ...] = (
+    "atr_pct",
+    "vwap_hold_bars",
+    "vwap_reclaim_recent",
+    "vwap_rejection_recent",
+    "volume_acceleration_ratio",
+    "volume_accelerating",
+    "volume_contracting",
+    "last_swing_high_structure",
+    "last_swing_low_structure",
+    "uptrend_structure",
+    "downtrend_structure",
+    "breakout_above_last_swing_high",
+    "failed_breakout_last_swing_high",
+)
+
+
+def add_causal_market_feature_columns(
+    frame: pd.DataFrame,
+    *,
+    session_column: str = "session",
+    swing_radius: int = 3,
+    volume_window: int = 5,
+    prior_volume_window: int = 10,
+) -> pd.DataFrame:
+    """Attach reusable point-in-time market features to every historical bar.
+
+    Each row is computed only from that row and earlier information. Confirmed
+    swing structure is delayed until the required right-side bars have actually
+    occurred, so historical feature rows can be used for backtesting and future
+    ML datasets without repainting.
+    """
+    if frame.empty:
+        return frame.copy()
+    data = frame.copy().sort_values("timestamp").reset_index(drop=True)
+    if session_column not in data.columns:
+        data[session_column] = "session"
+
+    session = data.groupby(session_column, sort=False)
+    if "vwap" not in data.columns:
+        typical = (data["high"] + data["low"] + data["close"]) / 3.0
+        cumulative_volume = session["volume"].cumsum()
+        numerator = (typical * data["volume"]).groupby(data[session_column], sort=False).cumsum()
+        data["vwap"] = numerator.div(cumulative_volume.where(cumulative_volume > 0))
+
+    if "atr_14" in data.columns:
+        atr = pd.to_numeric(data["atr_14"], errors="coerce")
+    else:
+        atr = pd.Series(float("nan"), index=data.index, dtype="float64")
+        for _, group in data.groupby(session_column, sort=False):
+            atr.loc[group.index] = _atr(group, period=14).to_numpy()
+    data["atr_pct"] = atr.div(data["close"].where(data["close"] > 0)).mul(100.0)
+
+    above = data["close"] > data["vwap"]
+    previous_above = above.groupby(data[session_column], sort=False).shift(1)
+    hold_bars = pd.Series(0, index=data.index, dtype="int64")
+    for _, group in data.groupby(session_column, sort=False):
+        group_above = above.loc[group.index].astype(bool)
+        run_group = (~group_above).cumsum()
+        hold_bars.loc[group.index] = group_above.astype(int).groupby(run_group).cumsum().to_numpy()
+    data["vwap_hold_bars"] = hold_bars
+
+    reclaim_event = previous_above.eq(False) & above
+    rejection_event = previous_above.eq(True) & ~above
+    recent_reclaim = reclaim_event.groupby(data[session_column], sort=False).transform(
+        lambda values: values.rolling(8, min_periods=1).max()
+    ).fillna(False).astype(bool)
+    recent_rejection = rejection_event.groupby(data[session_column], sort=False).transform(
+        lambda values: values.rolling(8, min_periods=1).max()
+    ).fillna(False).astype(bool)
+    data["vwap_reclaim_recent"] = recent_reclaim & (data["vwap_hold_bars"] >= 2)
+    data["vwap_rejection_recent"] = recent_rejection & ~above
+
+    recent_n = max(2, int(volume_window))
+    prior_n = max(recent_n, int(prior_volume_window))
+    recent_mean = session["volume"].transform(
+        lambda values: values.rolling(recent_n, min_periods=recent_n).mean()
+    )
+    prior_mean = session["volume"].transform(
+        lambda values: values.shift(recent_n).rolling(prior_n, min_periods=prior_n).mean()
+    )
+    ratio = recent_mean.div(prior_mean.where(prior_mean > 0))
+    data["volume_acceleration_ratio"] = ratio
+    data["volume_accelerating"] = ratio.ge(1.5).where(ratio.notna())
+    data["volume_contracting"] = ratio.le(0.7).where(ratio.notna())
+
+    for name in (
+        "last_swing_high_structure",
+        "last_swing_low_structure",
+        "uptrend_structure",
+        "downtrend_structure",
+        "breakout_above_last_swing_high",
+        "failed_breakout_last_swing_high",
+    ):
+        data[name] = None if "structure" in name else False
+
+    radius = max(1, int(swing_radius))
+    for _, group in data.groupby(session_column, sort=False):
+        indices = list(group.index)
+        highs: list[float] = []
+        lows: list[float] = []
+        active_swing_high: float | None = None
+        broke_active_high = False
+
+        for local_pos, row_index in enumerate(indices):
+            pivot_pos = local_pos - radius
+            if pivot_pos >= radius:
+                left = pivot_pos - radius
+                right = pivot_pos + radius + 1
+                window_indices = indices[left:right]
+                pivot_index = indices[pivot_pos]
+                pivot_high = float(data.at[pivot_index, "high"])
+                pivot_low = float(data.at[pivot_index, "low"])
+                window_high = float(data.loc[window_indices, "high"].max())
+                window_low = float(data.loc[window_indices, "low"].min())
+                if pivot_high >= window_high:
+                    highs.append(pivot_high)
+                    active_swing_high = pivot_high
+                    broke_active_high = False
+                if pivot_low <= window_low:
+                    lows.append(pivot_low)
+
+            high_label = None
+            low_label = None
+            if len(highs) >= 2:
+                high_label = "HH" if highs[-1] > highs[-2] else "LH" if highs[-1] < highs[-2] else "EH"
+            if len(lows) >= 2:
+                low_label = "HL" if lows[-1] > lows[-2] else "LL" if lows[-1] < lows[-2] else "EL"
+
+            if active_swing_high is not None and float(data.at[row_index, "close"]) > active_swing_high:
+                broke_active_high = True
+
+            latest_above = bool(
+                active_swing_high is not None
+                and float(data.at[row_index, "close"]) > active_swing_high
+            )
+            data.at[row_index, "last_swing_high_structure"] = high_label
+            data.at[row_index, "last_swing_low_structure"] = low_label
+            data.at[row_index, "uptrend_structure"] = bool(high_label == "HH" and low_label == "HL")
+            data.at[row_index, "downtrend_structure"] = bool(high_label == "LH" and low_label == "LL")
+            data.at[row_index, "breakout_above_last_swing_high"] = bool(broke_active_high and latest_above)
+            data.at[row_index, "failed_breakout_last_swing_high"] = bool(broke_active_high and not latest_above)
+
+    for name in (
+        "uptrend_structure",
+        "downtrend_structure",
+        "breakout_above_last_swing_high",
+        "failed_breakout_last_swing_high",
+    ):
+        data[name] = data[name].fillna(False).astype(bool)
+    return data
+
+
 def build_market_features(
     rows: list[dict[str, Any]],
     *,
