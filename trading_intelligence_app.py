@@ -372,7 +372,25 @@ def intelligence_store() -> StrategyStore:
 
 def load_library() -> dict[str, Any]:
     store = intelligence_store()
-    data = store.load_latest()
+    try:
+        data = store.load_latest()
+    except AppError as exc:
+        # Streamlit Cloud can retain a local working copy while the durable
+        # private GitHub library is updated by another app run/worker. The
+        # store correctly refuses to guess which divergent copy should win.
+        # For the unified Trading Intelligence workspace, recover by preserving
+        # the current local file in StrategyStore's automatic backups, restoring
+        # the durable private GitHub copy, and continuing instead of blocking
+        # the entire UI.
+        conflict_marker = (
+            "Both the local Trading Lab library and the private GitHub library changed "
+            "since their last shared version."
+        )
+        if conflict_marker not in str(exc):
+            raise
+        data = store.restore_cloud_backup()
+        st.session_state["_til_cloud_conflict_recovered"] = True
+
     data.setdefault("knowledge_sources", [])
     data.setdefault("strategies", [])
     data.setdefault("research_runs", [])
@@ -1132,6 +1150,13 @@ try:
 except AppError as exc:
     st.error(str(exc))
     st.stop()
+
+if st.session_state.pop("_til_cloud_conflict_recovered", False):
+    st.warning(
+        "Storage conflict recovered safely. The previous local working copy was preserved "
+        "in an automatic backup, and the durable private GitHub library was restored as "
+        "the active copy so the workspace could finish loading."
+    )
 
 strategies = list(library.get("strategies") or [])
 sources = list(library.get("knowledge_sources") or [])
