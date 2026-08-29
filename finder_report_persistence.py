@@ -21,6 +21,7 @@ def finder_summary_to_report(summary: dict[str, Any]) -> dict[str, Any]:
         "generated_at": summary.get("generated_at"),
         "symbol": str(summary.get("symbol") or "").upper(),
         "profile": summary.get("profile_details") or {"name": summary.get("profile")},
+        "strategy_fidelity_engine_version": int(summary.get("strategy_fidelity_engine_version") or 0),
         "search_policy": summary.get("search_policy") or {},
         "strategies_considered": summary.get("strategies_considered"),
         "strategies_tested": summary.get("strategies_tested"),
