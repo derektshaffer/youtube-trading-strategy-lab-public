@@ -34,6 +34,7 @@ from predictive_probability_model import (
     build_portable_probability_model,
     score_scan_result_probability,
 )
+from predictive_model_monitor import build_shadow_model_monitor
 import predictive_ml_pipeline as _predictive_ml_pipeline
 
 archetype_transfer_walk_forward_logistic_baseline = (
@@ -514,6 +515,21 @@ def apply_shadow_probability_scores(
     return results
 
 
+def shadow_probability_model_lookup(library: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Index saved probability artifacts by model id for compact live monitoring."""
+    output: dict[str, dict[str, Any]] = {}
+    for run in library.get("predictive_ml_runs") or []:
+        if not isinstance(run, dict):
+            continue
+        model = run.get("probability_model")
+        if not isinstance(model, dict):
+            continue
+        model_id = str(model.get("id") or "").strip()
+        if model_id:
+            output[model_id] = model
+    return output
+
+
 LIVE_LEARNING_STATUS_KEY = "live_learning_status"
 LIVE_LEARNING_MAX_NEW_PER_SCAN = 50
 LIVE_LEARNING_MAX_MATURATION_SYMBOLS = 25
@@ -623,6 +639,12 @@ def persist_live_learning_cycle(
         else:
             counts["pending"] += 1
 
+    model_monitor = build_shadow_model_monitor(
+        combined,
+        model_lookup=shadow_probability_model_lookup(data),
+    )
+    research_system["predictive_model_monitor"] = model_monitor
+
     status_record = {
         "last_logged_at": observed_at.isoformat(),
         "last_source": source,
@@ -633,6 +655,11 @@ def persist_live_learning_cycle(
         "horizons_minutes": [5, 15, 30, 60],
         "research_only": True,
         "affects_live_ranking": False,
+        "model_monitor_status": (
+            (model_monitor.get("latest_model") or {}).get("status")
+            if isinstance(model_monitor.get("latest_model"), dict)
+            else model_monitor.get("status")
+        ),
     }
     research_system[LIVE_LEARNING_STORAGE_KEY] = combined
     research_system[LIVE_LEARNING_STATUS_KEY] = status_record
@@ -6917,6 +6944,92 @@ elif module == "Pattern Validation":
             "Automatic ML backfill hit an error and will use the durable retry path: "
             + str(ml_backfill_status.get("last_error") or "unknown worker error")
         )
+
+    shadow_monitor = (
+        (library.get("research_system") or {}).get("predictive_model_monitor")
+        if isinstance(library.get("research_system"), dict)
+        else {}
+    ) or {}
+    shadow_latest = (
+        shadow_monitor.get("latest_model")
+        if isinstance(shadow_monitor.get("latest_model"), dict)
+        else {}
+    )
+    if shadow_latest:
+        shadow_status = str(shadow_latest.get("status") or "COLLECTING").upper()
+        monitor_icon = {
+            "HEALTHY": "✅",
+            "WATCH": "⚠️",
+            "DRIFT_ALERT": "🚨",
+            "COLLECTING": "🧪",
+        }.get(shadow_status, "🧪")
+        with st.expander(
+            f"{monitor_icon} Shadow model health · {shadow_status.replace('_', ' ').title()}",
+            expanded=shadow_status in {"WATCH", "DRIFT_ALERT"},
+        ):
+            monitor_cols = st.columns(5)
+            monitor_cols[0].metric(
+                "Matured decisions",
+                f"{int(shadow_latest.get('evaluated_decisions') or 0):,}",
+            )
+            monitor_cols[1].metric(
+                "Stocks",
+                int(shadow_latest.get("symbol_count") or 0),
+            )
+            monitor_cols[2].metric(
+                "Sessions",
+                int(shadow_latest.get("session_count") or 0),
+            )
+            live_skill = safe_float(shadow_latest.get("brier_skill_vs_naive"))
+            monitor_cols[3].metric(
+                "Live Brier skill",
+                "—" if live_skill is None else f"{live_skill * 100:.1f}%",
+            )
+            live_ece = safe_float(shadow_latest.get("expected_calibration_error"))
+            monitor_cols[4].metric(
+                "Calibration error",
+                "—" if live_ece is None else f"{live_ece * 100:.1f}%",
+            )
+            st.caption(
+                "Live shadow predictions are deduplicated into 30-minute stock decision points "
+                "before evaluation, so repeated scanner refreshes do not masquerade as independent evidence."
+            )
+            for reason in list(shadow_latest.get("reasons") or [])[:3]:
+                st.write("• " + str(reason))
+            reliability_rows = list(shadow_latest.get("reliability_bins") or [])
+            if reliability_rows:
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            {
+                                "Predicted range": (
+                                    f"{float(item.get('bin_low') or 0) * 100:.0f}–"
+                                    f"{float(item.get('bin_high') or 0) * 100:.0f}%"
+                                ),
+                                "Decisions": int(item.get("rows") or 0),
+                                "Avg predicted %": (
+                                    safe_float(item.get("mean_probability"), 0.0) * 100.0
+                                ),
+                                "Actual success %": (
+                                    safe_float(item.get("observed_rate"), 0.0) * 100.0
+                                ),
+                            }
+                            for item in reliability_rows
+                        ]
+                    ),
+                    width="stretch",
+                    hide_index=True,
+                )
+            st.caption(
+                "This monitor is diagnostic only. It cannot change scanner ranking, strategy approval, "
+                "position sizing, Paper Auto, or execution."
+            )
+    elif latest_shadow_probability_model(library):
+        st.caption(
+            "🧪 Shadow model health: collecting live matured outcomes. "
+            "No performance verdict is shown until real shadow predictions have enough breadth."
+        )
+
     ml_preset_cols = st.columns([1.35, 2.65])
     if ml_preset_cols[0].button(
         "Load broader 5-stock benchmark",
