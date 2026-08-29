@@ -1228,6 +1228,97 @@ class CloudDestinationBindingTests(unittest.TestCase):
 
 
 class CloudBackupFirstWriteTests(unittest.TestCase):
+    def test_large_library_uses_git_data_api_with_fast_forward_ref_update(self):
+        cloud = engine.GitHubCloudBackup(
+            "owner/private-backups",
+            "token",
+            branch="main",
+            path="trading-intelligence-lab/intelligence_library.json",
+        )
+        current_sha = "a" * 40
+        head_sha = "b" * 40
+        base_tree_sha = "c" * 40
+        blob_sha = "d" * 40
+        tree_sha = "e" * 40
+        commit_sha = "f" * 40
+        data = {
+            "strategies": [],
+            "updated_at": "2026-08-28T23:50:00Z",
+            "large": "x" * (engine.GITHUB_CONTENTS_API_SAFE_BYTES + 1),
+        }
+        current = {
+            "library": {"strategies": [], "updated_at": "2026-08-28T23:40:00Z"},
+            "sha": current_sha,
+        }
+
+        def request(url, *, method="GET", payload=None, missing_ok=False):
+            if "/git/ref/heads/main" in url:
+                return {"object": {"sha": head_sha}}
+            if "/contents/" in url:
+                return {"sha": current_sha}
+            if url.endswith(f"/git/commits/{head_sha}"):
+                return {"tree": {"sha": base_tree_sha}}
+            if url.endswith("/git/blobs"):
+                self.assertEqual(method, "POST")
+                self.assertEqual(payload["encoding"], "base64")
+                return {"sha": blob_sha}
+            if url.endswith("/git/trees"):
+                self.assertEqual(payload["base_tree"], base_tree_sha)
+                self.assertEqual(payload["tree"][0]["sha"], blob_sha)
+                return {"sha": tree_sha}
+            if url.endswith("/git/commits"):
+                self.assertEqual(payload["parents"], [head_sha])
+                return {"sha": commit_sha}
+            if "/git/refs/heads/main" in url:
+                self.assertEqual(method, "PATCH")
+                self.assertEqual(payload, {"sha": commit_sha, "force": False})
+                return {"object": {"sha": commit_sha}}
+            self.fail(f"Unexpected request: {method} {url}")
+
+        with patch.object(cloud, "read_library", return_value=current), patch.object(
+            cloud,
+            "_request",
+            side_effect=request,
+        ) as mocked:
+            saved = cloud.save_library(
+                data,
+                previous_updated_at="2026-08-28T23:40:00Z",
+            )
+
+        self.assertEqual(saved["sha"], blob_sha)
+        self.assertTrue(any(call.kwargs.get("method") == "PATCH" for call in mocked.call_args_list))
+
+    def test_large_library_stops_if_blob_changed_before_commit(self):
+        cloud = engine.GitHubCloudBackup(
+            "owner/private-backups",
+            "token",
+            branch="main",
+            path="trading-intelligence-lab/intelligence_library.json",
+        )
+        current = {
+            "library": {"strategies": [], "updated_at": "2026-08-28T23:40:00Z"},
+            "sha": "a" * 40,
+        }
+        data = {
+            "strategies": [],
+            "updated_at": "2026-08-28T23:50:00Z",
+            "large": "x" * (engine.GITHUB_CONTENTS_API_SAFE_BYTES + 1),
+        }
+        responses = [
+            {"object": {"sha": "b" * 40}},
+            {"sha": "9" * 40},
+        ]
+        with patch.object(cloud, "read_library", return_value=current), patch.object(
+            cloud,
+            "_request",
+            side_effect=responses,
+        ):
+            with self.assertRaisesRegex(engine.AppError, "changed while"):
+                cloud.save_library(
+                    data,
+                    previous_updated_at="2026-08-28T23:40:00Z",
+                )
+
     def test_force_write_does_not_short_circuit_identical_cloud_content(self):
         cloud = engine.GitHubCloudBackup(
             "owner/private-backups",

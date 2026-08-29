@@ -49,6 +49,11 @@ MAX_VIDEO_SECTION_TRANSIENT_WAIT_SECONDS = 20
 DEFAULT_DATA_DIRECTORY = ".youtube_strategy_data"
 DEFAULT_GITHUB_BACKUP_PATH = "youtube-strategy-lab/strategy_library.json"
 GITHUB_API_URL = "https://api.github.com"
+# The repository Contents API becomes unreliable for multi-megabyte JSON files
+# even though the underlying Git blob API supports much larger objects. Route
+# large libraries through Git data objects before the request body reaches that
+# endpoint; the current trading-intelligence library is already well above this.
+GITHUB_CONTENTS_API_SAFE_BYTES = 1_000_000
 MAX_AUTOMATIC_BACKUPS = 30
 MAX_RECOVERY_ITEMS = 150
 MAX_STRATEGY_VERSIONS = 300
@@ -1807,6 +1812,87 @@ class GitHubCloudBackup:
             url += "?" + urlencode({"ref": self.branch})
         return url
 
+    def _save_large_library(
+        self,
+        serialized: bytes,
+        *,
+        current_sha: str = "",
+    ) -> str:
+        """Commit a large library with Git data APIs and a fast-forward ref update."""
+        encoded_branch = quote(self.branch, safe="")
+        ref_url = f"{self._repository_url}/git/ref/heads/{encoded_branch}"
+        ref = self._request(ref_url)
+        head_sha = str(((ref or {}).get("object") or {}).get("sha") or "")
+        if not re.fullmatch(r"[a-fA-F0-9]{40,64}", head_sha):
+            raise AppError("GitHub did not return a readable backup branch revision.")
+
+        # Re-check the file at the exact parent commit. If it changed after
+        # read_library(), stop instead of hiding another writer's update.
+        exact_url = self._contents_url(include_branch=False) + "?" + urlencode({"ref": head_sha})
+        exact_record = self._request(exact_url, missing_ok=True)
+        exact_sha = str((exact_record or {}).get("sha") or "")
+        if exact_sha != str(current_sha or ""):
+            raise AppError(
+                "The GitHub cloud backup changed while this app was saving. "
+                "Restore or inspect the latest cloud backup before retrying so newer records are not overwritten."
+            )
+
+        commit = self._request(f"{self._repository_url}/git/commits/{quote(head_sha, safe='')}")
+        base_tree_sha = str(((commit or {}).get("tree") or {}).get("sha") or "")
+        if not re.fullmatch(r"[a-fA-F0-9]{40,64}", base_tree_sha):
+            raise AppError("GitHub did not return a readable backup tree revision.")
+
+        blob = self._request(
+            f"{self._repository_url}/git/blobs",
+            method="POST",
+            payload={
+                "content": base64.b64encode(serialized).decode("ascii"),
+                "encoding": "base64",
+            },
+        )
+        blob_sha = str((blob or {}).get("sha") or "")
+        if not re.fullmatch(r"[a-fA-F0-9]{40,64}", blob_sha):
+            raise AppError("GitHub did not return a valid blob id for the large cloud backup.")
+
+        tree = self._request(
+            f"{self._repository_url}/git/trees",
+            method="POST",
+            payload={
+                "base_tree": base_tree_sha,
+                "tree": [
+                    {
+                        "path": self.path,
+                        "mode": "100644",
+                        "type": "blob",
+                        "sha": blob_sha,
+                    }
+                ],
+            },
+        )
+        tree_sha = str((tree or {}).get("sha") or "")
+        if not re.fullmatch(r"[a-fA-F0-9]{40,64}", tree_sha):
+            raise AppError("GitHub did not return a valid tree id for the large cloud backup.")
+
+        new_commit = self._request(
+            f"{self._repository_url}/git/commits",
+            method="POST",
+            payload={
+                "message": "Back up YouTube Trading Strategy Lab library",
+                "tree": tree_sha,
+                "parents": [head_sha],
+            },
+        )
+        new_commit_sha = str((new_commit or {}).get("sha") or "")
+        if not re.fullmatch(r"[a-fA-F0-9]{40,64}", new_commit_sha):
+            raise AppError("GitHub did not return a valid commit id for the large cloud backup.")
+
+        self._request(
+            f"{self._repository_url}/git/refs/heads/{encoded_branch}",
+            method="PATCH",
+            payload={"sha": new_commit_sha, "force": False},
+        )
+        return blob_sha
+
     def read_library(self) -> dict[str, Any] | None:
         self._verify_private_repository()
         record = self._request(self._contents_url(), missing_ok=True)
@@ -1892,6 +1978,12 @@ class GitHubCloudBackup:
                     "Restore the latest cloud backup before retrying so newer records are preserved."
                 )
         serialized = json.dumps(data, indent=2, default=str, allow_nan=False).encode("utf-8")
+        if len(serialized) > GITHUB_CONTENTS_API_SAFE_BYTES:
+            sha = self._save_large_library(
+                serialized,
+                current_sha=str((current or {}).get("sha") or ""),
+            )
+            return {"library": data, "sha": sha}
         payload: dict[str, Any] = {
             "message": "Back up YouTube Trading Strategy Lab library",
             "content": base64.b64encode(serialized).decode("ascii"),
