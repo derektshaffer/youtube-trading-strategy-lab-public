@@ -4,6 +4,15 @@ on:
   schedule:
     - cron: "17 * * * *"
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "cloud_research_worker.py"
+      - "predictive_ml_backfill.py"
+      - "predictive_ml_pipeline.py"
+      - "predictive_probability_model.py"
+      - "trading_research_orchestrator.py"
+      - ".github/workflows/continuous-trading-research.yml"
 
 permissions:
   contents: read
@@ -34,6 +43,12 @@ jobs:
       RESEARCH_VALIDATION_BATCH_SIZE: ${{ vars.RESEARCH_VALIDATION_BATCH_SIZE || '3' }}
       RESEARCH_VALIDATION_UNIVERSE_SIZE: ${{ vars.RESEARCH_VALIDATION_UNIVERSE_SIZE || '250' }}
       RESEARCH_PARALLEL_WORKERS: ${{ vars.RESEARCH_PARALLEL_WORKERS || '4' }}
+      PREDICTIVE_ML_BACKFILL_SYMBOLS: ${{ vars.PREDICTIVE_ML_BACKFILL_SYMBOLS }}
+      PREDICTIVE_ML_BACKFILL_MAX_SYMBOLS: ${{ vars.PREDICTIVE_ML_BACKFILL_MAX_SYMBOLS || '12' }}
+      PREDICTIVE_ML_BACKFILL_TRADING_DAYS: ${{ vars.PREDICTIVE_ML_BACKFILL_TRADING_DAYS || '30' }}
+      PREDICTIVE_ML_BACKFILL_HORIZON: ${{ vars.PREDICTIVE_ML_BACKFILL_HORIZON || '15' }}
+      PREDICTIVE_ML_BACKFILL_STRIDE: ${{ vars.PREDICTIVE_ML_BACKFILL_STRIDE || '5' }}
+      PREDICTIVE_ML_BACKFILL_FRESHNESS_HOURS: ${{ vars.PREDICTIVE_ML_BACKFILL_FRESHNESS_HOURS || '20' }}
 
     steps:
       - uses: actions/checkout@v4

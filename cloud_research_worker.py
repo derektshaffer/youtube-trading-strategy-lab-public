@@ -17,6 +17,10 @@ from trading_auto_research import (
     merge_autonomous_research_into_library,
     run_autonomous_research,
 )
+from predictive_ml_backfill import (
+    merge_backfill_result_into_library,
+    run_predictive_ml_backfill,
+)
 from stock_strategy_finder import (
     latest_finder_checkpoint,
     merge_finder_checkpoint_into_library,
@@ -44,6 +48,7 @@ from trading_research_orchestrator import (
     finish_research_job,
     merge_grounded_research,
     record_worker_run,
+    ensure_predictive_ml_backfill_job,
     research_queue_status,
     seed_continuous_research_cycle,
     sync_hypothesis_validation_results,
@@ -358,6 +363,78 @@ def execute_job(
         store.save(latest)
         return result_ref
 
+    if job_type == "predictive_ml_backfill":
+        latest = store.load_latest()
+        research_system = (
+            dict(latest.get("research_system") or {})
+            if isinstance(latest.get("research_system"), dict)
+            else {}
+        )
+        research_system["predictive_ml_backfill_status"] = {
+            "status": "running",
+            "started_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "job_id": str(job.get("id") or ""),
+            "research_only": True,
+            "affects_live_ranking": False,
+            "affects_execution": False,
+        }
+        latest["research_system"] = research_system
+        store.save(latest)
+
+        configured_symbols = env("PREDICTIVE_ML_BACKFILL_SYMBOLS")
+        worker_payload = dict(payload)
+        if configured_symbols:
+            worker_payload["symbols"] = configured_symbols
+        if env("PREDICTIVE_ML_BACKFILL_TRADING_DAYS"):
+            worker_payload["trading_days"] = int(env("PREDICTIVE_ML_BACKFILL_TRADING_DAYS"))
+        if env("PREDICTIVE_ML_BACKFILL_MAX_SYMBOLS"):
+            worker_payload["max_symbols"] = int(env("PREDICTIVE_ML_BACKFILL_MAX_SYMBOLS"))
+        if env("PREDICTIVE_ML_BACKFILL_HORIZON"):
+            worker_payload["horizon"] = int(env("PREDICTIVE_ML_BACKFILL_HORIZON"))
+        if env("PREDICTIVE_ML_BACKFILL_STRIDE"):
+            worker_payload["observation_stride_bars"] = int(
+                env("PREDICTIVE_ML_BACKFILL_STRIDE")
+            )
+
+        market = build_market()
+
+        def ml_progress(message: str) -> None:
+            print(f"[predictive-ml] {message}", flush=True)
+
+        result = run_predictive_ml_backfill(
+            market,
+            latest,
+            payload=worker_payload,
+            progress=ml_progress,
+        )
+        latest = store.load_latest()
+        latest = merge_backfill_result_into_library(latest, result)
+        result_ref = f"predictive-ml:{result.get('id')}"
+        latest = finish_research_job(
+            latest,
+            str(job.get("id") or ""),
+            result_ref=result_ref,
+        )
+        model = (
+            result.get("probability_model")
+            if isinstance(result.get("probability_model"), dict)
+            else {}
+        )
+        latest = record_worker_run(
+            latest,
+            worker_id=worker_id,
+            job_id=str(job.get("id") or ""),
+            job_type=job_type,
+            status="complete",
+            detail=(
+                f"Automatic ML backfill completed with "
+                f"{int((result.get('dataset_summary') or {}).get('row_count') or 0):,} labeled rows; "
+                f"shadow model status {model.get('status') or 'unknown'}."
+            ),
+        )
+        store.save(latest)
+        return result_ref
+
     if job_type == "web_research":
         topic = str(payload.get("topic") or "").strip()
         research = router.grounded_research(
@@ -494,6 +571,20 @@ def main() -> int:
         store.save(data)
         print(f"Seeded {seeded} autonomous research topics.", flush=True)
 
+    # ML bootstrap/retraining has its own freshness clock so a deployment can
+    # start it immediately even if today's web-research cycle was already seeded.
+    data = store.load_latest()
+    data, ml_backfill_job = ensure_predictive_ml_backfill_job(
+        data,
+        freshness_hours=int(env("PREDICTIVE_ML_BACKFILL_FRESHNESS_HOURS", "20") or 20),
+    )
+    if ml_backfill_job:
+        store.save(data)
+        print(
+            f"Queued high-priority predictive ML backfill job {ml_backfill_job.get('id')}.",
+            flush=True,
+        )
+
     router = build_router()
     completed = 0
     for _ in range(jobs_per_run):
@@ -536,6 +627,23 @@ def main() -> int:
                     checkpoint["message"] = f"Cloud Finder failed: {exc}"
                     latest = merge_finder_checkpoint_into_library(latest, checkpoint)
                     failure_step = "stock_finder_execution"
+            if job_type == "predictive_ml_backfill":
+                research_system = (
+                    dict(latest.get("research_system") or {})
+                    if isinstance(latest.get("research_system"), dict)
+                    else {}
+                )
+                research_system["predictive_ml_backfill_status"] = {
+                    "status": "failed",
+                    "failed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "job_id": job_id,
+                    "last_error": str(exc)[:1200],
+                    "research_only": True,
+                    "affects_live_ranking": False,
+                    "affects_execution": False,
+                }
+                latest["research_system"] = research_system
+                failure_step = "predictive_ml_backfill"
             latest = fail_research_job(
                 latest,
                 job_id,
