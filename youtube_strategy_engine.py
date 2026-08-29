@@ -1816,6 +1816,22 @@ class GitHubCloudBackup:
     def _git_clone_url(self) -> str:
         return f"https://github.com/{self.repository}.git"
 
+    def library_revision(self) -> dict[str, Any] | None:
+        """Return lightweight file metadata without downloading the library blob."""
+        self._verify_private_repository()
+        record = self._request(self._contents_url(), missing_ok=True)
+        if record is None:
+            return None
+        if record.get("type") not in {None, "file"}:
+            raise AppError("The GitHub cloud-backup path must point to a normal JSON file.")
+        sha = str(record.get("sha") or "")
+        if not re.fullmatch(r"[a-fA-F0-9]{40,64}", sha):
+            raise AppError("GitHub did not return a valid version identifier for the cloud backup.")
+        return {
+            "sha": sha,
+            "size": int(safe_float(record.get("size"), 0) or 0),
+        }
+
     def _save_large_library(
         self,
         serialized: bytes,
