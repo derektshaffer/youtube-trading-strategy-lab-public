@@ -97,7 +97,8 @@ def _session_avwap(
             anchor_pos = 0
             anchor_label = "session_open"
         elif mode == "session_minute" and anchor_pos is None:
-            minute = int(_number(group.iloc[pos].get("session_minute"), -1) or -1)
+            minute_value = _number(group.iloc[pos].get("session_minute"), -1)
+            minute = int(minute_value if minute_value is not None else -1)
             if minute >= anchor_session_minute:
                 anchor_pos = pos
                 anchor_label = f"session_minute_{anchor_session_minute}"
@@ -194,7 +195,8 @@ def apply_anchored_vwap_indicators(
 
     confirm_bars = int(_number(rules.get("avwap_pivot_confirm_bars"), 2) or 2)
     confirm_bars = min(20, max(1, confirm_bars))
-    anchor_session_minute = int(_number(rules.get("avwap_anchor_session_minute"), 0) or 0)
+    anchor_minute_value = _number(rules.get("avwap_anchor_session_minute"), 0)
+    anchor_session_minute = int(anchor_minute_value if anchor_minute_value is not None else 0)
     anchor_session_minute = min(390, max(0, anchor_session_minute))
 
     avwap = pd.Series(index=data.index, dtype="float64")
