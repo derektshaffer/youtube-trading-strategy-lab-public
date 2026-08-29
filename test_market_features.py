@@ -62,3 +62,12 @@ def test_vwap_reclaim_requires_a_hold_not_one_crossing_bar():
     held = build_market_features(rows)
     assert held["features"]["vwap_reclaim_recent"] is True
     assert held["features"]["vwap_hold_bars"] >= 2
+
+
+def test_feature_snapshot_exposes_evidence_and_missing_data_contract():
+    rows = [_bar(0, 10.0, 10.1, 9.9, 10.0, 100)]
+    snapshot = build_market_features(rows)
+    assert set(snapshot) == {"features", "evidence", "missing_data", "provider"}
+    assert snapshot["provider"] == "native"
+    assert "vwap" in snapshot["evidence"]
+    assert "bar_history" in snapshot["missing_data"]
