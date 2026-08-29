@@ -1017,6 +1017,28 @@ class StrategyIntegrityTests(unittest.TestCase):
         self.assertNotIn("Move stop to breakeven", report["critical_missing_requirements"])
         self.assertNotIn("Trail remainder beneath VWAP", report["critical_missing_requirements"])
 
+    def test_multi_stage_parser_does_not_cross_pair_different_partial_sizes(self):
+        strategy = {
+            "id": "staged-different-fractions",
+            "name": "Different staged fractions",
+            "direction": "long",
+            "entry_conditions": ["Buy the breakout."],
+            "exit_conditions": [
+                "Scale out 25% at 1R and scale out 50% at 2R.",
+            ],
+            "machine_rules": {"breakout_lookback_bars": 20, "stop_loss_pct": 3},
+            "evidence": [{"location": "p.4", "description": "management", "source_excerpt": "short"}],
+            "unresolved_rules": [],
+        }
+        upgraded = upgrade_native_strategy_rules(strategy)
+        self.assertEqual(
+            upgraded["machine_rules"]["scale_out_stages"],
+            [
+                {"fraction_pct": 25.0, "at_r": 1.0},
+                {"fraction_pct": 50.0, "at_r": 2.0},
+            ],
+        )
+
     def test_staged_exit_policy_is_researchable_but_blocked_for_current_paper_auto(self):
         strategy = {
             "id": "staged-paper",
