@@ -46,7 +46,7 @@ from trading_catalyst_core import (
     enrich_bars_with_point_in_time_catalysts,
     historical_news,
 )
-from trading_market_discovery import analyze_stock_strategies, scan_strategy_universe
+from trading_market_discovery import analyze_stock_strategies, scan_market_strategies, scan_strategy_universe
 from trading_progress_ui import (
     AutonomousResearchEtaEstimator,
     AutonomousResearchProgressEstimator,
@@ -5732,8 +5732,8 @@ elif module == "Catalyst Intelligence":
 
 elif module == "Market Discovery":
     st.caption(
-        "Use current Alpaca market data as a sensor, then apply a saved strategy's actual rules "
-        "to the candidates. Validation status and live setup matching remain separate."
+        "Scan a live stock universe against the entire usable strategy library automatically. "
+        "Validated strategies rank first; research-only matches are clearly labeled."
     )
 
     validated_strategies = [
@@ -5741,64 +5741,66 @@ elif module == "Market Discovery":
         if str(item.get("validation_status") or "").lower() == "validated"
     ]
     include_research = st.checkbox(
-        "Include unvalidated research strategies",
-        value=bool(
-            st.session_state.get(
-                "til_market_discovery_include_research",
-                not bool(validated_strategies),
-            )
-        ),
+        "Include research-only strategy families",
+        value=True,
         key="til_market_discovery_include_research",
-        help="Unvalidated strategies can be explored here but should not be treated as proven live edges.",
+        help=(
+            "Recommended while the Lab is still building its validated library. "
+            "Validated matches always rank ahead of research-only matches."
+        ),
     )
     discovery_strategies = managed_strategies if include_research else validated_strategies
 
     if not discovery_strategies:
-        st.info("No validated strategies are available yet. Validate a strategy or include research strategies.")
-    else:
-        strategy_choices = {}
-        for item in discovery_strategies:
-            status = str(item.get("validation_status") or "unvalidated").replace("_", " ").title()
-            label = f"{item.get('name') or 'Unnamed strategy'} · {status}"
-            if label in strategy_choices:
-                label += f" · {str(item.get('id') or '')[:7]}"
-            strategy_choices[label] = item
-        target_id = str(st.session_state.pop("til_selected_strategy_id", "") or "")
-        if target_id:
-            for label, item in strategy_choices.items():
-                if str(item.get("id") or "") == target_id:
-                    st.session_state["til_market_discovery_strategy"] = label
-                    break
-        selected_discovery_strategy = strategy_choices[
-            st.selectbox(
-                "Strategy to scan for",
-                list(strategy_choices),
-                key="til_market_discovery_strategy",
-            )
-        ]
-
-        scan_cols = st.columns([1.1, 1.0, 2.0])
-        universe_mode = scan_cols[0].selectbox(
-            "Market universe",
-            ["Top gainers", "Most active", "Custom watchlist"],
+        st.info(
+            "No validated strategies are available yet. Turn on research-only strategy families "
+            "or let the research pipeline produce validated families first."
         )
-        candidate_count = int(scan_cols[1].slider("Candidates", 5, 30, 15, 5))
+    else:
+        st.markdown(
+            f"**Automatic strategy coverage:** {len(discovery_strategies)} strategy "
+            f"{'family' if len(discovery_strategies) == 1 else 'families'} will be checked against every stock."
+        )
+        if include_research:
+            st.caption(
+                f"{len(validated_strategies)} validated · "
+                f"{max(0, len(discovery_strategies) - len(validated_strategies))} research-only. "
+                "Research-only matches are useful leads, not proven edges."
+            )
+
+        scan_cols = st.columns([1.15, 1.0, 2.0])
+        universe_mode = scan_cols[0].selectbox(
+            "Stocks to scan",
+            ["Top gainers", "Most active", "Custom watchlist"],
+            key="til_market_discovery_universe",
+        )
+        candidate_count = int(
+            scan_cols[1].slider(
+                "How many stocks",
+                5,
+                30,
+                15,
+                5,
+                key="til_market_discovery_candidates",
+            )
+        )
         custom_symbols = scan_cols[2].text_input(
             "Custom tickers",
             placeholder="SDOT LUCY REAX",
             disabled=universe_mode != "Custom watchlist",
+            key="til_market_discovery_custom",
         )
 
         scan_slot = st.empty()
         scan_now = scan_slot.button(
-            "🔎 Scan current market",
+            "🔎 Find the best opportunities now",
             type="primary",
             width="stretch",
             key="til_scan_current_market",
         )
         if scan_now:
             scan_slot.button(
-                "🔎 Scanning…",
+                "🔎 Scanning every strategy…",
                 type="primary",
                 width="stretch",
                 disabled=True,
@@ -5828,38 +5830,47 @@ elif module == "Market Discovery":
                 update_task_bar(
                     scan_bar,
                     scan_monitor,
-                    0.18,
-                    f"Applying {selected_discovery_strategy.get('name')} to {len(symbols)} candidates",
+                    0.16,
+                    f"Comparing {len(discovery_strategies)} strategies across {len(symbols)} stocks",
                 )
-                status_box.write(f"Applying {selected_discovery_strategy.get('name')} to {len(symbols)} candidates…")
+                status_box.write(
+                    f"Comparing {len(discovery_strategies)} strategy families across "
+                    f"{len(symbols)} stocks…"
+                )
 
                 def market_scan_progress(message: str) -> None:
                     status_box.write(message)
                     lower = str(message).casefold()
                     fraction = 0.25
                     if "relative-volume" in lower:
-                        fraction = 0.45
+                        fraction = 0.43
                     elif "catalyst" in lower:
-                        fraction = 0.62
+                        fraction = 0.60
                     elif "intraday chart" in lower:
-                        fraction = 0.78
+                        fraction = 0.76
                     update_task_bar(scan_bar, scan_monitor, fraction, message)
 
-                results = scan_strategy_universe(
+                results = scan_market_strategies(
                     market,
                     symbols,
-                    selected_discovery_strategy,
+                    discovery_strategies,
                     progress=market_scan_progress,
                 )
                 st.session_state["til_market_discovery_result"] = {
-                    "strategy_id": selected_discovery_strategy.get("id"),
-                    "strategy_name": selected_discovery_strategy.get("name"),
-                    "validation_status": selected_discovery_strategy.get("validation_status"),
                     "universe_mode": universe_mode,
+                    "strategy_count": len(discovery_strategies),
+                    "include_research": include_research,
                     "results": results,
                 }
-                status_box.update(label=f"Scan complete · {len(results)} stocks evaluated", state="complete", expanded=False)
-                complete_task_bar(scan_bar, scan_monitor, "Market scan complete")
+                status_box.update(
+                    label=(
+                        f"Scan complete · {len(results)} stocks × "
+                        f"{len(discovery_strategies)} strategies"
+                    ),
+                    state="complete",
+                    expanded=False,
+                )
+                complete_task_bar(scan_bar, scan_monitor, "Market-wide strategy scan complete")
                 st.rerun()
             except AppError as exc:
                 st.error(str(exc))
@@ -5870,66 +5881,125 @@ elif module == "Market Discovery":
         live_results = list(discovery_result.get("results") or [])
         if live_results:
             st.divider()
-            st.markdown(
-                f"### Current matches · {discovery_result.get('strategy_name') or 'Strategy'}"
+            st.markdown("### Best opportunities found")
+            st.caption(
+                "Each stock is paired with its highest-ranked strategy. Validated strategies rank ahead "
+                "of research-only strategies, then current setup quality, robustness, and rule match are considered."
             )
-            if str(discovery_result.get("validation_status") or "").lower() != "validated":
-                st.warning(
-                    "This is an unvalidated research strategy. A live rule match is not evidence "
-                    "that the trade has positive expected value."
-                )
 
             table_rows = []
             for item in live_results:
                 metrics = item.get("metrics") or {}
+                validation = str(item.get("validation_status") or "unvalidated").replace("_", " ").title()
                 table_rows.append(
                     {
-                        "Symbol": item.get("symbol"),
-                        "Setup": item.get("status"),
+                        "Stock": item.get("symbol"),
+                        "Best strategy": item.get("best_strategy_name"),
+                        "Strategy status": validation,
+                        "Current setup": item.get("status"),
                         "Rule match %": safe_float(item.get("score"), 0.0) or 0.0,
+                        "Robustness": item.get("robustness_score"),
+                        "Other matching strategies": max(
+                            0,
+                            int(item.get("matching_strategy_count") or 0) - 1,
+                        ),
                         "Price": safe_float(metrics.get("price")),
                         "Day move %": safe_float(metrics.get("day_change_pct")),
                         "RVOL": safe_float(metrics.get("relative_volume")),
                         "Spread %": safe_float(metrics.get("spread_pct")),
-                        "Catalyst": item.get("has_catalyst"),
-                        "Needs verification": int(safe_float(item.get("unknown"), 0) or 0),
                     }
                 )
             st.dataframe(pd.DataFrame(table_rows), width="stretch", hide_index=True)
 
-            matches = [item for item in live_results if str(item.get("status")).upper() == "MATCH"]
-            watches = [
+            matches = [
                 item for item in live_results
-                if str(item.get("status")).upper() in {"WATCH", "VERIFY"}
+                if str(item.get("status") or "").upper() == "MATCH"
             ]
-            summary_cols = st.columns(3)
-            summary_cols[0].metric("Full rule matches", len(matches))
-            summary_cols[1].metric("Watch / verify", len(watches))
+            validated_matches = [
+                item for item in matches
+                if str(item.get("validation_status") or "").lower() == "validated"
+            ]
+            summary_cols = st.columns(4)
+            summary_cols[0].metric("Strong matches", len(matches))
+            summary_cols[1].metric("Validated matches", len(validated_matches))
             summary_cols[2].metric("Stocks evaluated", len(live_results))
+            summary_cols[3].metric(
+                "Strategies checked",
+                int(discovery_result.get("strategy_count") or 0),
+            )
 
             inspect_labels = {
-                f"{item.get('symbol')} · {item.get('status')} · {safe_float(item.get('score'), 0.0):.0f}%": item
+                (
+                    f"{item.get('symbol')} · {item.get('best_strategy_name')} · "
+                    f"{item.get('status')} · {safe_float(item.get('score'), 0.0):.0f}%"
+                ): item
                 for item in live_results
             }
-            inspected = inspect_labels[st.selectbox("Inspect candidate", list(inspect_labels))]
+            inspected = inspect_labels[
+                st.selectbox(
+                    "Inspect an opportunity",
+                    list(inspect_labels),
+                    key="til_market_discovery_inspect",
+                )
+            ]
             metrics = inspected.get("metrics") or {}
             signal = inspected.get("signal") or {}
+            validation = str(
+                inspected.get("validation_status") or "unvalidated"
+            ).replace("_", " ").title()
+
+            st.markdown(
+                f"**{inspected.get('symbol')} → {inspected.get('best_strategy_name')}**  "
+                f"· {validation} · {inspected.get('status')} · "
+                f"{safe_float(inspected.get('score'), 0.0):.0f}% rule match"
+            )
+            if validation.lower() != "validated":
+                st.warning(
+                    "The best match for this stock is still a research-only strategy. "
+                    "Treat it as a lead for further research, not a proven trade signal."
+                )
+
             detail_cols = st.columns(4)
-            detail_cols[0].metric("Price", f"${safe_float(metrics.get('price'), 0.0):,.4f}")
-            detail_cols[1].metric("Day move", f"{safe_float(metrics.get('day_change_pct'), 0.0):+.2f}%")
+            detail_cols[0].metric(
+                "Price",
+                "USD " + f"{safe_float(metrics.get('price'), 0.0):,.4f}",
+            )
+            detail_cols[1].metric(
+                "Day move",
+                f"{safe_float(metrics.get('day_change_pct'), 0.0):+.2f}%",
+            )
             rvol = safe_float(metrics.get("relative_volume"))
-            detail_cols[2].metric("Relative volume", f"{rvol:.2f}×" if rvol is not None else "—")
-            detail_cols[3].metric("Rule match", f"{safe_float(signal.get('score'), 0.0):.0f}%")
+            detail_cols[2].metric(
+                "Relative volume",
+                f"{rvol:.2f}×" if rvol is not None else "—",
+            )
+            detail_cols[3].metric(
+                "Rule match",
+                f"{safe_float(signal.get('score'), 0.0):.0f}%",
+            )
 
             checks = signal.get("checks") or []
             if checks:
-                with st.expander("Why this stock matched or failed", expanded=True):
+                with st.expander("Why the best strategy matched", expanded=True):
                     for check in checks:
                         state = str(check.get("status") or "").upper()
                         icon = "✅" if state == "PASS" else "❓" if state == "UNKNOWN" else "❌"
                         st.write(
                             f"{icon} **{check.get('label') or 'Rule'}** — "
                             f"current: {check.get('actual')} · required: {check.get('required')}"
+                        )
+
+            alternate_matches = list(inspected.get("strategy_matches") or [])[1:]
+            if alternate_matches:
+                with st.expander("Other strategies that fit this stock", expanded=False):
+                    for alternate in alternate_matches:
+                        alt_validation = str(
+                            alternate.get("validation_status") or "unvalidated"
+                        ).replace("_", " ").title()
+                        st.write(
+                            f"**{alternate.get('strategy_name')}** · {alt_validation} · "
+                            f"{alternate.get('status')} · "
+                            f"{safe_float(alternate.get('score'), 0.0):.0f}% rule match"
                         )
 
 
