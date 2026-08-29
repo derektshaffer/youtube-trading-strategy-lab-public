@@ -6866,6 +6866,16 @@ elif module == "Pattern Validation":
                 min_train_rows=250,
                 min_test_rows=25,
             )
+            compact_ml_evaluation = {
+                key: value
+                for key, value in ml_evaluation.items()
+                if key != "predictions"
+            }
+            compact_ml_generalization = {
+                key: value
+                for key, value in ml_generalization.items()
+                if key != "predictions"
+            }
             st.session_state["til_predictive_ml_result"] = {
                 "symbols": ml_symbols,
                 "days": ml_days,
@@ -6881,8 +6891,8 @@ elif module == "Pattern Validation":
                     for key, value in ml_dataset.items()
                     if key not in {"records"}
                 },
-                "evaluation": ml_evaluation,
-                "generalization": ml_generalization,
+                "evaluation": compact_ml_evaluation,
+                "generalization": compact_ml_generalization,
             }
             ml_status.update(
                 label=(
@@ -6897,7 +6907,7 @@ elif module == "Pattern Validation":
                 ml_monitor,
                 "Predictive ML baseline evaluation complete",
             )
-            st.rerun()
+            st.success("Predictive ML results are ready below.")
         except AppError as exc:
             st.error(str(exc))
         except Exception as exc:
