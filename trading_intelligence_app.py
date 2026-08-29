@@ -30,6 +30,10 @@ from live_learning import (
     merge_shadow_observations,
     pending_symbols,
 )
+from predictive_probability_model import (
+    build_portable_probability_model,
+    score_scan_result_probability,
+)
 import predictive_ml_pipeline as _predictive_ml_pipeline
 
 archetype_transfer_walk_forward_logistic_baseline = (
@@ -480,6 +484,36 @@ def load_cloud_status_library() -> dict[str, Any]:
 
 MAX_PREDICTIVE_ML_RUN_HISTORY = 12
 LIVE_LEARNING_STORAGE_KEY = "live_learning_observations"
+
+def latest_shadow_probability_model(library: dict[str, Any]) -> dict[str, Any]:
+    """Return the newest validated research-only probability artifact."""
+    runs = [
+        item
+        for item in library.get("predictive_ml_runs") or []
+        if isinstance(item, dict)
+    ]
+    runs.sort(key=lambda item: str(item.get("completed_at") or ""), reverse=True)
+    for run in runs:
+        model = run.get("probability_model")
+        if isinstance(model, dict) and model.get("shadow_scoring_enabled"):
+            return model
+    return {}
+
+
+def apply_shadow_probability_scores(
+    results: list[dict[str, Any]],
+    model: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Attach research-only probabilities without changing result order."""
+    if not model or not model.get("shadow_scoring_enabled"):
+        return results
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        item["ml_prediction"] = score_scan_result_probability(model, item)
+    return results
+
+
 LIVE_LEARNING_STATUS_KEY = "live_learning_status"
 LIVE_LEARNING_MAX_NEW_PER_SCAN = 50
 LIVE_LEARNING_MAX_MATURATION_SYMBOLS = 25
@@ -7123,6 +7157,13 @@ elif module == "Pattern Validation":
                     "status": "PENDING",
                     "reason": "Baseline saved; held-out-stock validation has not finished yet.",
                 },
+                "probability_model": {
+                    "status": "PENDING",
+                    "shadow_scoring_enabled": False,
+                    "research_only": True,
+                    "affects_live_ranking": False,
+                    "reason": "Waiting for held-out-stock validation before training the portable model.",
+                },
                 "ticker_specific": {
                     "status": "PENDING",
                     "reason": "Ticker-specific validation has not finished yet.",
@@ -7167,6 +7208,33 @@ elif module == "Pattern Validation":
                 if key != "predictions"
             }
             completed_ml_result["generalization"] = compact_ml_generalization
+            update_task_bar(
+                ml_bar,
+                ml_monitor,
+                0.935,
+                "Training portable calibrated shadow probability model…",
+            )
+            ml_probability_model = build_portable_probability_model(
+                ml_dataset,
+                target_horizon=ml_horizon,
+                target_mode=ml_target_mode,
+                generalization=ml_generalization,
+                min_train_sessions=8,
+                test_sessions_per_fold=2,
+                embargo_sessions=1,
+                min_train_rows=250,
+            )
+            completed_ml_result["probability_model"] = ml_probability_model
+            if ml_probability_model.get("shadow_scoring_enabled"):
+                ml_status.write(
+                    "Portable probability model passed the shadow-scoring gates. "
+                    "It remains research-only and cannot change rankings or execution."
+                )
+            else:
+                ml_status.write(
+                    "Portable probability candidate trained, but it remains gated off from "
+                    "live shadow scoring until validation is strong enough."
+                )
             completed_ml_result["checkpoint_stage"] = "generalization_complete"
             completed_ml_result["completed_at"] = utc_now().isoformat()
             st.session_state["til_predictive_ml_result"] = completed_ml_result
@@ -7313,6 +7381,7 @@ elif module == "Pattern Validation":
     ml_dataset_summary = stored_ml_result.get("dataset_summary") or {}
     ml_evaluation = stored_ml_result.get("evaluation") or {}
     ml_generalization = stored_ml_result.get("generalization") or {}
+    ml_probability_model = stored_ml_result.get("probability_model") or {}
     ml_ticker_specific = stored_ml_result.get("ticker_specific") or {}
     ml_similarity_validation = stored_ml_result.get("similarity_validation") or {}
     ml_archetype_validation = stored_ml_result.get("archetype_validation") or {}
@@ -7354,6 +7423,28 @@ elif module == "Pattern Validation":
             target_description = str(ml_evaluation.get("target_description") or "").strip()
             if target_description:
                 st.caption("Prediction target: " + target_description)
+
+            if ml_probability_model:
+                portable_validation = ml_probability_model.get("validation") or {}
+                portable_auc = safe_float(portable_validation.get("roc_auc"))
+                portable_skill = safe_float(portable_validation.get("brier_skill_vs_naive"))
+                if ml_probability_model.get("shadow_scoring_enabled"):
+                    st.success(
+                        "Shadow probability model ready · "
+                        f"{int(ml_probability_model.get('feature_count') or 0)} live-compatible features · "
+                        f"OOS AUC {portable_auc:.3f}" if portable_auc is not None else
+                        "Shadow probability model ready for research-only scoring."
+                    )
+                    st.caption(
+                        "These probabilities are now eligible to appear in Market Discovery and Stock Analyzer. "
+                        "They still cannot change ranking, strategy approval, position sizing, or execution."
+                    )
+                elif str(ml_probability_model.get("status") or "") not in {"", "PENDING"}:
+                    reasons = list(ml_probability_model.get("gate_reasons") or [])
+                    st.info(
+                        "Portable probability candidate trained but is still gated off from live shadow scoring"
+                        + (": " + " ".join(str(reason) for reason in reasons[:3]) if reasons else ".")
+                    )
 
             archetype_distribution = list(ml_dataset_summary.get("archetype_distribution") or [])
             context_feature_count = len(ml_dataset_summary.get("context_feature_columns") or [])
@@ -8182,6 +8273,10 @@ elif module == "Market Discovery":
                     discovery_strategies,
                     progress=market_scan_progress,
                 )
+                results = apply_shadow_probability_scores(
+                    results,
+                    latest_shadow_probability_model(library),
+                )
                 try:
                     st.session_state["til_live_learning_market_discovery_status"] = (
                         persist_live_learning_cycle(
@@ -8274,6 +8369,11 @@ elif module == "Market Discovery":
                         "Day move %": safe_float(metrics.get("day_change_pct")),
                         "RVOL": safe_float(metrics.get("relative_volume")),
                         "Spread %": safe_float(metrics.get("spread_pct")),
+                        "ML probability": (
+                            safe_float((item.get("ml_prediction") or {}).get("probability")) * 100.0
+                            if safe_float((item.get("ml_prediction") or {}).get("probability")) is not None
+                            else None
+                        ),
                     }
                 )
             st.dataframe(pd.DataFrame(table_rows), width="stretch", hide_index=True)
@@ -8326,7 +8426,7 @@ elif module == "Market Discovery":
                     "Treat it as a lead for further research, not a proven trade signal."
                 )
 
-            detail_cols = st.columns(4)
+            detail_cols = st.columns(5)
             detail_cols[0].metric(
                 "Price",
                 "USD " + f"{safe_float(metrics.get('price'), 0.0):,.4f}",
@@ -8344,6 +8444,18 @@ elif module == "Market Discovery":
                 "Rule match",
                 f"{safe_float(signal.get('score'), 0.0):.0f}%",
             )
+            inspected_ml = inspected.get("ml_prediction") or {}
+            inspected_probability = safe_float(inspected_ml.get("probability"))
+            detail_cols[4].metric(
+                "ML probability",
+                "—" if inspected_probability is None else f"{inspected_probability * 100:.1f}%",
+            )
+            if inspected_probability is not None:
+                st.caption(
+                    "ML probability is research-only and predicts: "
+                    + str(inspected_ml.get("target_description") or "the configured ML target")
+                    + ". It does not affect this ranking."
+                )
 
             checks = signal.get("checks") or []
             if checks:
@@ -8449,6 +8561,10 @@ elif module == "Stock Analyzer":
                     analyzer_strategies,
                     progress=stock_analysis_progress,
                 )
+                analysis = apply_shadow_probability_scores(
+                    [analysis],
+                    latest_shadow_probability_model(library),
+                )[0]
 
                 analyzer_as_of = utc_now()
                 analyzer_news = [
@@ -8538,7 +8654,7 @@ elif module == "Stock Analyzer":
                     "This does not affect strategy ranking."
                 )
 
-            market_cols = st.columns(5)
+            market_cols = st.columns(6)
             market_cols[0].metric("Price", f"${safe_float(metrics.get('price'), 0.0):,.4f}")
             market_cols[1].metric("Day move", f"{safe_float(metrics.get('day_change_pct'), 0.0):+.2f}%")
             rvol = safe_float(metrics.get("relative_volume"))
@@ -8550,6 +8666,18 @@ elif module == "Stock Analyzer":
                 "Fresh catalysts",
                 int(catalyst_summary.get("fresh_specific_catalysts") or 0),
             )
+            analyzer_ml = stock_result.get("ml_prediction") or {}
+            analyzer_probability = safe_float(analyzer_ml.get("probability"))
+            market_cols[5].metric(
+                "ML probability",
+                "—" if analyzer_probability is None else f"{analyzer_probability * 100:.1f}%",
+            )
+            if analyzer_probability is not None:
+                st.caption(
+                    "Research-only ML probability · "
+                    + str(analyzer_ml.get("target_description") or "configured ML target")
+                    + " · does not affect strategy ranking or execution."
+                )
 
             catalyst_evidence = list(stock_result.get("catalyst_evidence") or [])
             specific_evidence = [
