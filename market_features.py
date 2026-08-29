@@ -127,6 +127,186 @@ def _structure_label(swings: list[dict[str, Any]], *, high: bool) -> str | None:
     return "HL" if current > previous else "LL" if current < previous else "EL"
 
 
+def _completed_bounces(
+    frame: pd.DataFrame,
+    swing_highs: list[dict[str, Any]],
+    swing_lows: list[dict[str, Any]],
+    *,
+    max_recent: int = 3,
+) -> list[dict[str, Any]]:
+    """Build completed low-to-high rebounds from confirmed pivots only.
+
+    This is intentionally a structural bounce counter, not yet a strategy entry
+    rule. A bounce is complete only after both the low and the following high
+    are confirmed, so historical prefix tests cannot gain information from the
+    future.
+    """
+    bounces: list[dict[str, Any]] = []
+    highs = sorted(swing_highs, key=lambda item: int(item["index"]))
+    lows = sorted(swing_lows, key=lambda item: int(item["index"]))
+    high_cursor = 0
+    previous_low_index = -1
+    for low in lows:
+        low_index = int(low["index"])
+        if low_index <= previous_low_index:
+            continue
+        while high_cursor < len(highs) and int(highs[high_cursor]["index"]) <= low_index:
+            high_cursor += 1
+        if high_cursor >= len(highs):
+            break
+        high = highs[high_cursor]
+        next_low_index = next(
+            (int(candidate["index"]) for candidate in lows if int(candidate["index"]) > low_index),
+            None,
+        )
+        if next_low_index is not None and int(high["index"]) >= next_low_index:
+            continue
+        low_price = float(low["price"])
+        high_price = float(high["price"])
+        recovery_pct = ((high_price / low_price) - 1.0) * 100.0 if low_price > 0 else None
+        segment = frame.iloc[low_index : int(high["index"]) + 1]
+        bounces.append(
+            {
+                "low_index": low_index,
+                "low_price": low_price,
+                "high_index": int(high["index"]),
+                "high_price": high_price,
+                "recovery_pct": recovery_pct,
+                "mean_volume": float(segment["volume"].mean()) if not segment.empty else None,
+            }
+        )
+        previous_low_index = low_index
+        high_cursor += 1
+    return bounces[-max_recent:]
+
+
+def _bounce_features(bounces: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not bounces:
+        return (
+            {
+                "completed_bounce_count": 0,
+                "latest_bounce_number": None,
+                "latest_bounce_recovery_pct": None,
+                "bounce_deteriorating": None,
+                "bounce_strengthening": None,
+            },
+            {"recent_bounces": []},
+        )
+
+    recoveries = [
+        float(item["recovery_pct"])
+        for item in bounces
+        if item.get("recovery_pct") is not None
+    ]
+    deteriorating = None
+    strengthening = None
+    if len(recoveries) >= 2:
+        deteriorating = all(
+            current <= previous * 0.85
+            for previous, current in zip(recoveries, recoveries[1:])
+        )
+        strengthening = all(
+            current >= previous * 1.15
+            for previous, current in zip(recoveries, recoveries[1:])
+        )
+    numbered = []
+    for number, bounce in enumerate(bounces, start=1):
+        item = dict(bounce)
+        item["number"] = number
+        numbered.append(item)
+    return (
+        {
+            "completed_bounce_count": len(numbered),
+            "latest_bounce_number": numbered[-1]["number"],
+            "latest_bounce_recovery_pct": numbered[-1].get("recovery_pct"),
+            "bounce_deteriorating": deteriorating,
+            "bounce_strengthening": strengthening,
+            "bounce_2_present": len(numbered) >= 2,
+            "bounce_3_present": len(numbered) >= 3,
+        },
+        {"recent_bounces": numbered},
+    )
+
+
+def _stair_step_features(
+    swing_highs: list[dict[str, Any]],
+    swing_lows: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    recent_highs = swing_highs[-3:]
+    recent_lows = swing_lows[-3:]
+    enough = len(recent_highs) >= 3 and len(recent_lows) >= 3
+    if not enough:
+        return (
+            {"stair_step_up": None, "stair_step_down": None},
+            {"recent_highs": recent_highs, "recent_lows": recent_lows},
+        )
+    high_prices = [float(item["price"]) for item in recent_highs]
+    low_prices = [float(item["price"]) for item in recent_lows]
+    stair_up = all(b > a for a, b in zip(high_prices, high_prices[1:])) and all(
+        b > a for a, b in zip(low_prices, low_prices[1:])
+    )
+    stair_down = all(b < a for a, b in zip(high_prices, high_prices[1:])) and all(
+        b < a for a, b in zip(low_prices, low_prices[1:])
+    )
+    return (
+        {"stair_step_up": stair_up, "stair_step_down": stair_down},
+        {"recent_highs": recent_highs, "recent_lows": recent_lows},
+    )
+
+
+def _consolidation_expansion_features(
+    frame: pd.DataFrame,
+    *,
+    base_window: int = 8,
+    expansion_bars: int = 2,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Detect a tight recent base followed by an observed expansion.
+
+    The base excludes the current expansion bars. Tightness is normalized by
+    ATR so the detector works across different price/volatility regimes.
+    """
+    required = base_window + expansion_bars
+    if len(frame) < required:
+        return (
+            {
+                "consolidation_then_expansion_up": None,
+                "consolidation_then_expansion_down": None,
+                "base_range_atr_ratio": None,
+            },
+            {},
+        )
+    base = frame.iloc[-required:-expansion_bars]
+    expansion = frame.iloc[-expansion_bars:]
+    base_high = float(base["high"].max())
+    base_low = float(base["low"].min())
+    base_range = base_high - base_low
+    atr = _number(_atr(frame).iloc[-expansion_bars - 1])
+    range_atr_ratio = base_range / atr if atr is not None and atr > 0 else None
+    tight = bool(range_atr_ratio is not None and range_atr_ratio <= 2.5)
+    expansion_up = tight and bool((expansion["close"] > base_high).any())
+    expansion_down = tight and bool((expansion["close"] < base_low).any())
+    base_volume = float(base["volume"].mean()) if not base.empty else 0.0
+    expansion_volume = float(expansion["volume"].mean()) if not expansion.empty else 0.0
+    volume_ratio = expansion_volume / base_volume if base_volume > 0 else None
+    return (
+        {
+            "consolidation_then_expansion_up": expansion_up,
+            "consolidation_then_expansion_down": expansion_down,
+            "base_range_atr_ratio": range_atr_ratio,
+            "expansion_volume_ratio": volume_ratio,
+        },
+        {
+            "base_high": base_high,
+            "base_low": base_low,
+            "base_range": base_range,
+            "base_range_atr_ratio": range_atr_ratio,
+            "base_mean_volume": base_volume,
+            "expansion_mean_volume": expansion_volume,
+            "expansion_volume_ratio": volume_ratio,
+        },
+    )
+
+
 def build_market_features(
     rows: list[dict[str, Any]],
     *,
@@ -230,6 +410,25 @@ def build_market_features(
         "last_two_swing_lows": swings_low[-2:],
         "swing_radius": swing_radius,
     }
+
+    bounces = _completed_bounces(frame, swings_high, swings_low)
+    bounce_features, bounce_evidence = _bounce_features(bounces)
+    result.features.update(bounce_features)
+    result.evidence["bounce_sequence"] = bounce_evidence
+    if not bounces:
+        result.missing_data.append("completed_bounce_sequence")
+
+    stair_features, stair_evidence = _stair_step_features(swings_high, swings_low)
+    result.features.update(stair_features)
+    result.evidence["stair_step"] = stair_evidence
+    if stair_features["stair_step_up"] is None:
+        result.missing_data.append("stair_step_structure")
+
+    expansion_features, expansion_evidence = _consolidation_expansion_features(frame)
+    result.features.update(expansion_features)
+    result.evidence["consolidation_expansion"] = expansion_evidence
+    if expansion_features["consolidation_then_expansion_up"] is None:
+        result.missing_data.append("consolidation_expansion_history")
 
     last_swing_high = swings_high[-1] if swings_high else None
     if last_swing_high:
