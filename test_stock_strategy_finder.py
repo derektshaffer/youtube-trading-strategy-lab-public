@@ -71,6 +71,21 @@ class StockStrategyFinderPolicyTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in selected], ["valid"])
         self.assertEqual(len(skipped), 2)
 
+    def test_finder_excludes_strategy_when_defining_exit_is_not_modeled(self):
+        incomplete = strategy("scaleout", breakout_lookback_bars=20)
+        incomplete["exit_conditions"] = [
+            "Take partial profit on the first push and scale out into strength."
+        ]
+        selected, skipped = finder.selected_strategies_for_profile(
+            [incomplete],
+            "SDOT",
+            finder.search_profile("Deep"),
+        )
+        self.assertEqual(selected, [])
+        self.assertEqual(len(skipped), 1)
+        self.assertIn("fidelity audit failed", skipped[0])
+        self.assertIn("Scale-out", skipped[0])
+
     def test_deep_search_estimate_is_large_for_many_families(self):
         work = finder.estimate_search_work(finder.search_profile("Deep"), 20)
         self.assertGreater(work["minimum_estimated_simulations"], 10_000)
