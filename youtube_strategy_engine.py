@@ -584,10 +584,13 @@ For each setup:
   Set unavailable thresholds to null. Never fabricate values to make a strategy testable.
 - Preserve trade-management logic instead of replacing it with a generic fixed target. Use
   trailing_stop_pct only for an explicit percentage trail; move_stop_to_breakeven_at_r only
-  when the source gives an R-multiple trigger; exit_below_vwap=true or exit_below_fast_ema=true
-  only when losing that level is explicitly an exit. If the source uses scale-outs, partial
-  profits, tape/Level-2 discretion, momentum-failure selling, or another exit the schema
-  cannot yet execute faithfully, keep that requirement in exit_conditions/unresolved_rules.
+  when the source gives an R-multiple trigger; use scale_out_fraction_pct and scale_out_at_r
+  only when the source explicitly states the partial size and R trigger; exit_below_vwap=true
+  or exit_below_fast_ema=true only when losing that level is explicitly an exit. If the source
+  uses qualitative scale-outs, trailing/breakeven management, tape/Level-2 discretion,
+  momentum-failure selling, or another exit without exact values, preserve the requirement
+  in exit_conditions/unresolved_rules so the research compiler can test assumptions without
+  pretending the author supplied them.
 - Put subjective or unavailable requirements (level 2, float, tape speed, proprietary indicators,
   borrow availability, visual discretion, historical catalyst timing) in unresolved_rules.
 - Rate extraction confidence from 0 to 100 based on source clarity, NOT expected profitability.
@@ -3450,9 +3453,12 @@ def backtest_limitations(strategy: dict[str, Any]) -> list[str]:
     ):
         limitations.append("The video did not specify an exact target; the editable reward/risk setting is a research assumption.")
     exit_text = " ".join(str(item or "") for item in strategy.get("exit_conditions") or []).casefold()
-    if any(phrase in exit_text for phrase in ("scale out", "scaling out", "partial profit", "take partial")):
+    if any(phrase in exit_text for phrase in ("scale out", "scaling out", "partial profit", "take partial")) and not (
+        rules.get("scale_out_fraction_pct") is not None
+        and rules.get("scale_out_at_r") is not None
+    ):
         limitations.append(
-            "Source uses scale-outs/partial profit-taking; the deterministic backtester does not yet model partial exits."
+            "Source uses scale-outs/partial profit-taking, but the partial size or trigger is still unresolved."
         )
     if any(phrase in exit_text for phrase in ("momentum fades", "momentum fade", "momentum failure", "sell into strength")):
         limitations.append(
