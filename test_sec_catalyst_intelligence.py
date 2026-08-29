@@ -90,6 +90,27 @@ class SecCatalystTests(unittest.TestCase):
         self.assertFalse(row["is_positive"])
         self.assertFalse(row["is_negative"])
 
+
+
+    def test_8k_earnings_item_is_specific_but_directionally_neutral(self):
+        row = secintel.classify_sec_filing(
+            {
+                "form": "8-K",
+                "items": "2.02",
+                "accepted_at": "2026-08-29T16:00:00Z",
+            }
+        )
+        self.assertTrue(row["is_specific_catalyst"])
+        self.assertTrue(row["direction_requires_context"])
+        self.assertEqual(row["score"], 0.0)
+
+    def test_schedule_13d_is_not_assumed_bullish(self):
+        row = secintel.classify_sec_filing(
+            {"form": "SC 13D", "accepted_at": "2026-08-29T16:00:00Z"}
+        )
+        self.assertEqual(row["category"], "active ownership disclosure")
+        self.assertEqual(row["score"], 0.0)
+
     def test_missing_sec_user_agent_is_rejected_before_request(self):
         with self.assertRaises(secintel.AppError):
             secintel.SecEdgarClient("")
