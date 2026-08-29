@@ -1926,3 +1926,197 @@ class DynamicExitBacktestTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MLReadyMarketFeatureRuleTests(unittest.TestCase):
+    def test_market_pattern_rules_normalize(self):
+        rules = engine.normalize_machine_rules(
+            {
+                "minimum_vwap_hold_bars": "3",
+                "require_vwap_reclaim_hold": "true",
+                "avoid_vwap_rejection": True,
+                "min_volume_acceleration_ratio": "1.75",
+                "require_volume_accelerating": True,
+                "min_atr_pct": "2.5",
+                "max_atr_pct": "12.0",
+                "require_uptrend_structure": True,
+                "require_breakout_above_confirmed_swing_high": True,
+                "avoid_failed_breakout": True,
+                "minimum_completed_bounces": "2",
+                "require_bounce_2_present": True,
+                "require_bounce_3_present": False,
+                "min_latest_bounce_recovery_pct": "4.5",
+                "avoid_bounce_deterioration": True,
+                "require_stair_step_up": True,
+                "require_consolidation_expansion_up": True,
+                "max_base_range_atr_ratio": "2.5",
+                "min_expansion_volume_ratio": "1.4",
+            }
+        )
+        self.assertEqual(rules["minimum_vwap_hold_bars"], 3)
+        self.assertEqual(rules["min_volume_acceleration_ratio"], 1.75)
+        self.assertEqual(rules["min_atr_pct"], 2.5)
+        self.assertEqual(rules["max_atr_pct"], 12.0)
+        self.assertEqual(rules["minimum_completed_bounces"], 2)
+        self.assertEqual(rules["min_latest_bounce_recovery_pct"], 4.5)
+        self.assertEqual(rules["max_base_range_atr_ratio"], 2.5)
+        self.assertEqual(rules["min_expansion_volume_ratio"], 1.4)
+        self.assertTrue(rules["require_bounce_2_present"])
+        self.assertTrue(rules["require_stair_step_up"])
+        self.assertTrue(rules["require_consolidation_expansion_up"])
+
+    def test_market_pattern_rules_gate_historical_signal(self):
+        rules = engine.normalize_machine_rules(
+            {
+                "minimum_vwap_hold_bars": 3,
+                "require_vwap_reclaim_hold": True,
+                "avoid_vwap_rejection": True,
+                "min_volume_acceleration_ratio": 1.5,
+                "require_volume_accelerating": True,
+                "min_atr_pct": 2.0,
+                "max_atr_pct": 10.0,
+                "require_uptrend_structure": True,
+                "require_breakout_above_confirmed_swing_high": True,
+                "avoid_failed_breakout": True,
+                "minimum_completed_bounces": 2,
+                "require_bounce_2_present": True,
+                "avoid_bounce_deterioration": True,
+                "require_stair_step_up": True,
+                "require_consolidation_expansion_up": True,
+                "max_base_range_atr_ratio": 2.5,
+                "min_expansion_volume_ratio": 1.2,
+            }
+        )
+        row = {
+            "close": 10.5,
+            "session_minute": 20,
+            "vwap_hold_bars": 4,
+            "vwap_reclaim_recent": True,
+            "vwap_rejection_recent": False,
+            "volume_acceleration_ratio": 1.8,
+            "volume_accelerating": True,
+            "atr_pct": 5.0,
+            "uptrend_structure": True,
+            "breakout_above_last_swing_high": True,
+            "failed_breakout_last_swing_high": False,
+            "completed_bounce_count": 2,
+            "bounce_2_present": True,
+            "bounce_deteriorating": False,
+            "stair_step_up": True,
+            "consolidation_then_expansion_up": True,
+            "base_range_atr_ratio": 1.8,
+            "expansion_volume_ratio": 1.6,
+        }
+        self.assertTrue(engine.evaluate_signal(row, rules))
+
+        failed = dict(row)
+        failed["bounce_deteriorating"] = True
+        self.assertFalse(engine.evaluate_signal(failed, rules))
+
+        weak_expansion = dict(row)
+        weak_expansion["expansion_volume_ratio"] = 1.0
+        self.assertFalse(engine.evaluate_signal(weak_expansion, rules))
+
+    def test_live_matcher_uses_market_features_not_only_snapshot_metrics(self):
+        strategy = simple_strategy(
+            min_volume_acceleration_ratio=1.5,
+            require_bounce_2_present=True,
+            avoid_bounce_deterioration=True,
+            require_stair_step_up=True,
+        )
+        metrics = {
+            "price": 10.5,
+            "market_features": {
+                "volume_acceleration_ratio": 1.8,
+                "bounce_2_present": True,
+                "bounce_deteriorating": False,
+                "stair_step_up": True,
+            },
+        }
+        matched = engine.match_strategy(metrics, strategy)
+        feature_checks = {
+            item["label"]: item["status"]
+            for item in matched["checks"]
+            if item["label"] in {
+                "Volume acceleration ratio",
+                "Bounce #2 present",
+                "No bounce deterioration",
+                "Stair-step up",
+            }
+        }
+        self.assertEqual(
+            feature_checks,
+            {
+                "Volume acceleration ratio": "pass",
+                "Bounce #2 present": "pass",
+                "No bounce deterioration": "pass",
+                "Stair-step up": "pass",
+            },
+        )
+
+        metrics["market_features"]["bounce_2_present"] = False
+        failed = engine.match_strategy(metrics, strategy)
+        self.assertIn(
+            "fail",
+            [
+                item["status"]
+                for item in failed["checks"]
+                if item["label"] == "Bounce #2 present"
+            ],
+        )
+
+    def test_backtest_indicator_frame_contains_custom_momentum_features(self):
+        rows = []
+        price = 10.0
+        for minute in range(30):
+            if minute < 15:
+                volume = 1000
+            else:
+                volume = 2500
+            close = price + (0.08 if minute % 3 else -0.03)
+            rows.append(
+                bar(
+                    18,
+                    minute,
+                    price,
+                    max(price, close) + 0.12,
+                    min(price, close) - 0.10,
+                    close,
+                    volume,
+                )
+            )
+            price = close
+        frame = engine.add_indicators(engine.bars_to_frame(rows), simple_strategy())
+        for field in (
+            "atr_pct",
+            "vwap_hold_bars",
+            "volume_acceleration_ratio",
+            "uptrend_structure",
+            "completed_bounce_count",
+            "bounce_2_present",
+            "bounce_3_present",
+            "bounce_deteriorating",
+            "stair_step_up",
+            "consolidation_then_expansion_up",
+            "base_range_atr_ratio",
+            "expansion_volume_ratio",
+            "breakout_above_last_swing_high",
+            "failed_breakout_last_swing_high",
+        ):
+            self.assertIn(field, frame.columns)
+
+    def test_optimizer_can_tune_market_feature_thresholds(self):
+        strategy = simple_strategy(
+            minimum_vwap_hold_bars=4,
+            min_volume_acceleration_ratio=1.8,
+            min_atr_pct=2.0,
+            max_atr_pct=12.0,
+            minimum_completed_bounces=2,
+            min_latest_bounce_recovery_pct=5.0,
+            max_base_range_atr_ratio=2.5,
+            min_expansion_volume_ratio=1.5,
+        )
+        variants = engine.generate_strategy_variants(strategy, maximum=200)
+        self.assertTrue(any(item["minimum_vwap_hold_bars"] != 4 for item in variants))
+        self.assertTrue(any(item["min_volume_acceleration_ratio"] != 1.8 for item in variants))
+        self.assertTrue(any(item["min_latest_bounce_recovery_pct"] != 5.0 for item in variants))
