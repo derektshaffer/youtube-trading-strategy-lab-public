@@ -42,10 +42,24 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
 
     def test_trading_intelligence_reuses_prepared_library_between_reruns(self):
         source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        engine = (ROOT / "youtube_strategy_engine.py").read_text(encoding="utf-8")
         self.assertIn("LIBRARY_CLOUD_REFRESH_SECONDS = 60.0", source)
         self.assertIn("_til_library_render_cache", source)
-        self.assertIn("prepared_cache_for", source)
-        self.assertIn("force_cloud_refresh=True", source)
+        self.assertIn("_local_library_mtime_ns", source)
+        self.assertIn("library_revision()", source)
+        self.assertIn("def library_revision", engine)
+
+    def test_finder_auto_refresh_only_runs_while_cloud_work_is_active(self):
+        source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        self.assertIn('@st.fragment(run_every="60s")', source)
+        self.assertIn("_initial_active_cloud_finders", source)
+        self.assertIn("load_cloud_status_library()", source)
+        self.assertIn("automatic refresh stops so the page stays still", source)
+
+    def test_workspace_is_remembered_across_streamlit_sessions(self):
+        source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        self.assertIn('st.query_params.get("workspace")', source)
+        self.assertIn('st.query_params["workspace"] = module', source)
 
     def test_continuous_research_button_is_clearly_manual(self):
         source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
