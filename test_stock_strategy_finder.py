@@ -210,8 +210,14 @@ class OptimizerResumeTests(unittest.TestCase):
 class FinderPersistenceTests(unittest.TestCase):
     def test_merge_saves_loser_ledger_and_stock_specific_child(self):
         source = strategy("source-family", breakout_lookback_bars=20)
+        source["validation_status"] = "validated"
+        source["validated_rules"] = {
+            **source["machine_rules"],
+            "reward_risk": 9.0,
+        }
         report = {
             "generated_at": "2026-08-28T05:00:00+00:00",
+            "strategy_fidelity_engine_version": 1,
             "symbol": "SDOT",
             "profile": {"name": "Deep"},
             "verdict": {"code": "ready_for_paper", "label": "READY FOR PAPER TESTING"},
@@ -222,6 +228,10 @@ class FinderPersistenceTests(unittest.TestCase):
             "strategies_tested": 1,
             "robustness": {"score": 72, "label": "PROMISING"},
             "parameter_stability": {"positive_pct": 65},
+            "paper_execution_fidelity": {
+                "status": "ready",
+                "label": "PAPER EXECUTION COMPATIBLE",
+            },
             "walk_forward": {"summary": {"profitable_fold_pct": 75}},
             "optimization": {
                 "winner": {
@@ -316,12 +326,19 @@ class FinderPersistenceTests(unittest.TestCase):
         self.assertEqual(child["optimized_for_symbol"], "SDOT")
         self.assertEqual(child["paper_validation_status"], "ready")
         self.assertEqual(child["validation_status"], "validated")
+        self.assertEqual(child["validated_rules"], source["machine_rules"])
+        self.assertNotEqual(child["validated_rules"], source["validated_rules"])
+        self.assertEqual(
+            child["validated_backtest_settings"],
+            report["optimization"]["winner"]["optimized_backtest_settings"],
+        )
 
         restored = finder.latest_completed_finder_report(merged, "SDOT", "Deep")
         self.assertTrue(restored.get("restored_from_library"))
         self.assertEqual(restored["winner_strategy_name"], source["name"])
         self.assertEqual(restored["timeframe"], "5Min")
         self.assertEqual(restored["strategy_fidelity_engine_version"], 1)
+        self.assertEqual(restored["paper_execution_fidelity"]["status"], "ready")
         self.assertEqual(restored["optimization"]["winner"]["holdout_metrics"]["net_pnl"], 40)
 
         completed_checkpoint = finder.latest_finder_checkpoint(merged, "SDOT", "Deep")
