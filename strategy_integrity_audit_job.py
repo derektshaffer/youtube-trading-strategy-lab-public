@@ -1,8 +1,8 @@
 """Print a safe aggregate fidelity audit for the durable private Trading Lab library.
 
 This script is intended for GitHub Actions. It reads the configured private backup,
-then prints only aggregate counts and example strategy names. It never prints tokens,
-raw source text, or the full private library.
+then prints only aggregate counts, example strategy names, and coarse AVWAP anchor
+classifications. It never prints tokens, raw source text, or the full private library.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import base64
 from collections import defaultdict
 import json
 import os
+import re
 from typing import Any
 
 import requests
@@ -82,6 +83,54 @@ def load_private_library() -> dict[str, Any]:
     return payload
 
 
+def strategy_text(strategy: dict[str, Any]) -> str:
+    pieces: list[Any] = [
+        strategy.get("name"),
+        strategy.get("category"),
+        strategy.get("summary"),
+        *(strategy.get("indicators") or []),
+        *(strategy.get("entry_conditions") or []),
+        *(strategy.get("exit_conditions") or []),
+        *(strategy.get("risk_rules") or []),
+        *(strategy.get("avoid_conditions") or []),
+        *(strategy.get("market_context") or []),
+        *(strategy.get("stock_selection") or []),
+        *(strategy.get("unresolved_rules") or []),
+    ]
+    return " ".join(str(value or "") for value in pieces).casefold()
+
+
+def avwap_tags(strategy: dict[str, Any]) -> list[str]:
+    """Return coarse, non-sensitive anchor/mechanism labels from saved strategy text."""
+    text = strategy_text(strategy)
+    tags: list[str] = []
+
+    checks = (
+        ("ipo_day_one", ("ipo day-one", "ipo day one", "first trading day", "second minute")),
+        ("multi_day", ("multi-day", "multi day", "day two", "day 2", "several days")),
+        ("handoff_higher_low", ("handoff", "higher low", "higher-low", "trend acceleration")),
+        ("swing_low", ("swing low", "pivot low", "major low")),
+        ("swing_high", ("swing high", "pivot high", "major high")),
+        ("previous_day_level", ("previous day high", "previous-day high", "prior day high", "previous day low", "previous-day low")),
+        ("session_open", ("session open", "market open", "opening print", "opening price")),
+        ("breakout_event", ("breakout", "break above", "range break", "high of day", "hod")),
+        ("catalyst_event", ("catalyst", "news", "earnings", "press release", "offering")),
+        ("reclaim", ("reclaim", "cross back above", "regain")),
+        ("pullback_support", ("pullback", "support", "bounce", "rising avwap", "rising anchored vwap")),
+        ("compression_pinch", ("compression", "pinch", "coiling", "squeeze between")),
+        ("short_squeeze", ("short squeeze", "short-squeeze", "heavily shorted")),
+    )
+    for label, phrases in checks:
+        if any(phrase in text for phrase in phrases):
+            tags.append(label)
+
+    if re.search(r"anchor(?:ed|ing)?\s+(?:the\s+)?(?:vwap|avwap)?\s*(?:at|to|from|on)\b", text):
+        tags.append("explicit_anchor_language")
+    if not tags:
+        tags.append("unspecified")
+    return tags
+
+
 def main() -> None:
     library = load_private_library()
     all_strategies = [item for item in library.get("strategies") or [] if isinstance(item, dict)]
@@ -99,6 +148,8 @@ def main() -> None:
     blocked = 0
     partial = 0
     faithful = 0
+    avwap_records: list[dict[str, Any]] = []
+    avwap_tag_counts: dict[str, int] = defaultdict(int)
 
     for raw in source_strategies:
         strategy = upgrade_native_strategy_rules(raw)
@@ -118,6 +169,7 @@ def main() -> None:
             or strategy.get("source_type")
             or "Unknown source"
         )
+        has_avwap_gap = False
         for item in report.get("requirements") or []:
             if not isinstance(item, dict) or item.get("modeled") or not item.get("critical"):
                 continue
@@ -130,6 +182,14 @@ def main() -> None:
                 bucket["examples"].append(name)
             if not bucket["limitation"]:
                 bucket["limitation"] = str(item.get("limitation") or "")
+            if label == "Anchored VWAP structure":
+                has_avwap_gap = True
+
+        if has_avwap_gap:
+            tags = avwap_tags(strategy)
+            avwap_records.append({"name": name, "tags": tags})
+            for tag in set(tags):
+                avwap_tag_counts[tag] += 1
 
     ranked = sorted(
         gap_buckets.items(),
@@ -140,7 +200,7 @@ def main() -> None:
         ),
     )
 
-    print("STRATEGY_INTEGRITY_AUDIT_V1")
+    print("STRATEGY_INTEGRITY_AUDIT_V2")
     print(f"SOURCE_STRATEGIES={len(source_strategies)}")
     print(f"FAITHFUL={faithful}")
     print(f"PARTIAL={partial}")
@@ -157,6 +217,15 @@ def main() -> None:
             f"|| examples={examples} || limitation={limitation}"
         )
     print("TOP_GAPS_END")
+
+    print("AVWAP_TAG_COUNTS_BEGIN")
+    for tag, count in sorted(avwap_tag_counts.items(), key=lambda pair: (-pair[1], pair[0])):
+        print(f"{tag}={count}")
+    print("AVWAP_TAG_COUNTS_END")
+    print("AVWAP_STRATEGIES_BEGIN")
+    for record in sorted(avwap_records, key=lambda item: item["name"]):
+        print(f"{record['name']} || tags={','.join(record['tags'])}")
+    print("AVWAP_STRATEGIES_END")
 
 
 if __name__ == "__main__":
