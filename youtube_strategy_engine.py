@@ -4095,7 +4095,24 @@ def generate_strategy_variants(
     def add(updates: dict[str, Any]) -> None:
         if len(variants) >= limit:
             return
-        candidate = normalize_machine_rules({**baseline, **updates})
+        merged = {**baseline, **updates}
+        if (
+            original.get("reward_risk") is None
+            and "reward_risk" not in updates
+            and any(
+                updates.get(name) is not None
+                for name in (
+                    "trailing_stop_pct",
+                    "move_stop_to_breakeven_at_r",
+                    "exit_below_vwap",
+                    "exit_below_fast_ema",
+                )
+            )
+        ):
+            # A dynamic exit introduced by a source-supported option or AI research
+            # assumption must not inherit the generic fixed 2R target.
+            merged["reward_risk"] = None
+        candidate = normalize_machine_rules(merged)
         if not _valid_optimizer_rules(candidate):
             return
         signature = json.dumps(candidate, sort_keys=True, separators=(",", ":"))
