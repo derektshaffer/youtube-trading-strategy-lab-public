@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import tempfile
 from time import sleep
 from typing import Any, Callable
@@ -1812,86 +1813,134 @@ class GitHubCloudBackup:
             url += "?" + urlencode({"ref": self.branch})
         return url
 
+    def _git_clone_url(self) -> str:
+        return f"https://github.com/{self.repository}.git"
+
     def _save_large_library(
         self,
         serialized: bytes,
         *,
         current_sha: str = "",
     ) -> str:
-        """Commit a large library with Git data APIs and a fast-forward ref update."""
-        encoded_branch = quote(self.branch, safe="")
-        ref_url = f"{self._repository_url}/git/ref/heads/{encoded_branch}"
-        ref = self._request(ref_url)
-        head_sha = str(((ref or {}).get("object") or {}).get("sha") or "")
-        if not re.fullmatch(r"[a-fA-F0-9]{40,64}", head_sha):
-            raise AppError("GitHub did not return a readable backup branch revision.")
+        """Commit an oversized library with a shallow, conflict-safe Git push."""
 
-        # Re-check the file at the exact parent commit. If it changed after
-        # read_library(), stop instead of hiding another writer's update.
-        exact_url = self._contents_url(include_branch=False) + "?" + urlencode({"ref": head_sha})
-        exact_record = self._request(exact_url, missing_ok=True)
-        exact_sha = str((exact_record or {}).get("sha") or "")
-        if exact_sha != str(current_sha or ""):
-            raise AppError(
-                "The GitHub cloud backup changed while this app was saving. "
-                "Restore or inspect the latest cloud backup before retrying so newer records are not overwritten."
+        def run_git(arguments: list[str], *, cwd: Path | None, environment: dict[str, str]) -> str:
+            try:
+                result = subprocess.run(
+                    ["git", *arguments],
+                    cwd=str(cwd) if cwd else None,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=180,
+                    check=False,
+                )
+            except FileNotFoundError as exc:
+                raise AppError(
+                    "The strategy library is too large for GitHub's REST API, and Git is not available for the required backup push."
+                ) from exc
+            except subprocess.TimeoutExpired as exc:
+                raise AppError("The large GitHub cloud-backup push timed out; no force push was attempted.") from exc
+            if result.returncode:
+                detail = f"{result.stderr}\n{result.stdout}".casefold()
+                if any(marker in detail for marker in ("non-fast-forward", "fetch first", "stale info", "rejected")):
+                    raise AppError(
+                        "The GitHub cloud backup changed while this app was saving. "
+                        "Restore or inspect the latest cloud backup before retrying so newer records are not overwritten."
+                    )
+                raise AppError(
+                    "The large GitHub cloud-backup Git push failed. The saved library and completed research shards were not discarded."
+                )
+            return str(result.stdout or "").strip()
+
+        with tempfile.TemporaryDirectory(prefix="trading-lab-backup-") as directory:
+            root = Path(directory)
+            checkout = root / "repository"
+            askpass = root / "git-askpass.sh"
+            askpass.write_text(
+                "#!/bin/sh\n"
+                "case \"$1\" in\n"
+                "  *Username*) printf '%s\\n' 'x-access-token' ;;\n"
+                "  *Password*) printf '%s\\n' \"$TRADING_BACKUP_GIT_TOKEN\" ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            askpass.chmod(0o700)
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "GIT_ASKPASS": str(askpass),
+                    "GIT_TERMINAL_PROMPT": "0",
+                    "TRADING_BACKUP_GIT_TOKEN": self.token,
+                }
+            )
+            clone_url = self._git_clone_url()
+            run_git(
+                [
+                    "clone",
+                    "--depth",
+                    "1",
+                    "--single-branch",
+                    "--branch",
+                    self.branch,
+                    clone_url,
+                    str(checkout),
+                ],
+                cwd=None,
+                environment=environment,
             )
 
-        commit = self._request(f"{self._repository_url}/git/commits/{quote(head_sha, safe='')}")
-        base_tree_sha = str(((commit or {}).get("tree") or {}).get("sha") or "")
-        if not re.fullmatch(r"[a-fA-F0-9]{40,64}", base_tree_sha):
-            raise AppError("GitHub did not return a readable backup tree revision.")
+            target = checkout.joinpath(*self.path.split("/"))
+            if target.exists():
+                cloned_sha = run_git(
+                    ["hash-object", "--", self.path],
+                    cwd=checkout,
+                    environment=environment,
+                )
+            else:
+                cloned_sha = ""
+            if cloned_sha != str(current_sha or ""):
+                raise AppError(
+                    "The GitHub cloud backup changed while this app was saving. "
+                    "Restore or inspect the latest cloud backup before retrying so newer records are not overwritten."
+                )
 
-        blob = self._request(
-            f"{self._repository_url}/git/blobs",
-            method="POST",
-            payload={
-                "content": base64.b64encode(serialized).decode("ascii"),
-                "encoding": "base64",
-            },
-        )
-        blob_sha = str((blob or {}).get("sha") or "")
-        if not re.fullmatch(r"[a-fA-F0-9]{40,64}", blob_sha):
-            raise AppError("GitHub did not return a valid blob id for the large cloud backup.")
-
-        tree = self._request(
-            f"{self._repository_url}/git/trees",
-            method="POST",
-            payload={
-                "base_tree": base_tree_sha,
-                "tree": [
-                    {
-                        "path": self.path,
-                        "mode": "100644",
-                        "type": "blob",
-                        "sha": blob_sha,
-                    }
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(serialized)
+            blob_sha = run_git(
+                ["hash-object", "--", self.path],
+                cwd=checkout,
+                environment=environment,
+            )
+            if not re.fullmatch(r"[a-fA-F0-9]{40,64}", blob_sha):
+                raise AppError("Git did not return a valid blob id for the large cloud backup.")
+            run_git(["add", "--", self.path], cwd=checkout, environment=environment)
+            run_git(
+                ["config", "user.name", "Trading Intelligence Lab"],
+                cwd=checkout,
+                environment=environment,
+            )
+            run_git(
+                ["config", "user.email", "trading-intelligence-lab@users.noreply.github.com"],
+                cwd=checkout,
+                environment=environment,
+            )
+            run_git(
+                [
+                    "commit",
+                    "--allow-empty",
+                    "-m",
+                    "Back up YouTube Trading Strategy Lab library",
                 ],
-            },
-        )
-        tree_sha = str((tree or {}).get("sha") or "")
-        if not re.fullmatch(r"[a-fA-F0-9]{40,64}", tree_sha):
-            raise AppError("GitHub did not return a valid tree id for the large cloud backup.")
-
-        new_commit = self._request(
-            f"{self._repository_url}/git/commits",
-            method="POST",
-            payload={
-                "message": "Back up YouTube Trading Strategy Lab library",
-                "tree": tree_sha,
-                "parents": [head_sha],
-            },
-        )
-        new_commit_sha = str((new_commit or {}).get("sha") or "")
-        if not re.fullmatch(r"[a-fA-F0-9]{40,64}", new_commit_sha):
-            raise AppError("GitHub did not return a valid commit id for the large cloud backup.")
-
-        self._request(
-            f"{self._repository_url}/git/refs/heads/{encoded_branch}",
-            method="PATCH",
-            payload={"sha": new_commit_sha, "force": False},
-        )
-        return blob_sha
+                cwd=checkout,
+                environment=environment,
+            )
+            run_git(
+                ["push", "origin", f"HEAD:refs/heads/{self.branch}"],
+                cwd=checkout,
+                environment=environment,
+            )
+            return blob_sha
 
     def read_library(self) -> dict[str, Any] | None:
         self._verify_private_repository()
