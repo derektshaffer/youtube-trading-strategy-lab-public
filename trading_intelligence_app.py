@@ -7540,6 +7540,48 @@ elif module == "Stock Analyzer":
                     analyzer_strategies,
                     progress=stock_analysis_progress,
                 )
+
+                analyzer_as_of = utc_now()
+                analyzer_news = [
+                    classify_catalyst(item)
+                    for item in (analysis.get("news_items") or [])
+                    if isinstance(item, dict)
+                ]
+                analyzer_sec_filings: list[dict[str, Any]] = []
+                analyzer_sec_error = ""
+                analyzer_sec_user_agent = setting("SEC_USER_AGENT")
+                if analyzer_sec_user_agent:
+                    status_box.write("Checking SEC EDGAR for recent filing risk and catalysts…")
+                    update_task_bar(
+                        analyzer_bar,
+                        analyzer_monitor,
+                        0.86,
+                        "Checking SEC filing evidence",
+                    )
+                    try:
+                        analyzer_sec_payload = SecEdgarClient(
+                            analyzer_sec_user_agent
+                        ).recent_filings(
+                            analyzer_ticker,
+                            days=30,
+                            limit=100,
+                            as_of=analyzer_as_of,
+                        )
+                        analyzer_sec_filings = classify_recent_sec_filings(analyzer_sec_payload)
+                    except AppError as exc:
+                        analyzer_sec_error = str(exc)
+                        status_box.write("SEC evidence unavailable: " + analyzer_sec_error)
+
+                analyzer_evidence = rank_catalyst_evidence(
+                    analyzer_news,
+                    analyzer_sec_filings,
+                    as_of=analyzer_as_of,
+                )
+                analysis["catalyst_evidence"] = analyzer_evidence
+                analysis["catalyst_summary"] = catalyst_intelligence_summary(analyzer_evidence)
+                analysis["sec_summary"] = sec_filing_summary(analyzer_sec_filings)
+                analysis["sec_error"] = analyzer_sec_error
+                analysis["sec_enabled"] = bool(analyzer_sec_user_agent)
                 st.session_state["til_stock_analysis"] = analysis
                 status_box.update(label=f"{analyzer_ticker} analysis complete", state="complete", expanded=False)
                 complete_task_bar(analyzer_bar, analyzer_monitor, f"{analyzer_ticker} analysis complete")
@@ -7562,7 +7604,55 @@ elif module == "Stock Analyzer":
             rvol = safe_float(metrics.get("relative_volume"))
             market_cols[2].metric("RVOL", f"{rvol:.2f}×" if rvol is not None else "—")
             market_cols[3].metric("Spread", f"{safe_float(metrics.get('spread_pct'), 0.0):.2f}%")
-            market_cols[4].metric("Recent catalyst items", int(stock_result.get("news_count") or 0))
+            catalyst_summary = stock_result.get("catalyst_summary") or {}
+            sec_summary = stock_result.get("sec_summary") or {}
+            market_cols[4].metric(
+                "Fresh catalysts",
+                int(catalyst_summary.get("fresh_specific_catalysts") or 0),
+            )
+
+            catalyst_evidence = list(stock_result.get("catalyst_evidence") or [])
+            specific_evidence = [
+                item for item in catalyst_evidence if item.get("is_specific_catalyst")
+            ]
+            dilution_evidence = [
+                item for item in specific_evidence if item.get("is_dilution_risk")
+            ]
+            fresh_dilution = [
+                item for item in dilution_evidence
+                if str(item.get("freshness") or "") in {"breaking", "fresh", "recent"}
+            ]
+
+            if fresh_dilution:
+                strongest_dilution = max(
+                    fresh_dilution,
+                    key=lambda item: abs(safe_float(item.get("effective_score"), 0.0) or 0.0),
+                )
+                st.warning(
+                    "Fresh dilution / offering evidence detected: "
+                    f"{strongest_dilution.get('category')} · "
+                    f"{strongest_dilution.get('headline') or 'source evidence available'}"
+                )
+
+            if specific_evidence or stock_result.get("sec_error"):
+                with st.expander("Catalyst + SEC evidence", expanded=bool(fresh_dilution)):
+                    st.caption(
+                        f"{len(specific_evidence)} specific catalyst items · "
+                        f"{int(sec_summary.get('filings') or 0)} SEC filings reviewed · "
+                        f"{len(dilution_evidence)} dilution-risk flags."
+                    )
+                    if stock_result.get("sec_error"):
+                        st.caption("SEC evidence unavailable for this run: " + str(stock_result.get("sec_error")))
+                    for item in specific_evidence[:8]:
+                        icon = "⚠️" if item.get("is_dilution_risk") else (
+                            "▲" if item.get("is_positive") else "▼" if item.get("is_negative") else "•"
+                        )
+                        source_type = "SEC" if item.get("evidence_type") == "sec_filing" else "News"
+                        st.write(
+                            f"{icon} **{source_type} · {item.get('category')}** — "
+                            f"{item.get('headline') or 'Evidence'} "
+                            f"({str(item.get('freshness') or 'unknown').title()})"
+                        )
 
             if comparisons:
                 best = comparisons[0]
