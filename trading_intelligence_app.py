@@ -6711,7 +6711,8 @@ elif module == "Pattern Validation":
             f"The baseline will predict whether price reaches +{ml_profit_target_pct:.2f}% "
             f"before -{ml_stop_loss_pct:.2f}% within the selected horizon. If both levels are "
             "touched in the same 1-minute candle, the downside level wins conservatively because "
-            "intrabar ordering is unknown. Trading days means actual U.S. market sessions."
+            "intrabar ordering is unknown. Trading days means actual U.S. market sessions; "
+            "weekends and market holidays do not count."
         )
     else:
         st.info(
