@@ -19,6 +19,7 @@ from predictive_ml_pipeline import (
     walk_forward_logistic_baseline,
 )
 from predictive_probability_model import build_portable_probability_model
+from predictive_boosted_probability_model import build_boosted_probability_model
 
 
 DEFAULT_BOOTSTRAP_SYMBOLS: tuple[str, ...] = (
@@ -43,6 +44,7 @@ DEFAULT_SESSION_MODE = "regular"
 DEFAULT_OBSERVATION_STRIDE_BARS = 5
 DEFAULT_MAX_SYMBOLS = 12
 MAX_AUTOMATIC_ML_RUN_HISTORY = 12
+MODEL_SUITE_VERSION = 2
 
 
 def _clean_symbols(values: Any) -> list[str]:
@@ -250,7 +252,7 @@ def run_predictive_ml_backfill(
         min_test_rows=25,
     )
 
-    notify("Training gated portable shadow-probability model.")
+    notify("Training gated portable logistic shadow-probability model.")
     probability_model = build_portable_probability_model(
         dataset,
         target_horizon=int(config["horizon"]),
@@ -261,6 +263,22 @@ def run_predictive_ml_backfill(
         embargo_sessions=1,
         min_train_rows=250,
     )
+
+    notify("Training nonlinear gradient-boosted challenger with its own validation gates.")
+    boosted_probability_model = build_boosted_probability_model(
+        dataset,
+        target_horizon=int(config["horizon"]),
+        target_mode="target_before_stop",
+        min_train_sessions=8,
+        test_sessions_per_fold=2,
+        embargo_sessions=1,
+        min_train_rows=250,
+    )
+    probability_models = [
+        model
+        for model in (probability_model, boosted_probability_model)
+        if isinstance(model, dict)
+    ]
 
     completed_at = datetime.now(timezone.utc).isoformat()
     identity = "|".join(
@@ -285,6 +303,7 @@ def run_predictive_ml_backfill(
         "stop_loss_pct": float(config["stop_loss_pct"]),
         "session_mode": str(config["session_mode"]),
         "observation_stride_bars": int(config["observation_stride_bars"]),
+        "model_suite_version": int((payload or {}).get("model_suite_version") or MODEL_SUITE_VERSION),
         "dataset_summary": {
             key: deepcopy(value)
             for key, value in dataset.items()
@@ -293,6 +312,8 @@ def run_predictive_ml_backfill(
         "evaluation": _compact(evaluation),
         "generalization": _compact(generalization),
         "probability_model": deepcopy(probability_model),
+        "probability_models": deepcopy(probability_models),
+        "boosted_probability_model": deepcopy(boosted_probability_model),
         "ticker_specific": {
             "status": "SKIPPED_FOR_SPEED",
             "reason": (
@@ -350,6 +371,20 @@ def merge_backfill_result_into_library(
         if isinstance(record.get("probability_model"), dict)
         else {}
     )
+    probability_models = [
+        item
+        for item in record.get("probability_models") or []
+        if isinstance(item, dict)
+    ]
+    if model and not any(
+        str(item.get("id") or "") == str(model.get("id") or "")
+        for item in probability_models
+    ):
+        probability_models.insert(0, model)
+    ready_models = [
+        item for item in probability_models
+        if item.get("shadow_scoring_enabled")
+    ]
     dataset_summary = (
         record.get("dataset_summary")
         if isinstance(record.get("dataset_summary"), dict)
@@ -365,7 +400,13 @@ def merge_backfill_result_into_library(
         "labeled_rows": int(dataset_summary.get("row_count") or 0),
         "symbols_with_data": int(dataset_summary.get("symbols_with_data") or 0),
         "model_status": model.get("status"),
-        "shadow_scoring_enabled": bool(model.get("shadow_scoring_enabled")),
+        "model_suite_version": int(record.get("model_suite_version") or 1),
+        "ready_model_count": len(ready_models),
+        "ready_model_types": [
+            str(item.get("model_type") or "unknown")
+            for item in ready_models
+        ],
+        "shadow_scoring_enabled": bool(ready_models),
         "research_only": True,
         "affects_live_ranking": False,
         "affects_execution": False,
