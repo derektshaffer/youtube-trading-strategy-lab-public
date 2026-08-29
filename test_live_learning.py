@@ -209,3 +209,41 @@ def test_shadow_observation_keeps_parallel_challenger_predictions():
     assert [row["model_id"] for row in saved] == ["champion", "challenger"]
     assert saved[1]["probability"] == 0.62
     assert saved[1]["feature_coverage"] == 0.88
+
+
+
+def test_merge_keeps_parallel_predictions_from_duplicate_bucket():
+    observed = datetime(2026, 8, 29, 15, 1, tzinfo=timezone.utc)
+    first_result = scan_result()
+    first_result["ml_prediction"] = {
+        "status": "SCORED",
+        "probability": 0.70,
+        "model_id": "champion",
+        "target": "label__target_before_stop_15bar",
+    }
+    first_result["ml_predictions"] = [first_result["ml_prediction"]]
+    second_result = scan_result()
+    second_result["ml_prediction"] = {
+        "status": "SCORED",
+        "probability": 0.62,
+        "model_id": "challenger",
+        "target": "label__target_before_stop_15bar",
+    }
+    second_result["ml_predictions"] = [second_result["ml_prediction"]]
+
+    first = build_shadow_observation(
+        first_result,
+        source="market_discovery",
+        observed_at=observed,
+    )
+    second = build_shadow_observation(
+        second_result,
+        source="stock_analyzer",
+        observed_at=observed + timedelta(minutes=2),
+    )
+    merged = merge_shadow_observations([first], [second])
+    ids = {
+        row["model_id"]
+        for row in merged[0]["context"]["ml_predictions"]
+    }
+    assert ids == {"champion", "challenger"}
