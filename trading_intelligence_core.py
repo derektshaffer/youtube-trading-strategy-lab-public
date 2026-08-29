@@ -790,6 +790,22 @@ def upgrade_native_strategy_rules(strategy: dict[str, Any]) -> dict[str, Any]:
         item.pop("validated_rules", None)
         item.pop("validated_backtest_settings", None)
         item.pop("validated_at", None)
+
+    # A legacy validation may have been awarded to a simplified machine version of
+    # the source strategy. Once the fidelity audit detects defining logic that was
+    # never represented, that validation can no longer describe the original strategy.
+    if str(item.get("validation_status") or "").lower() == "validated":
+        integrity = strategy_integrity_report(item)
+        if str(integrity.get("status") or "") == "blocked":
+            item["previous_validation_invalidated_by_integrity_audit"] = {
+                "reason": "Defining source logic is not faithfully modeled by the deterministic backtester.",
+                "missing_requirements": list(integrity.get("critical_missing_requirements") or []),
+            }
+            item["validation_status"] = "unvalidated"
+            item["optimization_status"] = "not_run"
+            item.pop("validated_rules", None)
+            item.pop("validated_backtest_settings", None)
+            item.pop("validated_at", None)
     return item
 
 
