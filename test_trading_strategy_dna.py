@@ -267,6 +267,37 @@ class CanonicalFamilyManagerTests(unittest.TestCase):
         self.assertEqual(refreshed[0]["validation_status"], "unvalidated")
         self.assertTrue(refreshed[0].get("previous_family_validation_superseded"))
 
+    def test_same_entry_family_preserves_dynamic_exit_variations_for_optimizer(self):
+        first = self._strategy("trail-a", "book-1", rvol=5.0)
+        second = self._strategy("trail-b", "book-2", rvol=5.0)
+        first["exit_conditions"] = ["Trail the runner with a 3% trailing stop."]
+        second["exit_conditions"] = ["Trail the runner with a 6% trailing stop."]
+        first["machine_rules"]["trailing_stop_pct"] = 3.0
+        second["machine_rules"]["trailing_stop_pct"] = 6.0
+
+        canonical, families = build_canonical_family_strategies([first, second])
+        self.assertEqual(len(families), 1)
+        family = canonical[0]
+        self.assertEqual(
+            set(family["candidate_rule_options"]["trailing_stop_pct"]),
+            {3.0, 6.0},
+        )
+
+        variants = generate_strategy_variants(
+            family,
+            BacktestSettings(),
+            maximum=30,
+        )
+        dynamic_variants = [
+            item for item in variants
+            if item.get("trailing_stop_pct") in {3.0, 6.0}
+        ]
+        self.assertTrue(dynamic_variants)
+        self.assertTrue(
+            all(item.get("reward_risk") is None for item in dynamic_variants),
+            "A source-supported trailing exit must not inherit an invented fixed reward target.",
+        )
+
     def test_optional_family_rule_can_be_tested_as_not_required(self):
         first = self._strategy("a", "book-1", rvol=5.0)
         second = self._strategy("b", "book-2", rvol=5.0)
