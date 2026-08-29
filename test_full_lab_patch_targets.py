@@ -40,6 +40,10 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
                 self.assertEqual(run_module.call_count, 2)
                 run_module.assert_called_with(module_name, run_name="__main__")
 
+    def test_streamlit_version_supports_locked_sidebar(self):
+        requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+        self.assertIn("streamlit>=1.59,<2", requirements)
+
     def test_trading_intelligence_sidebar_is_locked_open_on_desktop(self):
         app_source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
         theme_source = (ROOT / "trading_glass_theme.py").read_text(encoding="utf-8")
