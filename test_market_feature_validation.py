@@ -1,6 +1,6 @@
 import pytest
 
-from market_feature_validation import run_detector_event_study
+from market_feature_validation import _ordered_sessions, run_detector_event_study
 
 
 def _bar(day, minute, o, h, l, c, v=100):
@@ -98,3 +98,20 @@ def test_bearish_detector_inverts_directional_return():
 def test_unknown_detector_is_rejected():
     with pytest.raises(ValueError):
         run_detector_event_study(_breakout_session(29), detectors=["not_a_detector"])
+
+
+
+def test_session_grouping_uses_new_york_date_not_utc_midnight():
+    rows = [
+        {
+            "t": "2026-08-30T00:00:00Z",
+            "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0, "v": 100,
+        },
+        {
+            "t": "2026-08-30T00:30:00Z",
+            "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0, "v": 100,
+        },
+    ]
+    sessions = _ordered_sessions(rows)
+    assert len(sessions) == 1
+    assert sessions[0][0] == "2026-08-29"
