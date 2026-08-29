@@ -3590,6 +3590,11 @@ def backtest_limitations(strategy: dict[str, Any]) -> list[str]:
             "move_stop_to_breakeven_at_r",
             "scale_out_fraction_pct",
             "scale_out_at_r",
+            "scale_out_stages",
+            "move_stop_to_breakeven_after_scale_out",
+            "trail_below_vwap",
+            "trail_below_fast_ema",
+            "trail_below_avwap",
             "exit_below_vwap",
             "exit_below_fast_ema",
             "exit_below_avwap",
@@ -3598,8 +3603,7 @@ def backtest_limitations(strategy: dict[str, Any]) -> list[str]:
         limitations.append("The video did not specify an exact target; the editable reward/risk setting is a research assumption.")
     exit_text = " ".join(str(item or "") for item in strategy.get("exit_conditions") or []).casefold()
     if any(phrase in exit_text for phrase in ("scale out", "scaling out", "partial profit", "take partial")) and not (
-        rules.get("scale_out_fraction_pct") is not None
-        and rules.get("scale_out_at_r") is not None
+        bool(configured_scale_out_stages(rules))
     ):
         limitations.append(
             "Source uses scale-outs/partial profit-taking, but the partial size or trigger is still unresolved."
@@ -3843,6 +3847,7 @@ def _empty_backtest(settings: BacktestSettings, strategy: dict[str, Any], symbol
         "metrics": summarize_trades([], settings.starting_cash),
         "in_sample": summarize_trades([], settings.starting_cash),
         "out_of_sample": summarize_trades([], settings.starting_cash),
+        "exit_attribution": summarize_exit_attribution([]),
         "sessions": 0,
     }
 
@@ -3884,6 +3889,57 @@ def summarize_trades(trades: list[dict[str, Any]], starting_cash: float) -> dict
         "max_drawdown_pct": round(max_drawdown, 2),
         "average_winner": round(sum(wins) / len(wins), 2) if wins else 0.0,
         "average_loser": round(sum(losses) / len(losses), 2) if losses else 0.0,
+    }
+
+
+def summarize_exit_attribution(trades: list[dict[str, Any]]) -> dict[str, Any]:
+    """Explain which final and partial exit mechanisms actually realized P/L."""
+    final_reasons: dict[str, dict[str, Any]] = {}
+    partial_reasons: dict[str, dict[str, Any]] = {}
+    total_partial_pnl = 0.0
+
+    for trade in trades:
+        reason = str(trade.get("reason") or "Unknown")
+        bucket = final_reasons.setdefault(
+            reason,
+            {"trade_count": 0, "net_pnl": 0.0, "wins": 0},
+        )
+        pnl = safe_float(trade.get("pnl"), 0.0) or 0.0
+        bucket["trade_count"] += 1
+        bucket["net_pnl"] += pnl
+        if pnl > 0:
+            bucket["wins"] += 1
+
+        for partial in trade.get("partial_exits") or []:
+            if not isinstance(partial, dict):
+                continue
+            partial_reason = str(partial.get("reason") or "Partial exit")
+            partial_bucket = partial_reasons.setdefault(
+                partial_reason,
+                {"event_count": 0, "net_pnl": 0.0, "quantity": 0},
+            )
+            partial_pnl = safe_float(partial.get("pnl"), 0.0) or 0.0
+            partial_bucket["event_count"] += 1
+            partial_bucket["net_pnl"] += partial_pnl
+            partial_bucket["quantity"] += int(safe_float(partial.get("quantity"), 0) or 0)
+            total_partial_pnl += partial_pnl
+
+    for bucket in final_reasons.values():
+        count = max(1, int(bucket["trade_count"]))
+        bucket["net_pnl"] = round(float(bucket["net_pnl"]), 2)
+        bucket["average_pnl"] = round(float(bucket["net_pnl"]) / count, 2)
+        bucket["win_rate_pct"] = round(int(bucket["wins"]) / count * 100.0, 2)
+        bucket.pop("wins", None)
+
+    for bucket in partial_reasons.values():
+        count = max(1, int(bucket["event_count"]))
+        bucket["net_pnl"] = round(float(bucket["net_pnl"]), 2)
+        bucket["average_pnl"] = round(float(bucket["net_pnl"]) / count, 2)
+
+    return {
+        "final_exit_reasons": final_reasons,
+        "partial_exit_reasons": partial_reasons,
+        "partial_exit_net_pnl": round(total_partial_pnl, 2),
     }
 
 
@@ -3930,6 +3986,11 @@ def run_backtest(
             "move_stop_to_breakeven_at_r",
             "scale_out_fraction_pct",
             "scale_out_at_r",
+            "scale_out_stages",
+            "move_stop_to_breakeven_after_scale_out",
+            "trail_below_vwap",
+            "trail_below_fast_ema",
+            "trail_below_avwap",
             "exit_below_vwap",
             "exit_below_fast_ema",
             "exit_below_avwap",
@@ -3939,6 +4000,7 @@ def run_backtest(
     if reward_risk is None and not dynamic_exit_configured:
         reward_risk = settings.default_reward_risk
     max_hold = rules.get("max_hold_minutes")
+    scale_out_stages = configured_scale_out_stages(rules)
     sessions = list(dict.fromkeys(data["session"].tolist()))
     split_index = max(1, min(len(sessions) - 1, int(len(sessions) * settings.train_fraction))) if len(sessions) > 1 else 1
     holdout_sessions = set(sessions[split_index:]) if len(sessions) > 1 else set()
@@ -4037,6 +4099,23 @@ def run_backtest(
             if original_quantity > 0
             else fill_exit
         )
+        highest_price = max(
+            float(position.get("highest_price") or position["entry_price"]),
+            fill_exit,
+        )
+        lowest_price = min(
+            float(position.get("lowest_price") or position["entry_price"]),
+            fill_exit,
+        )
+        entry_price = float(position["entry_price"])
+        mfe_pct = max(0.0, (highest_price / entry_price - 1.0) * 100.0)
+        mae_pct = max(0.0, (1.0 - lowest_price / entry_price) * 100.0)
+        weighted_return_pct = (weighted_exit_price / entry_price - 1.0) * 100.0
+        mfe_capture_pct = (
+            weighted_return_pct / mfe_pct * 100.0
+            if mfe_pct > 0 and weighted_return_pct > 0
+            else 0.0
+        )
         trade = {
             "trade_id": position["trade_id"],
             "symbol": symbol,
@@ -4056,7 +4135,11 @@ def run_backtest(
             "scaled_out_quantity": int(position.get("scaled_out_quantity") or 0),
             "partial_exits": list(position.get("partial_exits") or []),
             "pnl": round(pnl, 2),
-            "return_pct": round((weighted_exit_price / position["entry_price"] - 1.0) * 100.0, 3),
+            "return_pct": round(weighted_return_pct, 3),
+            "max_favorable_excursion_pct": round(mfe_pct, 3),
+            "max_adverse_excursion_pct": round(mae_pct, 3),
+            "mfe_capture_pct": round(mfe_capture_pct, 2),
+            "management_event_count": len(position.get("partial_exits") or []),
             "reason": reason,
             "sample": "out_of_sample" if position["session"] in holdout_sessions else "in_sample",
             "entry_session_type": "extended" if position.get("extended_hours") else "regular",
@@ -4158,7 +4241,9 @@ def run_backtest(
                                 ),
                                 "initial_risk_per_share": risk_per_share,
                                 "highest_price": entry,
+                                "lowest_price": entry,
                                 "scale_out_completed": False,
+                                "completed_scale_out_stages": [],
                                 "scaled_out_quantity": 0,
                                 "partial_exits": [],
                                 "realized_pnl": 0.0,
@@ -4182,36 +4267,47 @@ def run_backtest(
                 raw_exit = min(bar_open, position["stop_price"])
                 reason = "Stop loss"
             else:
-                scale_fraction = safe_float(rules.get("scale_out_fraction_pct"))
-                scale_at_r = safe_float(rules.get("scale_out_at_r"))
-                if (
-                    not bool(position.get("scale_out_completed"))
-                    and scale_fraction is not None
-                    and scale_at_r is not None
-                    and int(position.get("quantity") or 0) >= 2
-                ):
+                completed_stages = set(
+                    int(item) for item in position.get("completed_scale_out_stages") or []
+                )
+                for stage_index, stage in enumerate(scale_out_stages):
+                    if stage_index in completed_stages or int(position.get("quantity") or 0) < 2:
+                        continue
+                    stage_fraction = safe_float(stage.get("fraction_pct"))
+                    stage_at_r = safe_float(stage.get("at_r"))
+                    if stage_fraction is None or stage_at_r is None:
+                        continue
                     partial_target = (
                         float(position["entry_price"])
-                        + float(position.get("initial_risk_per_share") or 0.0) * scale_at_r
+                        + float(position.get("initial_risk_per_share") or 0.0) * stage_at_r
                     )
-                    if partial_target > float(position["entry_price"]) and high >= partial_target:
-                        desired_qty = max(
-                            1,
-                            int(round(int(position.get("original_quantity") or position["quantity"]) * scale_fraction / 100.0)),
-                        )
-                        partial_qty = min(
-                            desired_qty,
-                            max(0, int(position["quantity"]) - 1),
-                        )
-                        if partial_qty >= 1:
-                            record_partial_exit(
-                                position,
-                                max(bar_open, partial_target),
-                                current["timestamp"],
-                                partial_qty,
-                                "Scale-out target",
-                            )
-                            position["scale_out_completed"] = True
+                    if partial_target <= float(position["entry_price"]) or high < partial_target:
+                        continue
+                    desired_qty = max(
+                        1,
+                        int(round(
+                            int(position.get("original_quantity") or position["quantity"])
+                            * stage_fraction / 100.0
+                        )),
+                    )
+                    partial_qty = min(
+                        desired_qty,
+                        max(0, int(position["quantity"]) - 1),
+                    )
+                    if partial_qty < 1:
+                        continue
+                    record_partial_exit(
+                        position,
+                        max(bar_open, partial_target),
+                        current["timestamp"],
+                        partial_qty,
+                        f"Scale-out stage {stage_index + 1} ({stage_at_r:g}R)",
+                    )
+                    completed_stages.add(stage_index)
+                    position["completed_scale_out_stages"] = sorted(completed_stages)
+                position["scale_out_completed"] = bool(
+                    scale_out_stages and len(completed_stages) >= len(scale_out_stages)
+                )
                 if position.get("target_price") is not None and high >= float(position["target_price"]):
                     raw_exit = max(bar_open, float(position["target_price"]))
                     reason = "Profit target"
@@ -4239,7 +4335,19 @@ def run_backtest(
                     float(position.get("highest_price") or position["entry_price"]),
                     high,
                 )
+                position["lowest_price"] = min(
+                    float(position.get("lowest_price") or position["entry_price"]),
+                    low,
+                )
                 initial_risk = float(position.get("initial_risk_per_share") or 0.0)
+                if (
+                    rules.get("move_stop_to_breakeven_after_scale_out") is True
+                    and bool(position.get("completed_scale_out_stages"))
+                ):
+                    position["stop_price"] = max(
+                        float(position["stop_price"]),
+                        float(position["entry_price"]),
+                    )
                 breakeven_at_r = safe_float(rules.get("move_stop_to_breakeven_at_r"))
                 if (
                     breakeven_at_r is not None
@@ -4257,6 +4365,22 @@ def run_backtest(
                         position["stop_price"] = max(
                             float(position["stop_price"]),
                             trailing_stop,
+                        )
+                for flag_name, column_name in (
+                    ("trail_below_vwap", "vwap"),
+                    ("trail_below_fast_ema", "fast_ema"),
+                    ("trail_below_avwap", "avwap"),
+                ):
+                    if rules.get(flag_name) is not True:
+                        continue
+                    structural_trail = safe_float(current.get(column_name))
+                    if (
+                        structural_trail is not None
+                        and 0 < structural_trail < float(current["close"])
+                    ):
+                        position["stop_price"] = max(
+                            float(position["stop_price"]),
+                            float(structural_trail),
                         )
                 position["risk_dollars"] = max(
                     0.0,
@@ -4282,6 +4406,7 @@ def run_backtest(
             "metrics": summarize_trades(trades, settings.starting_cash),
             "in_sample": summarize_trades(in_sample, settings.starting_cash),
             "out_of_sample": summarize_trades(out_sample, max(holdout_start_cash, 0.01)),
+            "exit_attribution": summarize_exit_attribution(trades),
             "sessions": len(sessions),
             "holdout_start": min(holdout_sessions) if holdout_sessions else None,
             "concurrent_position_limit": int(settings.max_concurrent_positions),
@@ -4380,6 +4505,11 @@ def generate_strategy_variants(
             "move_stop_to_breakeven_at_r",
             "scale_out_fraction_pct",
             "scale_out_at_r",
+            "scale_out_stages",
+            "move_stop_to_breakeven_after_scale_out",
+            "trail_below_vwap",
+            "trail_below_fast_ema",
+            "trail_below_avwap",
             "exit_below_vwap",
             "exit_below_fast_ema",
             "exit_below_avwap",
@@ -4433,6 +4563,8 @@ def generate_strategy_variants(
         for field_name, raw_values in raw_source_options.items():
             if field_name not in baseline or not isinstance(raw_values, list):
                 continue
+            if field_name == "scale_out_stages":
+                continue
             for raw_value in raw_values:
                 # A missing rule is a legitimate family variant when some source strategies
                 # require the rule and others omit it. Test "not required" directly instead of
@@ -4475,6 +4607,7 @@ def generate_strategy_variants(
         for field_name, raw_values in raw_ai_options.items():
             if (
                 field_name not in baseline
+                or field_name == "scale_out_stages"
                 or not isinstance(raw_values, list)
                 or research_overrides.get(field_name) is None
             ):
