@@ -138,6 +138,26 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
         self.assertIn("not profitability evidence", orchestrator)
         self.assertIn("Retrospective/smoothed algorithms may be useful teachers", orchestrator)
 
+    def test_retrospective_workspace_surfaces_volume_avwap_and_indicator_layers(self):
+        source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        teacher = (ROOT / "retrospective_teacher.py").read_text(encoding="utf-8")
+        volume = (ROOT / "causal_volume_profile.py").read_text(encoding="utf-8")
+        avwap = (ROOT / "anchored_vwap_engine.py").read_text(encoding="utf-8")
+        crosscheck = (ROOT / "indicator_cross_validation.py").read_text(encoding="utf-8")
+        self.assertIn("Learning layers used", source)
+        self.assertIn("Indicator consistency check", source)
+        self.assertIn("label_volume_exhaustion_outcomes", teacher)
+        self.assertIn("label_multi_avwap_pinch_outcomes", teacher)
+        self.assertIn("apply_causal_volume_profile_features", volume)
+        self.assertIn("apply_multi_anchor_avwap_teacher_features", avwap)
+        self.assertIn("cross_validate_indicators", crosscheck)
+
+    def test_retrospective_observations_feed_autonomous_research(self):
+        source = (ROOT / "trading_research_orchestrator.py").read_text(encoding="utf-8")
+        self.assertIn("retrospective_teacher_challenge_jobs", source)
+        self.assertIn("descriptive observations", source)
+        self.assertIn('origin": "retrospective_teacher"', source)
+
     def test_continuous_research_button_is_clearly_manual(self):
         source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
         self.assertIn("Run today's research cycle now", source)
