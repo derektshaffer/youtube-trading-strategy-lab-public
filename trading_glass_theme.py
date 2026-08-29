@@ -1080,6 +1080,17 @@ def inject_research_glass_theme() -> None:
             min-width: 294px !important;
             max-width: 294px !important;
         }
+        /* Defensive fallback for stale browser sidebar state during hot deploys.
+           Native page config locks the sidebar open, but if Streamlit briefly
+           renders aria-expanded=false, do not allow its collapsed transform
+           or zero-width styles to hide the app's primary navigation rail. */
+        [data-testid="stSidebar"][aria-expanded="false"] {
+            transform: none !important;
+            width: 294px !important;
+            min-width: 294px !important;
+            max-width: 294px !important;
+            visibility: visible !important;
+        }
         [data-testid="stSidebar"] > div:first-child {
             width: 294px !important;
         }
