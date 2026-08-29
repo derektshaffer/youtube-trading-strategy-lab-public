@@ -769,11 +769,11 @@ def add_causal_market_feature_columns(
         reclaim_event = previous_above.eq(False) & above
         rejection_event = previous_above.eq(True) & ~above
         group["vwap_reclaim_recent"] = (
-            reclaim_event.rolling(8, min_periods=1).max().fillna(False).astype(bool)
+            reclaim_event.rolling(7, min_periods=1).max().fillna(False).astype(bool)
             & (group["vwap_hold_bars"] >= 2)
         )
         group["vwap_rejection_recent"] = (
-            rejection_event.rolling(8, min_periods=1).max().fillna(False).astype(bool)
+            rejection_event.rolling(7, min_periods=1).max().fillna(False).astype(bool)
             & ~above
         )
 
