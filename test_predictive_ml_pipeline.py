@@ -164,7 +164,8 @@ def test_later_future_labels_cannot_change_first_walk_forward_predictions():
         for item in right["predictions"]
         if item["session"] in first_test_sessions
     ]
-    assert left_first == pytest.approx(right_first)
+    assert [item[:3] for item in left_first] == [item[:3] for item in right_first]
+    assert [item[3] for item in left_first] == pytest.approx([item[3] for item in right_first])
 
 
 def test_walk_forward_refuses_too_little_history():
