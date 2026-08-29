@@ -104,3 +104,19 @@ def test_predictive_ml_progress_has_per_stock_substeps():
     assert '"adding causal context" in text' in block
     assert '"finished " in text' in block
     assert 'completed_units = max(0.0, (stock_index - 1) + phase)' in block
+
+
+def test_predictive_ml_workspace_reduces_memory_and_checkpoints_baseline():
+    block = _pattern_validation_block()
+    dataset_call = block.index("ml_dataset = build_cross_stock_training_dataset(")
+    baseline_call = block.index("ml_evaluation = walk_forward_logistic_baseline(", dataset_call)
+    baseline_save = block.index("persist_predictive_ml_result(completed_ml_result)", baseline_call)
+    generalization_call = block.index(
+        "ml_generalization = leave_one_symbol_out_walk_forward_logistic_baseline(",
+        baseline_save,
+    )
+    assert "horizons=(ml_horizon,)" in block[dataset_call:baseline_call]
+    assert "observation_stride_bars=5" in block[dataset_call:baseline_call]
+    assert baseline_call < baseline_save < generalization_call
+    assert '"checkpoint_stage": "baseline_complete"' in block[baseline_call:generalization_call]
+    assert "Baseline result saved durably." in block[baseline_call:generalization_call]
