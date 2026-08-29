@@ -16,6 +16,7 @@ from trading_intelligence_core import (
     prepare_strategies_with_ai,
     reconcile_knowledge_sources,
     research_readiness,
+    strategy_integrity_report,
     upgrade_native_strategy_rules,
 )
 from youtube_strategy_engine import AppError
@@ -877,6 +878,66 @@ class BookAnalyzerResilienceTests(unittest.TestCase):
 
         self.assertIn("Left recovered", result["source_summary"])
         self.assertIn("Right recovered", result["source_summary"])
+
+
+class StrategyIntegrityTests(unittest.TestCase):
+    def test_scale_out_strategy_is_blocked_until_partial_exits_are_modeled(self):
+        strategy = {
+            "id": "scaleout",
+            "name": "Momentum breakout with scale out",
+            "direction": "long",
+            "entry_conditions": ["Buy the breakout above resistance."],
+            "exit_conditions": ["Take partial profit at the first push and scale out into strength."],
+            "machine_rules": {"breakout_lookback_bars": 20, "stop_loss_pct": 3},
+            "evidence": [{"location": "p.1", "description": "setup", "source_excerpt": "short"}],
+            "unresolved_rules": [],
+        }
+        report = strategy_integrity_report(strategy)
+        readiness = research_readiness(strategy)
+        self.assertEqual(report["status"], "blocked")
+        self.assertIn("Scale-out / partial-profit management", report["critical_missing_requirements"])
+        self.assertEqual(readiness["label"], "partially_modeled")
+
+    def test_low_float_and_tape_requirements_are_not_silently_ignored(self):
+        strategy = {
+            "id": "tape",
+            "name": "Low-float tape breakout",
+            "direction": "long",
+            "stock_selection": ["Only low-float stocks."],
+            "entry_conditions": ["Enter when Level 2 and tape speed confirm the breakout."],
+            "machine_rules": {"breakout_lookback_bars": 20},
+            "evidence": [{"location": "video", "description": "setup", "source_excerpt": "short"}],
+            "unresolved_rules": ["Level 2 confirmation", "low float"],
+        }
+        report = strategy_integrity_report(strategy)
+        self.assertEqual(report["status"], "blocked")
+        self.assertIn("Historical float filter", report["critical_missing_requirements"])
+        self.assertIn("Level-2 / tape-reading confirmation", report["critical_missing_requirements"])
+
+    def test_existing_explicit_exit_text_is_upgraded_without_reupload(self):
+        strategy = {
+            "id": "dynamic",
+            "name": "Managed runner",
+            "direction": "long",
+            "exit_conditions": [
+                "Use a 5% trailing stop.",
+                "After the trade reaches 1R, move the stop to breakeven.",
+                "Exit if price closes below VWAP.",
+            ],
+            "machine_rules": {"min_price": 1},
+            "evidence": [{"location": "p.2", "description": "exit", "source_excerpt": "short"}],
+        }
+        upgraded = upgrade_native_strategy_rules(strategy)
+        rules = upgraded["machine_rules"]
+        self.assertEqual(rules["trailing_stop_pct"], 5.0)
+        self.assertEqual(rules["move_stop_to_breakeven_at_r"], 1.0)
+        self.assertTrue(rules["exit_below_vwap"])
+        report = strategy_integrity_report(upgraded)
+        self.assertNotIn("Trailing-stop exit", report["critical_missing_requirements"])
+        self.assertNotIn("Move stop to breakeven", report["critical_missing_requirements"])
+        self.assertNotIn("Exit when VWAP is lost", report["critical_missing_requirements"])
+
+
 
 
 if __name__ == "__main__":
