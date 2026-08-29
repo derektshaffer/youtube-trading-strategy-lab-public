@@ -47,6 +47,10 @@ from trading_catalyst_core import (
     historical_news,
 )
 from trading_market_discovery import analyze_stock_strategies, scan_market_strategies, scan_strategy_universe
+from retrospective_teacher import (
+    build_retrospective_teacher_run,
+    merge_retrospective_teacher_run,
+)
 from trading_progress_ui import (
     AutonomousResearchEtaEstimator,
     AutonomousResearchProgressEstimator,
@@ -903,6 +907,7 @@ WORKSPACE_SECTIONS = [
     "AI Research Autopilot",
     "Strategy Library",
     "Strategy Integrity",
+    "Retrospective Learning",
     "Strategy DNA",
     "Make Strategy Testable",
     "Strategy Lab",
@@ -975,6 +980,12 @@ WORKSPACE_PAGE_META = {
         "title": "Strategy Integrity Audit",
         "subtitle": "Verify that each source strategy is faithfully represented by the machine rules and backtester before trusting optimization results.",
     },
+    "Retrospective Learning": {
+        "step": "04B",
+        "group": "Strategy Development",
+        "title": "Retrospective Teacher → Causal Learner",
+        "subtitle": "Use hindsight to label what eventually mattered, while freezing every predictive feature at the timestamp it was actually knowable.",
+    },
     "Strategy DNA": {
         "step": "05",
         "group": "Strategy Development",
@@ -1042,7 +1053,7 @@ WORKSPACE_NAV_GROUPS = [
     ("RESEARCH", ["Overview", "Knowledge Sources", "AI Research Autopilot"]),
     (
         "STRATEGY DEVELOPMENT",
-        ["Strategy Library", "Strategy Integrity", "Strategy DNA", "Make Strategy Testable", "Strategy Lab", "Validation"],
+        ["Strategy Library", "Strategy Integrity", "Retrospective Learning", "Strategy DNA", "Make Strategy Testable", "Strategy Lab", "Validation"],
     ),
     (
         "MARKET RESEARCH",
@@ -1059,6 +1070,7 @@ WORKSPACE_NAV_ICONS = {
     "AI Research Autopilot": "✦",
     "Strategy Library": "▤",
     "Strategy Integrity": "⚖",
+    "Retrospective Learning": "↺",
     "Strategy DNA": "◇",
     "Make Strategy Testable": "≣",
     "Strategy Lab": "⬡",
@@ -1257,6 +1269,7 @@ with st.sidebar:
     advanced_sections = [
         "Strategy Library",
         "Strategy Integrity",
+        "Retrospective Learning",
         "Strategy DNA",
         "Make Strategy Testable",
         "Strategy Lab",
@@ -2630,6 +2643,255 @@ elif module == "Overview":
         st.caption(
             "Strategy Library, Blueprint, Rule Builder, Strategy Lab, Validation, Market Universe, "
             "Catalyst Intelligence, and System Health remain available under Advanced / Research Details."
+        )
+
+
+elif module == "Retrospective Learning":
+    st.caption(
+        "The teacher is allowed to look into the future **only to assign labels** such as "
+        "\"this became a meaningful swing low\" or \"this breakout later followed through.\" "
+        "The learner's features are frozen at the event timestamp, so future bars can never leak "
+        "into the prediction or backtest."
+    )
+
+    teacher_cols = st.columns([1.0, 1.0, 1.0])
+    teacher_symbol = teacher_cols[0].text_input(
+        "Ticker",
+        value="SDOT",
+        key="til_retrospective_symbol",
+    ).strip().upper()
+    teacher_timeframe = teacher_cols[1].selectbox(
+        "Timeframe",
+        ["1Min", "5Min", "15Min"],
+        index=1,
+        key="til_retrospective_timeframe",
+    )
+    teacher_days = int(
+        teacher_cols[2].slider(
+            "History days",
+            2,
+            30,
+            10,
+            1,
+            key="til_retrospective_days",
+        )
+    )
+
+    st.markdown("#### Teacher definitions")
+    teacher_settings = st.columns(5)
+    swing_confirm = int(
+        teacher_settings[0].number_input(
+            "Swing confirmation bars",
+            min_value=1,
+            max_value=10,
+            value=3,
+            step=1,
+            key="til_teacher_swing_confirm",
+        )
+    )
+    swing_move = float(
+        teacher_settings[1].number_input(
+            "Minimum swing move %",
+            min_value=0.1,
+            max_value=25.0,
+            value=1.0,
+            step=0.1,
+            key="til_teacher_swing_move",
+        )
+    )
+    breakout_lookback = int(
+        teacher_settings[2].number_input(
+            "Breakout lookback bars",
+            min_value=5,
+            max_value=100,
+            value=20,
+            step=1,
+            key="til_teacher_breakout_lookback",
+        )
+    )
+    breakout_outcome = int(
+        teacher_settings[3].number_input(
+            "Outcome bars",
+            min_value=2,
+            max_value=100,
+            value=12,
+            step=1,
+            key="til_teacher_breakout_outcome",
+        )
+    )
+    breakout_move = float(
+        teacher_settings[4].number_input(
+            "Follow-through move %",
+            min_value=0.1,
+            max_value=25.0,
+            value=2.0,
+            step=0.1,
+            key="til_teacher_breakout_move",
+        )
+    )
+
+    st.info(
+        "**Causality rule:** hindsight may decide the label and when an anchor becomes confirmed. "
+        "It may never change the feature snapshot that existed at the event. A confirmed historical "
+        "anchor can only become available to trading logic from its known_at timestamp forward."
+    )
+
+    if st.button(
+        "↺ Build retrospective teaching examples",
+        type="primary",
+        width="stretch",
+        key="til_build_retrospective_teacher",
+    ):
+        if not teacher_symbol:
+            st.error("Enter a ticker first.")
+        else:
+            with st.status(
+                f"Building causal teaching examples for {teacher_symbol}…",
+                expanded=True,
+            ) as teacher_status:
+                try:
+                    market = market_client()
+                    teacher_end = utc_now()
+                    if market.historical_feed == "sip" and market.live_feed != "sip":
+                        teacher_end -= timedelta(minutes=16)
+                    teacher_start = teacher_end - timedelta(days=teacher_days)
+                    teacher_status.write(
+                        f"Downloading {teacher_timeframe} bars from {teacher_start.date()} "
+                        f"through {teacher_end.date()}…"
+                    )
+                    rows_by_symbol = market.bars(
+                        [teacher_symbol],
+                        start=teacher_start,
+                        end=teacher_end,
+                        timeframe=teacher_timeframe,
+                        max_pages=80,
+                    )
+                    teacher_rows = list(rows_by_symbol.get(teacher_symbol) or [])
+                    if not teacher_rows:
+                        raise AppError(
+                            f"No historical bars were returned for {teacher_symbol}."
+                        )
+                    teacher_status.write(
+                        "Assigning hindsight labels, then rebuilding every feature snapshot "
+                        "using only information available at the event…"
+                    )
+                    teacher_run = build_retrospective_teacher_run(
+                        teacher_rows,
+                        symbol=teacher_symbol,
+                        timeframe=teacher_timeframe,
+                        swing_confirmation_bars=swing_confirm,
+                        swing_minimum_move_pct=swing_move,
+                        breakout_lookback_bars=breakout_lookback,
+                        breakout_outcome_bars=breakout_outcome,
+                        breakout_success_move_pct=breakout_move,
+                    )
+                    fresh_library = load_library(force_cloud_refresh=True)
+                    updated_library = merge_retrospective_teacher_run(
+                        fresh_library,
+                        teacher_run,
+                    )
+                    intelligence_store().save(updated_library)
+                    st.session_state["til_last_retrospective_run"] = teacher_run
+                    teacher_status.update(
+                        label=(
+                            f"Teacher run saved · {sum((teacher_run.get('label_counts') or {}).values())} "
+                            "causal examples"
+                        ),
+                        state="complete",
+                        expanded=False,
+                    )
+                    st.rerun()
+                except (AppError, ValueError) as exc:
+                    teacher_status.update(
+                        label="Retrospective teaching run failed",
+                        state="error",
+                        expanded=True,
+                    )
+                    st.error(str(exc))
+
+    retrospective_runs = [
+        dict(item)
+        for item in library.get("retrospective_learning_runs") or []
+        if isinstance(item, dict)
+    ]
+    session_teacher_run = st.session_state.get("til_last_retrospective_run")
+    if isinstance(session_teacher_run, dict):
+        retrospective_runs = [
+            dict(session_teacher_run),
+            *[
+                item
+                for item in retrospective_runs
+                if str(item.get("generated_at") or "")
+                != str(session_teacher_run.get("generated_at") or "")
+            ],
+        ]
+
+    if retrospective_runs:
+        st.divider()
+        st.markdown("### What the teacher has labeled")
+        run_labels = {
+            (
+                f"{item.get('symbol')} · {item.get('timeframe')} · "
+                f"{item.get('start','')[:10]} → {item.get('end','')[:10]}"
+            ): item
+            for item in retrospective_runs
+        }
+        selected_teacher_run = run_labels[
+            st.selectbox(
+                "Saved teaching run",
+                list(run_labels),
+                key="til_retrospective_saved_run",
+            )
+        ]
+        counts = dict(selected_teacher_run.get("label_counts") or {})
+        count_cols = st.columns(max(1, min(4, len(counts) or 1)))
+        if counts:
+            for index, (label, value) in enumerate(sorted(counts.items())):
+                count_cols[index % len(count_cols)].metric(
+                    label.replace("_", " ").title(),
+                    int(value or 0),
+                )
+        else:
+            st.warning("This run did not find any events that met the current teacher definitions.")
+
+        st.markdown("### Causal precursor summaries")
+        st.caption(
+            "These are descriptive medians of features measured **at the event**, before the future "
+            "outcome label was known. They are learning clues, not validated trading rules."
+        )
+        precursor = dict(selected_teacher_run.get("precursor_feature_medians") or {})
+        precursor_rows = []
+        for label, values in precursor.items():
+            for feature, value in (values or {}).items():
+                precursor_rows.append(
+                    {
+                        "Outcome label": str(label).replace("_", " ").title(),
+                        "Causal feature": str(feature).replace("_", " ").title(),
+                        "Median at event": value,
+                    }
+                )
+        if precursor_rows:
+            st.dataframe(pd.DataFrame(precursor_rows), width="stretch", hide_index=True)
+
+        with st.expander("Audit the hindsight / causality boundary", expanded=False):
+            policy = dict(selected_teacher_run.get("causality_policy") or {})
+            st.json(policy, expanded=True)
+            examples = list(selected_teacher_run.get("examples") or [])
+            if examples:
+                audit_rows = [
+                    {
+                        "Label": str(item.get("label") or "").replace("_", " ").title(),
+                        "Event / feature cutoff": item.get("feature_cutoff"),
+                        "Label known at": item.get("known_at"),
+                        "Outcome window end": item.get("outcome_window_end"),
+                    }
+                    for item in examples[-40:]
+                ]
+                st.dataframe(pd.DataFrame(audit_rows), width="stretch", hide_index=True)
+    else:
+        st.caption(
+            "No retrospective teaching runs are saved yet. Run one above; results are stored in the "
+            "durable Trading Intelligence library so later learning work can build on them."
         )
 
 
