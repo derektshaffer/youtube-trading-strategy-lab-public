@@ -143,3 +143,42 @@ def test_monitor_supports_positive_return_target():
     }
     report = build_shadow_model_monitor([row])
     assert report["models"][0]["positive_rate"] == 1.0
+
+
+
+def test_monitor_scores_parallel_models_against_same_matured_outcome():
+    observed = datetime(2026, 8, 29, 14, 0, tzinfo=timezone.utc)
+    row = {
+        "symbol": "AAA",
+        "session": "2026-08-29",
+        "observed_at": observed.isoformat(),
+        "context": {
+            "ml_model_id": "champion",
+            "ml_probability": 0.70,
+            "ml_target": "label__target_before_stop_15bar",
+            "ml_predictions": [
+                {
+                    "model_id": "champion",
+                    "probability": 0.70,
+                    "target": "label__target_before_stop_15bar",
+                },
+                {
+                    "model_id": "challenger",
+                    "probability": 0.40,
+                    "target": "label__target_before_stop_15bar",
+                },
+            ],
+        },
+        "outcomes": {
+            "15": {
+                "status": "EVALUATED",
+                "target_before_stop": True,
+            }
+        },
+    }
+    report = build_shadow_model_monitor([row])
+    by_id = {item["model_id"]: item for item in report["models"]}
+    assert set(by_id) == {"champion", "challenger"}
+    assert by_id["champion"]["evaluated_decisions"] == 1
+    assert by_id["challenger"]["evaluated_decisions"] == 1
+    assert by_id["champion"]["brier_score"] < by_id["challenger"]["brier_score"]

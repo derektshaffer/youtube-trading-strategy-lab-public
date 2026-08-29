@@ -35,6 +35,10 @@ from predictive_probability_model import (
     score_scan_result_probability,
 )
 from predictive_model_monitor import build_shadow_model_monitor
+from predictive_model_registry import (
+    build_model_registry,
+    ready_shadow_models,
+)
 import predictive_ml_pipeline as _predictive_ml_pipeline
 
 archetype_transfer_walk_forward_logistic_baseline = (
@@ -486,34 +490,75 @@ def load_cloud_status_library() -> dict[str, Any]:
 MAX_PREDICTIVE_ML_RUN_HISTORY = 12
 LIVE_LEARNING_STORAGE_KEY = "live_learning_observations"
 
+def shadow_probability_models(library: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return a bounded set of historically validated models for parallel shadow scoring."""
+    return ready_shadow_models(library.get("predictive_ml_runs") or [])
+
+
+def active_shadow_champion_id(library: dict[str, Any]) -> str:
+    research_system = (
+        library.get("research_system")
+        if isinstance(library.get("research_system"), dict)
+        else {}
+    )
+    registry = (
+        research_system.get("predictive_model_registry")
+        if isinstance(research_system.get("predictive_model_registry"), dict)
+        else {}
+    )
+    return str(registry.get("champion_model_id") or "").strip()
+
+
 def latest_shadow_probability_model(library: dict[str, Any]) -> dict[str, Any]:
-    """Return the newest validated research-only probability artifact."""
-    runs = [
-        item
-        for item in library.get("predictive_ml_runs") or []
-        if isinstance(item, dict)
-    ]
-    runs.sort(key=lambda item: str(item.get("completed_at") or ""), reverse=True)
-    for run in runs:
-        model = run.get("probability_model")
-        if isinstance(model, dict) and model.get("shadow_scoring_enabled"):
-            return model
-    return {}
+    """Return the current research-only champion, falling back to the newest ready model."""
+    models = shadow_probability_models(library)
+    if not models:
+        return {}
+    champion_id = active_shadow_champion_id(library)
+    if champion_id:
+        for model in models:
+            if str(model.get("id") or "") == champion_id:
+                return model
+    return models[0]
 
 
 def apply_shadow_probability_scores(
     results: list[dict[str, Any]],
-    model: dict[str, Any],
+    models: list[dict[str, Any]] | dict[str, Any],
+    *,
+    champion_model_id: str = "",
 ) -> list[dict[str, Any]]:
-    """Attach research-only probabilities without changing result order."""
-    if not model or not model.get("shadow_scoring_enabled"):
+    """Score all ready models in parallel while exposing only the champion as primary."""
+    if isinstance(models, dict):
+        candidates = [models] if models else []
+    else:
+        candidates = [item for item in models or [] if isinstance(item, dict)]
+    candidates = [
+        item for item in candidates if item.get("shadow_scoring_enabled")
+    ]
+    if not candidates:
         return results
+
+    chosen_id = str(champion_model_id or "").strip()
+    if not chosen_id or not any(str(item.get("id") or "") == chosen_id for item in candidates):
+        chosen_id = str(candidates[0].get("id") or "")
+
     for item in results:
         if not isinstance(item, dict):
             continue
-        item["ml_prediction"] = score_scan_result_probability(model, item)
+        predictions = []
+        primary = None
+        for model in candidates:
+            score = score_scan_result_probability(model, item)
+            if score.get("status") != "SCORED":
+                continue
+            predictions.append(score)
+            if str(score.get("model_id") or "") == chosen_id:
+                primary = score
+        if predictions:
+            item["ml_predictions"] = predictions
+            item["ml_prediction"] = primary or predictions[0]
     return results
-
 
 def shadow_probability_model_lookup(library: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Index saved probability artifacts by model id for compact live monitoring."""
@@ -639,11 +684,23 @@ def persist_live_learning_cycle(
         else:
             counts["pending"] += 1
 
+    model_lookup = shadow_probability_model_lookup(data)
     model_monitor = build_shadow_model_monitor(
         combined,
-        model_lookup=shadow_probability_model_lookup(data),
+        model_lookup=model_lookup,
     )
     research_system["predictive_model_monitor"] = model_monitor
+    previous_registry = (
+        research_system.get("predictive_model_registry")
+        if isinstance(research_system.get("predictive_model_registry"), dict)
+        else {}
+    )
+    model_registry = build_model_registry(
+        shadow_probability_models(data),
+        model_monitor,
+        previous=previous_registry,
+    )
+    research_system["predictive_model_registry"] = model_registry
 
     status_record = {
         "last_logged_at": observed_at.isoformat(),
@@ -660,6 +717,8 @@ def persist_live_learning_cycle(
             if isinstance(model_monitor.get("latest_model"), dict)
             else model_monitor.get("status")
         ),
+        "champion_model_id": model_registry.get("champion_model_id"),
+        "model_registry_status": model_registry.get("status"),
     }
     research_system[LIVE_LEARNING_STORAGE_KEY] = combined
     research_system[LIVE_LEARNING_STATUS_KEY] = status_record
@@ -6950,11 +7009,35 @@ elif module == "Pattern Validation":
         if isinstance(library.get("research_system"), dict)
         else {}
     ) or {}
-    shadow_latest = (
-        shadow_monitor.get("latest_model")
-        if isinstance(shadow_monitor.get("latest_model"), dict)
+    shadow_registry = (
+        (library.get("research_system") or {}).get("predictive_model_registry")
+        if isinstance(library.get("research_system"), dict)
         else {}
+    ) or {}
+    shadow_models_by_id = {
+        str(item.get("model_id") or ""): item
+        for item in shadow_monitor.get("models") or []
+        if isinstance(item, dict) and str(item.get("model_id") or "").strip()
+    }
+    shadow_champion_id = str(shadow_registry.get("champion_model_id") or "").strip()
+    shadow_latest = (
+        shadow_models_by_id.get(shadow_champion_id)
+        or (
+            shadow_monitor.get("latest_model")
+            if isinstance(shadow_monitor.get("latest_model"), dict)
+            else {}
+        )
     )
+    if shadow_registry.get("champion_model_id"):
+        registry_status = str(
+            shadow_registry.get("status") or "CHAMPION_PROVISIONAL"
+        ).replace("_", " ").title()
+        challenger_count = len(shadow_registry.get("challenger_model_ids") or [])
+        st.caption(
+            "🏆 Shadow model registry · "
+            f"{registry_status} · {challenger_count} compatible challenger(s) · "
+            + str(shadow_registry.get("decision_reason") or "")
+        )
     if shadow_latest:
         shadow_status = str(shadow_latest.get("status") or "COLLECTING").upper()
         monitor_icon = {
@@ -6992,7 +7075,9 @@ elif module == "Pattern Validation":
             )
             st.caption(
                 "Live shadow predictions are deduplicated into 30-minute stock decision points "
-                "before evaluation, so repeated scanner refreshes do not masquerade as independent evidence."
+                "before evaluation, so repeated scanner refreshes do not masquerade as independent evidence. "
+                "Validated challengers are scored on those same decisions and cannot replace the champion "
+                "until they show enough breadth and a material live advantage."
             )
             for reason in list(shadow_latest.get("reasons") or [])[:3]:
                 st.write("• " + str(reason))
@@ -8418,7 +8503,8 @@ elif module == "Market Discovery":
                 )
                 results = apply_shadow_probability_scores(
                     results,
-                    latest_shadow_probability_model(library),
+                    shadow_probability_models(library),
+                    champion_model_id=active_shadow_champion_id(library),
                 )
                 try:
                     st.session_state["til_live_learning_market_discovery_status"] = (
@@ -8706,7 +8792,8 @@ elif module == "Stock Analyzer":
                 )
                 analysis = apply_shadow_probability_scores(
                     [analysis],
-                    latest_shadow_probability_model(library),
+                    shadow_probability_models(library),
+                    champion_model_id=active_shadow_champion_id(library),
                 )[0]
 
                 analyzer_as_of = utc_now()

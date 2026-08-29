@@ -159,6 +159,18 @@ def build_shadow_observation(
         if isinstance(result.get("ml_prediction"), dict)
         else {}
     )
+    ml_predictions = [
+        {
+            "model_id": item.get("model_id"),
+            "probability": _number(item.get("probability")),
+            "raw_probability": _number(item.get("raw_probability")),
+            "target": item.get("target"),
+            "target_description": item.get("target_description"),
+            "feature_coverage": _number(item.get("feature_coverage")),
+        }
+        for item in result.get("ml_predictions") or []
+        if isinstance(item, dict) and str(item.get("model_id") or "").strip()
+    ]
 
     return {
         "id": _observation_id(symbol, observed, bucket_minutes),
@@ -203,6 +215,7 @@ def build_shadow_observation(
             "ml_target": ml_prediction.get("target"),
             "ml_target_description": ml_prediction.get("target_description"),
             "ml_feature_coverage": _number(ml_prediction.get("feature_coverage")),
+            "ml_predictions": ml_predictions,
         },
         "outcomes": {},
         "outcome_status": "PENDING",
@@ -267,7 +280,24 @@ def merge_shadow_observations(
             prior["outcome_status"] = record.get("outcome_status") or prior.get("outcome_status")
         prior_context = prior.get("context") if isinstance(prior.get("context"), dict) else {}
         new_context = record.get("context") if isinstance(record.get("context"), dict) else {}
+
+        # Preserve every model's probability when two scanner/analyzer passes land
+        # in the same five-minute stock bucket.
+        merged_predictions: dict[str, dict[str, Any]] = {}
+        for item in list(prior_context.get("ml_predictions") or []) + list(
+            new_context.get("ml_predictions") or []
+        ):
+            if not isinstance(item, dict):
+                continue
+            model_id = str(item.get("model_id") or "").strip()
+            if model_id and model_id not in merged_predictions:
+                merged_predictions[model_id] = deepcopy(item)
+        if merged_predictions:
+            prior_context["ml_predictions"] = list(merged_predictions.values())
+
         for key, value in new_context.items():
+            if key == "ml_predictions":
+                continue
             if prior_context.get(key) in (None, "", 0) and value not in (None, ""):
                 prior_context[key] = value
         prior["context"] = prior_context
