@@ -71,3 +71,13 @@ def test_feature_snapshot_exposes_evidence_and_missing_data_contract():
     assert snapshot["provider"] == "native"
     assert "vwap" in snapshot["evidence"]
     assert "bar_history" in snapshot["missing_data"]
+
+
+def test_out_of_order_rows_are_normalized_before_sequence_features():
+    rows = [
+        _bar(2, 10.2, 10.4, 10.1, 10.3, 300),
+        _bar(0, 10.0, 10.1, 9.9, 10.0, 100),
+        _bar(1, 10.0, 10.3, 9.9, 10.2, 100),
+    ]
+    snapshot = build_market_features(rows)
+    assert snapshot["features"]["last_price"] == 10.3
