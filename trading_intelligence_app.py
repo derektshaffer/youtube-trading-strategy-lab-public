@@ -51,7 +51,14 @@ from trading_catalyst_core import (
     enrich_bars_with_point_in_time_catalysts,
     historical_news,
 )
-from trading_market_discovery import analyze_stock_strategies, scan_market_strategies, scan_strategy_universe
+from trading_market_discovery import (
+    LIVE_SCAN_BATCH_SIZE,
+    MAX_LIVE_SCAN_SYMBOLS,
+    analyze_stock_strategies,
+    merge_momentum_candidate_universe,
+    scan_market_strategies,
+    scan_strategy_universe,
+)
 from retrospective_teacher import (
     build_retrospective_teacher_run,
     merge_retrospective_teacher_run,
@@ -6602,6 +6609,7 @@ elif module == "Pattern Validation":
                     hide_index=True,
                 )
 
+
     st.divider()
     st.markdown("### Predictive ML Research")
     st.caption(
@@ -7009,27 +7017,59 @@ elif module == "Market Discovery":
                 "Research-only matches are useful leads, not proven edges."
             )
 
-        scan_cols = st.columns([1.15, 1.0, 2.0])
+        scan_cols = st.columns([1.25, 1.0, 1.9])
         universe_mode = scan_cols[0].selectbox(
             "Stocks to scan",
-            ["Top gainers", "Most active", "Custom watchlist"],
+            ["Momentum universe", "Top gainers", "Most active", "Custom watchlist"],
             key="til_market_discovery_universe",
+            help=(
+                "Momentum universe blends Alpaca's ranked gainers and most-active lists, then "
+                "removes duplicates before the batched strategy scan."
+            ),
+        )
+        universe_limits = {
+            "Momentum universe": 150,
+            "Top gainers": 50,
+            "Most active": 100,
+            "Custom watchlist": MAX_LIVE_SCAN_SYMBOLS,
+        }
+        universe_defaults = {
+            "Momentum universe": 50,
+            "Top gainers": 30,
+            "Most active": 50,
+            "Custom watchlist": 50,
+        }
+        candidate_limit = int(universe_limits[universe_mode])
+        candidate_default = min(candidate_limit, int(universe_defaults[universe_mode]))
+        candidate_key = (
+            "til_market_discovery_candidates_"
+            + universe_mode.casefold().replace(" ", "_")
         )
         candidate_count = int(
             scan_cols[1].slider(
                 "How many stocks",
                 5,
-                30,
-                15,
+                candidate_limit,
+                candidate_default,
                 5,
-                key="til_market_discovery_candidates",
+                key=candidate_key,
             )
         )
         custom_symbols = scan_cols[2].text_input(
             "Custom tickers",
-            placeholder="SDOT LUCY REAX",
+            placeholder="SDOT LUCY REAX ...",
             disabled=universe_mode != "Custom watchlist",
             key="til_market_discovery_custom",
+            help=f"Custom live scans support up to {MAX_LIVE_SCAN_SYMBOLS} unique symbols per run.",
+        )
+        estimated_batches = max(
+            1,
+            (candidate_count + LIVE_SCAN_BATCH_SIZE - 1) // LIVE_SCAN_BATCH_SIZE,
+        )
+        st.caption(
+            f"Up to {candidate_count} candidates · processed in about {estimated_batches} "
+            f"batch{'es' if estimated_batches != 1 else ''} of {LIVE_SCAN_BATCH_SIZE} stocks. "
+            "Each batch shares market-data downloads across all strategies."
         )
 
         scan_slot = st.empty()
@@ -7055,7 +7095,15 @@ elif module == "Market Discovery":
             try:
                 market = market_client()
                 status_box = st.status("Building live candidate universe…", expanded=True)
-                if universe_mode == "Top gainers":
+                if universe_mode == "Momentum universe":
+                    gainers = market.movers(top=min(50, candidate_count))
+                    active = market.most_active(top=min(100, candidate_count))
+                    symbols = merge_momentum_candidate_universe(
+                        gainers,
+                        active,
+                        limit=candidate_count,
+                    )
+                elif universe_mode == "Top gainers":
                     symbols = market.movers(top=candidate_count)
                 elif universe_mode == "Most active":
                     symbols = market.most_active(top=candidate_count)
@@ -7081,15 +7129,34 @@ elif module == "Market Discovery":
 
                 def market_scan_progress(message: str) -> None:
                     status_box.write(message)
-                    lower = str(message).casefold()
-                    fraction = 0.25
+                    text = str(message or "")
+                    lower = text.casefold()
+                    batch_index = 1
+                    batch_total = max(
+                        1,
+                        (len(symbols) + LIVE_SCAN_BATCH_SIZE - 1) // LIVE_SCAN_BATCH_SIZE,
+                    )
+                    if lower.startswith("batch ") and " · " in text:
+                        try:
+                            batch_token = text.split(" · ", 1)[0].split(" ", 1)[1]
+                            batch_index, batch_total = [
+                                int(value) for value in batch_token.split("/", 1)
+                            ]
+                        except (IndexError, TypeError, ValueError):
+                            batch_index = 1
+                    stage_fraction = 0.08
                     if "relative-volume" in lower:
-                        fraction = 0.43
+                        stage_fraction = 0.35
                     elif "catalyst" in lower:
-                        fraction = 0.60
-                    elif "intraday chart" in lower:
-                        fraction = 0.76
-                    update_task_bar(scan_bar, scan_monitor, fraction, message)
+                        stage_fraction = 0.58
+                    elif "intraday" in lower:
+                        stage_fraction = 0.80
+                    completed_before = max(0, batch_index - 1)
+                    fraction = 0.18 + 0.76 * min(
+                        1.0,
+                        (completed_before + stage_fraction) / max(1, batch_total),
+                    )
+                    update_task_bar(scan_bar, scan_monitor, fraction, text)
 
                 results = scan_market_strategies(
                     market,
@@ -7099,6 +7166,9 @@ elif module == "Market Discovery":
                 )
                 st.session_state["til_market_discovery_result"] = {
                     "universe_mode": universe_mode,
+                    "requested_candidates": candidate_count,
+                    "candidate_symbols": list(symbols),
+                    "batch_size": LIVE_SCAN_BATCH_SIZE,
                     "strategy_count": len(discovery_strategies),
                     "include_research": include_research,
                     "results": results,
@@ -7123,9 +7193,17 @@ elif module == "Market Discovery":
         if live_results:
             st.divider()
             st.markdown("### Best opportunities found")
+            scanned_candidates = len(discovery_result.get("candidate_symbols") or [])
+            scan_batch_size = int(discovery_result.get("batch_size") or LIVE_SCAN_BATCH_SIZE)
+            scanned_batches = max(
+                1,
+                (scanned_candidates + scan_batch_size - 1) // scan_batch_size,
+            )
             st.caption(
                 "Each stock is paired with its highest-ranked strategy. Validated strategies rank ahead "
-                "of research-only strategies, then current setup quality, robustness, and rule match are considered."
+                "of research-only strategies, then current setup quality, robustness, and rule match are considered. "
+                f"Candidate universe: {scanned_candidates} stocks across {scanned_batches} "
+                f"batch{'es' if scanned_batches != 1 else ''}."
             )
 
             table_rows = []
