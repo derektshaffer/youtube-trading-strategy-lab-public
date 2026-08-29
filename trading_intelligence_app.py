@@ -3776,6 +3776,81 @@ elif module == "Strategy Integrity":
         )
         st.dataframe(audit_frame, width="stretch", hide_index=True)
 
+        # Audit raw source variations too. A minority exit/selection variation can
+        # disappear from a family's "core" DNA by design, but it still matters for
+        # deciding which machine capabilities the Lab should implement next.
+        source_gap_buckets: dict[str, dict[str, Any]] = {}
+        source_reports_with_gaps = 0
+        for raw_source_strategy in source_strategies:
+            source_report = strategy_integrity_report(raw_source_strategy)
+            missing_items = [
+                item
+                for item in source_report.get("requirements") or []
+                if not item.get("modeled") and item.get("critical")
+            ]
+            if missing_items:
+                source_reports_with_gaps += 1
+            source_name = str(raw_source_strategy.get("name") or "Unnamed strategy")
+            source_title = str(
+                raw_source_strategy.get("source_title")
+                or raw_source_strategy.get("source_type")
+                or "Unknown source"
+            )
+            for gap in missing_items:
+                label = str(gap.get("label") or "Unmodeled requirement")
+                bucket = source_gap_buckets.setdefault(
+                    label,
+                    {
+                        "Missing capability": label,
+                        "Area": str(gap.get("dimension") or "other").replace("_", " ").title(),
+                        "Source strategies affected": 0,
+                        "Sources affected": set(),
+                        "Examples": [],
+                        "Why it is missing": str(gap.get("limitation") or ""),
+                    },
+                )
+                bucket["Source strategies affected"] += 1
+                bucket["Sources affected"].add(source_title)
+                if len(bucket["Examples"]) < 4 and source_name not in bucket["Examples"]:
+                    bucket["Examples"].append(source_name)
+
+        if source_gap_buckets:
+            st.markdown("### Missing capabilities across the original research material")
+            st.caption(
+                "This looks at every original extracted strategy, including variations that were later "
+                "consolidated into the same family. It is the backlog for expanding the backtester's vocabulary."
+            )
+            source_gap_rows = []
+            for bucket in source_gap_buckets.values():
+                source_gap_rows.append(
+                    {
+                        "Missing capability": bucket["Missing capability"],
+                        "Area": bucket["Area"],
+                        "Source strategies affected": int(bucket["Source strategies affected"]),
+                        "Independent sources affected": len(bucket["Sources affected"]),
+                        "Example strategies": "; ".join(bucket["Examples"]),
+                        "Why it is missing": bucket["Why it is missing"],
+                    }
+                )
+            source_gap_rows.sort(
+                key=lambda row: (
+                    -int(row["Source strategies affected"]),
+                    -int(row["Independent sources affected"]),
+                    str(row["Missing capability"]),
+                )
+            )
+            st.dataframe(pd.DataFrame(source_gap_rows), width="stretch", hide_index=True)
+            st.warning(
+                f"{source_reports_with_gaps} original extracted strategy "
+                f"{'variation contains' if source_reports_with_gaps == 1 else 'variations contain'} "
+                "at least one defining requirement the current deterministic model cannot reproduce. "
+                "The most common gaps at the top of this table should drive the next engine upgrades."
+            )
+        else:
+            st.success(
+                "No critical vocabulary gaps were detected across the currently extracted source strategies."
+            )
+
         strategy_options = {
             f"{row['Strategy family']} · {row['Fidelity']} · {row['Coverage %']:.0f}%": row
             for row in integrity_rows
