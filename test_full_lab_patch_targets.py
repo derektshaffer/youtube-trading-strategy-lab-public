@@ -53,6 +53,11 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
             theme_source,
         )
         self.assertNotIn('data-testid="stSidebarCollapsedControl"', theme_source)
+        self.assertIn(
+            '[data-testid="stSidebar"][aria-expanded="false"]',
+            theme_source,
+        )
+        self.assertIn("transform: none !important;", theme_source)
 
     def test_trading_intelligence_recovers_known_cloud_divergence_without_blocking_ui(self):
         source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
