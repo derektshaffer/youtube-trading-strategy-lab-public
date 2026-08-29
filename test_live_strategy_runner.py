@@ -29,7 +29,15 @@ def valid_signal():
 
 
 def valid_strategy(direction="long"):
-    return {"id": "strategy-1", "approved": True, "direction": direction}
+    return {
+        "id": "strategy-1",
+        "approved": True,
+        "direction": direction,
+        "machine_rules": {
+            "stop_loss_pct": 5.0,
+            "reward_risk": 2.0,
+        },
+    }
 
 
 class FakePaperTrader:
@@ -127,6 +135,34 @@ class MarketDataFreshnessTests(unittest.TestCase):
         self.assertTrue(result["submitted"])
         self.assertEqual(len(trader.submissions), 1)
         self.assertEqual(trader.submissions[0]["symbol"], "TEST")
+
+    def test_dynamic_exit_strategy_is_blocked_before_broker_client(self):
+        strategy = valid_strategy()
+        strategy["machine_rules"] = {
+            "stop_loss_pct": 5.0,
+            "reward_risk": 2.0,
+            "trailing_stop_pct": 3.0,
+        }
+        with patch.object(
+            runner,
+            "paper_client",
+            side_effect=AssertionError("dynamic-exit mismatch must block before broker construction"),
+        ):
+            result = runner.paper_entry(
+                strategy=strategy,
+                metrics=valid_metrics(),
+                signal=valid_signal(),
+                risk_per_trade_pct=0.5,
+                max_position_pct=20.0,
+                max_position_dollars=0.0,
+                max_daily_loss=200.0,
+                max_entries_per_day=5,
+                max_open_positions=3,
+                one_entry_per_symbol_day=True,
+            )
+        self.assertFalse(result["submitted"])
+        self.assertIn("cannot yet reproduce", result["message"])
+        self.assertIn("Trailing-stop", result["message"])
 
     def test_data_that_expires_during_broker_checks_is_not_submitted(self):
         trader = FakePaperTrader()
