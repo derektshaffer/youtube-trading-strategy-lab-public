@@ -5815,7 +5815,7 @@ elif module == "Catalyst Intelligence":
 elif module == "Market Discovery":
     st.caption(
         "Scan a live stock universe against the entire usable strategy library automatically. "
-        "Validated strategies rank first; research-only matches are clearly labeled."
+        "Current setup quality ranks first; validated strategies win ties and research-only matches are clearly labeled."
     )
 
     validated_strategies = [
@@ -5828,7 +5828,7 @@ elif module == "Market Discovery":
         key="til_market_discovery_include_research",
         help=(
             "Recommended while the Lab is still building its validated library. "
-            "Validated matches always rank ahead of research-only matches."
+            "Validated status strengthens otherwise similar live matches."
         ),
     )
     discovery_strategies = managed_strategies if include_research else validated_strategies
