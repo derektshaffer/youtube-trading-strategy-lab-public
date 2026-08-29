@@ -20,6 +20,19 @@ from youtube_strategy_engine import (
     utc_now,
 )
 
+LIVE_SCAN_BATCH_SIZE = 20
+MAX_LIVE_SCAN_SYMBOLS = 200
+
+
+def _symbol_batches(
+    symbols: list[str],
+    batch_size: int = LIVE_SCAN_BATCH_SIZE,
+) -> list[list[str]]:
+    clean = parse_symbols(symbols)
+    size = max(1, int(batch_size))
+    return [clean[index : index + size] for index in range(0, len(clean), size)]
+
+
 
 def _needs_chart_data(strategy: dict[str, Any]) -> bool:
     rules = normalize_machine_rules(strategy.get("machine_rules"))
@@ -69,7 +82,7 @@ def _load_intraday_context(
         return {}
 
 
-def scan_strategy_universe(
+def _scan_strategy_universe_batch(
     market: AlpacaMarketData,
     symbols: list[str],
     strategy: dict[str, Any],
@@ -81,9 +94,6 @@ def scan_strategy_universe(
     if not clean:
         return []
     strategy = effective_strategy_for_live(strategy)
-    if len(clean) > 30:
-        clean = clean[:30]
-
     if progress:
         progress("Loading current snapshots…")
     snapshots = market.snapshots(clean)
@@ -160,7 +170,7 @@ def scan_strategy_universe(
 
 
 
-def scan_market_strategies(
+def _scan_market_strategies_batch(
     market: AlpacaMarketData,
     symbols: list[str],
     strategies: list[dict[str, Any]],
@@ -177,9 +187,6 @@ def scan_market_strategies(
     clean = parse_symbols(symbols)
     if not clean:
         return []
-    if len(clean) > 30:
-        clean = clean[:30]
-
     usable: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for raw in strategies:
         if not isinstance(raw, dict) or not raw.get("id"):
@@ -326,6 +333,109 @@ def scan_market_strategies(
         reverse=True,
     )
     return results
+
+
+def scan_strategy_universe(
+    market: AlpacaMarketData,
+    symbols: list[str],
+    strategy: dict[str, Any],
+    *,
+    progress: Callable[[str], None] | None = None,
+    batch_size: int = LIVE_SCAN_BATCH_SIZE,
+) -> list[dict[str, Any]]:
+    """Apply one saved strategy across a broader universe in bounded API batches."""
+    clean = parse_symbols(symbols)
+    if not clean:
+        return []
+    if len(clean) > MAX_LIVE_SCAN_SYMBOLS:
+        raise AppError(
+            f"Live strategy scans support up to {MAX_LIVE_SCAN_SYMBOLS} stocks per run. "
+            "Use a smaller candidate universe or split the scan into multiple runs."
+        )
+
+    batches = _symbol_batches(clean, batch_size=batch_size)
+    combined: list[dict[str, Any]] = []
+    total = len(batches)
+    for index, batch in enumerate(batches, start=1):
+        def batch_progress(message: str, *, _index: int = index) -> None:
+            if progress:
+                progress(f"Batch {_index}/{total} · {message}")
+
+        combined.extend(
+            _scan_strategy_universe_batch(
+                market,
+                batch,
+                strategy,
+                progress=batch_progress if progress else None,
+            )
+        )
+
+    status_rank = {"MATCH": 4, "WATCH": 3, "VERIFY": 2, "NO MATCH": 1, "UNKNOWN": 0}
+    combined.sort(
+        key=lambda item: (
+            status_rank.get(str(item.get("status") or "").upper(), 0),
+            float(item.get("score") or 0),
+            float((item.get("metrics") or {}).get("relative_volume") or 0),
+            float((item.get("metrics") or {}).get("day_change_pct") or 0),
+        ),
+        reverse=True,
+    )
+    return combined
+
+
+def scan_market_strategies(
+    market: AlpacaMarketData,
+    symbols: list[str],
+    strategies: list[dict[str, Any]],
+    *,
+    progress: Callable[[str], None] | None = None,
+    batch_size: int = LIVE_SCAN_BATCH_SIZE,
+) -> list[dict[str, Any]]:
+    """Rank a broader live universe while preserving one shared data pass per batch.
+
+    The public scanner intentionally chunks API work instead of sending a huge
+    symbol list through snapshots, daily bars, intraday bars, and news at once.
+    Results are merged and ranked globally after every batch completes.
+    """
+    clean = parse_symbols(symbols)
+    if not clean:
+        return []
+    if len(clean) > MAX_LIVE_SCAN_SYMBOLS:
+        raise AppError(
+            f"Live market discovery supports up to {MAX_LIVE_SCAN_SYMBOLS} stocks per run. "
+            "Narrow the universe or split it into multiple scans."
+        )
+
+    batches = _symbol_batches(clean, batch_size=batch_size)
+    combined: list[dict[str, Any]] = []
+    total = len(batches)
+    for index, batch in enumerate(batches, start=1):
+        def batch_progress(message: str, *, _index: int = index) -> None:
+            if progress:
+                progress(f"Batch {_index}/{total} · {message}")
+
+        combined.extend(
+            _scan_market_strategies_batch(
+                market,
+                batch,
+                strategies,
+                progress=batch_progress if progress else None,
+            )
+        )
+
+    status_rank = {"MATCH": 4, "WATCH": 3, "VERIFY": 2, "NO MATCH": 1, "UNKNOWN": 0}
+    combined.sort(
+        key=lambda item: (
+            status_rank.get(str(item.get("status") or "").upper(), 0),
+            str(item.get("validation_status") or "").lower() == "validated",
+            float(item.get("robustness_score") or 0),
+            float(item.get("score") or 0),
+            float((item.get("metrics") or {}).get("relative_volume") or 0),
+            float((item.get("metrics") or {}).get("day_change_pct") or 0),
+        ),
+        reverse=True,
+    )
+    return combined
 
 
 def analyze_stock_strategies(
