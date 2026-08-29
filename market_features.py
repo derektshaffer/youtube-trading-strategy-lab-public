@@ -763,7 +763,7 @@ def add_causal_market_feature_columns(
         hold_counts: list[int] = []
         run = 0
         for value in above.tolist():
-            run = run + 1 if bool(value) else 0
+            run = min(8, run + 1) if bool(value) else 0
             hold_counts.append(run)
         group["vwap_hold_bars"] = hold_counts
         reclaim_event = previous_above.eq(False) & above
