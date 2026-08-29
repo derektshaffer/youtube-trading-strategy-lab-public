@@ -42,6 +42,9 @@ on:
       - "test_trading_universe_research.py"
       - "test_trading_progress_ui.py"
       - "test_full_lab_patch_targets.py"
+      - "test_live_strategy_runner.py"
+      - "test_trading_market_discovery.py"
+      - "test_application_security.py"
       - ".github/workflows/validate-trading-intelligence.yml"
   pull_request:
     paths:
@@ -73,6 +76,9 @@ on:
       - "test_trading_auto_research.py"
       - "test_trading_progress_ui.py"
       - "test_full_lab_patch_targets.py"
+      - "test_live_strategy_runner.py"
+      - "test_trading_market_discovery.py"
+      - "test_application_security.py"
       - "requirements.txt"
 
 permissions:
@@ -113,4 +119,4 @@ jobs:
           python -m py_compile trading_universe_research.py
           python -m py_compile youtube_strategy_engine.py
       - name: Run Trading Intelligence tests
-        run: python -m unittest test_youtube_strategy_engine.py test_stock_strategy_finder.py test_trading_validation_core.py test_trading_catalyst_core.py test_trading_intelligence_core.py test_trading_strategy_dna.py test_trading_universe_research.py test_trading_auto_research.py test_trading_research_orchestrator.py test_trading_progress_ui.py test_trading_system_health.py test_distributed_stock_finder.py test_full_lab_patch_targets.py -q
+        run: python -m unittest test_youtube_strategy_engine.py test_stock_strategy_finder.py test_trading_validation_core.py test_trading_catalyst_core.py test_trading_intelligence_core.py test_trading_strategy_dna.py test_trading_universe_research.py test_trading_auto_research.py test_trading_research_orchestrator.py test_trading_progress_ui.py test_trading_system_health.py test_distributed_stock_finder.py test_full_lab_patch_targets.py test_live_strategy_runner.py test_trading_market_discovery.py test_application_security.py -q
