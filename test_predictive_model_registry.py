@@ -132,3 +132,18 @@ def test_incompatible_targets_are_not_compared_for_promotion():
     )
     assert registry["champion_model_id"] == "old"
     assert "new" in registry["incompatible_ready_model_ids"]
+
+
+
+def test_ready_shadow_models_collects_multiple_model_families_from_one_run():
+    logistic = {**model("logistic"), "model_type": "portable_numeric_logistic_regression"}
+    boosted = {**model("boosted"), "model_type": "portable_gradient_boosted_trees"}
+    runs = [
+        {
+            "completed_at": "2026-08-29T14:00:00Z",
+            "probability_model": logistic,
+            "probability_models": [logistic, boosted],
+        }
+    ]
+    chosen = ready_shadow_models(runs, maximum=6)
+    assert {item["id"] for item in chosen} == {"logistic", "boosted"}

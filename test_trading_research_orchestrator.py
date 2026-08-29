@@ -469,6 +469,7 @@ class PredictiveMlBackfillQueueTests(unittest.TestCase):
                 "predictive_ml_backfill_status": {
                     "status": "complete",
                     "completed_at": "2026-08-29T12:00:00Z",
+                    "model_suite_version": research.PREDICTIVE_ML_BACKFILL_SUITE_VERSION,
                 }
             }
         }
@@ -482,3 +483,25 @@ class PredictiveMlBackfillQueueTests(unittest.TestCase):
             research.research_queue_status(library)["active"],
             0,
         )
+
+
+
+def test_older_model_suite_forces_same_day_backfill_upgrade():
+    now = datetime(2026, 8, 29, 22, 0, tzinfo=timezone.utc)
+    library = {
+        "research_system": {
+            "predictive_ml_backfill_status": {
+                "status": "complete",
+                "completed_at": "2026-08-29T21:00:00Z",
+                "model_suite_version": research.PREDICTIVE_ML_BACKFILL_SUITE_VERSION - 1,
+            }
+        }
+    }
+    library, job = research.ensure_predictive_ml_backfill_job(
+        library,
+        now=now,
+        freshness_hours=20,
+    )
+    assert job is not None
+    assert job["payload"]["model_suite_version"] == research.PREDICTIVE_ML_BACKFILL_SUITE_VERSION
+    assert f"v{research.PREDICTIVE_ML_BACKFILL_SUITE_VERSION}" in job["dedupe_key"]
