@@ -1303,6 +1303,19 @@ canonical_strategies = [
     if str(item.get("source_type") or "").lower() == "canonical_family"
 ]
 managed_strategies = canonical_strategies or source_strategies
+managed_integrity_reports = {
+    str(item.get("id") or item.get("name") or ""): strategy_integrity_report(item)
+    for item in managed_strategies
+}
+integrity_safe_strategies = [
+    item
+    for item in managed_strategies
+    if str(
+        (managed_integrity_reports.get(str(item.get("id") or item.get("name") or "")) or {}).get("status")
+        or ""
+    ) != "blocked"
+]
+integrity_blocked_count = max(0, len(managed_strategies) - len(integrity_safe_strategies))
 
 top_gap, top_search, top_actions = st.columns([2.55, 1.35, .72], vertical_alignment="center")
 with top_gap:
@@ -5166,11 +5179,22 @@ elif module == "Strategy Lab":
         "earlier sessions, then evaluate separate validation and untouched holdout periods."
     )
 
-    if not managed_strategies:
-        st.info("Add or import at least one strategy before running the Strategy Lab.")
+    if integrity_blocked_count:
+        st.warning(
+            f"{integrity_blocked_count} strategy "
+            f"{'family is' if integrity_blocked_count == 1 else 'families are'} excluded from backtesting "
+            "because the historical engine cannot yet reproduce important source logic. "
+            "Review Advanced → Strategy Integrity Audit."
+        )
+
+    if not integrity_safe_strategies:
+        st.info(
+            "No strategy is currently faithful enough for Strategy Lab testing. "
+            "Expand the missing machine rules before treating a backtest as meaningful."
+        )
     else:
         strategy_labels: dict[str, dict[str, Any]] = {}
-        for item in managed_strategies:
+        for item in integrity_safe_strategies:
             label = f"{item.get('name') or 'Unnamed strategy'} · {source_label(item)}"
             if label in strategy_labels:
                 label += f" · {str(item.get('id') or '')[:7]}"
@@ -5197,7 +5221,7 @@ elif module == "Strategy Lab":
             ),
         )
         candidates = (
-            [effective_strategy_for_research(item) for item in managed_strategies]
+            [effective_strategy_for_research(item) for item in integrity_safe_strategies]
             if compare_all
             else [effective_strategy_for_research(selected_strategy)]
         )
@@ -5599,12 +5623,21 @@ elif module == "Universe Research":
         "overfitting: a strategy that only works on one symbol should look narrow here."
     )
 
-    if not managed_strategies:
-        st.info("Add or import a strategy before running cross-stock research.")
+    if integrity_blocked_count:
+        st.warning(
+            f"{integrity_blocked_count} low-fidelity strategy "
+            f"{'family is' if integrity_blocked_count == 1 else 'families are'} excluded from cross-stock research."
+        )
+
+    if not integrity_safe_strategies:
+        st.info(
+            "No strategy family is currently faithful enough for cross-stock research. "
+            "Review Advanced → Strategy Integrity Audit first."
+        )
     else:
         universe_choices = {}
         for item in sorted(
-            managed_strategies,
+            integrity_safe_strategies,
             key=lambda value: (
                 str(value.get("validation_status") or "").lower() != "validated",
                 str(value.get("name") or ""),
@@ -5992,7 +6025,7 @@ elif module == "Market Discovery":
     )
 
     validated_strategies = [
-        item for item in managed_strategies
+        item for item in integrity_safe_strategies
         if str(item.get("validation_status") or "").lower() == "validated"
     ]
     include_research = st.checkbox(
@@ -6004,7 +6037,14 @@ elif module == "Market Discovery":
             "Validated status strengthens otherwise similar live matches."
         ),
     )
-    discovery_strategies = managed_strategies if include_research else validated_strategies
+    discovery_strategies = integrity_safe_strategies if include_research else validated_strategies
+
+    if integrity_blocked_count:
+        st.warning(
+            f"{integrity_blocked_count} strategy "
+            f"{'family is' if integrity_blocked_count == 1 else 'families are'} excluded because "
+            "important source logic is not yet faithfully modeled. See Advanced → Strategy Integrity Audit."
+        )
 
     if not discovery_strategies:
         st.info(
@@ -6264,8 +6304,11 @@ elif module == "Stock Analyzer":
         "which validated setup currently fits best."
     )
 
-    if not managed_strategies:
-        st.info("No strategy families are available yet.")
+    if not integrity_safe_strategies:
+        st.info(
+            "No strategy families are currently safe to analyze. Open Advanced → Strategy Integrity Audit "
+            "to see which defining rules are missing from the backtester."
+        )
     else:
         analyzer_cols = st.columns([1.2, 1.0, 2.0])
         analyzer_ticker = analyzer_cols[0].text_input(
@@ -6284,7 +6327,7 @@ elif module == "Stock Analyzer":
         )
 
         analyzer_strategies = [
-            item for item in managed_strategies
+            item for item in integrity_safe_strategies
             if not validated_only
             or str(item.get("validation_status") or "").lower() == "validated"
         ]
