@@ -4077,7 +4077,18 @@ def generate_strategy_variants(
     original = normalize_machine_rules(strategy.get("machine_rules"))
     baseline = dict(original)
     baseline["stop_loss_pct"] = original.get("stop_loss_pct") or settings.default_stop_pct
-    baseline["reward_risk"] = original.get("reward_risk") or settings.default_reward_risk
+    dynamic_exit_source = any(
+        original.get(name) is not None
+        for name in (
+            "trailing_stop_pct",
+            "move_stop_to_breakeven_at_r",
+            "exit_below_vwap",
+            "exit_below_fast_ema",
+        )
+    )
+    baseline["reward_risk"] = original.get("reward_risk")
+    if baseline["reward_risk"] is None and not dynamic_exit_source:
+        baseline["reward_risk"] = settings.default_reward_risk
     variants: list[dict[str, Any]] = []
     seen: set[str] = set()
 
@@ -4188,7 +4199,11 @@ def generate_strategy_variants(
         options_per_rule = 5
 
     stop_values = list(dict.fromkeys([round(float(baseline["stop_loss_pct"]), 4), *stop_values]))
-    reward_values = list(dict.fromkeys([round(float(baseline["reward_risk"]), 4), *reward_values]))
+    if baseline.get("reward_risk") is None and dynamic_exit_source:
+        # Do not silently turn a source-authored trailing/level-loss exit into a fixed target strategy.
+        reward_values = []
+    else:
+        reward_values = list(dict.fromkeys([round(float(baseline["reward_risk"]), 4), *reward_values]))
 
     # Reserve part of the coarse budget for interactions. Everything else gets a fair
     # chance to be explored before stop/target cross-products can consume the search.
@@ -4221,6 +4236,8 @@ def generate_strategy_variants(
         ("pullback_touch_tolerance_pct", (0.50, 0.75, 1.25, 1.50, 2.0), 0.05, 10.0, False),
         ("max_pullback_number", (0.50, 0.75, 1.25, 1.50, 2.0), 1.0, 10.0, True),
         ("stop_ema_buffer_pct", (0.50, 0.75, 1.25, 1.50, 2.0), 0.0, 10.0, False),
+        ("trailing_stop_pct", (0.50, 0.75, 0.90, 1.10, 1.25, 1.50), 0.05, 30.0, False),
+        ("move_stop_to_breakeven_at_r", (0.50, 0.75, 1.25, 1.50, 2.0), 0.10, 10.0, False),
         ("breakout_lookback_bars", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 1.0, 150.0, True),
         ("opening_range_minutes", (0.50, 0.75, 1.25, 1.50, 2.0), 1.0, 180.0, True),
         ("volume_surge_ratio", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 0.10, 50.0, False),
@@ -4328,7 +4345,17 @@ def generate_local_strategy_refinements(
     limit = max(1, min(160, int(maximum)))
     baseline = normalize_machine_rules(seed_rules)
     baseline["stop_loss_pct"] = baseline.get("stop_loss_pct") or backtest_settings.default_stop_pct
-    baseline["reward_risk"] = baseline.get("reward_risk") or backtest_settings.default_reward_risk
+    dynamic_exit_seed = any(
+        baseline.get(name) is not None
+        for name in (
+            "trailing_stop_pct",
+            "move_stop_to_breakeven_at_r",
+            "exit_below_vwap",
+            "exit_below_fast_ema",
+        )
+    )
+    if baseline.get("reward_risk") is None and not dynamic_exit_seed:
+        baseline["reward_risk"] = backtest_settings.default_reward_risk
     variants: list[dict[str, Any]] = []
     seen: set[str] = {json.dumps(baseline, sort_keys=True, separators=(",", ":"))}
 
@@ -4362,6 +4389,8 @@ def generate_local_strategy_refinements(
         "pullback_touch_tolerance_pct": ((0.75, 0.50, 0.25, 0.10), 0.05, 10.0, False),
         "max_pullback_number": ((2.0, 1.0), 1.0, 10.0, True),
         "stop_ema_buffer_pct": ((0.50, 0.25, 0.10, 0.05), 0.0, 10.0, False),
+        "trailing_stop_pct": ((2.0, 1.0, 0.50, 0.25), 0.05, 30.0, False),
+        "move_stop_to_breakeven_at_r": ((1.0, 0.50, 0.25, 0.10), 0.10, 10.0, False),
         "breakout_lookback_bars": ((10.0, 5.0, 2.0, 1.0), 1.0, 150.0, True),
         "opening_range_minutes": ((15.0, 10.0, 5.0, 2.0), 1.0, 180.0, True),
         "volume_surge_ratio": ((1.0, 0.5, 0.25, 0.10), 0.10, 50.0, False),
@@ -4387,6 +4416,8 @@ def generate_local_strategy_refinements(
         "pullback_touch_tolerance_pct": ((0.25, 0.10, 0.05), 0.05, 10.0, False),
         "max_pullback_number": ((1.0,), 1.0, 10.0, True),
         "stop_ema_buffer_pct": ((0.20, 0.10, 0.05), 0.0, 10.0, False),
+        "trailing_stop_pct": ((0.50, 0.25, 0.10), 0.05, 30.0, False),
+        "move_stop_to_breakeven_at_r": ((0.25, 0.10, 0.05), 0.10, 10.0, False),
         "breakout_lookback_bars": ((2.0, 1.0), 1.0, 150.0, True),
         "opening_range_minutes": ((5.0, 2.0, 1.0), 1.0, 180.0, True),
         "volume_surge_ratio": ((0.25, 0.10, 0.05), 0.10, 50.0, False),
