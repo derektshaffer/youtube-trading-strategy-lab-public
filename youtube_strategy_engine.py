@@ -425,6 +425,8 @@ MACHINE_RULE_SCHEMA: dict[str, Any] = {
         "stop_ema_buffer_pct": NULLABLE_NUMBER,
         "trailing_stop_pct": NULLABLE_NUMBER,
         "move_stop_to_breakeven_at_r": NULLABLE_NUMBER,
+        "scale_out_fraction_pct": NULLABLE_NUMBER,
+        "scale_out_at_r": NULLABLE_NUMBER,
         "exit_below_vwap": NULLABLE_BOOLEAN,
         "exit_below_fast_ema": NULLABLE_BOOLEAN,
         "breakout_lookback_bars": NULLABLE_INTEGER,
@@ -672,6 +674,7 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
         "max_spread_pct", "max_vwap_distance_pct", "volume_surge_ratio", "stop_loss_pct", "reward_risk",
         "max_fast_ema_distance_pct", "pullback_touch_tolerance_pct", "stop_ema_buffer_pct",
         "trailing_stop_pct", "move_stop_to_breakeven_at_r",
+        "scale_out_fraction_pct", "scale_out_at_r",
     }
     integer_fields = {
         "breakout_lookback_bars", "opening_range_minutes", "minimum_green_bars", "max_hold_minutes",
@@ -703,6 +706,7 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
         "volume_surge_ratio", "stop_loss_pct", "reward_risk",
         "max_fast_ema_distance_pct", "pullback_touch_tolerance_pct", "stop_ema_buffer_pct",
         "trailing_stop_pct", "move_stop_to_breakeven_at_r",
+        "scale_out_fraction_pct", "scale_out_at_r",
     }:
         if result[name] is not None and result[name] < 0:
             result[name] = None
@@ -714,6 +718,10 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
         result["trailing_stop_pct"] = None
     if result.get("move_stop_to_breakeven_at_r") is not None and result["move_stop_to_breakeven_at_r"] <= 0:
         result["move_stop_to_breakeven_at_r"] = None
+    if result.get("scale_out_fraction_pct") is not None and not 0 < result["scale_out_fraction_pct"] < 100:
+        result["scale_out_fraction_pct"] = None
+    if result.get("scale_out_at_r") is not None and result["scale_out_at_r"] <= 0:
+        result["scale_out_at_r"] = None
     for name in ("fast_ema_period", "slow_ema_period", "trend_ema_period"):
         if result.get(name) is not None and not 2 <= int(result[name]) <= 500:
             result[name] = None
@@ -3434,6 +3442,8 @@ def backtest_limitations(strategy: dict[str, Any]) -> list[str]:
         for name in (
             "trailing_stop_pct",
             "move_stop_to_breakeven_at_r",
+            "scale_out_fraction_pct",
+            "scale_out_at_r",
             "exit_below_vwap",
             "exit_below_fast_ema",
         )
@@ -3745,6 +3755,8 @@ def run_backtest(
         for name in (
             "trailing_stop_pct",
             "move_stop_to_breakeven_at_r",
+            "scale_out_fraction_pct",
+            "scale_out_at_r",
             "exit_below_vwap",
             "exit_below_fast_ema",
         )
@@ -3791,34 +3803,93 @@ def run_backtest(
             if qualifying_reference is not None:
                 price_extension_sessions.add(str(session_name))
 
+    def record_partial_exit(
+        position: dict[str, Any],
+        raw_exit: float,
+        exit_time: Any,
+        quantity: int,
+        reason: str,
+    ) -> None:
+        """Realize part of a position while keeping the remaining shares open."""
+        nonlocal cash
+        remaining = int(position.get("quantity") or 0)
+        partial_qty = max(0, min(int(quantity), max(0, remaining - 1)))
+        if partial_qty < 1:
+            return
+        fill_exit = float(raw_exit) * (1.0 - execution_friction)
+        gross = (fill_exit - float(position["entry_price"])) * partial_qty
+        exit_fee = float(settings.fee_per_order)
+        realized_piece = gross - exit_fee
+        cash += realized_piece
+        position["quantity"] = remaining - partial_qty
+        position["realized_pnl"] = float(position.get("realized_pnl") or 0.0) + realized_piece
+        position["realized_exit_value"] = (
+            float(position.get("realized_exit_value") or 0.0) + fill_exit * partial_qty
+        )
+        position["scaled_out_quantity"] = int(position.get("scaled_out_quantity") or 0) + partial_qty
+        position["risk_dollars"] = (
+            float(position.get("initial_risk_per_share") or 0.0) * int(position["quantity"])
+        )
+        partials = list(position.get("partial_exits") or [])
+        partials.append(
+            {
+                "exit_time": isoformat_utc(exit_time.to_pydatetime()),
+                "exit_price": round(fill_exit, 4),
+                "quantity": partial_qty,
+                "reason": reason,
+                "pnl": round(realized_piece, 2),
+            }
+        )
+        position["partial_exits"] = partials
+
     def close_position(position: dict[str, Any], raw_exit: float, exit_time: Any, reason: str) -> None:
         nonlocal cash
+        remaining_qty = int(position.get("quantity") or 0)
+        if remaining_qty < 1:
+            return
         fill_exit = float(raw_exit) * (1.0 - execution_friction)
-        gross = (fill_exit - position["entry_price"]) * position["quantity"]
-        pnl = gross - settings.fee_per_order * 2.0
-        cash += pnl
+        gross = (fill_exit - position["entry_price"]) * remaining_qty
+        # The entry fee is charged once for the position. Each partial exit already
+        # charged its own exit-order fee; the final close charges one final exit fee.
+        final_piece = gross - settings.fee_per_order * 2.0
+        realized_before = float(position.get("realized_pnl") or 0.0)
+        pnl = realized_before + final_piece
+        cash += final_piece
+        original_quantity = int(position.get("original_quantity") or remaining_qty)
+        realized_exit_value = float(position.get("realized_exit_value") or 0.0)
+        weighted_exit_value = realized_exit_value + fill_exit * remaining_qty
+        weighted_exit_price = (
+            weighted_exit_value / original_quantity
+            if original_quantity > 0
+            else fill_exit
+        )
         trade = {
             "trade_id": position["trade_id"],
             "symbol": symbol,
             "entry_time": isoformat_utc(position["entry_time"].to_pydatetime()),
             "exit_time": isoformat_utc(exit_time.to_pydatetime()),
             "entry_price": round(position["entry_price"], 4),
-            "exit_price": round(fill_exit, 4),
+            "exit_price": round(weighted_exit_price, 4),
+            "final_exit_price": round(fill_exit, 4),
             "stop_price": round(position["stop_price"], 4),
             "target_price": (
                 round(position["target_price"], 4)
                 if position.get("target_price") is not None
                 else None
             ),
-            "quantity": position["quantity"],
+            "quantity": original_quantity,
+            "final_quantity": remaining_qty,
+            "scaled_out_quantity": int(position.get("scaled_out_quantity") or 0),
+            "partial_exits": list(position.get("partial_exits") or []),
             "pnl": round(pnl, 2),
-            "return_pct": round((fill_exit / position["entry_price"] - 1.0) * 100.0, 3),
+            "return_pct": round((weighted_exit_price / position["entry_price"] - 1.0) * 100.0, 3),
             "reason": reason,
             "sample": "out_of_sample" if position["session"] in holdout_sessions else "in_sample",
             "entry_session_type": "extended" if position.get("extended_hours") else "regular",
         }
         trades.append(trade)
         curve.append({"timestamp": trade["exit_time"], "equity": round(cash, 2)})
+
 
     for index in range(1, len(records)):
         current = records[index]
@@ -3897,6 +3968,7 @@ def run_backtest(
                                 "entry_time": current["timestamp"],
                                 "entry_price": entry,
                                 "quantity": quantity,
+                                "original_quantity": quantity,
                                 "stop_price": stop_price,
                                 "target_price": (
                                     entry + risk_per_share * reward_risk
@@ -3905,6 +3977,11 @@ def run_backtest(
                                 ),
                                 "initial_risk_per_share": risk_per_share,
                                 "highest_price": entry,
+                                "scale_out_completed": False,
+                                "scaled_out_quantity": 0,
+                                "partial_exits": [],
+                                "realized_pnl": 0.0,
+                                "realized_exit_value": 0.0,
                                 "session": current["session"],
                                 "risk_dollars": risk_per_share * quantity,
                                 "extended_hours": is_extended,
@@ -3923,16 +4000,47 @@ def run_backtest(
             if low <= position["stop_price"]:
                 raw_exit = min(bar_open, position["stop_price"])
                 reason = "Stop loss"
-            elif position.get("target_price") is not None and high >= float(position["target_price"]):
-                raw_exit = max(bar_open, float(position["target_price"]))
-                reason = "Profit target"
-            elif rules.get("exit_below_vwap") is True and safe_float(current.get("vwap")) is not None and float(current["close"]) < float(current["vwap"]):
+            else:
+                scale_fraction = safe_float(rules.get("scale_out_fraction_pct"))
+                scale_at_r = safe_float(rules.get("scale_out_at_r"))
+                if (
+                    not bool(position.get("scale_out_completed"))
+                    and scale_fraction is not None
+                    and scale_at_r is not None
+                    and int(position.get("quantity") or 0) >= 2
+                ):
+                    partial_target = (
+                        float(position["entry_price"])
+                        + float(position.get("initial_risk_per_share") or 0.0) * scale_at_r
+                    )
+                    if partial_target > float(position["entry_price"]) and high >= partial_target:
+                        desired_qty = max(
+                            1,
+                            int(round(int(position.get("original_quantity") or position["quantity"]) * scale_fraction / 100.0)),
+                        )
+                        partial_qty = min(
+                            desired_qty,
+                            max(0, int(position["quantity"]) - 1),
+                        )
+                        if partial_qty >= 1:
+                            record_partial_exit(
+                                position,
+                                max(bar_open, partial_target),
+                                current["timestamp"],
+                                partial_qty,
+                                "Scale-out target",
+                            )
+                            position["scale_out_completed"] = True
+                if position.get("target_price") is not None and high >= float(position["target_price"]):
+                    raw_exit = max(bar_open, float(position["target_price"]))
+                    reason = "Profit target"
+            if reason is None and rules.get("exit_below_vwap") is True and safe_float(current.get("vwap")) is not None and float(current["close"]) < float(current["vwap"]):
                 raw_exit = float(current["close"])
                 reason = "VWAP loss"
-            elif rules.get("exit_below_fast_ema") is True and safe_float(current.get("fast_ema")) is not None and float(current["close"]) < float(current["fast_ema"]):
+            elif reason is None and rules.get("exit_below_fast_ema") is True and safe_float(current.get("fast_ema")) is not None and float(current["close"]) < float(current["fast_ema"]):
                 raw_exit = float(current["close"])
                 reason = "Fast EMA loss"
-            elif max_hold is not None:
+            elif reason is None and max_hold is not None:
                 held_minutes = (current["timestamp"] - position["entry_time"]).total_seconds() / 60.0
                 if held_minutes >= max_hold:
                     raw_exit = float(current["close"])
@@ -3966,6 +4074,10 @@ def run_backtest(
                             float(position["stop_price"]),
                             trailing_stop,
                         )
+                position["risk_dollars"] = max(
+                    0.0,
+                    float(position["entry_price"]) - float(position["stop_price"]),
+                ) * int(position.get("quantity") or 0)
                 survivors.append(position)
         positions = survivors
 
@@ -4082,6 +4194,8 @@ def generate_strategy_variants(
         for name in (
             "trailing_stop_pct",
             "move_stop_to_breakeven_at_r",
+            "scale_out_fraction_pct",
+            "scale_out_at_r",
             "exit_below_vwap",
             "exit_below_fast_ema",
         )
@@ -4104,6 +4218,8 @@ def generate_strategy_variants(
                 for name in (
                     "trailing_stop_pct",
                     "move_stop_to_breakeven_at_r",
+                    "scale_out_fraction_pct",
+                    "scale_out_at_r",
                     "exit_below_vwap",
                     "exit_below_fast_ema",
                 )
@@ -4255,6 +4371,8 @@ def generate_strategy_variants(
         ("stop_ema_buffer_pct", (0.50, 0.75, 1.25, 1.50, 2.0), 0.0, 10.0, False),
         ("trailing_stop_pct", (0.50, 0.75, 0.90, 1.10, 1.25, 1.50), 0.05, 30.0, False),
         ("move_stop_to_breakeven_at_r", (0.50, 0.75, 1.25, 1.50, 2.0), 0.10, 10.0, False),
+        ("scale_out_fraction_pct", (0.50, 0.67, 0.80, 1.20, 1.33, 1.50), 10.0, 90.0, False),
+        ("scale_out_at_r", (0.50, 0.75, 1.25, 1.50, 2.0), 0.25, 5.0, False),
         ("breakout_lookback_bars", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 1.0, 150.0, True),
         ("opening_range_minutes", (0.50, 0.75, 1.25, 1.50, 2.0), 1.0, 180.0, True),
         ("volume_surge_ratio", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 0.10, 50.0, False),
@@ -4408,6 +4526,8 @@ def generate_local_strategy_refinements(
         "stop_ema_buffer_pct": ((0.50, 0.25, 0.10, 0.05), 0.0, 10.0, False),
         "trailing_stop_pct": ((2.0, 1.0, 0.50, 0.25), 0.05, 30.0, False),
         "move_stop_to_breakeven_at_r": ((1.0, 0.50, 0.25, 0.10), 0.10, 10.0, False),
+        "scale_out_fraction_pct": ((20.0, 10.0, 5.0, 2.5), 10.0, 90.0, False),
+        "scale_out_at_r": ((0.50, 0.25, 0.10), 0.25, 5.0, False),
         "breakout_lookback_bars": ((10.0, 5.0, 2.0, 1.0), 1.0, 150.0, True),
         "opening_range_minutes": ((15.0, 10.0, 5.0, 2.0), 1.0, 180.0, True),
         "volume_surge_ratio": ((1.0, 0.5, 0.25, 0.10), 0.10, 50.0, False),
@@ -4435,6 +4555,8 @@ def generate_local_strategy_refinements(
         "stop_ema_buffer_pct": ((0.20, 0.10, 0.05), 0.0, 10.0, False),
         "trailing_stop_pct": ((0.50, 0.25, 0.10), 0.05, 30.0, False),
         "move_stop_to_breakeven_at_r": ((0.25, 0.10, 0.05), 0.10, 10.0, False),
+        "scale_out_fraction_pct": ((10.0, 5.0, 2.5), 10.0, 90.0, False),
+        "scale_out_at_r": ((0.25, 0.10, 0.05), 0.25, 5.0, False),
         "breakout_lookback_bars": ((2.0, 1.0), 1.0, 150.0, True),
         "opening_range_minutes": ((5.0, 2.0, 1.0), 1.0, 180.0, True),
         "volume_surge_ratio": ((0.25, 0.10, 0.05), 0.10, 50.0, False),
