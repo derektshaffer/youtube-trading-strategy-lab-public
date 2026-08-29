@@ -139,6 +139,12 @@ For every strategy or setup:
 - Separate long, short, and ambiguous ideas.
 - Convert ONLY explicit, measurable thresholds into machine_rules. Never invent a numeric
   value merely to make a strategy testable.
+- Preserve the author's trade-management logic instead of substituting a generic fixed target.
+  Use trailing_stop_pct only for an explicit percentage trail; move_stop_to_breakeven_at_r only
+  when the source gives an R-multiple trigger; use exit_below_vwap=true or
+  exit_below_fast_ema=true only when losing that level is explicitly an exit. Keep scale-outs,
+  partial profits, discretionary momentum exits, and other unsupported management rules visible
+  in exit_conditions and unresolved_rules so the fidelity audit can block misleading backtests.
 - Put qualitative requirements such as "strong tape", "clean catalyst", "good liquidity",
   discretionary chart structure, Level 2 behavior, or unavailable historical data in
   unresolved_rules unless the source provides an objective definition.
