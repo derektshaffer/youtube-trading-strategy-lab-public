@@ -1539,7 +1539,7 @@ def similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline(
                     bandwidth=similarity_bandwidth,
                     min_weight=minimum_similarity_weight,
                 )
-                if not weight_info.get("active_similarity_columns"):
+                if len(weight_info.get("active_similarity_columns") or []) < 2:
                     continue
 
                 similarity_pipeline = _baseline_pipeline(numeric, categorical)
