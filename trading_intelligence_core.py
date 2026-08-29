@@ -829,11 +829,46 @@ def upgrade_native_strategy_rules(strategy: dict[str, Any]) -> dict[str, Any]:
                 }
             )
 
+    # Migrate explicit multi-stage partials from already-saved source text. This only
+    # activates when at least two exact percent + R pairs are present; qualitative
+    # language still remains a research assumption rather than an invented rule.
+    explicit_stage_pairs: list[tuple[float, float]] = []
+    for pattern in (
+        r"(?:scale out|scaling out|take partial|sell)[^\.]{0,35}(\d+(?:\.\d+)?)\s*%[^\.]{0,55}?(\d+(?:\.\d+)?)\s*r\b",
+        r"(\d+(?:\.\d+)?)\s*%[^\.]{0,55}?(\d+(?:\.\d+)?)\s*r\b",
+    ):
+        for fraction_text, r_text in re.findall(pattern, exit_text):
+            fraction_value = safe_float(fraction_text)
+            r_value = safe_float(r_text)
+            if fraction_value is None or r_value is None:
+                continue
+            pair = (float(fraction_value), float(r_value))
+            if pair not in explicit_stage_pairs:
+                explicit_stage_pairs.append(pair)
+    if len(explicit_stage_pairs) >= 2 and not rules.get("scale_out_stages"):
+        normalized_stages = normalize_machine_rules({
+            "scale_out_stages": [
+                {"fraction_pct": fraction, "at_r": at_r}
+                for fraction, at_r in explicit_stage_pairs
+            ]
+        }).get("scale_out_stages")
+        if normalized_stages and len(normalized_stages) >= 2:
+            rules["scale_out_stages"] = normalized_stages
+            explicit_migrations.append({
+                "rule": "scale_out_stages",
+                "value": normalized_stages,
+                "basis": (
+                    "Saved source text explicitly states multiple partial-exit percentages "
+                    "and their R-multiple triggers."
+                ),
+            })
+            changed = True
+
     scale_language = any(
         phrase in exit_text
         for phrase in ("scale out", "scaling out", "partial profit", "take partial")
     )
-    if scale_language:
+    if scale_language and not rules.get("scale_out_stages"):
         if rules.get("scale_out_fraction_pct") is None:
             fraction_value = None
             fraction_basis = ""
@@ -920,10 +955,44 @@ def upgrade_native_strategy_rules(strategy: dict[str, Any]) -> dict[str, Any]:
                     ),
                 )
 
+    # Preserve explicitly structural trailing instructions separately from a
+    # percentage trail. These levels are applied causally to the next bar.
+    structural_trails = (
+        (
+            "trail_below_avwap",
+            r"trail[^\.]{0,60}(?:under|below)[^\.]{0,35}(?:anchored vwap|avwap)",
+            "Saved source text explicitly trails the remainder beneath anchored VWAP.",
+        ),
+        (
+            "trail_below_vwap",
+            r"trail[^\.]{0,60}(?:under|below)[^\.]{0,35}vwap",
+            "Saved source text explicitly trails the remainder beneath session VWAP.",
+        ),
+        (
+            "trail_below_fast_ema",
+            r"trail[^\.]{0,60}(?:under|below)[^\.]{0,35}(?:fast )?(?:\d{1,3}\s*)?ema",
+            "Saved source text explicitly trails the remainder beneath the fast EMA.",
+        ),
+    )
+    for rule_name, pattern, basis in structural_trails:
+        if rule_name == "trail_below_vwap" and rules.get("trail_below_avwap") is True:
+            continue
+        if rules.get(rule_name) is not True and re.search(pattern, exit_text):
+            rules[rule_name] = True
+            explicit_migrations.append({"rule": rule_name, "value": True, "basis": basis})
+            changed = True
+
     qualitative_trailing = any(
         phrase in exit_text for phrase in ("trailing stop", "trail the stop", "trail stop")
     )
-    if qualitative_trailing and rules.get("trailing_stop_pct") is None:
+    if (
+        qualitative_trailing
+        and rules.get("trailing_stop_pct") is None
+        and not any(
+            rules.get(name) is True
+            for name in ("trail_below_vwap", "trail_below_fast_ema", "trail_below_avwap")
+        )
+    ):
         add_native_assumption(
             "trailing_stop_pct",
             3.0,
@@ -938,7 +1007,35 @@ def upgrade_native_strategy_rules(strategy: dict[str, Any]) -> dict[str, Any]:
     qualitative_breakeven = (
         "breakeven" in exit_text or "break even" in exit_text or "break-even" in exit_text
     )
-    if qualitative_breakeven and rules.get("move_stop_to_breakeven_at_r") is None:
+    breakeven_after_partial = bool(
+        qualitative_breakeven
+        and (
+            re.search(
+                r"(?:partial|scale out|scaling out)[^\.]{0,90}(?:breakeven|break even|break-even)",
+                exit_text,
+            )
+            or re.search(
+                r"(?:breakeven|break even|break-even)[^\.]{0,90}(?:after|once)[^\.]{0,50}(?:partial|scale out|scaling out)",
+                exit_text,
+            )
+        )
+    )
+    if (
+        breakeven_after_partial
+        and rules.get("move_stop_to_breakeven_after_scale_out") is not True
+    ):
+        rules["move_stop_to_breakeven_after_scale_out"] = True
+        explicit_migrations.append({
+            "rule": "move_stop_to_breakeven_after_scale_out",
+            "value": True,
+            "basis": "Saved source text explicitly moves the stop to breakeven after taking a partial.",
+        })
+        changed = True
+    if (
+        qualitative_breakeven
+        and not breakeven_after_partial
+        and rules.get("move_stop_to_breakeven_at_r") is None
+    ):
         add_native_assumption(
             "move_stop_to_breakeven_at_r",
             1.0,
