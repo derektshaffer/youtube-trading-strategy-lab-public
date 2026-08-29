@@ -398,6 +398,18 @@ NULLABLE_NUMBER = {"type": ["number", "null"]}
 NULLABLE_INTEGER = {"type": ["integer", "null"]}
 NULLABLE_BOOLEAN = {"type": ["boolean", "null"]}
 NULLABLE_STRING = {"type": ["string", "null"]}
+SCALE_OUT_STAGES_SCHEMA: dict[str, Any] = {
+    "type": ["array", "null"],
+    "items": {
+        "type": "object",
+        "properties": {
+            "fraction_pct": NULLABLE_NUMBER,
+            "at_r": NULLABLE_NUMBER,
+        },
+        "required": ["fraction_pct", "at_r"],
+    },
+    "maxItems": 6,
+}
 
 MACHINE_RULE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -444,6 +456,11 @@ MACHINE_RULE_SCHEMA: dict[str, Any] = {
         "move_stop_to_breakeven_at_r": NULLABLE_NUMBER,
         "scale_out_fraction_pct": NULLABLE_NUMBER,
         "scale_out_at_r": NULLABLE_NUMBER,
+        "scale_out_stages": SCALE_OUT_STAGES_SCHEMA,
+        "move_stop_to_breakeven_after_scale_out": NULLABLE_BOOLEAN,
+        "trail_below_vwap": NULLABLE_BOOLEAN,
+        "trail_below_fast_ema": NULLABLE_BOOLEAN,
+        "trail_below_avwap": NULLABLE_BOOLEAN,
         "exit_below_vwap": NULLABLE_BOOLEAN,
         "exit_below_fast_ema": NULLABLE_BOOLEAN,
         "breakout_lookback_bars": NULLABLE_INTEGER,
@@ -607,13 +624,17 @@ For each setup:
   Set unavailable thresholds to null. Never fabricate values to make a strategy testable.
 - Preserve trade-management logic instead of replacing it with a generic fixed target. Use
   trailing_stop_pct only for an explicit percentage trail; move_stop_to_breakeven_at_r only
-  when the source gives an R-multiple trigger; use scale_out_fraction_pct and scale_out_at_r
-  only when the source explicitly states the partial size and R trigger; exit_below_vwap=true
-  or exit_below_fast_ema=true only when losing that level is explicitly an exit. If the source
-  uses qualitative scale-outs, trailing/breakeven management, tape/Level-2 discretion,
-  momentum-failure selling, or another exit without exact values, preserve the requirement
-  in exit_conditions/unresolved_rules so the research compiler can test assumptions without
-  pretending the author supplied them.
+  when the source gives an R-multiple trigger. For one explicit partial, scale_out_fraction_pct
+  and scale_out_at_r remain supported. When the source explicitly teaches multiple partials,
+  encode scale_out_stages as ordered {fraction_pct, at_r} stages, with each fraction measured
+  against the original position. Use move_stop_to_breakeven_after_scale_out only when the source
+  explicitly says to move the stop after taking a partial. Use trail_below_vwap,
+  trail_below_fast_ema, or trail_below_avwap only when the source explicitly says to trail the
+  remainder beneath that level. Use exit_below_vwap=true or exit_below_fast_ema=true only when
+  losing that level is explicitly an exit. If the source uses qualitative scale-outs,
+  trailing/breakeven management, tape/Level-2 discretion, momentum-failure selling, or another
+  exit without exact values, preserve the requirement in exit_conditions/unresolved_rules so
+  the research compiler can test assumptions without pretending the author supplied them.
 - Put subjective or unavailable requirements (level 2, float, tape speed, proprietary indicators,
   borrow availability, visual discretion, historical catalyst timing) in unresolved_rules.
 - Rate extraction confidence from 0 to 100 based on source clarity, NOT expected profitability.
@@ -691,6 +712,43 @@ def _extract_generate_content_text(response: dict[str, Any]) -> str:
     return "\n".join(pieces).strip()
 
 
+def normalize_scale_out_stages(raw_stages: Any) -> list[dict[str, float]] | None:
+    """Normalize ordered partial-profit stages while preserving a final remainder."""
+    if not isinstance(raw_stages, list):
+        return None
+    cleaned: list[dict[str, float]] = []
+    seen_r: set[float] = set()
+    cumulative_fraction = 0.0
+    for raw_stage in raw_stages[:6]:
+        if not isinstance(raw_stage, dict):
+            continue
+        fraction = safe_float(raw_stage.get("fraction_pct"))
+        at_r = safe_float(raw_stage.get("at_r"))
+        if fraction is None or at_r is None or not 0 < fraction < 100 or at_r <= 0:
+            continue
+        fraction = round(float(fraction), 4)
+        at_r = round(float(at_r), 4)
+        if at_r in seen_r or cumulative_fraction + fraction >= 100:
+            continue
+        cleaned.append({"fraction_pct": fraction, "at_r": at_r})
+        seen_r.add(at_r)
+        cumulative_fraction += fraction
+    cleaned.sort(key=lambda stage: (float(stage["at_r"]), float(stage["fraction_pct"])))
+    return cleaned or None
+
+
+def configured_scale_out_stages(rules: dict[str, Any]) -> list[dict[str, float]]:
+    """Return rich stages, falling back to the legacy one-stage rule pair."""
+    stages = normalize_scale_out_stages(rules.get("scale_out_stages"))
+    if stages:
+        return stages
+    fraction = safe_float(rules.get("scale_out_fraction_pct"))
+    at_r = safe_float(rules.get("scale_out_at_r"))
+    if fraction is None or at_r is None or not 0 < fraction < 100 or at_r <= 0:
+        return []
+    return [{"fraction_pct": float(fraction), "at_r": float(at_r)}]
+
+
 def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
     raw_rules = raw_rules if isinstance(raw_rules, dict) else {}
     result: dict[str, Any] = {}
@@ -713,13 +771,17 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
         "require_price_above_trend_ema", "require_fast_ema_rising",
         "require_fast_ema_pullback", "require_pullback_breakout",
         "stop_below_fast_ema", "exit_below_vwap", "exit_below_fast_ema",
+        "move_stop_to_breakeven_after_scale_out",
+        "trail_below_vwap", "trail_below_fast_ema", "trail_below_avwap",
         "require_price_above_avwap", "avwap_reclaim", "require_avwap_rising",
         "require_avwap_pullback", "stop_below_avwap", "exit_below_avwap",
     }
     string_fields = {"avwap_anchor_mode"}
     for name in MACHINE_RULE_SCHEMA["properties"]:
         value = raw_rules.get(name)
-        if name in number_fields:
+        if name == "scale_out_stages":
+            result[name] = normalize_scale_out_stages(value)
+        elif name in number_fields:
             result[name] = safe_float(value)
         elif name in integer_fields:
             numeric = safe_float(value)
