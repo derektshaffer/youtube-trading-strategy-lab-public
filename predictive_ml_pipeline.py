@@ -500,7 +500,9 @@ def build_cross_stock_training_dataset(
             )
             continue
         if progress:
-            progress(f"Building causal ML rows for {symbol} ({index}/{len(clean)})…")
+            progress(
+                f"ML stock {index}/{len(clean)} · calculating causal features for {symbol}…"
+            )
         report = build_supervised_feature_rows(
             rows,
             horizons=clean_horizons,
@@ -509,11 +511,20 @@ def build_cross_stock_training_dataset(
             profit_target_pct=float(clean_profit_target),
             stop_loss_pct=float(clean_stop_loss),
         )
+        if progress:
+            progress(
+                f"ML stock {index}/{len(clean)} · adding causal context for {symbol}…"
+            )
         _attach_context_features(
             report,
             rows,
             session_mode=clean_session_mode,
         )
+        if progress:
+            progress(
+                f"ML stock {index}/{len(clean)} · finished {symbol} "
+                f"({len(report.get('records') or []):,} labeled rows)"
+            )
         symbol_records = []
         for item in report.get("records") or []:
             row = dict(item)
