@@ -130,43 +130,72 @@ def build_shadow_model_monitor(
     """Evaluate matured shadow probabilities by model using deduplicated decision points."""
     model_lookup = dict(model_lookup or {})
     deduped: dict[tuple[str, str], dict[str, Any]] = {}
+    raw_counts: dict[str, int] = defaultdict(int)
 
     for raw in observations or []:
         if not isinstance(raw, dict):
             continue
         context = raw.get("context") if isinstance(raw.get("context"), dict) else {}
-        model_id = str(context.get("ml_model_id") or "").strip()
-        probability = _number(context.get("ml_probability"))
         symbol = str(raw.get("symbol") or "").strip().upper()
         observed_at = _parse_time(raw.get("observed_at"))
         outcomes = raw.get("outcomes") if isinstance(raw.get("outcomes"), dict) else {}
-        actual = _target_actual(context, outcomes)
-
-        if (
-            not model_id
-            or probability is None
-            or not (0.0 <= probability <= 1.0)
-            or not symbol
-            or observed_at is None
-            or actual is None
-        ):
+        if not symbol or observed_at is None:
             continue
 
-        key = (model_id, _bucket_key(symbol, observed_at, bucket_minutes))
-        existing = deduped.get(key)
-        candidate = {
-            "model_id": model_id,
-            "symbol": symbol,
-            "session": str(raw.get("session") or observed_at.date().isoformat()),
-            "observed_at": observed_at,
-            "probability": float(probability),
-            "actual": int(actual),
-            "target": context.get("ml_target"),
-            "target_description": context.get("ml_target_description"),
-        }
-        # Keep the earliest observation in each stock/time bucket to avoid cherry-picking.
-        if existing is None or observed_at < existing["observed_at"]:
-            deduped[key] = candidate
+        predictions = [
+            dict(item)
+            for item in context.get("ml_predictions") or []
+            if isinstance(item, dict)
+        ]
+        primary_model_id = str(context.get("ml_model_id") or "").strip()
+        if primary_model_id and not any(
+            str(item.get("model_id") or "").strip() == primary_model_id
+            for item in predictions
+        ):
+            predictions.append(
+                {
+                    "model_id": primary_model_id,
+                    "probability": context.get("ml_probability"),
+                    "target": context.get("ml_target"),
+                    "target_description": context.get("ml_target_description"),
+                }
+            )
+
+        for prediction in predictions:
+            model_id = str(prediction.get("model_id") or "").strip()
+            probability = _number(prediction.get("probability"))
+            if not model_id or probability is None or not (0.0 <= probability <= 1.0):
+                continue
+            prediction_context = {
+                **context,
+                "ml_model_id": model_id,
+                "ml_probability": probability,
+                "ml_target": prediction.get("target") or context.get("ml_target"),
+                "ml_target_description": (
+                    prediction.get("target_description")
+                    or context.get("ml_target_description")
+                ),
+            }
+            actual = _target_actual(prediction_context, outcomes)
+            if actual is None:
+                continue
+            raw_counts[model_id] += 1
+
+            key = (model_id, _bucket_key(symbol, observed_at, bucket_minutes))
+            existing = deduped.get(key)
+            candidate = {
+                "model_id": model_id,
+                "symbol": symbol,
+                "session": str(raw.get("session") or observed_at.date().isoformat()),
+                "observed_at": observed_at,
+                "probability": float(probability),
+                "actual": int(actual),
+                "target": prediction_context.get("ml_target"),
+                "target_description": prediction_context.get("ml_target_description"),
+            }
+            # Keep the earliest observation in each stock/time bucket to avoid cherry-picking.
+            if existing is None or observed_at < existing["observed_at"]:
+                deduped[key] = candidate
 
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for item in deduped.values():
@@ -237,12 +266,7 @@ def build_shadow_model_monitor(
                 "model_id": model_id,
                 "status": status,
                 "evaluated_decisions": len(rows),
-                "raw_shadow_observations": sum(
-                    1
-                    for raw in observations or []
-                    if isinstance(raw, dict)
-                    and str((raw.get("context") or {}).get("ml_model_id") or "") == model_id
-                ),
+                "raw_shadow_observations": int(raw_counts.get(model_id) or 0),
                 "symbols": symbols,
                 "symbol_count": len(symbols),
                 "sessions": sessions,
