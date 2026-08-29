@@ -40,6 +40,15 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
                 self.assertEqual(run_module.call_count, 2)
                 run_module.assert_called_with(module_name, run_name="__main__")
 
+    def test_trading_intelligence_recovers_known_cloud_divergence_without_blocking_ui(self):
+        source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        self.assertIn("store.restore_cloud_backup()", source)
+        self.assertIn("_til_cloud_conflict_recovered", source)
+        self.assertIn(
+            "Both the local Trading Lab library and the private GitHub library changed",
+            source,
+        )
+
     def test_full_lab_features_are_integrated_into_the_core_module(self):
         source = (ROOT / "youtube_strategy_app_core.py").read_text(encoding="utf-8")
         for marker in (
