@@ -64,10 +64,11 @@ def test_predictive_ml_workspace_separates_hours_and_runs_symbol_holdout():
 def test_predictive_ml_results_render_without_forced_rerun():
     block = _pattern_validation_block()
     compact_start = block.index("compact_ml_evaluation = {")
-    result_store = block.index('st.session_state["til_predictive_ml_result"] = {')
+    result_build = block.index("completed_ml_result = {")
+    result_store = block.index('st.session_state["til_predictive_ml_result"] = completed_ml_result')
     result_reader = block.index('stored_ml_result = st.session_state.get("til_predictive_ml_result")')
     result_path = block[compact_start:result_reader]
-    assert compact_start < result_store < result_reader
+    assert compact_start < result_build < result_store < result_reader
     assert "st.rerun()" not in result_path
     assert 'if key != "predictions"' in result_path
     assert '"evaluation": compact_ml_evaluation' in result_path
@@ -83,3 +84,15 @@ def test_predictive_ml_workspace_exposes_causal_archetype_context():
     assert "Historical float and catalyst-profile" in block
     assert "same held-out-stock rows" in block.lower()
 
+
+
+def test_predictive_ml_results_are_persisted_and_restored_after_restart():
+    source = Path("trading_intelligence_app.py").read_text(encoding="utf-8")
+    block = _pattern_validation_block()
+    assert "def persist_predictive_ml_result" in source
+    assert 'data["predictive_ml_runs"] = [record, *previous][:MAX_PREDICTIVE_ML_RUN_HISTORY]' in source
+    assert "persist_predictive_ml_result(completed_ml_result)" in block
+    assert 'library.get("predictive_ml_runs")' in block
+    assert 'ml_result_source = "durable"' in block
+    assert "restored from durable storage" in block
+    assert 'if key != "predictions"' in block

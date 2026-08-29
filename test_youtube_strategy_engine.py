@@ -805,6 +805,26 @@ class StorageTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_predictive_ml_run_history_is_normalized_and_preserved(self):
+        blank = engine.StrategyStore.blank()
+        self.assertEqual(blank["predictive_ml_runs"], [])
+
+        saved = self.store.save(
+            {
+                "predictive_ml_runs": [
+                    {
+                        "id": "ml-run-1",
+                        "completed_at": "2026-08-29T19:30:00Z",
+                        "evaluation": {"status": "EVALUATED", "roc_auc": 0.61},
+                    }
+                ]
+            }
+        )
+        self.assertEqual(saved["predictive_ml_runs"][0]["id"], "ml-run-1")
+        loaded = self.store.load()
+        self.assertEqual(loaded["predictive_ml_runs"][0]["evaluation"]["roc_auc"], 0.61)
+        self.assertTrue(engine.StrategyStore._library_has_user_data(loaded))
+
     def test_video_analysis_keeps_existing_approval(self):
         url = "https://www.youtube.com/watch?v=abcDEF12_-3"
         strategy = simple_strategy()

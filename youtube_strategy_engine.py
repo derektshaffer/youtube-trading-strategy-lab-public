@@ -2220,6 +2220,7 @@ class GitHubCloudBackup:
             "external_research_runs",
             "research_hypotheses",
             "research_worker_runs",
+            "predictive_ml_runs",
         ):
             if name in library and not isinstance(library[name], list):
                 raise AppError(f"The GitHub cloud backup contains an invalid {name} collection.")
@@ -2308,6 +2309,7 @@ class StrategyStore:
             "external_research_runs": [],
             "research_hypotheses": [],
             "research_worker_runs": [],
+            "predictive_ml_runs": [],
             "research_system": {},
             "updated_at": None,
         }
@@ -2330,6 +2332,7 @@ class StrategyStore:
             "external_research_runs",
             "research_hypotheses",
             "research_worker_runs",
+            "predictive_ml_runs",
         ):
             if not isinstance(result.get(name), list):
                 result[name] = []
@@ -2370,6 +2373,7 @@ class StrategyStore:
             "external_research_runs",
             "research_hypotheses",
             "research_worker_runs",
+            "predictive_ml_runs",
         ):
             value = data.get(name)
             if isinstance(value, list) and value:
