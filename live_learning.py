@@ -159,6 +159,18 @@ def build_shadow_observation(
         if isinstance(result.get("ml_prediction"), dict)
         else {}
     )
+    ml_predictions = [
+        {
+            "model_id": item.get("model_id"),
+            "probability": _number(item.get("probability")),
+            "raw_probability": _number(item.get("raw_probability")),
+            "target": item.get("target"),
+            "target_description": item.get("target_description"),
+            "feature_coverage": _number(item.get("feature_coverage")),
+        }
+        for item in result.get("ml_predictions") or []
+        if isinstance(item, dict) and str(item.get("model_id") or "").strip()
+    ]
 
     return {
         "id": _observation_id(symbol, observed, bucket_minutes),
@@ -203,6 +215,7 @@ def build_shadow_observation(
             "ml_target": ml_prediction.get("target"),
             "ml_target_description": ml_prediction.get("target_description"),
             "ml_feature_coverage": _number(ml_prediction.get("feature_coverage")),
+            "ml_predictions": ml_predictions,
         },
         "outcomes": {},
         "outcome_status": "PENDING",
