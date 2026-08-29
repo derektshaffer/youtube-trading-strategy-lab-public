@@ -109,6 +109,15 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
             source,
         )
 
+    def test_legacy_finder_results_are_visibly_marked_pre_integrity(self):
+        source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        finder = (ROOT / "stock_strategy_finder.py").read_text(encoding="utf-8")
+        persistence = (ROOT / "finder_report_persistence.py").read_text(encoding="utf-8")
+        self.assertIn("strategy_fidelity_engine_version", source)
+        self.assertIn("Legacy research result", source)
+        self.assertIn("STRATEGY_FIDELITY_ENGINE_VERSION = 1", finder)
+        self.assertIn("strategy_fidelity_engine_version", persistence)
+
     def test_continuous_research_button_is_clearly_manual(self):
         source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
         self.assertIn("Run today's research cycle now", source)
