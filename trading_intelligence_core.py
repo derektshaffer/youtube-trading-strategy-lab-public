@@ -139,6 +139,10 @@ For every strategy or setup:
 - Separate long, short, and ambiguous ideas.
 - Convert ONLY explicit, measurable thresholds into machine_rules. Never invent a numeric
   value merely to make a strategy testable.
+- Preserve anchored-VWAP structure. If the source clearly states the anchor event, trend direction,
+  pullback/reclaim relationship, stop, or exit, map those to the AVWAP machine fields. Do not
+  substitute session VWAP. Multi-anchor pinches, IPO-only context, and multi-day anchors stay
+  unresolved until the historical engine can reproduce that extra context.
 - Preserve the author's trade-management logic instead of substituting a generic fixed target.
   Use trailing_stop_pct only for an explicit percentage trail; move_stop_to_breakeven_at_r only
   when the source gives an R-multiple trigger; use exit_below_vwap=true or
@@ -951,6 +955,116 @@ def upgrade_native_strategy_rules(strategy: dict[str, Any]) -> dict[str, Any]:
     if assumptions:
         item["compiler_assumptions"] = assumptions[-150:]
 
+    avwap_language = "anchored vwap" in text or "avwap" in text
+    if avwap_language:
+        direction = str(item.get("direction") or "").strip().casefold()
+        mode = rules.get("avwap_anchor_mode")
+        if mode is None:
+            if "higher low" in text or ("handoff" in text and direction in {"long", "both"}):
+                mode = "higher_low_handoff"
+            elif "lower high" in text or ("handoff" in text and direction == "short"):
+                mode = "lower_high_handoff"
+            elif "swing low" in text or ("cross purchase" in text and "dip" in text) or "rising avwap" in text:
+                mode = "swing_low"
+            elif "swing high" in text or ("cross short" in text and "rip" in text) or "declining avwap" in text:
+                mode = "swing_high"
+            elif re.search(r"anchor(?:ed|ing)?[^.]{0,50}(?:previous|prior)[^.]{0,30}day[^.]{0,20}high", text):
+                mode = "previous_day_high_break"
+            elif re.search(r"anchor(?:ed|ing)?[^.]{0,50}breakout(?: bar)?", text):
+                mode = "breakout_bar"
+            elif re.search(r"anchor(?:ed|ing)?[^.]{0,60}(?:second|2nd) minute", text):
+                mode = "session_minute"
+                if rules.get("avwap_anchor_session_minute") is None:
+                    rules["avwap_anchor_session_minute"] = 1
+                    explicit_migrations.append({
+                        "rule": "avwap_anchor_session_minute",
+                        "value": 1,
+                        "basis": "Saved source text explicitly anchors AVWAP to the second session minute.",
+                    })
+                    changed = True
+        if mode is not None and rules.get("avwap_anchor_mode") is None:
+            rules["avwap_anchor_mode"] = mode
+            explicit_migrations.append({
+                "rule": "avwap_anchor_mode",
+                "value": mode,
+                "basis": "Saved source text identifies a causal anchored-VWAP reference structure.",
+            })
+            changed = True
+
+        if rules.get("avwap_anchor_mode") in {"swing_low", "swing_high", "higher_low_handoff", "lower_high_handoff"}:
+            if overrides.get("avwap_pivot_confirm_bars") is None and rules.get("avwap_pivot_confirm_bars") is None:
+                overrides["avwap_pivot_confirm_bars"] = 2
+                assumptions = list(item.get("compiler_assumptions") or [])
+                if not any(isinstance(record, dict) and record.get("target_rule") == "avwap_pivot_confirm_bars" for record in assumptions):
+                    assumptions.append({
+                        "target_rule": "avwap_pivot_confirm_bars",
+                        "value": 2,
+                        "source_requirement": "Use a causally confirmed AVWAP swing/handoff anchor.",
+                        "rationale": "Two right-side bars are a starting research assumption, not an author-stated threshold.",
+                        "confidence": 80.0,
+                        "accepted_at": _utc_iso(),
+                        "model": "native-rule-upgrade",
+                        "accepted_by": "ai_autopilot",
+                        "is_research_assumption": True,
+                    })
+                item["compiler_assumptions"] = assumptions[-150:]
+                changed = True
+
+        if "rising avwap" in text and rules.get("require_avwap_rising") is None:
+            rules["require_avwap_rising"] = True
+            explicit_migrations.append({"rule": "require_avwap_rising", "value": True, "basis": "Saved source text explicitly requires a rising AVWAP."})
+            changed = True
+        if "declining avwap" in text and rules.get("require_avwap_rising") is None:
+            rules["require_avwap_rising"] = False
+            explicit_migrations.append({"rule": "require_avwap_rising", "value": False, "basis": "Saved source text explicitly requires a declining AVWAP."})
+            changed = True
+        if any(phrase in text for phrase in ("above avwap", "above the avwap", "above anchored vwap", "above the anchored vwap")) and rules.get("require_price_above_avwap") is None:
+            rules["require_price_above_avwap"] = True
+            explicit_migrations.append({"rule": "require_price_above_avwap", "value": True, "basis": "Saved source text explicitly requires price above AVWAP."})
+            changed = True
+        if any(phrase in text for phrase in ("below avwap", "below the avwap", "below anchored vwap", "below the anchored vwap")) and rules.get("require_price_above_avwap") is None:
+            rules["require_price_above_avwap"] = False
+            explicit_migrations.append({"rule": "require_price_above_avwap", "value": False, "basis": "Saved source text explicitly requires price below AVWAP."})
+            changed = True
+        if "reclaim" in text and rules.get("avwap_reclaim") is None:
+            rules["avwap_reclaim"] = True
+            explicit_migrations.append({"rule": "avwap_reclaim", "value": True, "basis": "Saved source text explicitly describes an AVWAP reclaim."})
+            changed = True
+        if any(phrase in text for phrase in ("pullback", "pull back", "support")) and rules.get("require_avwap_pullback") is None:
+            rules["require_avwap_pullback"] = True
+            explicit_migrations.append({"rule": "require_avwap_pullback", "value": True, "basis": "Saved source text explicitly uses AVWAP as pullback/support structure."})
+            changed = True
+            if overrides.get("avwap_pullback_tolerance_pct") is None and rules.get("avwap_pullback_tolerance_pct") is None:
+                overrides["avwap_pullback_tolerance_pct"] = 0.5
+                assumptions = list(item.get("compiler_assumptions") or [])
+                if not any(isinstance(record, dict) and record.get("target_rule") == "avwap_pullback_tolerance_pct" for record in assumptions):
+                    assumptions.append({
+                        "target_rule": "avwap_pullback_tolerance_pct",
+                        "value": 0.5,
+                        "source_requirement": "Price pulls back near/to AVWAP support.",
+                        "rationale": "0.5% is a starting research tolerance, not an author-stated distance.",
+                        "confidence": 75.0,
+                        "accepted_at": _utc_iso(),
+                        "model": "native-rule-upgrade",
+                        "accepted_by": "ai_autopilot",
+                        "is_research_assumption": True,
+                    })
+                item["compiler_assumptions"] = assumptions[-150:]
+                changed = True
+
+        avwap_exit_text = " ".join(str(value or "") for value in (*(item.get("exit_conditions") or []), *(item.get("risk_rules") or []))).casefold()
+        if rules.get("exit_below_avwap") is None and re.search(r"(?:exit|sell|close)[^.]{0,80}(?:below|lose|loses)[^.]{0,40}(?:avwap|anchored vwap)", avwap_exit_text):
+            rules["exit_below_avwap"] = True
+            explicit_migrations.append({"rule": "exit_below_avwap", "value": True, "basis": "Saved source text explicitly exits on loss of AVWAP."})
+            changed = True
+        if rules.get("stop_below_avwap") is None and re.search(r"stop[^.]{0,80}below[^.]{0,40}(?:avwap|anchored vwap)", avwap_exit_text):
+            rules["stop_below_avwap"] = True
+            explicit_migrations.append({"rule": "stop_below_avwap", "value": True, "basis": "Saved source text explicitly places the stop below AVWAP."})
+            changed = True
+            if overrides.get("stop_avwap_buffer_pct") is None and rules.get("stop_avwap_buffer_pct") is None:
+                overrides["stop_avwap_buffer_pct"] = 0.3
+                changed = True
+
     item["machine_rules"] = rules
     if overrides:
         item["research_rule_overrides"] = normalize_machine_rules(overrides)
@@ -1128,6 +1242,10 @@ Strict rules:
   a rising/sloping-up fast average.
 - "Stop slightly below the EMA" can map to stop_below_fast_ema=true; any numeric
   stop_ema_buffer_pct is a RESEARCH ASSUMPTION unless the source gave the exact buffer.
+- Preserve anchored-VWAP logic when it is causal and source-defined. Use avwap_anchor_mode only
+  for an identifiable anchor such as a confirmed swing low/high, higher-low/lower-high handoff,
+  breakout bar, previous-day-high break, or explicit session minute. Numeric pivot confirmation,
+  pullback tolerance, and stop buffers are RESEARCH ASSUMPTIONS unless the source states them.
 - Preserve exit logic. An explicit "exit/close if VWAP is lost" can map to exit_below_vwap=true;
   an explicit "exit/close if the fast EMA is lost" can map to exit_below_fast_ema=true.
 - A source-stated percentage trailing stop maps to trailing_stop_pct. If the source says only
@@ -1662,12 +1780,49 @@ def strategy_semantic_coverage(strategy: dict[str, Any]) -> dict[str, Any]:
             limitation="Historical order-book/tape state is not currently available to the deterministic backtester.",
         )
     if any(phrase in text for phrase in ("anchored vwap", "avwap")):
+        avwap_mode = rules.get("avwap_anchor_mode")
         add(
             "Anchored VWAP structure",
+            ("avwap_anchor_mode",),
             dimension="structure",
-            modeled_override=False,
-            limitation="The current VWAP rule is session VWAP, not a source-defined anchored VWAP.",
+            modeled_override=bool(avwap_mode),
+            limitation="A causal AVWAP anchor has not yet been identified for this source strategy.",
         )
+        if avwap_mode in {"swing_low", "swing_high", "higher_low_handoff", "lower_high_handoff"}:
+            add(
+                "Causal AVWAP pivot confirmation",
+                ("avwap_pivot_confirm_bars",),
+                dimension="structure",
+                limitation="Swing/handoff anchors require an explicit or research-assumption confirmation window.",
+            )
+        if "rising avwap" in text or "declining avwap" in text:
+            add("AVWAP trend direction", ("require_avwap_rising",), dimension="structure")
+        if "reclaim" in text:
+            add("Anchored VWAP reclaim", ("avwap_reclaim",), dimension="entry")
+        if any(phrase in text for phrase in ("pullback", "pull back", "support")):
+            add("Anchored VWAP pullback/support", ("require_avwap_pullback",), dimension="entry")
+            add("Objective AVWAP pullback tolerance", ("avwap_pullback_tolerance_pct",), dimension="entry")
+        if any(phrase in text for phrase in ("compression", "pinch", "multiple anchored vwap", "multiple avwap")):
+            add(
+                "Multi-anchor AVWAP compression structure",
+                dimension="structure",
+                modeled_override=False,
+                limitation="AVWAP v1 models one causal anchor at a time; multi-anchor pinch/compression logic is intentionally not approximated.",
+            )
+        if any(phrase in text for phrase in ("ipo day-one", "ipo day one", "first trading day of an ipo")):
+            add(
+                "Historical IPO day-one context",
+                dimension="universe",
+                modeled_override=False,
+                limitation="The historical engine does not yet have point-in-time IPO listing-date context.",
+            )
+        if any(phrase in text for phrase in ("multi-day avwap", "multi day avwap", "day two")):
+            add(
+                "Multi-day AVWAP persistence",
+                dimension="structure",
+                modeled_override=False,
+                limitation="AVWAP v1 intentionally resets supported anchors by session and does not yet carry an anchor across trading days.",
+            )
     if any(phrase in text for phrase in ("proprietary indicator", "custom indicator", "private indicator")):
         add(
             "Proprietary/custom indicator",
@@ -1766,6 +1921,8 @@ def paper_execution_fidelity(strategy: dict[str, Any]) -> dict[str, Any]:
         for rule_name, label in PAPER_EXECUTION_UNSUPPORTED_DYNAMIC_EXITS.items()
         if rules.get(rule_name) is not None and rules.get(rule_name) is not False
     ]
+    if rules.get("avwap_anchor_mode") is not None:
+        unsupported.append("Anchored VWAP signal/management parity")
     if unsupported:
         return {
             "status": "blocked",

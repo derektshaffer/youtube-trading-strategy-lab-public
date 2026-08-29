@@ -107,6 +107,13 @@ def needs_chart_candles(strategy: dict[str, Any]) -> bool:
         rules.get(name) is not None and rules.get(name) is not False
         for name in (
             "vwap_reclaim",
+            "avwap_anchor_mode",
+            "require_price_above_avwap",
+            "avwap_reclaim",
+            "require_avwap_rising",
+            "require_avwap_pullback",
+            "stop_below_avwap",
+            "exit_below_avwap",
             "breakout_lookback_bars",
             "opening_range_minutes",
             "volume_surge_ratio",

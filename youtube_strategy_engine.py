@@ -30,6 +30,11 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from anchored_vwap_engine import (
+    SUPPORTED_AVWAP_ANCHOR_MODES,
+    apply_anchored_vwap_indicators,
+)
+
 
 ET = ZoneInfo("America/New_York")
 UTC = timezone.utc
@@ -409,6 +414,18 @@ MACHINE_RULE_SCHEMA: dict[str, Any] = {
         "above_vwap": NULLABLE_BOOLEAN,
         "vwap_reclaim": NULLABLE_BOOLEAN,
         "max_vwap_distance_pct": NULLABLE_NUMBER,
+        "avwap_anchor_mode": NULLABLE_STRING,
+        "avwap_pivot_confirm_bars": NULLABLE_INTEGER,
+        "avwap_anchor_session_minute": NULLABLE_INTEGER,
+        "require_price_above_avwap": NULLABLE_BOOLEAN,
+        "avwap_reclaim": NULLABLE_BOOLEAN,
+        "max_avwap_distance_pct": NULLABLE_NUMBER,
+        "require_avwap_rising": NULLABLE_BOOLEAN,
+        "require_avwap_pullback": NULLABLE_BOOLEAN,
+        "avwap_pullback_tolerance_pct": NULLABLE_NUMBER,
+        "stop_below_avwap": NULLABLE_BOOLEAN,
+        "stop_avwap_buffer_pct": NULLABLE_NUMBER,
+        "exit_below_avwap": NULLABLE_BOOLEAN,
         "fast_ema_period": NULLABLE_INTEGER,
         "slow_ema_period": NULLABLE_INTEGER,
         "trend_ema_period": NULLABLE_INTEGER,
@@ -568,6 +585,12 @@ For each setup:
 - Capture the stock universe, price range, liquidity, relative volume, VWAP, breakout level,
   opening range, prior-day/session conditions, trend, entry trigger, stop, target, reward/risk,
   session time, news catalyst, and explicit reasons to avoid the setup whenever the presenter gives them.
+- Preserve anchored-VWAP structure explicitly. When the source clearly identifies a causal anchor,
+  use avwap_anchor_mode with one of the supported modes rather than substituting session VWAP.
+  Use require_price_above_avwap, avwap_reclaim, require_avwap_rising, require_avwap_pullback,
+  stop_below_avwap, or exit_below_avwap only when the source states that relationship. If the
+  source uses several simultaneous AVWAPs, an IPO-only anchor, multi-day persistence, or a
+  discretionary event anchor that cannot be reproduced causally, preserve it as unresolved.
 - Preserve explicitly named EMA periods. For moving-average setups, use fast_ema_period,
   slow_ema_period, and trend_ema_period when the source gives those periods; use
   require_price_above_*_ema, require_fast_ema_rising, require_fast_ema_pullback,
@@ -674,7 +697,7 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
     number_fields = {
         "min_price", "max_price", "min_day_change_pct", "min_relative_volume", "min_dollar_volume",
         "min_previous_day_volume_ratio", "min_previous_day_change_pct",
-        "max_spread_pct", "max_vwap_distance_pct", "volume_surge_ratio", "stop_loss_pct", "reward_risk",
+        "max_spread_pct", "max_vwap_distance_pct", "max_avwap_distance_pct", "avwap_pullback_tolerance_pct", "stop_avwap_buffer_pct", "volume_surge_ratio", "stop_loss_pct", "reward_risk",
         "max_fast_ema_distance_pct", "pullback_touch_tolerance_pct", "stop_ema_buffer_pct",
         "trailing_stop_pct", "move_stop_to_breakeven_at_r",
         "scale_out_fraction_pct", "scale_out_at_r",
@@ -682,6 +705,7 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
     integer_fields = {
         "breakout_lookback_bars", "opening_range_minutes", "minimum_green_bars", "max_hold_minutes",
         "fast_ema_period", "slow_ema_period", "trend_ema_period", "max_pullback_number",
+        "avwap_pivot_confirm_bars", "avwap_anchor_session_minute",
     }
     boolean_fields = {
         "above_vwap", "vwap_reclaim", "catalyst_required", "previous_day_high_breakout",
@@ -689,7 +713,10 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
         "require_price_above_trend_ema", "require_fast_ema_rising",
         "require_fast_ema_pullback", "require_pullback_breakout",
         "stop_below_fast_ema", "exit_below_vwap", "exit_below_fast_ema",
+        "require_price_above_avwap", "avwap_reclaim", "require_avwap_rising",
+        "require_avwap_pullback", "stop_below_avwap", "exit_below_avwap",
     }
+    string_fields = {"avwap_anchor_mode"}
     for name in MACHINE_RULE_SCHEMA["properties"]:
         value = raw_rules.get(name)
         if name in number_fields:
@@ -699,6 +726,9 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
             result[name] = max(1, int(numeric)) if numeric is not None and numeric >= 1 else None
         elif name in boolean_fields:
             result[name] = safe_bool(value)
+        elif name in string_fields:
+            text = str(value).strip().casefold() if value is not None else ""
+            result[name] = text or None
         else:
             text = str(value).strip() if value is not None else ""
             result[name] = text if re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", text) else None
@@ -706,6 +736,7 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
     for name in {
         "min_price", "max_price", "min_relative_volume", "min_dollar_volume",
         "min_previous_day_volume_ratio", "max_spread_pct", "max_vwap_distance_pct",
+        "max_avwap_distance_pct", "avwap_pullback_tolerance_pct", "stop_avwap_buffer_pct",
         "volume_surge_ratio", "stop_loss_pct", "reward_risk",
         "max_fast_ema_distance_pct", "pullback_touch_tolerance_pct", "stop_ema_buffer_pct",
         "trailing_stop_pct", "move_stop_to_breakeven_at_r",
@@ -713,6 +744,18 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
     }:
         if result[name] is not None and result[name] < 0:
             result[name] = None
+    if result.get("avwap_anchor_mode") not in SUPPORTED_AVWAP_ANCHOR_MODES:
+        result["avwap_anchor_mode"] = None
+    if result.get("avwap_pivot_confirm_bars") is not None and not 1 <= int(result["avwap_pivot_confirm_bars"]) <= 20:
+        result["avwap_pivot_confirm_bars"] = None
+    if result.get("avwap_anchor_session_minute") is not None and not 0 <= int(result["avwap_anchor_session_minute"]) <= 390:
+        result["avwap_anchor_session_minute"] = None
+    if result.get("max_avwap_distance_pct") is not None and result["max_avwap_distance_pct"] > 100:
+        result["max_avwap_distance_pct"] = None
+    if result.get("avwap_pullback_tolerance_pct") is not None and result["avwap_pullback_tolerance_pct"] > 20:
+        result["avwap_pullback_tolerance_pct"] = None
+    if result.get("stop_avwap_buffer_pct") is not None and result["stop_avwap_buffer_pct"] > 20:
+        result["stop_avwap_buffer_pct"] = None
     if result["stop_loss_pct"] is not None and not 0 < result["stop_loss_pct"] < 100:
         result["stop_loss_pct"] = None
     if result["reward_risk"] is not None and result["reward_risk"] <= 0:
@@ -3327,6 +3370,7 @@ def add_indicators(frame: pd.DataFrame, strategy: dict[str, Any]) -> pd.DataFram
         & (data["close"] > data["pullback_reference_high"])
         & (data["close"] > data["open"])
     )
+    data = apply_anchored_vwap_indicators(data, rules)
     return data
 
 def apply_strategy_specific_indicators(
@@ -3411,6 +3455,7 @@ def apply_strategy_specific_indicators(
         & data["fast_ema"].shift(3).notna()
         & (data["fast_ema"] > data["fast_ema"].shift(3))
     )
+    data = apply_anchored_vwap_indicators(data, rules)
     return data
 
 
@@ -3449,6 +3494,7 @@ def backtest_limitations(strategy: dict[str, Any]) -> list[str]:
             "scale_out_at_r",
             "exit_below_vwap",
             "exit_below_fast_ema",
+            "exit_below_avwap",
         )
     ):
         limitations.append("The video did not specify an exact target; the editable reward/risk setting is a research assumption.")
@@ -3527,6 +3573,29 @@ def evaluate_signal(
             return False
         if not (float(row["previous_close"]) <= float(row["previous_vwap"]) and close > float(row["vwap"])):
             return False
+
+    if rules.get("avwap_anchor_mode") is not None and not has_number("avwap"):
+        return False
+    if rules.get("require_price_above_avwap") is True and (not has_number("avwap") or close <= float(row["avwap"])):
+        return False
+    if rules.get("require_price_above_avwap") is False and (not has_number("avwap") or close >= float(row["avwap"])):
+        return False
+    if rules.get("avwap_reclaim"):
+        if not all(has_number(name) for name in ("previous_close", "previous_avwap", "avwap")):
+            return False
+        if not (float(row["previous_close"]) <= float(row["previous_avwap"]) and close > float(row["avwap"])):
+            return False
+    max_avwap_distance = safe_float(rules.get("max_avwap_distance_pct"))
+    if max_avwap_distance is not None:
+        if not has_number("avwap_distance_pct") or abs(float(row["avwap_distance_pct"])) > max_avwap_distance:
+            return False
+    if rules.get("require_avwap_rising") is True and not bool(row.get("avwap_rising")):
+        return False
+    if rules.get("require_avwap_rising") is False:
+        if not has_number("previous_avwap") or not has_number("avwap") or float(row["avwap"]) >= float(row["previous_avwap"]):
+            return False
+    if rules.get("require_avwap_pullback") is True and not bool(row.get("avwap_pullback_recent")):
+        return False
 
     for rule_name, field_name in (
         ("require_price_above_fast_ema", "fast_ema"),
@@ -3765,6 +3834,7 @@ def run_backtest(
             "scale_out_at_r",
             "exit_below_vwap",
             "exit_below_fast_ema",
+            "exit_below_avwap",
         )
     )
     reward_risk = rules.get("reward_risk")
@@ -3936,6 +4006,13 @@ def run_backtest(
                         structural_stop = signal_ema * (1.0 - ema_buffer / 100.0)
                         if 0 < structural_stop < entry:
                             stop_price = structural_stop
+                if rules.get("stop_below_avwap") is True:
+                    signal_avwap = safe_float(previous.get("avwap"))
+                    if signal_avwap is not None and signal_avwap > 0:
+                        avwap_buffer = max(0.0, safe_float(rules.get("stop_avwap_buffer_pct"), 0.0) or 0.0)
+                        structural_stop = signal_avwap * (1.0 - avwap_buffer / 100.0)
+                        if 0 < structural_stop < entry:
+                            stop_price = structural_stop
                 risk_per_share = entry - stop_price
                 if risk_per_share > 0:
                     max_positions = max(1, int(settings.max_concurrent_positions))
@@ -4046,6 +4123,9 @@ def run_backtest(
             elif reason is None and rules.get("exit_below_fast_ema") is True and safe_float(current.get("fast_ema")) is not None and float(current["close"]) < float(current["fast_ema"]):
                 raw_exit = float(current["close"])
                 reason = "Fast EMA loss"
+            elif reason is None and rules.get("exit_below_avwap") is True and safe_float(current.get("avwap")) is not None and float(current["close"]) < float(current["avwap"]):
+                raw_exit = float(current["close"])
+                reason = "Anchored VWAP loss"
             elif reason is None and max_hold is not None:
                 held_minutes = (current["timestamp"] - position["entry_time"]).total_seconds() / 60.0
                 if held_minutes >= max_hold:
@@ -4204,6 +4284,7 @@ def generate_strategy_variants(
             "scale_out_at_r",
             "exit_below_vwap",
             "exit_below_fast_ema",
+            "exit_below_avwap",
         )
     )
     baseline["reward_risk"] = original.get("reward_risk")
@@ -4228,6 +4309,7 @@ def generate_strategy_variants(
                     "scale_out_at_r",
                     "exit_below_vwap",
                     "exit_below_fast_ema",
+            "exit_below_avwap",
                 )
             )
         ):
@@ -4368,6 +4450,10 @@ def generate_strategy_variants(
         ("min_dollar_volume", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 100.0, 2_000_000_000.0, False),
         ("max_spread_pct", (0.60, 0.80, 1.25, 1.60), 0.01, 50.0, False),
         ("max_vwap_distance_pct", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 0.05, 100.0, False),
+        ("max_avwap_distance_pct", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 0.05, 100.0, False),
+        ("avwap_pivot_confirm_bars", (0.50, 0.75, 1.50, 2.0), 1.0, 10.0, True),
+        ("avwap_pullback_tolerance_pct", (0.50, 0.75, 1.25, 1.50, 2.0), 0.05, 10.0, False),
+        ("stop_avwap_buffer_pct", (0.50, 0.75, 1.25, 1.50, 2.0), 0.0, 10.0, False),
         ("fast_ema_period", (0.70, 0.85, 1.15, 1.30, 1.60), 2.0, 80.0, True),
         ("slow_ema_period", (0.70, 0.85, 1.15, 1.30, 1.60), 3.0, 200.0, True),
         ("trend_ema_period", (0.70, 0.85, 1.15, 1.30), 10.0, 500.0, True),
@@ -4493,6 +4579,7 @@ def generate_local_strategy_refinements(
             "move_stop_to_breakeven_at_r",
             "exit_below_vwap",
             "exit_below_fast_ema",
+            "exit_below_avwap",
         )
     )
     if baseline.get("reward_risk") is None and not dynamic_exit_seed:
@@ -4523,6 +4610,10 @@ def generate_local_strategy_refinements(
         "min_dollar_volume": ((500_000.0, 250_000.0, 100_000.0, 50_000.0), 100.0, 2_000_000_000.0, False),
         "max_spread_pct": ((0.50, 0.25, 0.10), 0.01, 50.0, False),
         "max_vwap_distance_pct": ((2.0, 1.0, 0.5, 0.25), 0.05, 100.0, False),
+        "max_avwap_distance_pct": ((2.0, 1.0, 0.5, 0.25), 0.05, 100.0, False),
+        "avwap_pivot_confirm_bars": ((2.0, 1.0), 1.0, 10.0, True),
+        "avwap_pullback_tolerance_pct": ((0.75, 0.50, 0.25, 0.10), 0.05, 10.0, False),
+        "stop_avwap_buffer_pct": ((0.50, 0.25, 0.10, 0.05), 0.0, 10.0, False),
         "fast_ema_period": ((4.0, 2.0, 1.0), 2.0, 80.0, True),
         "slow_ema_period": ((10.0, 5.0, 2.0, 1.0), 3.0, 200.0, True),
         "trend_ema_period": ((50.0, 25.0, 10.0, 5.0), 10.0, 500.0, True),
@@ -4552,6 +4643,10 @@ def generate_local_strategy_refinements(
         "min_dollar_volume": ((100_000.0, 50_000.0, 25_000.0), 100.0, 2_000_000_000.0, False),
         "max_spread_pct": ((0.10, 0.05, 0.02), 0.01, 50.0, False),
         "max_vwap_distance_pct": ((0.50, 0.25, 0.10), 0.05, 100.0, False),
+        "max_avwap_distance_pct": ((0.50, 0.25, 0.10), 0.05, 100.0, False),
+        "avwap_pivot_confirm_bars": ((1.0,), 1.0, 10.0, True),
+        "avwap_pullback_tolerance_pct": ((0.25, 0.10, 0.05), 0.05, 10.0, False),
+        "stop_avwap_buffer_pct": ((0.20, 0.10, 0.05), 0.0, 10.0, False),
         "fast_ema_period": ((2.0, 1.0), 2.0, 80.0, True),
         "slow_ema_period": ((5.0, 2.0, 1.0), 3.0, 200.0, True),
         "trend_ema_period": ((20.0, 10.0, 5.0), 10.0, 500.0, True),
@@ -7047,6 +7142,50 @@ def match_strategy(metrics: dict[str, Any], strategy: dict[str, Any]) -> dict[st
         actual = bool(metrics.get("above_vwap")) if metrics.get("vwap") is not None else None
         status = "unknown" if actual is None else ("pass" if actual is required else "fail")
         checks.append({"label": "Price above VWAP", "actual": actual, "required": required, "status": status})
+    avwap_value = safe_float(chart_checks.get("avwap"))
+    if rules.get("avwap_anchor_mode") is not None:
+        checks.append({
+            "label": "Anchored VWAP available",
+            "actual": avwap_value,
+            "required": rules.get("avwap_anchor_mode"),
+            "status": "pass" if avwap_value is not None else "unknown",
+        })
+    if rules.get("require_price_above_avwap") is not None:
+        price_value = safe_float(metrics.get("price"))
+        required = bool(rules.get("require_price_above_avwap"))
+        actual = None if price_value is None or avwap_value is None else price_value > avwap_value
+        checks.append({
+            "label": "Price above anchored VWAP",
+            "actual": actual,
+            "required": required,
+            "status": "unknown" if actual is None else ("pass" if actual == required else "fail"),
+        })
+    if rules.get("require_avwap_rising") is not None:
+        observed = chart_checks.get("avwap_rising")
+        required = bool(rules.get("require_avwap_rising"))
+        checks.append({
+            "label": "Anchored VWAP rising",
+            "actual": observed,
+            "required": required,
+            "status": "unknown" if observed is None else ("pass" if bool(observed) == required else "fail"),
+        })
+    if rules.get("require_avwap_pullback") is True:
+        observed = chart_checks.get("avwap_pullback_recent")
+        checks.append({
+            "label": "Recent pullback to anchored VWAP",
+            "actual": observed,
+            "required": True,
+            "status": "unknown" if observed is None else ("pass" if bool(observed) else "fail"),
+        })
+    if rules.get("avwap_reclaim") is True:
+        observed = chart_checks.get("avwap_reclaim")
+        checks.append({
+            "label": "Anchored VWAP reclaim",
+            "actual": observed,
+            "required": True,
+            "status": "unknown" if observed is None else ("pass" if bool(observed) else "fail"),
+        })
+
     for rule_name, chart_field, label in (
         ("require_price_above_fast_ema", "fast_ema", "Price above fast EMA"),
         ("require_price_above_slow_ema", "slow_ema", "Price above slow EMA"),
@@ -7196,6 +7335,11 @@ def match_strategy(metrics: dict[str, Any], strategy: dict[str, Any]) -> dict[st
     stop_pct = rules.get("stop_loss_pct")
     ratio = rules.get("reward_risk")
     stop = price * (1.0 - stop_pct / 100.0) if price and stop_pct else None
+    if rules.get("stop_below_avwap") is True and avwap_value is not None and price:
+        buffer_pct = max(0.0, safe_float(rules.get("stop_avwap_buffer_pct"), 0.0) or 0.0)
+        candidate_stop = avwap_value * (1.0 - buffer_pct / 100.0)
+        if 0 < candidate_stop < price:
+            stop = candidate_stop
     target = price + (price - stop) * ratio if price and stop is not None and ratio else None
     return {
         "strategy_id": strategy.get("id"),
@@ -7220,6 +7364,8 @@ def chart_trigger_checks(rows: list[dict[str, Any]], strategy: dict[str, Any]) -
         "previous_day_volume_ratio", "previous_day_change_pct",
         "fast_ema", "slow_ema", "trend_ema", "fast_ema_rising",
         "fast_ema_pullback_recent", "fast_ema_pullback_number", "pullback_breakout",
+        "avwap", "previous_avwap", "avwap_rising", "avwap_pullback_recent",
+        "avwap_anchor_active", "avwap_reclaim",
     )
     outcome: dict[str, Any] = {name: None for name in fields}
     frame = bars_to_frame(rows)
@@ -7233,10 +7379,10 @@ def chart_trigger_checks(rows: list[dict[str, Any]], strategy: dict[str, Any]) -
         outcome["previous_day_volume_ratio"] = float(last["previous_day_volume_ratio"])
     if pd.notna(last.get("previous_day_change_pct")):
         outcome["previous_day_change_pct"] = float(last["previous_day_change_pct"])
-    for field_name in ("fast_ema", "slow_ema", "trend_ema", "fast_ema_pullback_number"):
+    for field_name in ("fast_ema", "slow_ema", "trend_ema", "fast_ema_pullback_number", "avwap", "previous_avwap"):
         if pd.notna(last.get(field_name)):
             outcome[field_name] = float(last[field_name])
-    for field_name in ("fast_ema_rising", "fast_ema_pullback_recent", "pullback_breakout"):
+    for field_name in ("fast_ema_rising", "fast_ema_pullback_recent", "pullback_breakout", "avwap_rising", "avwap_pullback_recent", "avwap_anchor_active"):
         value = last.get(field_name)
         if value is not None and pd.notna(value):
             outcome[field_name] = bool(value)
@@ -7247,6 +7393,13 @@ def chart_trigger_checks(rows: list[dict[str, Any]], strategy: dict[str, Any]) -
         if not eligible.empty:
             crosses = (eligible["previous_close"] <= eligible["previous_vwap"]) & (eligible["close"] > eligible["vwap"])
             outcome["vwap_reclaim"] = bool(crosses.any())
+
+    if rules.get("avwap_reclaim"):
+        recent = enriched.tail(3)
+        eligible = recent.dropna(subset=["previous_close", "previous_avwap", "avwap"])
+        if not eligible.empty:
+            crosses = (eligible["previous_close"] <= eligible["previous_avwap"]) & (eligible["close"] > eligible["avwap"])
+            outcome["avwap_reclaim"] = bool(crosses.any())
 
     if rules.get("previous_day_high_breakout"):
         if pd.notna(last.get("previous_bar_close")) and pd.notna(last.get("previous_daily_high")):
