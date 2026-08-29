@@ -1366,15 +1366,7 @@ if module == "Stock Strategy Finder":
         unsafe_allow_html=True,
     )
 
-    @st.fragment(run_every="30s")
-    def render_global_cloud_finder_activity() -> None:
-        """Always show active cloud Finder work, regardless of current dropdowns."""
-        try:
-            fresh_library = load_library(force_cloud_refresh=True)
-        except AppError as exc:
-            st.error(f"Cloud research status could not refresh: {exc}")
-            return
-
+    def render_recent_completed_cloud_runs(fresh_library: dict[str, Any]) -> None:
         recent_cloud_runs = [
             item
             for item in fresh_library.get("stock_strategy_finder_runs") or []
@@ -1428,6 +1420,19 @@ if module == "Stock Strategy Finder":
                         st.session_state["til_finder_profile"] = completed_profile
                     st.rerun()
 
+
+
+    @st.fragment(run_every="60s")
+    def render_global_cloud_finder_activity() -> None:
+        """Auto-refresh cloud Finder status only while a job is active."""
+        try:
+            fresh_library = load_library(force_cloud_refresh=True)
+        except AppError as exc:
+            st.error(f"Cloud research status could not refresh: {exc}")
+            return
+
+        render_recent_completed_cloud_runs(fresh_library)
+
         active_jobs = [
             item
             for item in fresh_library.get("research_queue") or []
@@ -1436,7 +1441,7 @@ if module == "Stock Strategy Finder":
             and str(item.get("status") or "") in {"queued", "running", "retry"}
         ]
         if not active_jobs:
-            return
+            st.rerun()
 
         active_jobs.sort(
             key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""),
@@ -1628,7 +1633,17 @@ if module == "Stock Strategy Finder":
         if len(active_jobs) > 4:
             st.caption(f"{len(active_jobs) - 4} additional cloud Finder job(s) are also queued.")
 
-    render_global_cloud_finder_activity()
+    _initial_active_cloud_finders = [
+        item
+        for item in library.get("research_queue") or []
+        if isinstance(item, dict)
+        and str(item.get("type") or "") == "stock_finder"
+        and str(item.get("status") or "") in {"queued", "running", "retry"}
+    ]
+    if _initial_active_cloud_finders:
+        render_global_cloud_finder_activity()
+    else:
+        render_recent_completed_cloud_runs(library)
 
     finder_a, finder_b = st.columns([1.15, 1.0])
     with finder_a:
@@ -1887,7 +1902,7 @@ if module == "Stock Strategy Finder":
         st.caption(
             "Distributed cloud mode is recommended for Deep/Very Deep runs. It preserves the full search space "
             "while splitting independent family/timeframe work across multiple cloud runners. "
-            "The status monitor above refreshes automatically about every 30 seconds while this page is open."
+            "While cloud research is active, the status monitor refreshes about once per minute. When no cloud job is active, automatic refresh stops so the page stays still."
         )
 
     if queue_cloud_finder and finder_symbol:
