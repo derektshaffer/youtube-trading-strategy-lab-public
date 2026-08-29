@@ -687,6 +687,10 @@ RULE_FRIENDLY_LABELS = {
     "require_pullback_breakout": "Pullback breakout confirmation",
     "stop_below_fast_ema": "Stop below fast EMA",
     "stop_ema_buffer_pct": "EMA stop buffer",
+    "trailing_stop_pct": "Trailing stop %",
+    "move_stop_to_breakeven_at_r": "Move stop to breakeven at R",
+    "exit_below_vwap": "Exit when VWAP is lost",
+    "exit_below_fast_ema": "Exit when fast EMA is lost",
     "breakout_lookback_bars": "Breakout lookback",
     "opening_range_minutes": "Opening-range breakout",
     "volume_surge_ratio": "Volume surge",
@@ -2583,6 +2587,22 @@ elif module == "Overview":
         "The hourly cloud worker keeps processing research jobs, while the daily research cycle adds fresh topics. "
         f"Latest recorded research activity: {last_cycle}."
     )
+
+    if integrity_blocked_count:
+        integrity_home_col, integrity_button_col = st.columns([3.2, 1.0], vertical_alignment="center")
+        integrity_home_col.warning(
+            f"**Strategy fidelity check:** {integrity_blocked_count} strategy "
+            f"{'family has' if integrity_blocked_count == 1 else 'families have'} important source logic "
+            "the current backtester cannot faithfully reproduce. Those families are excluded from new "
+            "Finder, Strategy Lab, Market Discovery, Stock Analyzer, and cross-stock research runs."
+        )
+        if integrity_button_col.button(
+            "Review integrity gaps",
+            key="til_home_integrity_audit",
+            width="stretch",
+        ):
+            st.session_state["til_workspace_section"] = "Strategy Integrity"
+            st.rerun()
 
     with st.expander("How the Lab works behind the scenes", expanded=False):
         st.write(
@@ -5239,7 +5259,15 @@ elif module == "Strategy Lab":
         entry_rule_count = sum(
             1
             for key, value in active_rules.items()
-            if key not in {"stop_loss_pct", "reward_risk", "max_hold_minutes"} and value is not None
+            if key not in {
+                "stop_loss_pct",
+                "reward_risk",
+                "max_hold_minutes",
+                "trailing_stop_pct",
+                "move_stop_to_breakeven_at_r",
+                "exit_below_vwap",
+                "exit_below_fast_ema",
+            } and value is not None
         )
         if entry_rule_count == 0 and not compare_all:
             st.warning(
