@@ -1,5 +1,7 @@
 import pytest
 
+from market_features import build_market_features
+
 from market_feature_validation import _ordered_sessions, build_supervised_feature_rows, run_detector_event_study
 
 
@@ -121,6 +123,7 @@ def test_supervised_rows_separate_feature_and_future_label_columns():
         require_full_horizon=True,
     )
     assert report["causal_replay"] is True
+    assert report["feature_calculation"] == "single_pass_causal_session_frame"
     assert report["row_count"] == 5
     assert all(name.startswith("feature__") for name in report["feature_columns"])
     assert all(name.startswith("label__") for name in report["label_columns"])
@@ -157,3 +160,24 @@ def test_session_grouping_uses_new_york_date_not_utc_midnight():
     sessions = _ordered_sessions(rows)
     assert len(sessions) == 1
     assert sessions[0][0] == "2026-08-29"
+
+
+def test_single_pass_supervised_features_still_match_live_prefix_snapshot():
+    rows = _breakout_session(29)
+    report = build_supervised_feature_rows(
+        rows,
+        horizons=(1,),
+        swing_radius=1,
+        require_full_horizon=True,
+    )
+    for record in report["records"]:
+        index = int(record["bar_index"])
+        expected = build_market_features(rows[: index + 1], swing_radius=1)["features"]
+        for name, value in expected.items():
+            actual = record.get(f"feature__{name}")
+            if value is None:
+                assert actual is None
+            elif isinstance(value, float):
+                assert actual == pytest.approx(value)
+            else:
+                assert actual == value
