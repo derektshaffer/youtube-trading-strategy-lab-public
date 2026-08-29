@@ -104,6 +104,147 @@ class MarketDiscoveryTests(unittest.TestCase):
             self.assertEqual(len(item["strategy_matches"]), 2)
             self.assertEqual(item["market_features"], feature_payload)
 
+
+
+
+
+    def test_momentum_universe_interleaves_gainers_and_active_without_duplicates(self):
+        merged = discovery.merge_momentum_candidate_universe(
+            ["AAA", "BBB", "CCC"],
+            ["AAA", "DDD", "EEE", "FFF"],
+            limit=6,
+        )
+        self.assertEqual(merged, ["AAA", "BBB", "DDD", "CCC", "EEE", "FFF"])
+        self.assertEqual(len(merged), len(set(merged)))
+
+    def test_large_market_scan_is_chunked_without_dropping_symbols(self):
+        market = FakeMarket()
+        symbols = [f"S{i:02d}" for i in range(45)]
+        strategies = [
+            {
+                "id": "one",
+                "name": "One",
+                "direction": "long",
+                "validation_status": "unvalidated",
+                "machine_rules": {"min_price": 1.0},
+            },
+            {
+                "id": "two",
+                "name": "Two",
+                "direction": "long",
+                "validation_status": "unvalidated",
+                "machine_rules": {"min_price": 1.0},
+            },
+        ]
+
+        def fake_snapshot_metrics(symbol, snapshot, *, average_daily_volume):
+            number = int(symbol[1:])
+            return {
+                "symbol": symbol,
+                "price": 10.0,
+                "relative_volume": 1.0 + number / 100.0,
+                "day_change_pct": float(number),
+                "spread_pct": 0.1,
+            }
+
+        with (
+            patch.object(discovery, "effective_strategy_for_live", side_effect=lambda item: item),
+            patch.object(discovery, "average_completed_daily_volume", return_value=1_000_000),
+            patch.object(discovery, "snapshot_metrics", side_effect=fake_snapshot_metrics),
+            patch.object(discovery, "_needs_chart_data", return_value=False),
+            patch.object(
+                discovery,
+                "build_market_features",
+                return_value={"features": {}, "evidence": {}, "missing_data": [], "provider": "native"},
+            ) as feature_builder,
+            patch.object(
+                discovery,
+                "match_strategy",
+                return_value={"status": "WATCH", "score": 80.0, "unknown": 0, "checks": []},
+            ) as matcher,
+        ):
+            results = discovery.scan_market_strategies(
+                market,
+                symbols,
+                strategies,
+                batch_size=20,
+            )
+
+        self.assertEqual(len(results), 45)
+        self.assertEqual({item["symbol"] for item in results}, set(symbols))
+        self.assertEqual(market.snapshot_calls, 3)
+        self.assertEqual(len(market.bar_calls), 6)
+        self.assertEqual(
+            [len(call[0]) for call in market.bar_calls],
+            [20, 20, 20, 20, 5, 5],
+        )
+        self.assertEqual(feature_builder.call_count, 45)
+        self.assertEqual(matcher.call_count, 90)
+        self.assertEqual(results[0]["symbol"], "S44")
+
+    def test_market_scan_rejects_more_than_live_safety_limit_instead_of_silent_truncation(self):
+        market = FakeMarket()
+        symbols = [f"X{i:03d}" for i in range(discovery.MAX_LIVE_SCAN_SYMBOLS + 1)]
+        strategy = {
+            "id": "one",
+            "name": "One",
+            "direction": "long",
+            "machine_rules": {"min_price": 1.0},
+        }
+
+        with self.assertRaises(discovery.AppError):
+            discovery.scan_market_strategies(market, symbols, [strategy])
+
+        self.assertEqual(market.snapshot_calls, 0)
+        self.assertEqual(market.bar_calls, [])
+
+    def test_batch_progress_reports_batch_number(self):
+        market = FakeMarket()
+        symbols = [f"P{i:02d}" for i in range(25)]
+        strategy = {
+            "id": "one",
+            "name": "One",
+            "direction": "long",
+            "machine_rules": {"min_price": 1.0},
+        }
+        messages = []
+
+        with (
+            patch.object(discovery, "effective_strategy_for_live", side_effect=lambda item: item),
+            patch.object(discovery, "average_completed_daily_volume", return_value=1_000_000),
+            patch.object(
+                discovery,
+                "snapshot_metrics",
+                return_value={
+                    "price": 10.0,
+                    "relative_volume": 1.0,
+                    "day_change_pct": 1.0,
+                    "spread_pct": 0.1,
+                },
+            ),
+            patch.object(discovery, "_needs_chart_data", return_value=False),
+            patch.object(
+                discovery,
+                "build_market_features",
+                return_value={"features": {}, "evidence": {}, "missing_data": [], "provider": "native"},
+            ),
+            patch.object(
+                discovery,
+                "match_strategy",
+                return_value={"status": "WATCH", "score": 70.0, "unknown": 0, "checks": []},
+            ),
+        ):
+            discovery.scan_market_strategies(
+                market,
+                symbols,
+                [strategy],
+                batch_size=20,
+                progress=messages.append,
+            )
+
+        self.assertTrue(any(message.startswith("Batch 1/2") for message in messages))
+        self.assertTrue(any(message.startswith("Batch 2/2") for message in messages))
+
     def test_analyzer_returns_market_features_even_when_strategy_needs_no_chart_rule(self):
         market = FakeMarket()
         strategies = [
