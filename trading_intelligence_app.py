@@ -371,7 +371,7 @@ def intelligence_store() -> StrategyStore:
     return build_intelligence_store()
 
 
-LIBRARY_CLOUD_REFRESH_SECONDS = 20.0
+LIBRARY_CLOUD_REFRESH_SECONDS = 60.0
 _LIBRARY_RENDER_CACHE_KEY = "_til_library_render_cache"
 _LIBRARY_LAST_CLOUD_REFRESH_KEY = "_til_library_last_cloud_refresh_monotonic"
 
@@ -399,21 +399,30 @@ def load_library(*, force_cloud_refresh: bool = False) -> dict[str, Any]:
         or now - last_cloud_refresh >= LIBRARY_CLOUD_REFRESH_SECONDS
     )
 
-    if not cloud_refresh_due and isinstance(cached, dict):
-        local = store.load()
-        cached_updated_at = str(cached.get("updated_at") or "")
-        local_updated_at = str(local.get("updated_at") or "")
+    def prepared_cache_for(version: str) -> dict[str, Any] | None:
+        if not isinstance(cached, dict):
+            return None
         cached_data = cached.get("data")
         if (
-            cached_updated_at == local_updated_at
+            str(cached.get("updated_at") or "") == str(version or "")
             and isinstance(cached_data, dict)
         ):
             return deepcopy(cached_data)
+        return None
+
+    if not cloud_refresh_due and isinstance(cached, dict):
+        local = store.load()
+        prepared = prepared_cache_for(str(local.get("updated_at") or ""))
+        if prepared is not None:
+            return prepared
         data = local
     else:
         try:
             data = store.load_latest()
             st.session_state[_LIBRARY_LAST_CLOUD_REFRESH_KEY] = now
+            prepared = prepared_cache_for(str(data.get("updated_at") or ""))
+            if prepared is not None:
+                return prepared
         except AppError as exc:
             # Streamlit Cloud can retain a local working copy while the durable
             # private GitHub library is updated by another app run/worker. The
@@ -4341,7 +4350,7 @@ elif module == "AI Research Autopilot":
     queue_cycle_col, queue_refresh_col = st.columns([1.4, 1.0])
     with queue_cycle_col:
         if st.button(
-            "Queue today's continuous research cycle",
+            "Run today's research cycle now",
             type="primary",
             width="stretch",
             key="til_seed_continuous_research",
