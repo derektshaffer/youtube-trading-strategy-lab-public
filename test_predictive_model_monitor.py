@@ -71,7 +71,7 @@ def test_monitor_calculates_brier_skill_and_calibration():
         for idx, symbol in enumerate(["AAA", "BBB", "CCC", "DDD", "EEE"]):
             for bucket in range(2):
                 actual = (idx + bucket + day) % 2 == 0
-                probability = 0.80 if actual else 0.20
+                probability = 0.95 if actual else 0.05
                 rows.append(
                     observation(
                         model_id="m1",
