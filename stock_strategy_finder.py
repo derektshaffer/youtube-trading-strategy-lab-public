@@ -485,6 +485,8 @@ def complete_stock_strategy_finder_from_optimization(
     verdict = _verdict(robustness, stability, walk)
     paper_fidelity = paper_execution_fidelity({
         **winner_source,
+        "validation_status": "research_only",
+        "validated_rules": None,
         "machine_rules": winner.get("optimized_rules") or winner_source.get("machine_rules") or {},
     })
     if (
@@ -882,6 +884,17 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
             "optimized_at": generated_at,
             "machine_rules": winner.get("optimized_rules") or source.get("machine_rules") or {},
             "optimized_backtest_settings": winner.get("optimized_backtest_settings") or {},
+            "validated_rules": (
+                winner.get("optimized_rules") or source.get("machine_rules") or {}
+                if ready_for_paper
+                else None
+            ),
+            "validated_backtest_settings": (
+                winner.get("optimized_backtest_settings") or {}
+                if ready_for_paper
+                else None
+            ),
+            "validated_at": generated_at if ready_for_paper else None,
             "validation_status": "validated" if ready_for_paper else "research_only",
             "paper_validation_status": "ready" if ready_for_paper else "not_ready",
             "stock_strategy_finder_verdict": verdict,
@@ -900,6 +913,11 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
                 "parameter_stability": report.get("parameter_stability") or {},
             },
         }
+        if not ready_for_paper:
+            child.pop("validated_rules", None)
+            child.pop("validated_backtest_settings", None)
+            child.pop("validated_at", None)
+
         existing_strategies = [
             item for item in result.get("strategies") or []
             if str(item.get("id") or "") != child_id
