@@ -936,6 +936,92 @@ def build_canonical_family_strategies(
     for family in families:
         blueprint = _canonical_blueprint_from_family(family)
         compiled = compile_candidate_blueprint(blueprint)
+
+        # Preserve AI/research-assumption rule ranges contributed by source variations.
+        # These are not promoted to source-explicit rules; they remain clearly separated
+        # optimizer hypotheses on the canonical family.
+        member_ai_options: dict[str, list[Any]] = {}
+        member_research_seeds: dict[str, list[Any]] = {}
+        member_assumptions: list[dict[str, Any]] = []
+        for member in family.get("strategies") or []:
+            if not isinstance(member, dict):
+                continue
+            explicit_member = normalize_machine_rules(member.get("machine_rules"))
+            member_overrides = normalize_machine_rules(member.get("research_rule_overrides"))
+            for rule_name, value in member_overrides.items():
+                if value is None or explicit_member.get(rule_name) is not None:
+                    continue
+                values = member_research_seeds.setdefault(str(rule_name), [])
+                if value not in values:
+                    values.append(value)
+            raw_options = member.get("ai_candidate_rule_options")
+            if isinstance(raw_options, dict):
+                for rule_name, raw_values in raw_options.items():
+                    if not isinstance(raw_values, list):
+                        continue
+                    values = member_ai_options.setdefault(str(rule_name), [])
+                    for raw_value in raw_values:
+                        parsed = _coerce_rule_option(str(rule_name), raw_value)
+                        if parsed is not None and parsed not in values:
+                            values.append(parsed)
+            for assumption in member.get("compiler_assumptions") or []:
+                if isinstance(assumption, dict):
+                    record = dict(assumption)
+                    signature = (
+                        str(record.get("target_rule") or ""),
+                        str(record.get("accepted_by") or ""),
+                        repr(record.get("value")),
+                    )
+                    if not any(
+                        (
+                            str(existing.get("target_rule") or ""),
+                            str(existing.get("accepted_by") or ""),
+                            repr(existing.get("value")),
+                        ) == signature
+                        for existing in member_assumptions
+                    ):
+                        member_assumptions.append(record)
+
+        compiled_rules = normalize_machine_rules(compiled.get("machine_rules"))
+        compiled_overrides = {
+            key: value
+            for key, value in normalize_machine_rules(compiled.get("research_rule_overrides")).items()
+            if value is not None
+        }
+        compiled_ai_options = {
+            str(name): list(values)
+            for name, values in (compiled.get("ai_candidate_rule_options") or {}).items()
+            if isinstance(values, list)
+        }
+        for rule_name, seeds in member_research_seeds.items():
+            combined = list(compiled_ai_options.get(rule_name) or [])
+            for value in [*seeds, *(member_ai_options.get(rule_name) or [])]:
+                if value is not None and value not in combined:
+                    combined.append(value)
+            if combined:
+                compiled_ai_options[rule_name] = combined
+            if compiled_rules.get(rule_name) is None and compiled_overrides.get(rule_name) is None:
+                seed = _representative_exact_option(seeds or combined)
+                if seed is not None:
+                    compiled_overrides[rule_name] = seed
+        for rule_name, values in member_ai_options.items():
+            combined = list(compiled_ai_options.get(rule_name) or [])
+            for value in values:
+                if value is not None and value not in combined:
+                    combined.append(value)
+            if combined:
+                compiled_ai_options[rule_name] = combined
+
+        if compiled_overrides:
+            compiled["research_rule_overrides"] = normalize_machine_rules(compiled_overrides)
+        if compiled_ai_options:
+            compiled["ai_candidate_rule_options"] = compiled_ai_options
+        if member_assumptions:
+            compiled["compiler_assumptions"] = [
+                *(compiled.get("compiler_assumptions") or []),
+                *member_assumptions,
+            ][-150:]
+
         compiled["id"] = "canonical-" + str(family.get("id") or "")
         compiled["name"] = str(blueprint.get("name") or family.get("name") or "Strategy family")
         compiled["category"] = "AI-managed strategy family"
