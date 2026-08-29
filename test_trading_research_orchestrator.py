@@ -424,3 +424,61 @@ class ResearchMergeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+class PredictiveMlBackfillQueueTests(unittest.TestCase):
+    def test_predictive_ml_backfill_is_supported_and_high_priority(self):
+        now = datetime(2026, 8, 29, 22, 0, tzinfo=timezone.utc)
+        library, job = research.ensure_predictive_ml_backfill_job(
+            {},
+            now=now,
+        )
+        self.assertIn(
+            "predictive_ml_backfill",
+            research.SUPPORTED_RESEARCH_JOB_TYPES,
+        )
+        self.assertIsNotNone(job)
+        self.assertEqual(job["type"], "predictive_ml_backfill")
+        self.assertEqual(job["priority"], 95)
+        self.assertEqual(
+            library["research_system"]["predictive_ml_backfill_status"]["status"],
+            "queued",
+        )
+
+    def test_predictive_ml_backfill_dedupes_same_day(self):
+        now = datetime(2026, 8, 29, 22, 0, tzinfo=timezone.utc)
+        library, first = research.ensure_predictive_ml_backfill_job({}, now=now)
+        library, second = research.ensure_predictive_ml_backfill_job(
+            library,
+            now=now,
+        )
+        self.assertIsNotNone(first)
+        self.assertIsNone(second)
+        jobs = [
+            item
+            for item in library["research_queue"]
+            if item["type"] == "predictive_ml_backfill"
+        ]
+        self.assertEqual(len(jobs), 1)
+
+    def test_recent_completed_backfill_suppresses_retraining(self):
+        now = datetime(2026, 8, 29, 22, 0, tzinfo=timezone.utc)
+        library = {
+            "research_system": {
+                "predictive_ml_backfill_status": {
+                    "status": "complete",
+                    "completed_at": "2026-08-29T12:00:00Z",
+                }
+            }
+        }
+        library, job = research.ensure_predictive_ml_backfill_job(
+            library,
+            now=now,
+            freshness_hours=20,
+        )
+        self.assertIsNone(job)
+        self.assertEqual(
+            research.research_queue_status(library)["active"],
+            0,
+        )
