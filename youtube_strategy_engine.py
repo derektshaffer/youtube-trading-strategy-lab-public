@@ -423,6 +423,10 @@ MACHINE_RULE_SCHEMA: dict[str, Any] = {
         "require_pullback_breakout": NULLABLE_BOOLEAN,
         "stop_below_fast_ema": NULLABLE_BOOLEAN,
         "stop_ema_buffer_pct": NULLABLE_NUMBER,
+        "trailing_stop_pct": NULLABLE_NUMBER,
+        "move_stop_to_breakeven_at_r": NULLABLE_NUMBER,
+        "exit_below_vwap": NULLABLE_BOOLEAN,
+        "exit_below_fast_ema": NULLABLE_BOOLEAN,
         "breakout_lookback_bars": NULLABLE_INTEGER,
         "opening_range_minutes": NULLABLE_INTEGER,
         "volume_surge_ratio": NULLABLE_NUMBER,
@@ -576,6 +580,12 @@ For each setup:
   activity/volume multiple. Use min_previous_day_change_pct only for an explicit prior-day move threshold.
 - Convert ONLY explicitly stated or visually verified numeric thresholds into machine_rules.
   Set unavailable thresholds to null. Never fabricate values to make a strategy testable.
+- Preserve trade-management logic instead of replacing it with a generic fixed target. Use
+  trailing_stop_pct only for an explicit percentage trail; move_stop_to_breakeven_at_r only
+  when the source gives an R-multiple trigger; exit_below_vwap=true or exit_below_fast_ema=true
+  only when losing that level is explicitly an exit. If the source uses scale-outs, partial
+  profits, tape/Level-2 discretion, momentum-failure selling, or another exit the schema
+  cannot yet execute faithfully, keep that requirement in exit_conditions/unresolved_rules.
 - Put subjective or unavailable requirements (level 2, float, tape speed, proprietary indicators,
   borrow availability, visual discretion, historical catalyst timing) in unresolved_rules.
 - Rate extraction confidence from 0 to 100 based on source clarity, NOT expected profitability.
@@ -661,6 +671,7 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
         "min_previous_day_volume_ratio", "min_previous_day_change_pct",
         "max_spread_pct", "max_vwap_distance_pct", "volume_surge_ratio", "stop_loss_pct", "reward_risk",
         "max_fast_ema_distance_pct", "pullback_touch_tolerance_pct", "stop_ema_buffer_pct",
+        "trailing_stop_pct", "move_stop_to_breakeven_at_r",
     }
     integer_fields = {
         "breakout_lookback_bars", "opening_range_minutes", "minimum_green_bars", "max_hold_minutes",
@@ -671,7 +682,7 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
         "require_price_above_fast_ema", "require_price_above_slow_ema",
         "require_price_above_trend_ema", "require_fast_ema_rising",
         "require_fast_ema_pullback", "require_pullback_breakout",
-        "stop_below_fast_ema",
+        "stop_below_fast_ema", "exit_below_vwap", "exit_below_fast_ema",
     }
     for name in MACHINE_RULE_SCHEMA["properties"]:
         value = raw_rules.get(name)
@@ -691,6 +702,7 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
         "min_previous_day_volume_ratio", "max_spread_pct", "max_vwap_distance_pct",
         "volume_surge_ratio", "stop_loss_pct", "reward_risk",
         "max_fast_ema_distance_pct", "pullback_touch_tolerance_pct", "stop_ema_buffer_pct",
+        "trailing_stop_pct", "move_stop_to_breakeven_at_r",
     }:
         if result[name] is not None and result[name] < 0:
             result[name] = None
@@ -698,6 +710,10 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
         result["stop_loss_pct"] = None
     if result["reward_risk"] is not None and result["reward_risk"] <= 0:
         result["reward_risk"] = None
+    if result.get("trailing_stop_pct") is not None and not 0 < result["trailing_stop_pct"] < 100:
+        result["trailing_stop_pct"] = None
+    if result.get("move_stop_to_breakeven_at_r") is not None and result["move_stop_to_breakeven_at_r"] <= 0:
+        result["move_stop_to_breakeven_at_r"] = None
     for name in ("fast_ema_period", "slow_ema_period", "trend_ema_period"):
         if result.get(name) is not None and not 2 <= int(result[name]) <= 500:
             result[name] = None
@@ -3413,8 +3429,25 @@ def backtest_limitations(strategy: dict[str, Any]) -> list[str]:
             )
     elif rules.get("stop_loss_pct") is None:
         limitations.append("The video did not specify an exact stop; the editable default stop is a research assumption.")
-    if rules.get("reward_risk") is None:
+    if rules.get("reward_risk") is None and not any(
+        rules.get(name) is not None
+        for name in (
+            "trailing_stop_pct",
+            "move_stop_to_breakeven_at_r",
+            "exit_below_vwap",
+            "exit_below_fast_ema",
+        )
+    ):
         limitations.append("The video did not specify an exact target; the editable reward/risk setting is a research assumption.")
+    exit_text = " ".join(str(item or "") for item in strategy.get("exit_conditions") or []).casefold()
+    if any(phrase in exit_text for phrase in ("scale out", "scaling out", "partial profit", "take partial")):
+        limitations.append(
+            "Source uses scale-outs/partial profit-taking; the deterministic backtester does not yet model partial exits."
+        )
+    if any(phrase in exit_text for phrase in ("momentum fades", "momentum fade", "momentum failure", "sell into strength")):
+        limitations.append(
+            "Source uses discretionary momentum/strength exits; that exit is preserved as research context but is not fully modeled."
+        )
     return list(dict.fromkeys(limitations))
 
 
@@ -3707,7 +3740,18 @@ def run_backtest(
             if item != "Historical, point-in-time news catalysts are not included in this backtest."
         ]
     stop_pct = rules.get("stop_loss_pct") or settings.default_stop_pct
-    reward_risk = rules.get("reward_risk") or settings.default_reward_risk
+    dynamic_exit_configured = any(
+        rules.get(name) is not None
+        for name in (
+            "trailing_stop_pct",
+            "move_stop_to_breakeven_at_r",
+            "exit_below_vwap",
+            "exit_below_fast_ema",
+        )
+    )
+    reward_risk = rules.get("reward_risk")
+    if reward_risk is None and not dynamic_exit_configured:
+        reward_risk = settings.default_reward_risk
     max_hold = rules.get("max_hold_minutes")
     sessions = list(dict.fromkeys(data["session"].tolist()))
     split_index = max(1, min(len(sessions) - 1, int(len(sessions) * settings.train_fraction))) if len(sessions) > 1 else 1
@@ -3761,7 +3805,11 @@ def run_backtest(
             "entry_price": round(position["entry_price"], 4),
             "exit_price": round(fill_exit, 4),
             "stop_price": round(position["stop_price"], 4),
-            "target_price": round(position["target_price"], 4),
+            "target_price": (
+                round(position["target_price"], 4)
+                if position.get("target_price") is not None
+                else None
+            ),
             "quantity": position["quantity"],
             "pnl": round(pnl, 2),
             "return_pct": round((fill_exit / position["entry_price"] - 1.0) * 100.0, 3),
@@ -3850,7 +3898,13 @@ def run_backtest(
                                 "entry_price": entry,
                                 "quantity": quantity,
                                 "stop_price": stop_price,
-                                "target_price": entry + risk_per_share * reward_risk,
+                                "target_price": (
+                                    entry + risk_per_share * reward_risk
+                                    if reward_risk is not None
+                                    else None
+                                ),
+                                "initial_risk_per_share": risk_per_share,
+                                "highest_price": entry,
                                 "session": current["session"],
                                 "risk_dollars": risk_per_share * quantity,
                                 "extended_hours": is_extended,
@@ -3869,9 +3923,15 @@ def run_backtest(
             if low <= position["stop_price"]:
                 raw_exit = min(bar_open, position["stop_price"])
                 reason = "Stop loss"
-            elif high >= position["target_price"]:
-                raw_exit = max(bar_open, position["target_price"])
+            elif position.get("target_price") is not None and high >= float(position["target_price"]):
+                raw_exit = max(bar_open, float(position["target_price"]))
                 reason = "Profit target"
+            elif rules.get("exit_below_vwap") is True and safe_float(current.get("vwap")) is not None and float(current["close"]) < float(current["vwap"]):
+                raw_exit = float(current["close"])
+                reason = "VWAP loss"
+            elif rules.get("exit_below_fast_ema") is True and safe_float(current.get("fast_ema")) is not None and float(current["close"]) < float(current["fast_ema"]):
+                raw_exit = float(current["close"])
+                reason = "Fast EMA loss"
             elif max_hold is not None:
                 held_minutes = (current["timestamp"] - position["entry_time"]).total_seconds() / 60.0
                 if held_minutes >= max_hold:
@@ -3880,6 +3940,32 @@ def run_backtest(
             if reason and raw_exit is not None:
                 close_position(position, raw_exit, current["timestamp"], reason)
             else:
+                # Update dynamic stops for the *next* candle. With OHLC bars we do not
+                # know whether this candle's high occurred before its low, so applying a
+                # newly raised stop to the same candle would introduce false intrabar order.
+                position["highest_price"] = max(
+                    float(position.get("highest_price") or position["entry_price"]),
+                    high,
+                )
+                initial_risk = float(position.get("initial_risk_per_share") or 0.0)
+                breakeven_at_r = safe_float(rules.get("move_stop_to_breakeven_at_r"))
+                if (
+                    breakeven_at_r is not None
+                    and initial_risk > 0
+                    and position["highest_price"] >= position["entry_price"] + initial_risk * breakeven_at_r
+                ):
+                    position["stop_price"] = max(
+                        float(position["stop_price"]),
+                        float(position["entry_price"]),
+                    )
+                trailing_pct = safe_float(rules.get("trailing_stop_pct"))
+                if trailing_pct is not None and trailing_pct > 0:
+                    trailing_stop = position["highest_price"] * (1.0 - trailing_pct / 100.0)
+                    if 0 < trailing_stop < position["highest_price"]:
+                        position["stop_price"] = max(
+                            float(position["stop_price"]),
+                            trailing_stop,
+                        )
                 survivors.append(position)
         positions = survivors
 
