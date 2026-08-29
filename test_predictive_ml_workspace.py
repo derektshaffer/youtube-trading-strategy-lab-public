@@ -37,3 +37,14 @@ def test_predictive_ml_workspace_respects_alpaca_sip_delay():
     assert 'timedelta(minutes=16)' in block
     assert 'current Alpaca entitlement' in block
     assert 'build_cross_stock_training_dataset(\n                ml_market,' in block
+
+
+def test_predictive_ml_workspace_has_broader_five_stock_benchmark_preset():
+    block = _pattern_validation_block()
+    assert "Load broader 5-stock benchmark" in block
+    assert 'broader_symbols = "SDOT REAX CRMG ACDC FWDI"' in block
+    assert 'st.session_state["til_ml_history_days"] = 30' in block
+    assert 'st.session_state["til_ml_target_horizon"] = 15' in block
+    assert 'st.session_state["til_ml_target_mode_choice"] = "Trade-quality move"' in block
+    assert 'st.session_state["til_ml_profit_target_pct"] = 1.0' in block
+    assert 'st.session_state["til_ml_stop_loss_pct"] = 0.75' in block
