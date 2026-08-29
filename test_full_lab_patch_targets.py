@@ -40,6 +40,19 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
                 self.assertEqual(run_module.call_count, 2)
                 run_module.assert_called_with(module_name, run_name="__main__")
 
+    def test_trading_intelligence_reuses_prepared_library_between_reruns(self):
+        source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        self.assertIn("LIBRARY_CLOUD_REFRESH_SECONDS = 60.0", source)
+        self.assertIn("_til_library_render_cache", source)
+        self.assertIn("prepared_cache_for", source)
+        self.assertIn("force_cloud_refresh=True", source)
+
+    def test_continuous_research_button_is_clearly_manual(self):
+        source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        self.assertIn("Run today's research cycle now", source)
+        self.assertIn("Runs automatically once per UTC day", source)
+        self.assertIn("hourly cloud worker", source)
+
     def test_trading_intelligence_refreshes_storage_before_health_snapshot(self):
         source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
         self.assertLess(
