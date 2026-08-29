@@ -154,6 +154,31 @@ def _ordered_sessions(rows: list[dict[str, Any]]) -> list[tuple[str, list[dict[s
     return [("session-0", [row for _, _, row in parsed])]
 
 
+def limit_rows_to_recent_market_sessions(
+    rows: list[dict[str, Any]],
+    session_limit: int | None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Keep only the most recent completed market-date buckets from timestamped rows.
+
+    The session labels use the same America/New_York grouping as detector replay, so
+    weekends and market holidays naturally contribute zero sessions. If timestamps
+    cannot be parsed, the original rows are returned unchanged because an exact
+    trading-session count cannot be established safely.
+    """
+    if session_limit is None:
+        sessions = _ordered_sessions(rows)
+        return list(rows or []), [name for name, _ in sessions]
+    limit = max(1, int(session_limit))
+    sessions = _ordered_sessions(rows)
+    if not sessions:
+        return [], []
+    if len(sessions) == 1 and sessions[0][0] == "session-0":
+        return list(rows or []), ["session-0"]
+    selected = sessions[-limit:]
+    flattened = [row for _, session_rows in selected for row in session_rows]
+    return flattened, [name for name, _ in selected]
+
+
 def _is_active(features: dict[str, Any], spec: dict[str, Any]) -> bool:
     return features.get(str(spec["feature"])) == spec.get("equals")
 

@@ -104,3 +104,54 @@ def test_empty_symbol_list_avoids_market_request():
     assert market.calls == []
     assert report["symbols_requested"] == 0
     assert report["summary"] == {}
+
+
+def test_session_limit_keeps_most_recent_actual_market_dates_only():
+    market = FakeMarket(
+        {
+            "AAA": (
+                _breakout_session(24)
+                + _breakout_session(25)
+                + _breakout_session(28)
+            )
+        }
+    )
+    report = run_detector_scorecards(
+        market,
+        ["AAA"],
+        start=datetime(2026, 8, 20, tzinfo=timezone.utc),
+        end=datetime(2026, 8, 29, tzinfo=timezone.utc),
+        detectors=["breakout_holding"],
+        horizons=(1,),
+        swing_radius=1,
+        session_limit=2,
+    )
+
+    by_symbol = report["by_symbol"][0]
+    assert by_symbol["sessions"] == 2
+    assert by_symbol["market_sessions"] == ["2026-08-25", "2026-08-28"]
+    assert report["market_sessions_requested"] == 2
+    assert report["market_sessions_observed"] == 2
+    assert report["market_session_dates"] == ["2026-08-25", "2026-08-28"]
+
+
+def test_session_limit_does_not_count_missing_weekend_dates():
+    market = FakeMarket(
+        {
+            "AAA": _breakout_session(28),
+        }
+    )
+    report = run_detector_scorecards(
+        market,
+        ["AAA"],
+        start=datetime(2026, 8, 28, tzinfo=timezone.utc),
+        end=datetime(2026, 8, 31, tzinfo=timezone.utc),
+        detectors=["breakout_holding"],
+        horizons=(1,),
+        swing_radius=1,
+        session_limit=3,
+    )
+
+    assert report["market_sessions_requested"] == 3
+    assert report["market_sessions_observed"] == 1
+    assert report["market_session_dates"] == ["2026-08-28"]

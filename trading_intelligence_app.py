@@ -6388,7 +6388,7 @@ elif module == "Pattern Validation":
     )
     pattern_days = int(
         pv_cols[1].slider(
-            "History (days)",
+            "Trading days",
             1,
             10,
             3,
@@ -6423,9 +6423,9 @@ elif module == "Pattern Validation":
     ]
 
     st.info(
-        "This view is deliberately bounded to 5 stocks and 10 days because causal replay is much "
+        "This view is deliberately bounded to 5 stocks and 10 trading days because causal replay is much "
         "more rigorous than a normal indicator calculation: each historical candle is processed "
-        "as if later candles do not exist."
+        "as if later candles do not exist. Weekends and market holidays do not count toward the selected days."
     )
 
     pattern_slot = st.empty()
@@ -6477,7 +6477,10 @@ elif module == "Pattern Validation":
                 )
 
             validation_end = utc_now()
-            validation_start = validation_end - timedelta(days=pattern_days)
+            # Fetch a conservative calendar buffer, then trim the downloaded bars to
+            # the requested number of actual America/New_York market sessions.
+            calendar_lookback_days = max(7, pattern_days * 2 + 3)
+            validation_start = validation_end - timedelta(days=calendar_lookback_days)
             scorecards = run_detector_scorecards(
                 market_client(),
                 pattern_symbols,
@@ -6488,12 +6491,14 @@ elif module == "Pattern Validation":
                 swing_radius=3,
                 detectors=selected_detectors,
                 max_pages=80,
+                session_limit=pattern_days,
                 progress=pattern_validation_progress,
             )
             evidence_gate = evaluate_scorecard_report(scorecards)
             st.session_state["til_pattern_validation_result"] = {
                 "symbols": pattern_symbols,
                 "days": pattern_days,
+                "trading_days": pattern_days,
                 "detectors": selected_detectors,
                 "report": scorecards,
                 "evidence_gate": evidence_gate,
@@ -6535,7 +6540,11 @@ elif module == "Pattern Validation":
         )
         score_cols = st.columns(4)
         score_cols[0].metric("Stocks with data", int(pattern_report.get("symbols_with_data") or 0))
-        score_cols[1].metric("Sessions replayed", int(pattern_report.get("sessions_analyzed") or 0))
+        score_cols[1].metric(
+            "Market days loaded",
+            int(pattern_report.get("market_sessions_observed") or 0),
+            help="Unique U.S. market-session dates actually present in the downloaded data.",
+        )
         score_cols[2].metric("Pattern events", total_events)
         eligible_detectors = list(pattern_gate.get("eligible_detectors") or [])
         score_cols[3].metric(
