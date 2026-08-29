@@ -6710,19 +6710,19 @@ elif module == "Pattern Validation":
         )
         ml_session_choice = ml_target_cols[1].selectbox(
             "Market hours",
-            options=["Regular session", "Premarket + after-hours"],
+            options=["Regular session", "Premarket", "After-hours"],
             index=0,
             help=(
-                "Regular session uses only 9:30 AM-4:00 PM ET. Premarket + after-hours uses "
-                "4:00-9:30 AM and 4:00-8:00 PM ET. The regimes are never mixed."
+                "Regular session uses 9:30 AM-4:00 PM ET, Premarket uses 4:00-9:30 AM ET, "
+                "and After-hours uses 4:00-8:00 PM ET. Each run uses exactly one regime."
             ),
             key="til_ml_session_mode_choice",
         )
-        ml_session_mode = (
-            "regular"
-            if ml_session_choice == "Regular session"
-            else "extended"
-        )
+        ml_session_mode = {
+            "Regular session": "regular",
+            "Premarket": "premarket",
+            "After-hours": "afterhours",
+        }[ml_session_choice]
         ml_profit_target_pct = float(
             ml_target_cols[2].slider(
                 "Upside target",
