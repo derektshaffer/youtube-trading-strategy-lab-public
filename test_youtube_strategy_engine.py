@@ -1926,3 +1926,153 @@ class DynamicExitBacktestTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MLReadyCausalFeatureRuleTests(unittest.TestCase):
+    def test_causal_market_rules_normalize(self):
+        rules = engine.normalize_machine_rules({
+            "minimum_vwap_hold_bars": "3",
+            "require_vwap_retest_held": True,
+            "avoid_vwap_retest_failed": True,
+            "min_volume_acceleration_ratio": "1.75",
+            "min_atr_pct": "2.5",
+            "max_atr_pct": "12",
+            "minimum_breakout_hold_bars": "2",
+            "min_breakout_volume_ratio": "1.4",
+            "minimum_completed_bounces": "2",
+            "require_bounce_2_present": True,
+            "avoid_bounce_structural_weakening": True,
+            "require_bounce_sequence_higher_lows": True,
+            "max_pullback_depth_pct_of_impulse": "55",
+            "max_pullback_volume_ratio": "1.0",
+            "require_strong_pullback": True,
+        })
+        self.assertEqual(rules["minimum_vwap_hold_bars"], 3)
+        self.assertEqual(rules["min_volume_acceleration_ratio"], 1.75)
+        self.assertEqual(rules["minimum_breakout_hold_bars"], 2)
+        self.assertEqual(rules["minimum_completed_bounces"], 2)
+        self.assertEqual(rules["max_pullback_depth_pct_of_impulse"], 55.0)
+        self.assertTrue(rules["require_vwap_retest_held"])
+        self.assertTrue(rules["avoid_bounce_structural_weakening"])
+        self.assertTrue(rules["require_strong_pullback"])
+
+    def test_causal_market_rules_gate_backtest_signal(self):
+        rules = engine.normalize_machine_rules({
+            "minimum_vwap_hold_bars": 3,
+            "require_vwap_retest_held": True,
+            "avoid_vwap_retest_failed": True,
+            "min_volume_acceleration_ratio": 1.5,
+            "min_atr_pct": 2.0,
+            "max_atr_pct": 10.0,
+            "minimum_breakout_hold_bars": 2,
+            "min_breakout_volume_ratio": 1.2,
+            "minimum_completed_bounces": 2,
+            "require_bounce_2_present": True,
+            "avoid_bounce_structural_weakening": True,
+            "require_bounce_sequence_higher_lows": True,
+            "require_stair_step_up": True,
+            "max_pullback_depth_pct_of_impulse": 55,
+            "max_pullback_volume_ratio": 1.1,
+            "require_pullback_higher_low": True,
+            "require_strong_pullback": True,
+        })
+        row = {
+            "close": 10.5,
+            "session_minute": 20,
+            "vwap_hold_bars": 4,
+            "vwap_retest_held": True,
+            "vwap_retest_failed": False,
+            "volume_acceleration_ratio": 1.8,
+            "atr_pct": 5.0,
+            "breakout_hold_bars": 3,
+            "breakout_volume_ratio": 1.5,
+            "completed_bounce_count": 2,
+            "bounce_2_present": True,
+            "bounce_structural_weakening": False,
+            "bounce_sequence_higher_lows": True,
+            "stair_step_up": True,
+            "pullback_depth_pct_of_impulse": 40.0,
+            "pullback_volume_ratio": 0.8,
+            "pullback_higher_low": True,
+            "pullback_quality": "strong",
+        }
+        self.assertTrue(engine.evaluate_signal(row, rules))
+        weak = dict(row)
+        weak["pullback_quality"] = "weak"
+        self.assertFalse(engine.evaluate_signal(weak, rules))
+        failed = dict(row)
+        failed["vwap_retest_failed"] = True
+        self.assertFalse(engine.evaluate_signal(failed, rules))
+
+    def test_live_matcher_scores_same_causal_market_features(self):
+        strategy = simple_strategy(
+            min_volume_acceleration_ratio=1.5,
+            require_vwap_retest_held=True,
+            minimum_breakout_hold_bars=2,
+            require_bounce_2_present=True,
+            avoid_bounce_structural_weakening=True,
+            require_strong_pullback=True,
+        )
+        metrics = {
+            "price": 10.5,
+            "market_features": {
+                "volume_acceleration_ratio": 1.8,
+                "vwap_retest_held": True,
+                "breakout_hold_bars": 3,
+                "bounce_2_present": True,
+                "bounce_structural_weakening": False,
+                "pullback_quality": "strong",
+            },
+        }
+        result = engine.match_strategy(metrics, strategy)
+        statuses = {item["label"]: item["status"] for item in result["checks"]}
+        self.assertEqual(statuses["Volume acceleration ratio"], "pass")
+        self.assertEqual(statuses["VWAP retest held"], "pass")
+        self.assertEqual(statuses["Breakout hold bars"], "pass")
+        self.assertEqual(statuses["Bounce #2 present"], "pass")
+        self.assertEqual(statuses["No structural bounce weakening"], "pass")
+        self.assertEqual(statuses["Strong pullback quality"], "pass")
+
+    def test_add_indicators_exposes_ml_ready_feature_columns(self):
+        rows = []
+        price = 10.0
+        for minute in range(30):
+            close = price + (0.08 if minute % 3 else -0.03)
+            rows.append(bar(
+                18,
+                minute,
+                price,
+                max(price, close) + 0.12,
+                min(price, close) - 0.10,
+                close,
+                1000 if minute < 15 else 2500,
+            ))
+            price = close
+        frame = engine.add_indicators(engine.bars_to_frame(rows), simple_strategy())
+        for field in (
+            "vwap_retest_held",
+            "volume_acceleration_ratio",
+            "atr_pct",
+            "bounce_2_present",
+            "bounce_structural_weakening",
+            "pullback_quality",
+            "stair_step_up",
+            "consolidation_then_expansion_up",
+            "breakout_state",
+            "breakout_hold_bars",
+            "breakout_volume_ratio",
+        ):
+            self.assertIn(field, frame.columns)
+
+    def test_optimizer_tunes_numeric_causal_feature_thresholds(self):
+        strategy = simple_strategy(
+            minimum_vwap_hold_bars=4,
+            min_volume_acceleration_ratio=1.8,
+            minimum_breakout_hold_bars=3,
+            min_breakout_volume_ratio=1.5,
+            max_pullback_depth_pct_of_impulse=55,
+        )
+        variants = engine.generate_strategy_variants(strategy, maximum=200)
+        self.assertTrue(any(item["minimum_vwap_hold_bars"] != 4 for item in variants))
+        self.assertTrue(any(item["min_volume_acceleration_ratio"] != 1.8 for item in variants))
+        self.assertTrue(any(item["minimum_breakout_hold_bars"] != 3 for item in variants))
