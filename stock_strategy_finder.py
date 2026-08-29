@@ -20,6 +20,7 @@ from finder_report_persistence import (
     finder_summary_to_report,
     latest_completed_finder_report,
 )
+from trading_intelligence_core import strategy_integrity_report
 from trading_validation_core import validation_strength, walk_forward_validate
 from youtube_strategy_engine import (
     AppError,
@@ -110,6 +111,11 @@ def _technical_eligibility(strategy: dict[str, Any], symbol: str) -> tuple[bool,
     locked = str(strategy.get("optimized_for_symbol") or "").strip().upper()
     if locked and locked != symbol.upper():
         return False, f"strategy is explicitly locked to {locked}"
+    integrity = strategy_integrity_report(strategy)
+    if str(integrity.get("status") or "") == "blocked":
+        missing = list(integrity.get("critical_missing_requirements") or [])
+        detail = ", ".join(str(item) for item in missing[:3]) or "important source logic"
+        return False, "strategy fidelity audit failed: " + detail
     rules = normalize_machine_rules(strategy.get("machine_rules"))
     if not any(value is not None for value in rules.values()):
         return False, "no machine-testable rules"
