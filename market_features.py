@@ -1,11 +1,11 @@
 """Reusable, non-look-ahead market feature calculations.
 
-This module sits between raw market bars and strategy/scanner logic.  It does
-not decide whether to enter a trade.  Instead it turns candles into explicit,
+This module sits between raw market bars and strategy/scanner logic. It does
+not decide whether to enter a trade. Instead it turns candles into explicit,
 testable market facts that can be shared by the scanner, stock analyzer, and
 future strategy engines.
 
-All features are calculated only from rows supplied by the caller.  No detector
+All features are calculated only from rows supplied by the caller. No detector
 uses bars after the final supplied bar, which makes prefix-by-prefix historical
 validation possible without accidental look-ahead.
 """
@@ -62,6 +62,12 @@ def _frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
     if frame.empty:
         return frame
     frame["volume"] = frame["volume"].fillna(0.0)
+    if frame["timestamp"].notna().all():
+        parsed = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
+        if parsed.notna().all():
+            frame = frame.assign(_parsed_timestamp=parsed).sort_values(
+                "_parsed_timestamp", kind="stable"
+            ).drop(columns="_parsed_timestamp")
     return frame.reset_index(drop=True)
 
 
@@ -159,7 +165,6 @@ def build_market_features(
         }
     )
 
-    # VWAP state requires a sequence, not a single price comparison.
     recent = frame.tail(min(8, len(frame))).copy()
     recent["above"] = recent["close"] > recent["vwap"]
     reclaim_index: int | None = None
@@ -187,8 +192,6 @@ def build_market_features(
         "hold_bars": bars_above,
     }
 
-    # Volume acceleration compares recent volume rate with the immediately
-    # preceding window rather than confusing cumulative RVOL with acceleration.
     recent_n = max(2, int(volume_window))
     prior_n = max(recent_n, int(prior_volume_window))
     if len(frame) >= recent_n + prior_n:
@@ -228,8 +231,6 @@ def build_market_features(
         "swing_radius": swing_radius,
     }
 
-    # Breakout/failure facts use the most recent confirmed swing high.  A break
-    # is not called a failure until price has subsequently closed back below it.
     last_swing_high = swings_high[-1] if swings_high else None
     if last_swing_high:
         level = float(last_swing_high["price"])
@@ -253,12 +254,7 @@ def build_market_features(
 
 
 def pyindicators_market_structure(rows: list[dict[str, Any]], *, length: int = 5) -> dict[str, Any] | None:
-    """Optional PyIndicators adapter for comparison/validation.
-
-    The app's core feature snapshot does not depend on this function.  Keeping
-    the third-party calculation behind a small adapter lets us compare it with
-    our native, non-repainting detectors and replace/upgrade it independently.
-    """
+    """Optional PyIndicators adapter for comparison/validation."""
     frame = _frame(rows)
     if frame.empty:
         return None
