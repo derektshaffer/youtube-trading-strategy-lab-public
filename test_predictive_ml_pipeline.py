@@ -12,6 +12,7 @@ from predictive_ml_pipeline import (
     leave_one_symbol_out_walk_forward_logistic_baseline,
     load_training_dataset,
     save_training_dataset,
+    similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline,
     walk_forward_logistic_baseline,
 )
 
@@ -340,6 +341,98 @@ def test_leave_one_symbol_out_requires_multiple_symbols():
     )
     assert report["status"] == "INSUFFICIENT_DATA"
     assert "At least two symbols" in report["reason"]
+
+
+def _synthetic_similarity_dataset(session_count: int = 12, rows_per_symbol: int = 20) -> dict:
+    records = []
+    symbols = [
+        ("AAA", 2.0, 10.0, 5_000_000.0, 20_000.0, True),
+        ("AAB", 2.2, 11.0, 6_000_000.0, 24_000.0, True),
+        ("BBB", 20.0, 3.0, 80_000_000.0, 400_000.0, False),
+        ("BBC", 18.0, 3.5, 70_000_000.0, 350_000.0, False),
+    ]
+    for session_index in range(session_count):
+        session = f"2026-08-{session_index + 1:02d}"
+        for symbol, price, range_pct, dollar_volume, bar_dollar_volume, follows_signal in symbols:
+            for row_index in range(rows_per_symbol):
+                signal = float(row_index % 2)
+                target = bool(signal) if follows_signal else not bool(signal)
+                records.append(
+                    {
+                        "symbol": symbol,
+                        "session": session,
+                        "timestamp": f"{session}T14:{row_index:02d}:00Z",
+                        "feature__signal": signal,
+                        "feature__context_typical_price": price,
+                        "feature__context_typical_range_pct": range_pct,
+                        "feature__context_typical_dollar_volume": dollar_volume,
+                        "feature__context_typical_bar_dollar_volume": bar_dollar_volume,
+                        "feature__context_archetype": "rigid_one" if follows_signal else "rigid_two",
+                        "label__target_before_stop_1bar": target,
+                    }
+                )
+    return {
+        "feature_columns": [
+            "feature__signal",
+            "feature__context_typical_price",
+            "feature__context_typical_range_pct",
+            "feature__context_typical_dollar_volume",
+            "feature__context_typical_bar_dollar_volume",
+            "feature__context_archetype",
+        ],
+        "label_columns": ["label__target_before_stop_1bar"],
+        "profit_target_pct": 1.0,
+        "stop_loss_pct": 0.75,
+        "records": records,
+    }
+
+
+def test_similarity_weighting_beats_pooled_baseline_when_nearby_stocks_share_behavior():
+    report = similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline(
+        _synthetic_similarity_dataset(),
+        target_horizon=1,
+        target_mode="target_before_stop",
+        similarity_bandwidth=0.5,
+        minimum_similarity_weight=0.01,
+        min_train_sessions=4,
+        test_sessions_per_fold=2,
+        embargo_sessions=1,
+        min_train_rows=100,
+        min_test_rows=10,
+    )
+
+    assert report["status"] == "EVALUATED"
+    assert report["paired_oos_rows"] > 0
+    assert report["similarity_roc_auc"] is not None
+    assert report["baseline_roc_auc"] is not None
+    assert report["similarity_roc_auc"] > 0.95
+    assert report["similarity_minus_baseline_auc"] > 0.3
+    assert report["split_policy"]["held_out_symbol_never_in_training"] is True
+    assert report["split_policy"]["all_eligible_training_rows_retained"] is True
+    assert report["split_policy"]["hard_archetype_not_used_for_training_selection"] is True
+    assert report["split_policy"]["hard_archetype_removed_from_model_inputs"] is True
+    assert "feature__context_archetype" not in report["similarity_columns"]
+    for item in report["slices"]:
+        assert item["held_out_symbol"] not in {
+            peer["symbol"] for peer in item["top_similar_symbols"]
+        }
+
+
+def test_similarity_weighting_requires_continuous_context():
+    dataset = _synthetic_similarity_dataset()
+    dataset["feature_columns"] = ["feature__signal", "feature__context_archetype"]
+    report = similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline(
+        dataset,
+        target_horizon=1,
+        min_train_sessions=4,
+        test_sessions_per_fold=1,
+        embargo_sessions=1,
+        min_train_rows=20,
+        min_test_rows=5,
+    )
+    assert report["status"] == "INSUFFICIENT_DATA"
+    assert "continuous lagged context" in report["reason"]
+
 
 def _synthetic_archetype_dataset(session_count: int = 12, rows_per_symbol: int = 20) -> dict:
     records = []
