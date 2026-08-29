@@ -1,6 +1,6 @@
 import pytest
 
-from market_feature_validation import _ordered_sessions, run_detector_event_study
+from market_feature_validation import _ordered_sessions, build_supervised_feature_rows, run_detector_event_study
 
 
 def _bar(day, minute, o, h, l, c, v=100):
@@ -100,17 +100,59 @@ def test_unknown_detector_is_rejected():
         run_detector_event_study(_breakout_session(29), detectors=["not_a_detector"])
 
 
+def test_detector_event_retains_full_point_in_time_feature_snapshot():
+    report = run_detector_event_study(
+        _breakout_session(29),
+        detectors=["breakout_holding"],
+        horizons=(1,),
+        swing_radius=1,
+    )
+    event = report["events"][0]
+    assert event["features"]["breakout_state"] == "holding"
+    assert "vwap_hold_bars" in event["features"]
+
+
+def test_supervised_rows_separate_feature_and_future_label_columns():
+    rows = _breakout_session(29)
+    report = build_supervised_feature_rows(
+        rows,
+        horizons=(1, 2),
+        swing_radius=1,
+        require_full_horizon=True,
+    )
+    assert report["causal_replay"] is True
+    assert report["row_count"] == 5
+    assert all(name.startswith("feature__") for name in report["feature_columns"])
+    assert all(name.startswith("label__") for name in report["label_columns"])
+    first = report["records"][0]
+    expected_1 = ((rows[1]["c"] / rows[0]["c"]) - 1.0) * 100.0
+    expected_2 = ((rows[2]["c"] / rows[0]["c"]) - 1.0) * 100.0
+    assert first["label__forward_return_1bar_pct"] == pytest.approx(expected_1)
+    assert first["label__forward_return_2bar_pct"] == pytest.approx(expected_2)
+    assert "feature__vwap_hold_bars" in first
+    assert "label__max_favorable_excursion_2bar_pct" in first
+    assert "label__max_adverse_excursion_2bar_pct" in first
+
+
+def test_supervised_feature_values_are_unchanged_when_later_future_is_appended():
+    base = _breakout_session(29)
+    extended = base + [_bar(29, 7, 10.9, 11.2, 10.8, 11.1, 230)]
+    left = build_supervised_feature_rows(
+        base, horizons=(1,), swing_radius=1, require_full_horizon=True
+    )["records"]
+    right = build_supervised_feature_rows(
+        extended, horizons=(1,), swing_radius=1, require_full_horizon=True
+    )["records"]
+    for index in range(len(left)):
+        left_features = {k: v for k, v in left[index].items() if k.startswith("feature__")}
+        right_features = {k: v for k, v in right[index].items() if k.startswith("feature__")}
+        assert left_features == right_features
+
 
 def test_session_grouping_uses_new_york_date_not_utc_midnight():
     rows = [
-        {
-            "t": "2026-08-30T00:00:00Z",
-            "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0, "v": 100,
-        },
-        {
-            "t": "2026-08-30T00:30:00Z",
-            "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0, "v": 100,
-        },
+        {"t": "2026-08-30T00:00:00Z", "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0, "v": 100},
+        {"t": "2026-08-30T00:30:00Z", "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0, "v": 100},
     ]
     sessions = _ordered_sessions(rows)
     assert len(sessions) == 1

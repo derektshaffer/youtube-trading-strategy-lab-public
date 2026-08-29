@@ -297,6 +297,7 @@ def _summarize_events(
     return summary
 
 
+
 def summarize_detector_events(
     events: list[dict[str, Any]],
     *,
@@ -305,6 +306,82 @@ def summarize_detector_events(
     """Public aggregation helper for detector scorecards."""
     clean_horizons = tuple(sorted({max(1, int(value)) for value in horizons}))
     return _summarize_events(events, horizons=clean_horizons)
+
+
+def build_supervised_feature_rows(
+    rows: list[dict[str, Any]],
+    *,
+    horizons: tuple[int, ...] = DEFAULT_HORIZONS,
+    swing_radius: int = 3,
+    require_full_horizon: bool = True,
+) -> dict[str, Any]:
+    """Build leakage-safe supervised-learning rows from historical candles.
+
+    Features are computed from a prefix ending at the observation bar. Labels are
+    then measured strictly from later bars in the same session. The result is a
+    flat, JSON-serializable table suitable for persistence or DataFrame/model use.
+    """
+    clean_horizons = tuple(sorted({max(1, int(value)) for value in horizons}))
+    max_horizon = max(clean_horizons, default=0)
+    sessions = _ordered_sessions(rows)
+    records: list[dict[str, Any]] = []
+    feature_names: set[str] = set()
+    label_names: set[str] = set()
+
+    for session_key, session_rows in sessions:
+        for index in range(len(session_rows)):
+            if require_full_horizon and index + max_horizon >= len(session_rows):
+                continue
+            prefix = session_rows[: index + 1]
+            snapshot = build_market_features(prefix, swing_radius=swing_radius)
+            features = dict(snapshot.get("features") or {})
+            outcomes = _event_outcomes(
+                session_rows,
+                index,
+                horizons=clean_horizons,
+                direction=0,
+            )
+            record: dict[str, Any] = {
+                "session": session_key,
+                "bar_index": index,
+                "timestamp": _timestamp(session_rows[index]),
+            }
+            for name, value in features.items():
+                column = f"feature__{name}"
+                record[column] = value
+                feature_names.add(column)
+
+            forward = outcomes.get("forward_returns_pct") or {}
+            for horizon in clean_horizons:
+                key = str(horizon)
+                value = _number(forward.get(key))
+                return_name = f"label__forward_return_{horizon}bar_pct"
+                positive_name = f"label__positive_return_{horizon}bar"
+                record[return_name] = value
+                record[positive_name] = None if value is None else value > 0
+                label_names.update((return_name, positive_name))
+
+            mfe_name = f"label__max_favorable_excursion_{max_horizon}bar_pct"
+            mae_name = f"label__max_adverse_excursion_{max_horizon}bar_pct"
+            record[mfe_name] = outcomes.get("max_favorable_excursion_pct")
+            record[mae_name] = outcomes.get("max_adverse_excursion_pct")
+            label_names.update((mfe_name, mae_name))
+            records.append(record)
+
+    return {
+        "causal_replay": True,
+        "sessions_analyzed": len(sessions),
+        "horizons": list(clean_horizons),
+        "require_full_horizon": bool(require_full_horizon),
+        "row_count": len(records),
+        "feature_columns": sorted(feature_names),
+        "label_columns": sorted(label_names),
+        "records": records,
+        "note": (
+            "Every feature column is calculated without future bars. Columns prefixed "
+            "label__ are calculated only from bars after the observation timestamp."
+        ),
+    }
 
 
 def run_detector_event_study(
@@ -355,6 +432,7 @@ def run_detector_event_study(
                             "detection_index": index,
                             "detection_timestamp": _timestamp(session_rows[index]),
                             "feature_value": features.get(str(spec["feature"])),
+                            "features": dict(features),
                             "evidence": snapshot.get("evidence") or {},
                             "outcomes": outcomes,
                         }

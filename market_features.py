@@ -189,6 +189,8 @@ def _bounce_features(bounces: list[dict[str, Any]]) -> tuple[dict[str, Any], dic
                 "latest_bounce_recovery_pct": None,
                 "bounce_deteriorating": None,
                 "bounce_strengthening": None,
+                "bounce_2_present": False,
+                "bounce_3_present": False,
             },
             {"recent_bounces": []},
         )
@@ -641,6 +643,416 @@ def _breakout_quality_features(
             "max_extension_pct": max_extension_pct,
         },
     )
+
+
+
+MARKET_FEATURE_COLUMNS: tuple[str, ...] = (
+    "bar_count",
+    "last_price",
+    "session_vwap",
+    "price_above_vwap",
+    "price_below_vwap",
+    "atr",
+    "atr_pct",
+    "vwap_hold_bars",
+    "vwap_reclaim_recent",
+    "vwap_rejection_recent",
+    "vwap_retest_recent",
+    "vwap_retest_held",
+    "vwap_retest_failed",
+    "vwap_retest_distance_atr",
+    "volume_acceleration_ratio",
+    "volume_accelerating",
+    "volume_contracting",
+    "last_swing_high_structure",
+    "last_swing_low_structure",
+    "confirmed_swing_high_count",
+    "confirmed_swing_low_count",
+    "uptrend_structure",
+    "downtrend_structure",
+    "completed_bounce_count",
+    "latest_bounce_number",
+    "latest_bounce_recovery_pct",
+    "bounce_deteriorating",
+    "bounce_strengthening",
+    "bounce_2_present",
+    "bounce_3_present",
+    "bounce_sequence_higher_lows",
+    "bounce_sequence_higher_highs",
+    "latest_bounce_volume_ratio_vs_prior",
+    "bounce_structural_weakening",
+    "bounce_structural_strengthening",
+    "stair_step_up",
+    "stair_step_down",
+    "consolidation_then_expansion_up",
+    "consolidation_then_expansion_down",
+    "base_range_atr_ratio",
+    "expansion_volume_ratio",
+    "pullback_depth_pct_of_impulse",
+    "pullback_higher_low",
+    "pullback_volume_ratio",
+    "pullback_quality",
+    "breakout_above_last_swing_high",
+    "failed_breakout_last_swing_high",
+    "breakout_state",
+    "breakout_hold_bars",
+    "breakout_volume_ratio",
+    "breakout_max_extension_pct",
+)
+
+
+def add_causal_market_feature_columns(
+    frame: pd.DataFrame,
+    *,
+    session_column: str = "session",
+    swing_radius: int = 3,
+    volume_window: int = 5,
+    prior_volume_window: int = 10,
+    base_window: int = 8,
+    expansion_bars: int = 2,
+) -> pd.DataFrame:
+    """Attach the live detector vocabulary to every historical bar.
+
+    The implementation advances left-to-right. Confirmed pivots are exposed only
+    after their right-side confirmation bars exist, and no feature reads rows
+    after the row being populated. This gives backtests and future ML datasets
+    the same point-in-time feature semantics as build_market_features.
+    """
+    if frame.empty:
+        return frame.copy()
+
+    data = frame.copy().sort_values("timestamp").reset_index(drop=True)
+    if session_column not in data.columns:
+        data[session_column] = "session"
+    for name in MARKET_FEATURE_COLUMNS:
+        if name not in data.columns:
+            data[name] = None
+
+    radius = max(1, int(swing_radius))
+    recent_n = max(2, int(volume_window))
+    prior_n = max(recent_n, int(prior_volume_window))
+    base_n = max(2, int(base_window))
+    expansion_n = max(1, int(expansion_bars))
+
+    for _, original_group in data.groupby(session_column, sort=False):
+        indices = list(original_group.index)
+        group = data.loc[indices].copy().reset_index(drop=True)
+        if group.empty:
+            continue
+
+        group["vwap"] = (
+            pd.to_numeric(group["vwap"], errors="coerce")
+            if "vwap" in group.columns and group["vwap"].notna().all()
+            else _session_vwap(group)
+        )
+        group["atr"] = _atr(group)
+        close = pd.to_numeric(group["close"], errors="coerce")
+        volume = pd.to_numeric(group["volume"], errors="coerce").fillna(0.0)
+
+        group["bar_count"] = list(range(1, len(group) + 1))
+        group["last_price"] = close
+        group["session_vwap"] = group["vwap"]
+        group["price_above_vwap"] = close > group["vwap"]
+        group["price_below_vwap"] = close < group["vwap"]
+        group["atr_pct"] = (
+            group["atr"].div(close.where(close > 0)).mul(100.0).round(4)
+        )
+
+        above = (close > group["vwap"]).fillna(False)
+        previous_above = above.shift(1)
+        hold_counts: list[int] = []
+        run = 0
+        for value in above.tolist():
+            run = min(8, run + 1) if bool(value) else 0
+            hold_counts.append(run)
+        group["vwap_hold_bars"] = hold_counts
+        reclaim_event = previous_above.eq(False) & above
+        rejection_event = previous_above.eq(True) & ~above
+        group["vwap_reclaim_recent"] = (
+            reclaim_event.rolling(7, min_periods=1).max().fillna(False).astype(bool)
+            & (group["vwap_hold_bars"] >= 2)
+        )
+        group["vwap_rejection_recent"] = (
+            rejection_event.rolling(7, min_periods=1).max().fillna(False).astype(bool)
+            & ~above
+        )
+
+        recent_mean = volume.rolling(recent_n, min_periods=recent_n).mean()
+        prior_mean = volume.shift(recent_n).rolling(prior_n, min_periods=prior_n).mean()
+        acceleration = recent_mean.div(prior_mean.where(prior_mean > 0))
+        group["volume_acceleration_ratio"] = acceleration
+        group["volume_accelerating"] = acceleration.ge(1.5).where(acceleration.notna())
+        group["volume_contracting"] = acceleration.le(0.7).where(acceleration.notna())
+
+        base_high = group["high"].shift(expansion_n).rolling(base_n, min_periods=base_n).max()
+        base_low = group["low"].shift(expansion_n).rolling(base_n, min_periods=base_n).min()
+        base_range = base_high - base_low
+        anchor_atr = group["atr"].shift(expansion_n)
+        base_ratio = base_range.div(anchor_atr.where(anchor_atr > 0))
+        tight = base_ratio.le(2.5) & base_ratio.notna()
+        expansion_high_close = close.rolling(expansion_n, min_periods=expansion_n).max()
+        expansion_low_close = close.rolling(expansion_n, min_periods=expansion_n).min()
+        group["consolidation_then_expansion_up"] = (
+            tight & expansion_high_close.gt(base_high)
+        ).where(base_high.notna())
+        group["consolidation_then_expansion_down"] = (
+            tight & expansion_low_close.lt(base_low)
+        ).where(base_low.notna())
+        group["base_range_atr_ratio"] = base_ratio
+        base_mean_volume = volume.shift(expansion_n).rolling(base_n, min_periods=base_n).mean()
+        expansion_mean_volume = volume.rolling(expansion_n, min_periods=expansion_n).mean()
+        group["expansion_volume_ratio"] = expansion_mean_volume.div(
+            base_mean_volume.where(base_mean_volume > 0)
+        )
+
+        swing_highs: list[dict[str, Any]] = []
+        swing_lows: list[dict[str, Any]] = []
+        bounce_features, _ = _bounce_features([])
+        bounce_context, _ = _bounce_context_features([])
+        stair_features, _ = _stair_step_features([], [])
+        pullback_features, _ = _pullback_quality_features(group.iloc[:0], [], [])
+        latest_reclaim_index: int | None = None
+
+        active_swing_high: dict[str, Any] | None = None
+        first_breakout_index: int | None = None
+        breakout_pre_volume: float | None = None
+        breakout_max_high: float | None = None
+        breakout_hold_bars = 0
+
+        for local_pos in range(len(group)):
+            prefix = group.iloc[: local_pos + 1]
+            current_close = float(group.at[local_pos, "close"])
+
+            if local_pos >= 1 and not bool(above.iloc[local_pos - 1]) and bool(above.iloc[local_pos]):
+                latest_reclaim_index = local_pos
+            if local_pos < 3:
+                vwap_retest = {
+                    "vwap_retest_recent": None,
+                    "vwap_retest_held": None,
+                    "vwap_retest_failed": None,
+                    "vwap_retest_distance_atr": None,
+                }
+            elif latest_reclaim_index is None:
+                vwap_retest = {
+                    "vwap_retest_recent": False,
+                    "vwap_retest_held": False,
+                    "vwap_retest_failed": False,
+                    "vwap_retest_distance_atr": None,
+                }
+            elif latest_reclaim_index >= local_pos:
+                vwap_retest = {
+                    "vwap_retest_recent": False,
+                    "vwap_retest_held": False,
+                    "vwap_retest_failed": False,
+                    "vwap_retest_distance_atr": None,
+                }
+            else:
+                reclaim_atr = _number(group.at[latest_reclaim_index, "atr"]) or _number(
+                    group.at[local_pos, "atr"]
+                )
+                tolerance = max(
+                    (reclaim_atr or 0.0) * 0.20,
+                    current_close * 0.0005,
+                )
+                retest_indices = [
+                    idx
+                    for idx in range(latest_reclaim_index + 1, local_pos + 1)
+                    if float(group.at[idx, "low"])
+                    <= float(group.at[idx, "vwap"]) + tolerance
+                ]
+                if not retest_indices:
+                    vwap_retest = {
+                        "vwap_retest_recent": False,
+                        "vwap_retest_held": False,
+                        "vwap_retest_failed": False,
+                        "vwap_retest_distance_atr": None,
+                    }
+                else:
+                    retest_index = retest_indices[-1]
+                    retest_vwap = _number(group.at[retest_index, "vwap"])
+                    distance_atr = (
+                        (float(group.at[retest_index, "low"]) - float(retest_vwap))
+                        / float(reclaim_atr)
+                        if retest_vwap is not None
+                        and reclaim_atr is not None
+                        and reclaim_atr > 0
+                        else None
+                    )
+                    tail_start = max(retest_index, local_pos - 1)
+                    hold_tail = group.iloc[tail_start : local_pos + 1]
+                    latest_above = bool(
+                        current_close >= float(group.at[local_pos, "vwap"])
+                    )
+                    held = latest_above and bool(
+                        (hold_tail["close"] >= hold_tail["vwap"]).all()
+                    )
+                    vwap_retest = {
+                        "vwap_retest_recent": True,
+                        "vwap_retest_held": held,
+                        "vwap_retest_failed": not latest_above,
+                        "vwap_retest_distance_atr": distance_atr,
+                    }
+            for name, value in vwap_retest.items():
+                group.at[local_pos, name] = value
+
+            confirmed_high_this_row = False
+            pivot_changed = False
+            pivot_pos = local_pos - radius
+            if pivot_pos >= radius:
+                left = pivot_pos - radius
+                right = pivot_pos + radius + 1
+                window = group.iloc[left:right]
+                pivot_high = float(group.at[pivot_pos, "high"])
+                pivot_low = float(group.at[pivot_pos, "low"])
+                if pivot_high >= float(window["high"].max()):
+                    item = {
+                        "index": pivot_pos,
+                        "price": pivot_high,
+                        "timestamp": group.at[pivot_pos, "timestamp"],
+                        "confirmed_at_index": local_pos,
+                    }
+                    swing_highs.append(item)
+                    active_swing_high = item
+                    first_breakout_index = None
+                    breakout_pre_volume = None
+                    breakout_max_high = None
+                    breakout_hold_bars = 0
+                    confirmed_high_this_row = True
+                    pivot_changed = True
+                if pivot_low <= float(window["low"].min()):
+                    swing_lows.append(
+                        {
+                            "index": pivot_pos,
+                            "price": pivot_low,
+                            "timestamp": group.at[pivot_pos, "timestamp"],
+                            "confirmed_at_index": local_pos,
+                        }
+                    )
+                    pivot_changed = True
+
+            if pivot_changed:
+                bounces = _completed_bounces(prefix, swing_highs, swing_lows)
+                bounce_features, _ = _bounce_features(bounces)
+                bounce_context, _ = _bounce_context_features(bounces)
+                stair_features, _ = _stair_step_features(swing_highs, swing_lows)
+                pullback_features, _ = _pullback_quality_features(
+                    prefix, swing_highs, swing_lows
+                )
+
+            high_label = _structure_label(swing_highs, high=True)
+            low_label = _structure_label(swing_lows, high=False)
+            group.at[local_pos, "last_swing_high_structure"] = high_label
+            group.at[local_pos, "last_swing_low_structure"] = low_label
+            group.at[local_pos, "confirmed_swing_high_count"] = len(swing_highs)
+            group.at[local_pos, "confirmed_swing_low_count"] = len(swing_lows)
+            group.at[local_pos, "uptrend_structure"] = bool(
+                high_label == "HH" and low_label == "HL"
+            )
+            group.at[local_pos, "downtrend_structure"] = bool(
+                high_label == "LH" and low_label == "LL"
+            )
+
+            for values in (bounce_features, bounce_context, stair_features, pullback_features):
+                for name, value in values.items():
+                    group.at[local_pos, name] = value
+
+            if active_swing_high is None:
+                breakout_values = {
+                    "breakout_above_last_swing_high": None,
+                    "failed_breakout_last_swing_high": None,
+                    "breakout_state": None,
+                    "breakout_hold_bars": None,
+                    "breakout_volume_ratio": None,
+                    "breakout_max_extension_pct": None,
+                }
+            else:
+                level = float(active_swing_high["price"])
+                if (
+                    not confirmed_high_this_row
+                    and local_pos > int(active_swing_high["confirmed_at_index"])
+                    and first_breakout_index is None
+                    and current_close > level
+                ):
+                    first_breakout_index = local_pos
+                    before = group.iloc[max(0, local_pos - 5) : local_pos]
+                    breakout_pre_volume = (
+                        float(before["volume"].mean()) if not before.empty else 0.0
+                    )
+                    breakout_max_high = float(group.at[local_pos, "high"])
+
+                if first_breakout_index is None:
+                    breakout_values = {
+                        "breakout_above_last_swing_high": False,
+                        "failed_breakout_last_swing_high": False,
+                        "breakout_state": "not_broken",
+                        "breakout_hold_bars": 0,
+                        "breakout_volume_ratio": None,
+                        "breakout_max_extension_pct": None,
+                    }
+                else:
+                    breakout_max_high = max(
+                        float(breakout_max_high or group.at[local_pos, "high"]),
+                        float(group.at[local_pos, "high"]),
+                    )
+                    if current_close > level:
+                        breakout_hold_bars += 1
+                    else:
+                        breakout_hold_bars = 0
+                    latest_above = current_close > level
+                    state = (
+                        "holding"
+                        if latest_above and breakout_hold_bars >= 2
+                        else "testing"
+                        if latest_above
+                        else "failed"
+                    )
+                    breakout_window_end = min(
+                        local_pos + 1,
+                        first_breakout_index + 2,
+                    )
+                    breakout_window = group.iloc[
+                        first_breakout_index:breakout_window_end
+                    ]
+                    breakout_mean_volume = (
+                        float(breakout_window["volume"].mean())
+                        if not breakout_window.empty
+                        else 0.0
+                    )
+                    volume_ratio = (
+                        breakout_mean_volume / breakout_pre_volume
+                        if breakout_pre_volume is not None and breakout_pre_volume > 0
+                        else None
+                    )
+                    breakout_values = {
+                        "breakout_above_last_swing_high": latest_above,
+                        "failed_breakout_last_swing_high": not latest_above,
+                        "breakout_state": state,
+                        "breakout_hold_bars": breakout_hold_bars,
+                        "breakout_volume_ratio": volume_ratio,
+                        "breakout_max_extension_pct": (
+                            ((float(breakout_max_high) / level) - 1.0) * 100.0
+                            if level > 0
+                            else None
+                        ),
+                    }
+            for name, value in breakout_values.items():
+                group.at[local_pos, name] = value
+
+        for name in MARKET_FEATURE_COLUMNS:
+            data.loc[indices, name] = group[name].to_numpy()
+
+    for name in (
+        "price_above_vwap",
+        "price_below_vwap",
+        "vwap_reclaim_recent",
+        "vwap_rejection_recent",
+        "uptrend_structure",
+        "downtrend_structure",
+        "bounce_2_present",
+        "bounce_3_present",
+    ):
+        data[name] = data[name].fillna(False).astype(bool)
+    return data
 
 
 def build_market_features(
