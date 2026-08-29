@@ -178,3 +178,29 @@ def test_walk_forward_refuses_too_little_history():
         min_train_rows=10,
     )
     assert report["status"] == "INSUFFICIENT_DATA"
+
+
+def test_cross_stock_dataset_limits_to_recent_actual_trading_sessions():
+    market = FakeMarket(
+        {
+            "AAA": (
+                [_bar(24, i, 10.0 + i * 0.01) for i in range(6)]
+                + [_bar(25, i, 10.2 + i * 0.01) for i in range(6)]
+                + [_bar(28, i, 10.4 + i * 0.01) for i in range(6)]
+            )
+        }
+    )
+    report = build_cross_stock_training_dataset(
+        market,
+        ["AAA"],
+        start="2026-08-20",
+        end="2026-08-29",
+        horizons=(1,),
+        swing_radius=1,
+        session_limit=2,
+    )
+    assert report["market_sessions_requested"] == 2
+    assert report["market_sessions_observed"] == 2
+    assert report["market_session_dates"] == ["2026-08-25", "2026-08-28"]
+    assert report["by_symbol"][0]["market_sessions"] == ["2026-08-25", "2026-08-28"]
+    assert {row["session"] for row in report["records"]} == {"2026-08-25", "2026-08-28"}
