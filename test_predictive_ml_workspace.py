@@ -83,3 +83,15 @@ def test_predictive_ml_workspace_exposes_causal_archetype_context():
     assert "Historical float and catalyst-profile" in block
     assert "same held-out-stock rows" in block.lower()
 
+
+
+def test_predictive_ml_results_are_persisted_and_restored_after_restart():
+    source = Path("trading_intelligence_app.py").read_text(encoding="utf-8")
+    block = _pattern_validation_block()
+    assert "def persist_predictive_ml_result" in source
+    assert 'data["predictive_ml_runs"] = [record, *previous][:MAX_PREDICTIVE_ML_RUN_HISTORY]' in source
+    assert "persist_predictive_ml_result(completed_ml_result)" in block
+    assert 'library.get("predictive_ml_runs")' in block
+    assert 'ml_result_source = "durable"' in block
+    assert "restored from durable storage" in block
+    assert 'if key != "predictions"' in block
