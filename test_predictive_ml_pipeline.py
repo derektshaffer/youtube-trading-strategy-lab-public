@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from predictive_ml_pipeline import (
+    archetype_transfer_walk_forward_logistic_baseline,
     build_cross_stock_training_dataset,
     leave_one_symbol_out_walk_forward_logistic_baseline,
     load_training_dataset,
@@ -339,4 +340,137 @@ def test_leave_one_symbol_out_requires_multiple_symbols():
     )
     assert report["status"] == "INSUFFICIENT_DATA"
     assert "At least two symbols" in report["reason"]
+
+def _synthetic_archetype_dataset(session_count: int = 12, rows_per_symbol: int = 20) -> dict:
+    records = []
+    symbols = [("AAA", "family_one"), ("AAB", "family_one"), ("BBB", "family_two"), ("BBC", "family_two")]
+    for session_index in range(session_count):
+        session = f"2026-08-{session_index + 1:02d}"
+        for symbol, archetype in symbols:
+            for row_index in range(rows_per_symbol):
+                signal = float(row_index % 2)
+                target = bool(signal) if archetype == "family_one" else not bool(signal)
+                records.append(
+                    {
+                        "symbol": symbol,
+                        "session": session,
+                        "timestamp": f"{session}T14:{row_index:02d}:00Z",
+                        "feature__signal": signal,
+                        "feature__context_typical_range_pct": 12.0 if archetype == "family_one" else 4.0,
+                        "feature__context_typical_dollar_volume": 5_000_000.0 if archetype == "family_one" else 80_000_000.0,
+                        "feature__context_archetype": archetype,
+                        "label__target_before_stop_1bar": target,
+                    }
+                )
+    return {
+        "feature_columns": [
+            "feature__signal",
+            "feature__context_typical_range_pct",
+            "feature__context_typical_dollar_volume",
+            "feature__context_archetype",
+        ],
+        "context_feature_columns": [
+            "feature__context_typical_range_pct",
+            "feature__context_typical_dollar_volume",
+            "feature__context_archetype",
+        ],
+        "archetype_column": "feature__context_archetype",
+        "label_columns": ["label__target_before_stop_1bar"],
+        "profit_target_pct": 1.0,
+        "stop_loss_pct": 0.75,
+        "records": records,
+    }
+
+
+def test_context_features_use_only_current_and_completed_prior_sessions():
+    market = FakeMarket(
+        {
+            "AAA": (
+                [_bar(24, i, 2.0 + i * 0.01, 50_000) for i in range(8)]
+                + [_bar(25, i, 2.2 + i * 0.02, 60_000) for i in range(8)]
+                + [_bar(26, i, 2.4 + i * 0.03, 70_000) for i in range(8)]
+            )
+        }
+    )
+    base = build_cross_stock_training_dataset(
+        market,
+        ["AAA"],
+        start="2026-08-24",
+        end="2026-08-27",
+        horizons=(1,),
+        swing_radius=1,
+        session_mode="regular",
+    )
+    day26 = [row for row in base["records"] if row["session"] == "2026-08-26"]
+    assert day26
+    first = day26[0]
+    assert first["feature__context_prior_session_count"] == 2
+    assert first["feature__context_archetype"] != "unknown"
+    assert first["feature__context_typical_range_pct"] is not None
+    assert first["feature__context_typical_dollar_volume"] is not None
+    assert "feature__context_pattern_personality" in first
+    assert base["archetype_column"] == "feature__context_archetype"
+    assert base["context_feature_columns"]
+
+    changed_market = FakeMarket(
+        {
+            "AAA": market.rows_by_symbol["AAA"]
+            + [_bar(27, i, 50.0 + i, 9_000_000) for i in range(8)]
+        }
+    )
+    changed = build_cross_stock_training_dataset(
+        changed_market,
+        ["AAA"],
+        start="2026-08-24",
+        end="2026-08-28",
+        horizons=(1,),
+        swing_radius=1,
+        session_mode="regular",
+    )
+    changed_day26 = [row for row in changed["records"] if row["session"] == "2026-08-26"]
+    keys = [name for name in base["context_feature_columns"] if name != "feature__context_cumulative_dollar_volume"]
+    for left, right in zip(day26, changed_day26):
+        for key in keys:
+            assert left.get(key) == right.get(key)
+
+
+def test_archetype_transfer_prefers_matching_family_on_opposite_synthetic_relationships():
+    report = archetype_transfer_walk_forward_logistic_baseline(
+        _synthetic_archetype_dataset(),
+        target_horizon=1,
+        target_mode="target_before_stop",
+        min_train_sessions=4,
+        test_sessions_per_fold=2,
+        embargo_sessions=1,
+        min_train_rows=50,
+        min_test_rows=10,
+    )
+    assert report["status"] == "EVALUATED"
+    assert report["paired_oos_rows"] > 0
+    assert report["within_roc_auc"] is not None and report["within_roc_auc"] > 0.95
+    assert report["across_roc_auc"] is not None and report["across_roc_auc"] < 0.05
+    assert report["within_minus_across_auc"] is not None
+    assert report["within_minus_across_auc"] > 0.9
+    assert report["split_policy"]["held_out_symbol_never_in_training"] is True
+    assert report["split_policy"]["same_test_rows_for_within_and_across"] is True
+    for item in report["slices"]:
+        assert item["held_out_symbol"] not in item["within_train_symbols"]
+        assert item["held_out_symbol"] not in item["across_train_symbols"]
+
+
+def test_archetype_transfer_requires_populated_multiple_archetypes():
+    dataset = _synthetic_archetype_dataset()
+    for row in dataset["records"]:
+        row["feature__context_archetype"] = "one_family"
+    report = archetype_transfer_walk_forward_logistic_baseline(
+        dataset,
+        target_horizon=1,
+        min_train_sessions=4,
+        test_sessions_per_fold=1,
+        embargo_sessions=1,
+        min_train_rows=20,
+        min_test_rows=5,
+    )
+    assert report["status"] == "INSUFFICIENT_DATA"
+    assert "At least two populated archetypes" in report["reason"]
 
