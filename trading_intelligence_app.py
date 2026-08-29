@@ -6843,14 +6843,29 @@ elif module == "Pattern Validation":
                 fraction = 0.10
                 if text.startswith("Loading historical"):
                     fraction = 0.18
-                elif text.startswith("Building causal ML rows"):
-                    progress_state["built"] += 1
+                elif text.startswith("ML stock "):
+                    try:
+                        position = text.split()[2]
+                        stock_index_text, stock_total_text = position.split("/", 1)
+                        stock_index = max(1, int(stock_index_text))
+                        stock_total = max(1, int(stock_total_text))
+                    except (IndexError, TypeError, ValueError):
+                        stock_index = max(1, progress_state.get("built", 0) + 1)
+                        stock_total = max(1, len(ml_symbols))
+
+                    phase = 0.0
+                    if "adding causal context" in text:
+                        phase = 0.50
+                    elif "finished " in text:
+                        phase = 1.0
+                        progress_state["built"] = max(
+                            progress_state.get("built", 0),
+                            stock_index,
+                        )
+                    completed_units = max(0.0, (stock_index - 1) + phase)
                     fraction = min(
                         0.78,
-                        0.20
-                        + 0.58
-                        * progress_state["built"]
-                        / max(1, len(ml_symbols)),
+                        0.20 + 0.58 * completed_units / stock_total,
                     )
                 update_task_bar(
                     ml_bar,
