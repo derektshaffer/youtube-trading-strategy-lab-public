@@ -30,6 +30,7 @@ Suggested repository name: `youtube-trading-strategy-lab`.
 ALPACA_API_KEY = "your-existing-alpaca-api-key"
 ALPACA_SECRET_KEY = "your-existing-alpaca-secret-key"
 GEMINI_API_KEY = "your-new-google-gemini-api-key"
+APP_ACCESS_PASSWORD = "a-long-unique-password-used-only-for-this-app"
 ALPACA_LIVE_FEED = "iex"
 ALPACA_HISTORICAL_FEED = "sip"
 GEMINI_MODEL = "gemini-3.7-flash"
@@ -43,7 +44,7 @@ Gemini API key is new. Create one at https://aistudio.google.com/apikey.
 Never put real API keys in a GitHub file. Add them only to Streamlit Secrets or
 local environment variables.
 
-The app does not use a separate in-app password. If you want access restricted, use your hosting provider's deployment-level access controls.
+`APP_ACCESS_PASSWORD` protects the app, but a successful login creates a signed browser-link token that remains valid for about 12 hours. The password itself is never placed in the URL. Keep the deployment private too when your hosting plan supports access controls.
 
 ## Run locally on a Mac
 
@@ -52,6 +53,7 @@ python3 -m pip install -r requirements.txt
 export ALPACA_API_KEY="your-existing-alpaca-api-key"
 export ALPACA_SECRET_KEY="your-existing-alpaca-secret-key"
 export GEMINI_API_KEY="your-google-gemini-api-key"
+export APP_ACCESS_PASSWORD="a-long-unique-password-used-only-for-this-app"
 streamlit run youtube_strategy_app.py
 ```
 
