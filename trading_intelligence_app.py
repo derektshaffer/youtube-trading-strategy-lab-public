@@ -6815,7 +6815,8 @@ elif module == "Pattern Validation":
         value=True,
         help=(
             "Recommended research test. Each stock is held out completely, then historical rows "
-            "that behave more like it receive more influence without discarding the other stocks."
+            "with more similar prior-session VWAP, breakout, bounce, pullback, stair-step, volume, "
+            "price, range, and liquidity behavior receive more influence without discarding other stocks."
         ),
         key="til_ml_run_similarity_validation",
     )
@@ -7337,9 +7338,10 @@ elif module == "Pattern Validation":
                         )
                     st.caption(
                         "This test does not put stocks into fixed families. Every eligible historical "
-                        "training row remains available, but rows with more similar prior-session price, "
-                        "range, and liquidity behavior receive more influence. The held-out stock is never "
-                        "used in training, and similarity is calculated from causal prior-session context."
+                        "training row remains available, but rows with more similar completed-session VWAP, "
+                        "breakout, bounce, pullback, stair-step, volume-acceleration, price, range, and "
+                        "liquidity behavior receive more influence. The held-out stock is never used in "
+                        "training, and the similarity fingerprint never uses the current session's future."
                     )
 
             if ml_archetype_validation:
