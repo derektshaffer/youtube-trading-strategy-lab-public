@@ -204,3 +204,39 @@ def test_cross_stock_dataset_limits_to_recent_actual_trading_sessions():
     assert report["market_session_dates"] == ["2026-08-25", "2026-08-28"]
     assert report["by_symbol"][0]["market_sessions"] == ["2026-08-25", "2026-08-28"]
     assert {row["session"] for row in report["records"]} == {"2026-08-25", "2026-08-28"}
+
+def test_walk_forward_can_predict_trade_quality_target():
+    dataset = deepcopy(_synthetic_dataset())
+    dataset["profit_target_pct"] = 1.0
+    dataset["stop_loss_pct"] = 0.75
+    dataset["barrier_same_bar_policy"] = "stop_first_conservative"
+    dataset["label_columns"] = list(dataset["label_columns"]) + [
+        "label__target_before_stop_1bar"
+    ]
+    for row in dataset["records"]:
+        row["label__target_before_stop_1bar"] = row["label__positive_return_1bar"]
+
+    report = walk_forward_logistic_baseline(
+        dataset,
+        target_horizon=1,
+        target_mode="target_before_stop",
+        min_train_sessions=4,
+        test_sessions_per_fold=2,
+        embargo_sessions=1,
+        min_train_rows=50,
+    )
+    assert report["status"] == "EVALUATED"
+    assert report["target_mode"] == "target_before_stop"
+    assert report["target"] == "label__target_before_stop_1bar"
+    assert "+1%" in report["target_description"]
+    assert report["roc_auc"] is not None and report["roc_auc"] > 0.95
+
+
+def test_walk_forward_rejects_unknown_target_mode():
+    with pytest.raises(ValueError):
+        walk_forward_logistic_baseline(
+            _synthetic_dataset(),
+            target_horizon=1,
+            target_mode="not-a-target",
+        )
+
