@@ -54,14 +54,21 @@ CATALYST_RULES: tuple[tuple[str, float, tuple[str, ...]], ...] = (
         ("investigation", "subpoena", "lawsuit", "class action", "sec charges", "fraud"),
     ),
     (
-        "FDA / clinical catalyst",
+        "FDA approval / clearance",
         9.0,
         (
             "fda approval",
+            "fda approves",
             "fda clears",
             "fda clearance",
             "breakthrough therapy",
             "fast track designation",
+        ),
+    ),
+    (
+        "clinical trial update",
+        0.0,
+        (
             "phase 1",
             "phase 2",
             "phase 3",
@@ -72,7 +79,7 @@ CATALYST_RULES: tuple[tuple[str, float, tuple[str, ...]], ...] = (
     ),
     (
         "merger / acquisition",
-        9.0,
+        0.0,
         (
             "merger",
             "acquisition",
@@ -85,7 +92,7 @@ CATALYST_RULES: tuple[tuple[str, float, tuple[str, ...]], ...] = (
     ),
     (
         "major commercial deal",
-        7.0,
+        6.0,
         (
             "purchase order",
             "contract award",
@@ -97,18 +104,25 @@ CATALYST_RULES: tuple[tuple[str, float, tuple[str, ...]], ...] = (
         ),
     ),
     (
-        "earnings / guidance",
+        "positive earnings / guidance",
         6.0,
+        (
+            "raises guidance",
+            "raised guidance",
+            "beats estimates",
+            "beat estimates",
+            "record revenue",
+            "record quarterly revenue",
+        ),
+    ),
+    (
+        "earnings / financial results",
+        0.0,
         (
             "earnings",
             "quarterly results",
             "financial results",
-            "raises guidance",
-            "raised guidance",
             "revenue guidance",
-            "beats estimates",
-            "record revenue",
-            "profit",
         ),
     ),
     (
@@ -122,7 +136,6 @@ CATALYST_RULES: tuple[tuple[str, float, tuple[str, ...]], ...] = (
         ("upgraded", "upgrade", "price target raised", "raises price target", "initiates coverage"),
     ),
 )
-
 
 def _article_timestamp(article: dict[str, Any]) -> datetime | None:
     raw = article.get("created_at") or article.get("published_at") or article.get("updated_at")
@@ -149,7 +162,13 @@ def classify_catalyst(article: dict[str, Any]) -> dict[str, Any]:
             matches.append({"category": category, "score": score, "keywords": found})
 
     if matches:
-        strongest = max(matches, key=lambda item: abs(float(item["score"])))
+        strongest = max(
+            matches,
+            key=lambda item: (
+                abs(float(item["score"])),
+                len(item.get("keywords") or []),
+            ),
+        )
         category = strongest["category"]
         score = float(strongest["score"])
         keywords = strongest["keywords"]
@@ -170,10 +189,18 @@ def classify_catalyst(article: dict[str, Any]) -> dict[str, Any]:
         "category": category,
         "score": score,
         "keywords": keywords,
-        "is_specific_catalyst": bool(score),
+        "is_specific_catalyst": bool(matches),
+        "is_directional_hint": bool(matches) and score != 0,
+        "direction_requires_context": bool(matches) and score == 0,
         "is_positive": score > 0,
         "is_negative": score < 0,
-        "is_dilution_risk": category in {"offering / dilution risk", "delisting / reverse split risk"},
+        "is_dilution_risk": category == "offering / dilution risk",
+        "is_structural_risk": category in {
+            "offering / dilution risk",
+            "delisting / reverse split risk",
+            "bankruptcy / severe distress",
+            "legal / regulatory risk",
+        },
         "evidence_type": "news",
         "source_quality": "news",
         "fingerprint": fingerprint_text,
