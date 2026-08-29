@@ -34,6 +34,7 @@ from anchored_vwap_engine import (
     SUPPORTED_AVWAP_ANCHOR_MODES,
     apply_anchored_vwap_indicators,
 )
+from market_features import add_causal_market_feature_columns
 
 
 ET = ZoneInfo("America/New_York")
@@ -426,6 +427,41 @@ MACHINE_RULE_SCHEMA: dict[str, Any] = {
         "above_vwap": NULLABLE_BOOLEAN,
         "vwap_reclaim": NULLABLE_BOOLEAN,
         "max_vwap_distance_pct": NULLABLE_NUMBER,
+        "minimum_vwap_hold_bars": NULLABLE_INTEGER,
+        "require_vwap_reclaim_hold": NULLABLE_BOOLEAN,
+        "avoid_vwap_rejection": NULLABLE_BOOLEAN,
+        "require_vwap_retest_held": NULLABLE_BOOLEAN,
+        "avoid_vwap_retest_failed": NULLABLE_BOOLEAN,
+        "min_volume_acceleration_ratio": NULLABLE_NUMBER,
+        "require_volume_accelerating": NULLABLE_BOOLEAN,
+        "min_atr_pct": NULLABLE_NUMBER,
+        "max_atr_pct": NULLABLE_NUMBER,
+        "require_uptrend_structure": NULLABLE_BOOLEAN,
+        "require_breakout_above_confirmed_swing_high": NULLABLE_BOOLEAN,
+        "avoid_failed_breakout": NULLABLE_BOOLEAN,
+        "minimum_breakout_hold_bars": NULLABLE_INTEGER,
+        "min_breakout_volume_ratio": NULLABLE_NUMBER,
+        "minimum_completed_bounces": NULLABLE_INTEGER,
+        "require_bounce_2_present": NULLABLE_BOOLEAN,
+        "require_bounce_3_present": NULLABLE_BOOLEAN,
+        "min_latest_bounce_recovery_pct": NULLABLE_NUMBER,
+        "avoid_bounce_deterioration": NULLABLE_BOOLEAN,
+        "require_bounce_strengthening": NULLABLE_BOOLEAN,
+        "require_bounce_sequence_higher_lows": NULLABLE_BOOLEAN,
+        "require_bounce_sequence_higher_highs": NULLABLE_BOOLEAN,
+        "min_latest_bounce_volume_ratio": NULLABLE_NUMBER,
+        "avoid_bounce_structural_weakening": NULLABLE_BOOLEAN,
+        "require_bounce_structural_strengthening": NULLABLE_BOOLEAN,
+        "require_stair_step_up": NULLABLE_BOOLEAN,
+        "avoid_stair_step_down": NULLABLE_BOOLEAN,
+        "require_consolidation_expansion_up": NULLABLE_BOOLEAN,
+        "avoid_consolidation_expansion_down": NULLABLE_BOOLEAN,
+        "max_base_range_atr_ratio": NULLABLE_NUMBER,
+        "min_expansion_volume_ratio": NULLABLE_NUMBER,
+        "require_pullback_higher_low": NULLABLE_BOOLEAN,
+        "require_strong_pullback": NULLABLE_BOOLEAN,
+        "max_pullback_depth_pct_of_impulse": NULLABLE_NUMBER,
+        "max_pullback_volume_ratio": NULLABLE_NUMBER,
         "avwap_anchor_mode": NULLABLE_STRING,
         "avwap_pivot_confirm_bars": NULLABLE_INTEGER,
         "avwap_anchor_session_minute": NULLABLE_INTEGER,
@@ -600,6 +636,9 @@ For each setup:
 - Provide exact source timestamps for the most useful evidence and distinguish visual evidence
   from spoken evidence. If small chart text is unreadable, say so; do not invent values or tickers.
 - Capture the stock universe, price range, liquidity, relative volume, VWAP, breakout level,
+  VWAP reclaim/retest quality, volume acceleration, ATR/volatility, confirmed market structure,
+  bounce #2/#3 behavior and structural strength, pullback depth/volume quality, stair-step
+  continuation, and consolidation-to-expansion behavior when the source states them.
   opening range, prior-day/session conditions, trend, entry trigger, stop, target, reward/risk,
   session time, news catalyst, and explicit reasons to avoid the setup whenever the presenter gives them.
 - Preserve anchored-VWAP structure explicitly. When the source clearly identifies a causal anchor,
@@ -756,6 +795,11 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
         "min_price", "max_price", "min_day_change_pct", "min_relative_volume", "min_dollar_volume",
         "min_previous_day_volume_ratio", "min_previous_day_change_pct",
         "max_spread_pct", "max_vwap_distance_pct", "max_avwap_distance_pct", "avwap_pullback_tolerance_pct", "stop_avwap_buffer_pct", "volume_surge_ratio", "stop_loss_pct", "reward_risk",
+        "min_volume_acceleration_ratio", "min_atr_pct", "max_atr_pct",
+        "min_breakout_volume_ratio", "min_latest_bounce_recovery_pct",
+        "min_latest_bounce_volume_ratio", "max_base_range_atr_ratio",
+        "min_expansion_volume_ratio", "max_pullback_depth_pct_of_impulse",
+        "max_pullback_volume_ratio",
         "max_fast_ema_distance_pct", "pullback_touch_tolerance_pct", "stop_ema_buffer_pct",
         "trailing_stop_pct", "move_stop_to_breakeven_at_r",
         "scale_out_fraction_pct", "scale_out_at_r",
@@ -764,6 +808,7 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
         "breakout_lookback_bars", "opening_range_minutes", "minimum_green_bars", "max_hold_minutes",
         "fast_ema_period", "slow_ema_period", "trend_ema_period", "max_pullback_number",
         "avwap_pivot_confirm_bars", "avwap_anchor_session_minute",
+        "minimum_vwap_hold_bars", "minimum_breakout_hold_bars", "minimum_completed_bounces",
     }
     boolean_fields = {
         "above_vwap", "vwap_reclaim", "catalyst_required", "previous_day_high_breakout",
@@ -775,6 +820,17 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
         "trail_below_vwap", "trail_below_fast_ema", "trail_below_avwap",
         "require_price_above_avwap", "avwap_reclaim", "require_avwap_rising",
         "require_avwap_pullback", "stop_below_avwap", "exit_below_avwap",
+        "require_vwap_reclaim_hold", "avoid_vwap_rejection",
+        "require_vwap_retest_held", "avoid_vwap_retest_failed",
+        "require_volume_accelerating", "require_uptrend_structure",
+        "require_breakout_above_confirmed_swing_high", "avoid_failed_breakout",
+        "require_bounce_2_present", "require_bounce_3_present",
+        "avoid_bounce_deterioration", "require_bounce_strengthening",
+        "require_bounce_sequence_higher_lows", "require_bounce_sequence_higher_highs",
+        "avoid_bounce_structural_weakening", "require_bounce_structural_strengthening",
+        "require_stair_step_up", "avoid_stair_step_down",
+        "require_consolidation_expansion_up", "avoid_consolidation_expansion_down",
+        "require_pullback_higher_low", "require_strong_pullback",
     }
     string_fields = {"avwap_anchor_mode"}
     for name in MACHINE_RULE_SCHEMA["properties"]:
@@ -800,6 +856,11 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
         "min_previous_day_volume_ratio", "max_spread_pct", "max_vwap_distance_pct",
         "max_avwap_distance_pct", "avwap_pullback_tolerance_pct", "stop_avwap_buffer_pct",
         "volume_surge_ratio", "stop_loss_pct", "reward_risk",
+        "min_volume_acceleration_ratio", "min_atr_pct", "max_atr_pct",
+        "min_breakout_volume_ratio", "min_latest_bounce_recovery_pct",
+        "min_latest_bounce_volume_ratio", "max_base_range_atr_ratio",
+        "min_expansion_volume_ratio", "max_pullback_depth_pct_of_impulse",
+        "max_pullback_volume_ratio",
         "max_fast_ema_distance_pct", "pullback_touch_tolerance_pct", "stop_ema_buffer_pct",
         "trailing_stop_pct", "move_stop_to_breakeven_at_r",
         "scale_out_fraction_pct", "scale_out_at_r",
@@ -814,6 +875,33 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
         result["avwap_anchor_session_minute"] = None
     if result.get("max_avwap_distance_pct") is not None and result["max_avwap_distance_pct"] > 100:
         result["max_avwap_distance_pct"] = None
+    for name, maximum in (
+        ("minimum_vwap_hold_bars", 120),
+        ("minimum_breakout_hold_bars", 120),
+        ("minimum_completed_bounces", 3),
+    ):
+        if result.get(name) is not None and not 1 <= int(result[name]) <= maximum:
+            result[name] = None
+    for name, maximum in (
+        ("min_volume_acceleration_ratio", 100.0),
+        ("min_atr_pct", 500.0),
+        ("max_atr_pct", 500.0),
+        ("min_breakout_volume_ratio", 100.0),
+        ("min_latest_bounce_recovery_pct", 500.0),
+        ("min_latest_bounce_volume_ratio", 100.0),
+        ("max_base_range_atr_ratio", 100.0),
+        ("min_expansion_volume_ratio", 100.0),
+        ("max_pullback_depth_pct_of_impulse", 500.0),
+        ("max_pullback_volume_ratio", 100.0),
+    ):
+        if result.get(name) is not None and result[name] > maximum:
+            result[name] = None
+    if (
+        result.get("min_atr_pct") is not None
+        and result.get("max_atr_pct") is not None
+        and result["min_atr_pct"] > result["max_atr_pct"]
+    ):
+        result["min_atr_pct"], result["max_atr_pct"] = result["max_atr_pct"], result["min_atr_pct"]
     if result.get("avwap_pullback_tolerance_pct") is not None and result["avwap_pullback_tolerance_pct"] > 20:
         result["avwap_pullback_tolerance_pct"] = None
     if result.get("stop_avwap_buffer_pct") is not None and result["stop_avwap_buffer_pct"] > 20:
@@ -3468,6 +3556,7 @@ def add_indicators(frame: pd.DataFrame, strategy: dict[str, Any]) -> pd.DataFram
         & (data["close"] > data["pullback_reference_high"])
         & (data["close"] > data["open"])
     )
+    data = add_causal_market_feature_columns(data)
     data = apply_anchored_vwap_indicators(data, rules)
     return data
 
@@ -3653,6 +3742,19 @@ def evaluate_signal(
         ("max_fast_ema_distance_pct", "fast_ema_distance_pct", lambda actual, target: actual <= target),
         ("volume_surge_ratio", "volume_surge", lambda actual, target: actual >= target),
         ("minimum_green_bars", "green_streak", lambda actual, target: actual >= target),
+        ("minimum_vwap_hold_bars", "vwap_hold_bars", lambda actual, target: actual >= target),
+        ("min_volume_acceleration_ratio", "volume_acceleration_ratio", lambda actual, target: actual >= target),
+        ("min_atr_pct", "atr_pct", lambda actual, target: actual >= target),
+        ("max_atr_pct", "atr_pct", lambda actual, target: actual <= target),
+        ("minimum_breakout_hold_bars", "breakout_hold_bars", lambda actual, target: actual >= target),
+        ("min_breakout_volume_ratio", "breakout_volume_ratio", lambda actual, target: actual >= target),
+        ("minimum_completed_bounces", "completed_bounce_count", lambda actual, target: actual >= target),
+        ("min_latest_bounce_recovery_pct", "latest_bounce_recovery_pct", lambda actual, target: actual >= target),
+        ("min_latest_bounce_volume_ratio", "latest_bounce_volume_ratio_vs_prior", lambda actual, target: actual >= target),
+        ("max_base_range_atr_ratio", "base_range_atr_ratio", lambda actual, target: actual <= target),
+        ("min_expansion_volume_ratio", "expansion_volume_ratio", lambda actual, target: actual >= target),
+        ("max_pullback_depth_pct_of_impulse", "pullback_depth_pct_of_impulse", lambda actual, target: actual <= target),
+        ("max_pullback_volume_ratio", "pullback_volume_ratio", lambda actual, target: actual <= target),
     ]
     for rule_name, field_name, comparator in comparisons:
         threshold = rules.get(rule_name)
@@ -3675,6 +3777,33 @@ def evaluate_signal(
             return False
         if not (float(row["previous_close"]) <= float(row["previous_vwap"]) and close > float(row["vwap"])):
             return False
+    for rule_name, feature_name, expected in (
+        ("require_vwap_reclaim_hold", "vwap_reclaim_recent", True),
+        ("avoid_vwap_rejection", "vwap_rejection_recent", False),
+        ("require_vwap_retest_held", "vwap_retest_held", True),
+        ("avoid_vwap_retest_failed", "vwap_retest_failed", False),
+        ("require_volume_accelerating", "volume_accelerating", True),
+        ("require_uptrend_structure", "uptrend_structure", True),
+        ("require_breakout_above_confirmed_swing_high", "breakout_above_last_swing_high", True),
+        ("avoid_failed_breakout", "failed_breakout_last_swing_high", False),
+        ("require_bounce_2_present", "bounce_2_present", True),
+        ("require_bounce_3_present", "bounce_3_present", True),
+        ("avoid_bounce_deterioration", "bounce_deteriorating", False),
+        ("require_bounce_strengthening", "bounce_strengthening", True),
+        ("require_bounce_sequence_higher_lows", "bounce_sequence_higher_lows", True),
+        ("require_bounce_sequence_higher_highs", "bounce_sequence_higher_highs", True),
+        ("avoid_bounce_structural_weakening", "bounce_structural_weakening", False),
+        ("require_bounce_structural_strengthening", "bounce_structural_strengthening", True),
+        ("require_stair_step_up", "stair_step_up", True),
+        ("avoid_stair_step_down", "stair_step_down", False),
+        ("require_consolidation_expansion_up", "consolidation_then_expansion_up", True),
+        ("avoid_consolidation_expansion_down", "consolidation_then_expansion_down", False),
+        ("require_pullback_higher_low", "pullback_higher_low", True),
+    ):
+        if rules.get(rule_name) is True and bool(row.get(feature_name)) is not expected:
+            return False
+    if rules.get("require_strong_pullback") is True and row.get("pullback_quality") != "strong":
+        return False
 
     if rules.get("avwap_anchor_mode") is not None and not has_number("avwap"):
         return False
