@@ -26,6 +26,7 @@ from predictive_ml_pipeline import (
     archetype_transfer_walk_forward_logistic_baseline,
     build_cross_stock_training_dataset,
     leave_one_symbol_out_walk_forward_logistic_baseline,
+    similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline,
     walk_forward_logistic_baseline,
 )
 from trading_app_runtime import market_client, setting
@@ -6787,15 +6788,18 @@ elif module == "Pattern Validation":
             )
         )
 
-    ml_run_archetype_transfer = st.checkbox(
-        "Also run within-vs-across archetype transfer validation",
-        value=False,
+    ml_run_similarity_validation = st.checkbox(
+        "Also run continuous stock-similarity validation",
+        value=True,
         help=(
-            "This is a heavier research test. Each stock is held out, then same-archetype training "
-            "is compared with different-archetype training on identical future rows."
+            "Recommended research test. Each stock is held out completely, then historical rows "
+            "that behave more like it receive more influence without discarding the other stocks."
         ),
-        key="til_ml_run_archetype_transfer",
+        key="til_ml_run_similarity_validation",
     )
+    # Retain the old archetype validator in code for research reproducibility, but
+    # do not surface it in the main workflow now that hard-bucket transfer underperformed.
+    ml_run_archetype_transfer = False
 
     if ml_target_mode == "target_before_stop":
         st.info(
@@ -6993,6 +6997,41 @@ elif module == "Pattern Validation":
             except AppError as exc:
                 st.session_state["til_predictive_ml_persist_error"] = str(exc)
 
+            ml_similarity_validation = {}
+            if ml_run_similarity_validation:
+                update_task_bar(
+                    ml_bar,
+                    ml_monitor,
+                    0.96,
+                    "Testing continuous behavioral similarity weighting…",
+                )
+                ml_similarity_validation = (
+                    similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline(
+                        ml_dataset,
+                        target_horizon=ml_horizon,
+                        target_mode=ml_target_mode,
+                        min_train_sessions=8,
+                        test_sessions_per_fold=2,
+                        embargo_sessions=1,
+                        min_train_rows=250,
+                        min_test_rows=20,
+                    )
+                )
+                compact_ml_similarity_validation = {
+                    key: value
+                    for key, value in ml_similarity_validation.items()
+                    if key != "predictions"
+                }
+                completed_ml_result["similarity_validation"] = compact_ml_similarity_validation
+                completed_ml_result["checkpoint_stage"] = "similarity_complete"
+                completed_ml_result["completed_at"] = utc_now().isoformat()
+                st.session_state["til_predictive_ml_result"] = completed_ml_result
+                try:
+                    persist_predictive_ml_result(completed_ml_result)
+                    st.session_state["til_predictive_ml_persist_error"] = ""
+                except AppError as exc:
+                    st.session_state["til_predictive_ml_persist_error"] = str(exc)
+
             ml_archetype_validation = {}
             if ml_run_archetype_transfer:
                 update_task_bar(
@@ -7065,6 +7104,7 @@ elif module == "Pattern Validation":
     ml_dataset_summary = stored_ml_result.get("dataset_summary") or {}
     ml_evaluation = stored_ml_result.get("evaluation") or {}
     ml_generalization = stored_ml_result.get("generalization") or {}
+    ml_similarity_validation = stored_ml_result.get("similarity_validation") or {}
     ml_archetype_validation = stored_ml_result.get("archetype_validation") or {}
     if ml_evaluation:
         st.divider()
@@ -7214,6 +7254,71 @@ elif module == "Pattern Validation":
                     "The model also trained only on earlier market sessions from the other stocks, "
                     "so this tests cross-stock transfer without ticker or future-session leakage."
                 )
+
+            if ml_similarity_validation:
+                st.markdown("#### Continuous behavioral similarity")
+                if str(ml_similarity_validation.get("status") or "") != "EVALUATED":
+                    st.warning(
+                        "Similarity-weighted validation could not be evaluated: "
+                        + str(
+                            ml_similarity_validation.get("reason")
+                            or "not enough continuous context or held-out history."
+                        )
+                    )
+                else:
+                    sim_cols = st.columns(4)
+                    base_auc = safe_float(ml_similarity_validation.get("baseline_roc_auc"))
+                    sim_auc = safe_float(ml_similarity_validation.get("similarity_roc_auc"))
+                    auc_delta = safe_float(
+                        ml_similarity_validation.get("similarity_minus_baseline_auc")
+                    )
+                    sim_skill = safe_float(
+                        ml_similarity_validation.get("similarity_brier_skill_vs_naive")
+                    )
+                    sim_cols[0].metric(
+                        "Unweighted AUC",
+                        "—" if base_auc is None else f"{base_auc:.3f}",
+                    )
+                    sim_cols[1].metric(
+                        "Similarity AUC",
+                        "—" if sim_auc is None else f"{sim_auc:.3f}",
+                    )
+                    sim_cols[2].metric(
+                        "AUC improvement",
+                        "—" if auc_delta is None else f"{auc_delta:+.3f}",
+                    )
+                    sim_cols[3].metric(
+                        "Similarity Brier skill",
+                        "—" if sim_skill is None else f"{sim_skill * 100:.1f}%",
+                    )
+                    similarity_rows = []
+                    for item in ml_similarity_validation.get("by_symbol") or []:
+                        similarity_rows.append(
+                            {
+                                "Held-out stock": item.get("symbol"),
+                                "Rows": int(item.get("oos_rows") or 0),
+                                "Unweighted AUC": safe_float(item.get("baseline_roc_auc")),
+                                "Similarity AUC": safe_float(item.get("similarity_roc_auc")),
+                                "AUC improvement": safe_float(
+                                    item.get("similarity_minus_baseline_auc")
+                                ),
+                                "Similarity Brier skill": safe_float(
+                                    item.get("similarity_brier_skill_vs_naive")
+                                ),
+                            }
+                        )
+                    if similarity_rows:
+                        st.dataframe(
+                            pd.DataFrame(similarity_rows),
+                            width="stretch",
+                            hide_index=True,
+                        )
+                    st.caption(
+                        "This test does not put stocks into fixed families. Every eligible historical "
+                        "training row remains available, but rows with more similar prior-session price, "
+                        "range, and liquidity behavior receive more influence. The held-out stock is never "
+                        "used in training, and similarity is calculated from causal prior-session context."
+                    )
 
             if ml_archetype_validation:
                 st.markdown("#### Within-archetype vs across-archetype transfer")
