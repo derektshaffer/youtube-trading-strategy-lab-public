@@ -37,7 +37,7 @@ def _number(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
-MARKET_SESSION_MODES = ("regular", "extended")
+MARKET_SESSION_MODES = ("regular", "premarket", "afterhours")
 
 
 def _normalize_market_session_mode(value: str) -> str:
@@ -46,13 +46,15 @@ def _normalize_market_session_mode(value: str) -> str:
         "regular": "regular",
         "regular_hours": "regular",
         "rth": "regular",
-        "extended": "extended",
-        "extended_hours": "extended",
-        "premarket_afterhours": "extended",
+        "premarket": "premarket",
+        "pre_market": "premarket",
+        "afterhours": "afterhours",
+        "after_hours": "afterhours",
+        "postmarket": "afterhours",
     }
     normalized = aliases.get(mode)
     if normalized is None:
-        raise ValueError("session_mode must be 'regular' or 'extended'.")
+        raise ValueError("session_mode must be 'regular', 'premarket', or 'afterhours'.")
     return normalized
 
 
@@ -60,9 +62,11 @@ def _filter_rows_by_market_session(
     rows: list[dict[str, Any]],
     session_mode: str,
 ) -> list[dict[str, Any]]:
-    """Keep either the regular U.S. session or premarket/after-hours bars.
+    """Keep exactly one continuous U.S. equity market-hours regime.
 
-    Regular is 09:30-16:00 ET. Extended is 04:00-09:30 ET plus 16:00-20:00 ET.
+    Regular is 09:30-16:00 ET, premarket is 04:00-09:30 ET, and after-hours is
+    16:00-20:00 ET. Premarket and after-hours are deliberately separate so a
+    forward label can never jump across the regular-session gap.
     Rows without parseable timestamps are excluded because they cannot be assigned
     safely to a market-hours regime.
     """
@@ -81,8 +85,13 @@ def _filter_rows_by_market_session(
         local = stamp.tz_convert("America/New_York")
         minute = int(local.hour) * 60 + int(local.minute)
         is_regular = (9 * 60 + 30) <= minute < (16 * 60)
-        is_extended = (4 * 60) <= minute < (20 * 60) and not is_regular
-        if (mode == "regular" and is_regular) or (mode == "extended" and is_extended):
+        is_premarket = (4 * 60) <= minute < (9 * 60 + 30)
+        is_afterhours = (16 * 60) <= minute < (20 * 60)
+        if (
+            (mode == "regular" and is_regular)
+            or (mode == "premarket" and is_premarket)
+            or (mode == "afterhours" and is_afterhours)
+        ):
             selected.append(dict(raw))
     return selected
 
@@ -106,9 +115,8 @@ def build_cross_stock_training_dataset(
 ) -> dict[str, Any]:
     """Build one supervised dataset across many symbols from a single batched bar load.
 
-    session_mode="regular" keeps 09:30-16:00 ET. session_mode="extended" keeps
-    premarket 04:00-09:30 ET plus after-hours 16:00-20:00 ET. The two regimes are
-    never mixed inside one dataset.
+    session_mode="regular" keeps 09:30-16:00 ET, "premarket" keeps 04:00-09:30 ET,
+    and "afterhours" keeps 16:00-20:00 ET. Regimes are never mixed in one dataset.
     """
     clean = parse_symbols(symbols)
     clean_horizons = tuple(sorted({max(1, int(value)) for value in horizons}))
@@ -133,11 +141,11 @@ def build_cross_stock_training_dataset(
             "stop_loss_pct": float(clean_stop_loss),
             "barrier_same_bar_policy": "stop_first_conservative",
             "session_mode": clean_session_mode,
-            "session_window_et": (
-                "09:30-16:00"
-                if clean_session_mode == "regular"
-                else "04:00-09:30 + 16:00-20:00"
-            ),
+            "session_window_et": {
+                "regular": "09:30-16:00",
+                "premarket": "04:00-09:30",
+                "afterhours": "16:00-20:00",
+            }[clean_session_mode],
             "records": [],
         }
 
@@ -238,11 +246,11 @@ def build_cross_stock_training_dataset(
         "stop_loss_pct": float(clean_stop_loss),
         "barrier_same_bar_policy": "stop_first_conservative",
         "session_mode": clean_session_mode,
-        "session_window_et": (
-            "09:30-16:00"
-            if clean_session_mode == "regular"
-            else "04:00-09:30 + 16:00-20:00"
-        ),
+        "session_window_et": {
+            "regular": "09:30-16:00",
+            "premarket": "04:00-09:30",
+            "afterhours": "16:00-20:00",
+        }[clean_session_mode],
         "row_count": len(records),
         "feature_columns": sorted(feature_columns),
         "label_columns": sorted(label_columns),
@@ -253,7 +261,7 @@ def build_cross_stock_training_dataset(
             "from the same market session and must never be supplied to a model as inputs. "
             "Trade-quality labels count an upside target only when it is reached before the "
             "downside barrier; same-candle target/stop ambiguity is scored conservatively as stop first. "
-            f"Market-hours regime: {clean_session_mode}; regular and extended-hours rows are never mixed."
+            f"Market-hours regime: {clean_session_mode}; regular, premarket, and after-hours rows are never mixed."
         ),
     }
 
