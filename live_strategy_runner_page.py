@@ -15,6 +15,7 @@ import streamlit as st
 
 from app_access import require_app_access
 from trading_app_runtime import market_client, setting
+from trading_intelligence_core import paper_execution_fidelity
 from trading_progress_ui import LongTaskMonitor, session_task_profiles
 from alpaca_paper_trader import (
     AlpacaPaperTrader,
@@ -257,6 +258,20 @@ def paper_entry(
         return {"submitted": False, "message": "No paper order: at least one rule still needs verification."}
     if not is_long_strategy(strategy):
         return {"submitted": False, "message": "Paper Auto currently supports LONG strategies only."}
+
+    execution_fidelity = paper_execution_fidelity(strategy)
+    if str(execution_fidelity.get("status") or "") != "ready":
+        unsupported = ", ".join(
+            str(item) for item in execution_fidelity.get("unsupported_management") or []
+        )
+        detail = unsupported or str(execution_fidelity.get("reason") or "trade-management mismatch")
+        return {
+            "submitted": False,
+            "message": (
+                "No paper order: Paper Auto cannot yet reproduce this strategy's validated "
+                f"trade management ({detail})."
+            ),
+        }
 
     fresh, freshness_message, _ = market_data_freshness(metrics)
     if not fresh:
