@@ -120,7 +120,15 @@ def build_shadow_observation(
     if not symbol or price is None or price <= 0:
         return None
 
-    observed = observed_at or datetime.now(timezone.utc)
+    # Anchor the observation to the market event that supplied the live price.
+    # A broad batched scan can finish minutes after its early batches; using the
+    # UI completion time would shift those labels forward and distort outcomes.
+    observed = (
+        _parse_time(metrics.get("trade_timestamp"))
+        or _parse_time(metrics.get("quote_timestamp"))
+        or observed_at
+        or datetime.now(timezone.utc)
+    )
     if observed.tzinfo is None:
         observed = observed.replace(tzinfo=timezone.utc)
     observed = observed.astimezone(timezone.utc)
