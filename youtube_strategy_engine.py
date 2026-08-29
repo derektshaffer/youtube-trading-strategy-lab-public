@@ -7465,6 +7465,11 @@ def match_strategy(metrics: dict[str, Any], strategy: dict[str, Any]) -> dict[st
     rules = normalize_machine_rules(strategy.get("machine_rules"))
     checks: list[dict[str, Any]] = []
     chart_checks = metrics.get("chart_checks") if isinstance(metrics.get("chart_checks"), dict) else {}
+    market_features = (
+        metrics.get("market_features")
+        if isinstance(metrics.get("market_features"), dict)
+        else {}
+    )
 
     def check(label: str, actual: Any, required: Any, compare: Callable[[float, float], bool]) -> None:
         if required is None:
@@ -7475,6 +7480,29 @@ def match_strategy(metrics: dict[str, Any], strategy: dict[str, Any]) -> dict[st
         else:
             status = "pass" if compare(actual_float, float(required)) else "fail"
         checks.append({"label": label, "actual": actual, "required": required, "status": status})
+
+    def check_market_flag(
+        label: str,
+        feature_name: str,
+        rule_name: str,
+        *,
+        expected: bool,
+    ) -> None:
+        if rules.get(rule_name) is not True:
+            return
+        actual = market_features.get(feature_name)
+        if actual is None:
+            status = "unknown"
+        else:
+            status = "pass" if bool(actual) is expected else "fail"
+        checks.append(
+            {
+                "label": label,
+                "actual": actual,
+                "required": expected,
+                "status": status,
+            }
+        )
 
     check("Minimum price", metrics.get("price"), rules.get("min_price"), lambda actual, expected: actual >= expected)
     check("Maximum price", metrics.get("price"), rules.get("max_price"), lambda actual, expected: actual <= expected)
@@ -7495,6 +7523,29 @@ def match_strategy(metrics: dict[str, Any], strategy: dict[str, Any]) -> dict[st
     )
     check("Maximum spread %", metrics.get("spread_pct"), rules.get("max_spread_pct"), lambda actual, expected: actual <= expected)
     check("Maximum VWAP extension %", metrics.get("vwap_distance_pct"), rules.get("max_vwap_distance_pct"), lambda actual, expected: actual <= expected)
+    check("VWAP hold bars", market_features.get("vwap_hold_bars"), rules.get("minimum_vwap_hold_bars"), lambda actual, expected: actual >= expected)
+    check("Volume acceleration ratio", market_features.get("volume_acceleration_ratio"), rules.get("min_volume_acceleration_ratio"), lambda actual, expected: actual >= expected)
+    check("Minimum ATR %", market_features.get("atr_pct"), rules.get("min_atr_pct"), lambda actual, expected: actual >= expected)
+    check("Maximum ATR %", market_features.get("atr_pct"), rules.get("max_atr_pct"), lambda actual, expected: actual <= expected)
+    check("Completed bounce count", market_features.get("completed_bounce_count"), rules.get("minimum_completed_bounces"), lambda actual, expected: actual >= expected)
+    check("Latest bounce recovery %", market_features.get("latest_bounce_recovery_pct"), rules.get("min_latest_bounce_recovery_pct"), lambda actual, expected: actual >= expected)
+    check("Maximum base range / ATR", market_features.get("base_range_atr_ratio"), rules.get("max_base_range_atr_ratio"), lambda actual, expected: actual <= expected)
+    check("Expansion volume ratio", market_features.get("expansion_volume_ratio"), rules.get("min_expansion_volume_ratio"), lambda actual, expected: actual >= expected)
+
+    check_market_flag("VWAP reclaim held", "vwap_reclaim_recent", "require_vwap_reclaim_hold", expected=True)
+    check_market_flag("No recent VWAP rejection", "vwap_rejection_recent", "avoid_vwap_rejection", expected=False)
+    check_market_flag("Volume accelerating", "volume_accelerating", "require_volume_accelerating", expected=True)
+    check_market_flag("Confirmed HH/HL uptrend", "uptrend_structure", "require_uptrend_structure", expected=True)
+    check_market_flag("Confirmed-swing breakout", "breakout_above_last_swing_high", "require_breakout_above_confirmed_swing_high", expected=True)
+    check_market_flag("No failed confirmed-swing breakout", "failed_breakout_last_swing_high", "avoid_failed_breakout", expected=False)
+    check_market_flag("Bounce #2 present", "bounce_2_present", "require_bounce_2_present", expected=True)
+    check_market_flag("Bounce #3 present", "bounce_3_present", "require_bounce_3_present", expected=True)
+    check_market_flag("No bounce deterioration", "bounce_deteriorating", "avoid_bounce_deterioration", expected=False)
+    check_market_flag("Bounce strengthening", "bounce_strengthening", "require_bounce_strengthening", expected=True)
+    check_market_flag("Stair-step up", "stair_step_up", "require_stair_step_up", expected=True)
+    check_market_flag("No stair-step down", "stair_step_down", "avoid_stair_step_down", expected=False)
+    check_market_flag("Consolidation → expansion up", "consolidation_then_expansion_up", "require_consolidation_expansion_up", expected=True)
+    check_market_flag("No consolidation → expansion down", "consolidation_then_expansion_down", "avoid_consolidation_expansion_down", expected=False)
     if rules.get("above_vwap") is not None:
         required = bool(rules["above_vwap"])
         actual = bool(metrics.get("above_vwap")) if metrics.get("vwap") is not None else None
