@@ -40,15 +40,15 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
                 self.assertEqual(run_module.call_count, 2)
                 run_module.assert_called_with(module_name, run_name="__main__")
 
-    def test_trading_intelligence_sidebar_can_always_be_reopened(self):
-        source = (ROOT / "trading_glass_theme.py").read_text(encoding="utf-8")
-        self.assertIn('data-testid="stSidebarCollapsedControl"', source)
-        self.assertIn('data-testid="collapsedControl"', source)
-        self.assertIn('data-testid="stSidebarCollapseButton"', source)
-        self.assertNotIn(
+    def test_trading_intelligence_sidebar_is_locked_open_on_desktop(self):
+        app_source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        theme_source = (ROOT / "trading_glass_theme.py").read_text(encoding="utf-8")
+        self.assertIn('initial_sidebar_state="locked"', app_source)
+        self.assertIn(
             '[data-testid="stHeader"] {\n            height: 0 !important;',
-            source,
+            theme_source,
         )
+        self.assertNotIn('data-testid="stSidebarCollapsedControl"', theme_source)
 
     def test_trading_intelligence_recovers_known_cloud_divergence_without_blocking_ui(self):
         source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
