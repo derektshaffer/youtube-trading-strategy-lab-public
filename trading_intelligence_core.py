@@ -834,8 +834,8 @@ def upgrade_native_strategy_rules(strategy: dict[str, Any]) -> dict[str, Any]:
     # language still remains a research assumption rather than an invented rule.
     explicit_stage_pairs: list[tuple[float, float]] = []
     for pattern in (
-        r"(?:scale out|scaling out|take partial|sell)[^\.]{0,35}(\d+(?:\.\d+)?)\s*%[^\.]{0,55}?(\d+(?:\.\d+)?)\s*r\b",
-        r"(\d+(?:\.\d+)?)\s*%[^\.]{0,55}?(\d+(?:\.\d+)?)\s*r\b",
+        r"(?:scale out|scaling out|take partial|sell)[^\.]{0,35}(?<![\d.])(\d+(?:\.\d+)?)\s*%[^\.]{0,55}?(\d+(?:\.\d+)?)\s*r\b",
+        r"(?<![\d.])(\d+(?:\.\d+)?)\s*%[^\.]{0,55}?(\d+(?:\.\d+)?)\s*r\b",
     ):
         for fraction_text, r_text in re.findall(pattern, exit_text):
             fraction_value = safe_float(fraction_text)
