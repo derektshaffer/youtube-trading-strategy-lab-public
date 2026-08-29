@@ -499,13 +499,17 @@ def load_library(*, force_cloud_refresh: bool = False) -> dict[str, Any]:
     except AppError:
         pass
 
+    raw_strategy_records = [
+        dict(item)
+        for item in data.get("strategies") or []
+        if isinstance(item, dict)
+    ]
     upgraded_strategies: list[dict[str, Any]] = []
-    for raw in data.get("strategies") or []:
-        if not isinstance(raw, dict):
-            continue
+    for raw in raw_strategy_records:
         upgraded = upgrade_native_strategy_rules(raw)
         upgraded["research_readiness"] = research_readiness(upgraded)
         upgraded_strategies.append(upgraded)
+    native_strategy_changed = upgraded_strategies != raw_strategy_records
     data["strategies"] = upgraded_strategies
 
     data, sources_changed = reconcile_knowledge_sources(data)
@@ -537,7 +541,7 @@ def load_library(*, force_cloud_refresh: bool = False) -> dict[str, Any]:
     canonical_changed = canonical_families != existing_canonical
     data["strategies"] = [*source_and_other, *canonical_families]
 
-    if legacy_changed or sources_changed or canonical_changed:
+    if legacy_changed or native_strategy_changed or sources_changed or canonical_changed:
         try:
             data = store.save(data)
             # save() created a new remote commit, so learn its SHA cheaply on
