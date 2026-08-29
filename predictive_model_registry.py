@@ -49,19 +49,31 @@ def ready_shadow_models(
     for run in runs or []:
         if not isinstance(run, dict):
             continue
-        model = run.get("probability_model")
-        if not isinstance(model, dict) or not model.get("shadow_scoring_enabled"):
-            continue
-        model_id = str(model.get("id") or "").strip()
-        if not model_id or model_id in seen:
-            continue
-        seen.add(model_id)
-        stamp = str(
-            run.get("completed_at")
-            or model.get("created_at")
-            or ""
-        )
-        prepared.append((stamp, deepcopy(model)))
+        candidates = [
+            item
+            for item in run.get("probability_models") or []
+            if isinstance(item, dict)
+        ]
+        legacy = run.get("probability_model")
+        if isinstance(legacy, dict) and not any(
+            str(item.get("id") or "") == str(legacy.get("id") or "")
+            for item in candidates
+        ):
+            candidates.insert(0, legacy)
+
+        for model in candidates:
+            if not model.get("shadow_scoring_enabled"):
+                continue
+            model_id = str(model.get("id") or "").strip()
+            if not model_id or model_id in seen:
+                continue
+            seen.add(model_id)
+            stamp = str(
+                run.get("completed_at")
+                or model.get("created_at")
+                or ""
+            )
+            prepared.append((stamp, deepcopy(model)))
     prepared.sort(key=lambda item: item[0], reverse=True)
     return [model for _, model in prepared[: max(1, int(maximum))]]
 
