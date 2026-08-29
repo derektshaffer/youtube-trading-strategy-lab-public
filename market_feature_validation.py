@@ -172,6 +172,8 @@ def _event_outcomes(
         "directional_returns_pct": {},
         "max_favorable_excursion_pct": None,
         "max_adverse_excursion_pct": None,
+        "directional_max_favorable_excursion_pct": None,
+        "directional_max_adverse_excursion_pct": None,
     }
     if entry is None or entry <= 0:
         return outcomes
@@ -200,6 +202,15 @@ def _event_outcomes(
         outcomes["max_favorable_excursion_pct"] = ((max(highs) / entry) - 1.0) * 100.0
     if lows:
         outcomes["max_adverse_excursion_pct"] = ((min(lows) / entry) - 1.0) * 100.0
+
+    raw_mfe = _number(outcomes.get("max_favorable_excursion_pct"))
+    raw_mae = _number(outcomes.get("max_adverse_excursion_pct"))
+    if direction == 1:
+        outcomes["directional_max_favorable_excursion_pct"] = raw_mfe
+        outcomes["directional_max_adverse_excursion_pct"] = raw_mae
+    elif direction == -1:
+        outcomes["directional_max_favorable_excursion_pct"] = -raw_mae if raw_mae is not None else None
+        outcomes["directional_max_adverse_excursion_pct"] = -raw_mfe if raw_mfe is not None else None
     return outcomes
 
 
@@ -235,6 +246,23 @@ def _summarize_events(
         item["avg_max_favorable_excursion_pct"] = mean(mfes) if mfes else None
         item["avg_max_adverse_excursion_pct"] = mean(maes) if maes else None
 
+        directional_mfes = [
+            _number((event.get("outcomes") or {}).get("directional_max_favorable_excursion_pct"))
+            for event in detector_events
+        ]
+        directional_maes = [
+            _number((event.get("outcomes") or {}).get("directional_max_adverse_excursion_pct"))
+            for event in detector_events
+        ]
+        directional_mfes = [value for value in directional_mfes if value is not None]
+        directional_maes = [value for value in directional_maes if value is not None]
+        item["avg_directional_max_favorable_excursion_pct"] = (
+            mean(directional_mfes) if directional_mfes else None
+        )
+        item["avg_directional_max_adverse_excursion_pct"] = (
+            mean(directional_maes) if directional_maes else None
+        )
+
         for horizon in horizons:
             key = str(horizon)
             returns = [
@@ -257,6 +285,8 @@ def _summarize_events(
                     else None
                 ),
                 "avg_directional_return_pct": mean(directional) if directional else None,
+                "directional_samples": len(directional),
+                "directional_hits": sum(value > 0 for value in directional),
                 "directional_hit_pct": (
                     sum(value > 0 for value in directional) / len(directional) * 100.0
                     if directional
