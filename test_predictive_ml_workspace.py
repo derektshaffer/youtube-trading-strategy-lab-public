@@ -66,13 +66,18 @@ def test_predictive_ml_results_render_without_forced_rerun():
     compact_start = block.index("compact_ml_evaluation = {")
     result_build = block.index("completed_ml_result = {")
     result_store = block.index('st.session_state["til_predictive_ml_result"] = completed_ml_result')
+    generalization_update = block.index(
+        'completed_ml_result["generalization"] = compact_ml_generalization',
+        result_store,
+    )
     result_reader = block.index('stored_ml_result = st.session_state.get("til_predictive_ml_result")')
     result_path = block[compact_start:result_reader]
-    assert compact_start < result_build < result_store < result_reader
+    assert compact_start < result_build < result_store < generalization_update < result_reader
     assert "st.rerun()" not in result_path
     assert 'if key != "predictions"' in result_path
     assert '"evaluation": compact_ml_evaluation' in result_path
-    assert '"generalization": compact_ml_generalization' in result_path
+    assert '"status": "PENDING"' in result_path
+    assert 'completed_ml_result["generalization"] = compact_ml_generalization' in result_path
     assert "Predictive ML results are ready below." in result_path
 
 def test_predictive_ml_workspace_exposes_causal_archetype_context():
