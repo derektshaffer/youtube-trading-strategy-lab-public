@@ -6642,7 +6642,7 @@ elif module == "Pattern Validation":
     )
     ml_days = int(
         ml_cols[1].slider(
-            "ML history (days)",
+            "Trading days",
             12,
             30,
             20,
@@ -6669,7 +6669,8 @@ elif module == "Pattern Validation":
     st.info(
         "The first model is intentionally simple. Its job is to establish a trustworthy benchmark: "
         "can causal market features predict whether price is higher after the selected horizon on "
-        "future market sessions better than simply guessing the historical positive-return rate?"
+        "future market sessions better than simply guessing the historical positive-return rate? "
+        "Trading days means actual U.S. market sessions; weekends and market holidays do not count."
     )
     ml_slot = st.empty()
     run_ml_baseline = ml_slot.button(
@@ -6728,7 +6729,8 @@ elif module == "Pattern Validation":
                 )
             else:
                 ml_end -= timedelta(minutes=1)
-            ml_start = ml_end - timedelta(days=ml_days)
+            ml_calendar_lookback_days = max(20, ml_days * 2 + 5)
+            ml_start = ml_end - timedelta(days=ml_calendar_lookback_days)
             ml_dataset = build_cross_stock_training_dataset(
                 ml_market,
                 ml_symbols,
@@ -6739,6 +6741,7 @@ elif module == "Pattern Validation":
                 swing_radius=3,
                 max_pages=120,
                 require_full_horizon=True,
+                session_limit=ml_days,
                 progress=ml_research_progress,
             )
             update_task_bar(
@@ -6758,6 +6761,7 @@ elif module == "Pattern Validation":
             st.session_state["til_predictive_ml_result"] = {
                 "symbols": ml_symbols,
                 "days": ml_days,
+                "trading_days": ml_days,
                 "horizon": ml_horizon,
                 "dataset_summary": {
                     key: value
