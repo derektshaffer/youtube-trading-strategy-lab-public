@@ -189,44 +189,100 @@ def _event_outcomes(
     *,
     horizons: tuple[int, ...],
     direction: int,
+    profit_target_pct: float | None = None,
+    stop_loss_pct: float | None = None,
 ) -> dict[str, Any]:
+    """Measure future outcomes without allowing future data into the feature row.
+
+    When profit/stop barriers are supplied, a successful trade-quality outcome
+    means the upside target was reached before the downside limit within the
+    selected horizon. If both barriers are touched inside the same candle, the
+    downside barrier wins conservatively because intrabar ordering is unknowable.
+    """
     entry = _close(rows[index])
     outcomes: dict[str, Any] = {
         "entry_price": entry,
         "forward_returns_pct": {},
         "directional_returns_pct": {},
+        "max_favorable_excursion_pct_by_horizon": {},
+        "max_adverse_excursion_pct_by_horizon": {},
+        "target_before_stop_by_horizon": {},
+        "barrier_outcome_by_horizon": {},
         "max_favorable_excursion_pct": None,
         "max_adverse_excursion_pct": None,
         "directional_max_favorable_excursion_pct": None,
         "directional_max_adverse_excursion_pct": None,
+        "profit_target_pct": profit_target_pct,
+        "stop_loss_pct": stop_loss_pct,
     }
     if entry is None or entry <= 0:
         return outcomes
 
+    target_pct = _number(profit_target_pct)
+    stop_pct = _number(stop_loss_pct)
+    use_barriers = (
+        target_pct is not None
+        and stop_pct is not None
+        and target_pct > 0
+        and stop_pct > 0
+    )
+
     for horizon in horizons:
+        key = str(horizon)
         target_index = index + horizon
+        full_window = target_index < len(rows)
         future_return = None
-        if target_index < len(rows):
+        if full_window:
             target_close = _close(rows[target_index])
             if target_close is not None:
                 future_return = ((target_close / entry) - 1.0) * 100.0
-        outcomes["forward_returns_pct"][str(horizon)] = future_return
-        outcomes["directional_returns_pct"][str(horizon)] = (
+        outcomes["forward_returns_pct"][key] = future_return
+        outcomes["directional_returns_pct"][key] = (
             future_return * direction
             if future_return is not None and direction in {-1, 1}
             else None
         )
 
+        future_window = rows[index + 1 : min(len(rows), index + horizon + 1)]
+        highs = [_high(row) for row in future_window]
+        lows = [_low(row) for row in future_window]
+        highs = [value for value in highs if value is not None]
+        lows = [value for value in lows if value is not None]
+        mfe = ((max(highs) / entry) - 1.0) * 100.0 if highs else None
+        mae = ((min(lows) / entry) - 1.0) * 100.0 if lows else None
+        outcomes["max_favorable_excursion_pct_by_horizon"][key] = mfe
+        outcomes["max_adverse_excursion_pct_by_horizon"][key] = mae
+
+        if use_barriers and full_window:
+            target_price = entry * (1.0 + float(target_pct) / 100.0)
+            stop_price = entry * (1.0 - float(stop_pct) / 100.0)
+            barrier_outcome = "none"
+            for future_bar in future_window:
+                high = _high(future_bar)
+                low = _low(future_bar)
+                hit_target = high is not None and high >= target_price
+                hit_stop = low is not None and low <= stop_price
+                if hit_stop:
+                    # Includes same-bar target+stop ambiguity: count downside first.
+                    barrier_outcome = "stop"
+                    break
+                if hit_target:
+                    barrier_outcome = "target"
+                    break
+            outcomes["barrier_outcome_by_horizon"][key] = barrier_outcome
+            outcomes["target_before_stop_by_horizon"][key] = barrier_outcome == "target"
+        else:
+            outcomes["barrier_outcome_by_horizon"][key] = None
+            outcomes["target_before_stop_by_horizon"][key] = None
+
     max_horizon = max(horizons, default=0)
-    future_window = rows[index + 1 : min(len(rows), index + max_horizon + 1)]
-    highs = [_high(row) for row in future_window]
-    lows = [_low(row) for row in future_window]
-    highs = [value for value in highs if value is not None]
-    lows = [value for value in lows if value is not None]
-    if highs:
-        outcomes["max_favorable_excursion_pct"] = ((max(highs) / entry) - 1.0) * 100.0
-    if lows:
-        outcomes["max_adverse_excursion_pct"] = ((min(lows) / entry) - 1.0) * 100.0
+    max_key = str(max_horizon)
+    outcomes["max_favorable_excursion_pct"] = (
+        outcomes["max_favorable_excursion_pct_by_horizon"].get(max_key)
+    )
+    outcomes["max_adverse_excursion_pct"] = (
+        outcomes["max_adverse_excursion_pct_by_horizon"].get(max_key)
+    )
 
     raw_mfe = _number(outcomes.get("max_favorable_excursion_pct"))
     raw_mae = _number(outcomes.get("max_adverse_excursion_pct"))
@@ -237,7 +293,6 @@ def _event_outcomes(
         outcomes["directional_max_favorable_excursion_pct"] = -raw_mae if raw_mae is not None else None
         outcomes["directional_max_adverse_excursion_pct"] = -raw_mfe if raw_mfe is not None else None
     return outcomes
-
 
 def _summarize_events(
     events: list[dict[str, Any]],
@@ -386,16 +441,25 @@ def build_supervised_feature_rows(
     horizons: tuple[int, ...] = DEFAULT_HORIZONS,
     swing_radius: int = 3,
     require_full_horizon: bool = True,
+    profit_target_pct: float = 1.0,
+    stop_loss_pct: float = 0.75,
 ) -> dict[str, Any]:
     """Build leakage-safe supervised-learning rows from historical candles.
 
     Each session's causal feature frame is calculated once, left-to-right. Labels
-    are still measured strictly from later bars in the same session. This keeps
-    live/backtest feature semantics while making multi-stock ML dataset generation
-    practical instead of replaying every historical prefix independently.
+    are measured strictly from later bars in the same session. In addition to raw
+    forward-return labels, each horizon receives a conservative trade-quality label
+    asking whether price reached the profit target before the stop limit.
     """
     clean_horizons = tuple(sorted({max(1, int(value)) for value in horizons}))
     max_horizon = max(clean_horizons, default=0)
+    clean_profit_target = _number(profit_target_pct)
+    clean_stop_loss = _number(stop_loss_pct)
+    if clean_profit_target is None or clean_profit_target <= 0:
+        raise ValueError("profit_target_pct must be greater than zero.")
+    if clean_stop_loss is None or clean_stop_loss <= 0:
+        raise ValueError("stop_loss_pct must be greater than zero.")
+
     sessions = _ordered_sessions(rows)
     records: list[dict[str, Any]] = []
     feature_names = {f"feature__{name}" for name in MARKET_FEATURE_COLUMNS}
@@ -418,6 +482,8 @@ def build_supervised_feature_rows(
                 index,
                 horizons=clean_horizons,
                 direction=0,
+                profit_target_pct=float(clean_profit_target),
+                stop_loss_pct=float(clean_stop_loss),
             )
             feature_row = feature_frame.iloc[index]
             record: dict[str, Any] = {
@@ -429,20 +495,37 @@ def build_supervised_feature_rows(
                 record[f"feature__{name}"] = _plain_scalar(feature_row.get(name))
 
             forward = outcomes.get("forward_returns_pct") or {}
+            mfes = outcomes.get("max_favorable_excursion_pct_by_horizon") or {}
+            maes = outcomes.get("max_adverse_excursion_pct_by_horizon") or {}
+            target_before_stop = outcomes.get("target_before_stop_by_horizon") or {}
+            barrier_outcomes = outcomes.get("barrier_outcome_by_horizon") or {}
+
             for horizon in clean_horizons:
                 key = str(horizon)
                 value = _number(forward.get(key))
                 return_name = f"label__forward_return_{horizon}bar_pct"
                 positive_name = f"label__positive_return_{horizon}bar"
+                mfe_name = f"label__max_favorable_excursion_{horizon}bar_pct"
+                mae_name = f"label__max_adverse_excursion_{horizon}bar_pct"
+                target_name = f"label__target_before_stop_{horizon}bar"
+                outcome_name = f"label__barrier_outcome_{horizon}bar"
+
                 record[return_name] = value
                 record[positive_name] = None if value is None else value > 0
-                label_names.update((return_name, positive_name))
-
-            mfe_name = f"label__max_favorable_excursion_{max_horizon}bar_pct"
-            mae_name = f"label__max_adverse_excursion_{max_horizon}bar_pct"
-            record[mfe_name] = outcomes.get("max_favorable_excursion_pct")
-            record[mae_name] = outcomes.get("max_adverse_excursion_pct")
-            label_names.update((mfe_name, mae_name))
+                record[mfe_name] = _number(mfes.get(key))
+                record[mae_name] = _number(maes.get(key))
+                record[target_name] = target_before_stop.get(key)
+                record[outcome_name] = barrier_outcomes.get(key)
+                label_names.update(
+                    (
+                        return_name,
+                        positive_name,
+                        mfe_name,
+                        mae_name,
+                        target_name,
+                        outcome_name,
+                    )
+                )
             records.append(record)
 
     return {
@@ -450,6 +533,9 @@ def build_supervised_feature_rows(
         "sessions_analyzed": len(sessions),
         "horizons": list(clean_horizons),
         "require_full_horizon": bool(require_full_horizon),
+        "profit_target_pct": float(clean_profit_target),
+        "stop_loss_pct": float(clean_stop_loss),
+        "barrier_same_bar_policy": "stop_first_conservative",
         "row_count": len(records),
         "feature_columns": sorted(feature_names),
         "label_columns": sorted(label_names),
@@ -457,10 +543,12 @@ def build_supervised_feature_rows(
         "feature_calculation": "single_pass_causal_session_frame",
         "note": (
             "Every feature column is calculated without future bars. Columns prefixed "
-            "label__ are calculated only from bars after the observation timestamp."
+            "label__ are calculated only from bars after the observation timestamp. "
+            "Trade-quality labels ask whether the upside target was reached before the "
+            "downside limit; if both are touched in one candle, the downside limit wins "
+            "conservatively because intrabar ordering is unknown."
         ),
     }
-
 
 def run_detector_event_study(
     rows: list[dict[str, Any]],
