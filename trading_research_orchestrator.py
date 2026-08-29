@@ -43,6 +43,7 @@ DEFAULT_GEMINI_BULK_RESEARCH_MODEL = "gemini-3.7-flash"
 DEFAULT_GEMINI_BULK_FALLBACK_MODEL = "gemini-3.6-flash"
 DEFAULT_GEMINI_SPECIALIST_MODEL = "gemini-3.1-pro-preview"
 DEFAULT_GEMINI_SPECIALIST_FALLBACK_MODEL = "gemini-2.5-pro"
+PREDICTIVE_ML_BACKFILL_SUITE_VERSION = 2
 
 # Keep the durable queue contract in one place. Executors can intentionally
 # claim only a subset (the distributed Finder owns stock_finder jobs), but every
@@ -328,7 +329,8 @@ def ensure_predictive_ml_backfill_job(
     data = ensure_research_collections(library)
     current = (now or datetime.now(UTC)).astimezone(UTC)
     day = current.date().isoformat()
-    dedupe_key = f"predictive-ml-backfill:{day}"
+    suite_version = PREDICTIVE_ML_BACKFILL_SUITE_VERSION
+    dedupe_key = f"predictive-ml-backfill:v{suite_version}:{day}"
 
     # Never create duplicate same-day work, including after a terminal failure.
     # Retry semantics belong to the original durable job.
@@ -343,7 +345,8 @@ def ensure_predictive_ml_backfill_job(
         else {}
     )
     completed_at = _parse_iso(status.get("completed_at"))
-    if completed_at is not None:
+    completed_suite_version = int(status.get("model_suite_version") or 1)
+    if completed_at is not None and completed_suite_version >= suite_version:
         age = current - completed_at
         if age < timedelta(hours=max(1, int(freshness_hours))):
             return data, None
@@ -351,6 +354,7 @@ def ensure_predictive_ml_backfill_job(
     job_payload = {
         "origin": "automatic_predictive_ml_backfill",
         "cycle_date": day,
+        "model_suite_version": suite_version,
         **dict(payload or {}),
     }
     data, job = enqueue_research_job(
@@ -367,6 +371,7 @@ def ensure_predictive_ml_backfill_job(
             "status": "queued",
             "queued_at": utc_iso(),
             "job_id": job.get("id"),
+            "model_suite_version": suite_version,
             "research_only": True,
             "affects_live_ranking": False,
             "affects_execution": False,
