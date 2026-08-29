@@ -59,3 +59,13 @@ def test_predictive_ml_workspace_separates_hours_and_runs_symbol_holdout():
     assert "Held-out-stock generalization" in block
     assert "held-out ticker was excluded" not in block.lower()
 
+
+
+def test_predictive_ml_results_render_without_forced_rerun():
+    block = _pattern_validation_block()
+    result_store = block.index('st.session_state["til_predictive_ml_result"] = {')
+    result_reader = block.index('stored_ml_result = st.session_state.get("til_predictive_ml_result")')
+    between = block[result_store:result_reader]
+    assert "st.rerun()" not in between
+    assert 'if key != "predictions"' in between
+    assert "Predictive ML results are ready below." in between
