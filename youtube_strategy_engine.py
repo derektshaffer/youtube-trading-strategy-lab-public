@@ -876,7 +876,7 @@ def normalize_machine_rules(raw_rules: dict[str, Any] | None) -> dict[str, Any]:
     if result.get("max_avwap_distance_pct") is not None and result["max_avwap_distance_pct"] > 100:
         result["max_avwap_distance_pct"] = None
     for name, maximum in (
-        ("minimum_vwap_hold_bars", 120),
+        ("minimum_vwap_hold_bars", 8),
         ("minimum_breakout_hold_bars", 120),
         ("minimum_completed_bounces", 3),
     ):
@@ -4810,7 +4810,7 @@ def generate_strategy_variants(
         ("min_dollar_volume", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 100.0, 2_000_000_000.0, False),
         ("max_spread_pct", (0.60, 0.80, 1.25, 1.60), 0.01, 50.0, False),
         ("max_vwap_distance_pct", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 0.05, 100.0, False),
-        ("minimum_vwap_hold_bars", (0.50, 0.75, 1.25, 1.50, 2.0), 1.0, 60.0, True),
+        ("minimum_vwap_hold_bars", (0.50, 0.75, 1.25, 1.50, 2.0), 1.0, 8.0, True),
         ("min_volume_acceleration_ratio", (0.50, 0.70, 0.85, 1.15, 1.30, 1.60), 0.10, 20.0, False),
         ("min_atr_pct", (0.50, 0.70, 0.85, 1.15, 1.30, 1.60), 0.05, 100.0, False),
         ("max_atr_pct", (0.70, 0.85, 1.15, 1.30, 1.60), 0.05, 200.0, False),
@@ -4983,7 +4983,7 @@ def generate_local_strategy_refinements(
         "min_dollar_volume": ((500_000.0, 250_000.0, 100_000.0, 50_000.0), 100.0, 2_000_000_000.0, False),
         "max_spread_pct": ((0.50, 0.25, 0.10), 0.01, 50.0, False),
         "max_vwap_distance_pct": ((2.0, 1.0, 0.5, 0.25), 0.05, 100.0, False),
-        "minimum_vwap_hold_bars": ((4.0, 2.0, 1.0), 1.0, 60.0, True),
+        "minimum_vwap_hold_bars": ((4.0, 2.0, 1.0), 1.0, 8.0, True),
         "min_volume_acceleration_ratio": ((1.0, 0.5, 0.25, 0.10), 0.10, 20.0, False),
         "min_atr_pct": ((2.0, 1.0, 0.5, 0.25), 0.05, 100.0, False),
         "max_atr_pct": ((4.0, 2.0, 1.0, 0.5), 0.05, 200.0, False),
@@ -5029,7 +5029,7 @@ def generate_local_strategy_refinements(
         "min_dollar_volume": ((100_000.0, 50_000.0, 25_000.0), 100.0, 2_000_000_000.0, False),
         "max_spread_pct": ((0.10, 0.05, 0.02), 0.01, 50.0, False),
         "max_vwap_distance_pct": ((0.50, 0.25, 0.10), 0.05, 100.0, False),
-        "minimum_vwap_hold_bars": ((2.0, 1.0), 1.0, 60.0, True),
+        "minimum_vwap_hold_bars": ((2.0, 1.0), 1.0, 8.0, True),
         "min_volume_acceleration_ratio": ((0.25, 0.10, 0.05), 0.10, 20.0, False),
         "min_atr_pct": ((0.50, 0.25, 0.10), 0.05, 100.0, False),
         "max_atr_pct": ((1.0, 0.50, 0.25), 0.05, 200.0, False),
