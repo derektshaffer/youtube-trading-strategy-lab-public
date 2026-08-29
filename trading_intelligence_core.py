@@ -490,7 +490,7 @@ def chunk_source_text(
     return chunks
 
 
-NATIVE_RULE_SCHEMA_VERSION = 3
+NATIVE_RULE_SCHEMA_VERSION = 4
 
 
 def upgrade_native_strategy_rules(strategy: dict[str, Any]) -> dict[str, Any]:
@@ -701,6 +701,76 @@ def upgrade_native_strategy_rules(strategy: dict[str, Any]) -> dict[str, Any]:
         })
         changed = True
 
+    exit_text = " ".join(
+        str(value or "")
+        for value in (
+            *(item.get("exit_conditions") or []),
+            *(item.get("risk_rules") or []),
+        )
+    ).casefold()
+
+    if rules.get("exit_below_vwap") is None and (
+        re.search(r"(?:exit|sell|close)[^\.]{0,80}(?:below|under|lose|loses|loss of)[^\.]{0,40}vwap", exit_text)
+        or re.search(r"(?:lose|loses|loss of)[^\.]{0,30}vwap[^\.]{0,60}(?:exit|sell|close)", exit_text)
+    ):
+        rules["exit_below_vwap"] = True
+        explicit_migrations.append({
+            "rule": "exit_below_vwap",
+            "value": True,
+            "basis": "Saved source text explicitly exits when VWAP is lost.",
+        })
+        changed = True
+
+    if rules.get("exit_below_fast_ema") is None and (
+        re.search(r"(?:exit|sell|close)[^\.]{0,80}(?:below|under|lose|loses)[^\.]{0,50}(?:\d{1,3}\s*)?ema", exit_text)
+        or re.search(r"(?:close|closes)[^\.]{0,30}below[^\.]{0,40}(?:\d{1,3}\s*)?ema", exit_text)
+    ):
+        rules["exit_below_fast_ema"] = True
+        explicit_migrations.append({
+            "rule": "exit_below_fast_ema",
+            "value": True,
+            "basis": "Saved source text explicitly exits when the EMA is lost.",
+        })
+        changed = True
+
+    if rules.get("trailing_stop_pct") is None:
+        trailing_match = re.search(
+            r"(?:trailing\s+stop|trail(?:ing)?\s+(?:the\s+)?stop)[^0-9%]{0,30}(\d+(?:\.\d+)?)\s*%",
+            exit_text,
+        )
+        if trailing_match:
+            normalized_trail = normalize_machine_rules(
+                {"trailing_stop_pct": safe_float(trailing_match.group(1))}
+            ).get("trailing_stop_pct")
+            if normalized_trail is not None:
+                rules["trailing_stop_pct"] = normalized_trail
+                explicit_migrations.append({
+                    "rule": "trailing_stop_pct",
+                    "value": normalized_trail,
+                    "basis": "Saved source text explicitly states a percentage trailing stop.",
+                })
+                changed = True
+
+    if rules.get("move_stop_to_breakeven_at_r") is None and (
+        "breakeven" in exit_text or "break even" in exit_text or "break-even" in exit_text
+    ):
+        breakeven_match = (
+            re.search(r"(\d+(?:\.\d+)?)\s*r[^\.]{0,80}(?:breakeven|break even|break-even)", exit_text)
+            or re.search(r"(?:breakeven|break even|break-even)[^\.]{0,80}(\d+(?:\.\d+)?)\s*r", exit_text)
+        )
+        if breakeven_match:
+            normalized_breakeven = normalize_machine_rules(
+                {"move_stop_to_breakeven_at_r": safe_float(breakeven_match.group(1))}
+            ).get("move_stop_to_breakeven_at_r")
+            if normalized_breakeven is not None:
+                rules["move_stop_to_breakeven_at_r"] = normalized_breakeven
+                explicit_migrations.append({
+                    "rule": "move_stop_to_breakeven_at_r",
+                    "value": normalized_breakeven,
+                    "basis": "Saved source text explicitly states the R trigger for moving the stop to breakeven.",
+                })
+                changed = True
+
     item["machine_rules"] = rules
     if overrides:
         item["research_rule_overrides"] = normalize_machine_rules(overrides)
@@ -862,6 +932,14 @@ Strict rules:
   a rising/sloping-up fast average.
 - "Stop slightly below the EMA" can map to stop_below_fast_ema=true; any numeric
   stop_ema_buffer_pct is a RESEARCH ASSUMPTION unless the source gave the exact buffer.
+- Preserve exit logic. An explicit "exit/close if VWAP is lost" can map to exit_below_vwap=true;
+  an explicit "exit/close if the fast EMA is lost" can map to exit_below_fast_ema=true.
+- A source-stated percentage trailing stop maps to trailing_stop_pct. If the source says only
+  "trail the stop" without a percentage, a proposed trailing_stop_pct is a RESEARCH ASSUMPTION.
+- A source-stated "move stop to breakeven at X R" maps to move_stop_to_breakeven_at_r. If the
+  trigger is qualitative, any proposed R threshold is a RESEARCH ASSUMPTION.
+- Never pretend scale-outs/partial exits, tape-based exits, or discretionary momentum-failure
+  selling are supported by a fixed target. Keep unsupported exit mechanics unmapped.
 - Do not add require_pullback_breakout unless the source explicitly requires breakout/confirmation
   after the pullback.
 - Keep tape-reading, Level 2, float, borrow, proprietary indicators, subjective catalyst quality,
