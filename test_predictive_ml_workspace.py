@@ -96,3 +96,11 @@ def test_predictive_ml_results_are_persisted_and_restored_after_restart():
     assert 'ml_result_source = "durable"' in block
     assert "restored from durable storage" in block
     assert 'if key != "predictions"' in block
+
+
+def test_predictive_ml_progress_has_per_stock_substeps():
+    block = _pattern_validation_block()
+    assert 'text.startswith("ML stock ")' in block
+    assert '"adding causal context" in text' in block
+    assert '"finished " in text' in block
+    assert 'completed_units = max(0.0, (stock_index - 1) + phase)' in block
