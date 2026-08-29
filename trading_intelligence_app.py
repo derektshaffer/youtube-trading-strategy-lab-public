@@ -435,6 +435,45 @@ def load_cloud_status_library() -> dict[str, Any]:
         return _recover_cloud_library_conflict(store, exc)
 
 
+MAX_PREDICTIVE_ML_RUN_HISTORY = 12
+
+
+def persist_predictive_ml_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Save a compact completed ML result to durable Trading Lab storage."""
+    if not isinstance(result, dict) or not result.get("evaluation"):
+        raise AppError("Predictive ML result was empty and could not be saved.")
+
+    record = deepcopy(result)
+    completed_at = str(record.get("completed_at") or utc_now().isoformat())
+    record["completed_at"] = completed_at
+    identity = "|".join(
+        [
+            completed_at,
+            " ".join(str(symbol) for symbol in record.get("symbols") or []),
+            str(record.get("trading_days") or record.get("days") or ""),
+            str(record.get("horizon") or ""),
+            str(record.get("target_mode") or ""),
+            str(record.get("session_mode") or ""),
+        ]
+    )
+    record["id"] = str(record.get("id") or hashlib.sha1(identity.encode("utf-8")).hexdigest()[:16])
+
+    store = intelligence_store()
+    try:
+        data = store.load_latest()
+    except AppError as exc:
+        data = _recover_cloud_library_conflict(store, exc)
+
+    previous = [
+        item
+        for item in data.get("predictive_ml_runs") or []
+        if isinstance(item, dict) and str(item.get("id") or "") != record["id"]
+    ]
+    data["predictive_ml_runs"] = [record, *previous][:MAX_PREDICTIVE_ML_RUN_HISTORY]
+    store.save(data)
+    return record
+
+
 def load_library(*, force_cloud_refresh: bool = False) -> dict[str, Any]:
     """Load the prepared library while keeping ordinary Streamlit reruns lightweight."""
     store = intelligence_store()
@@ -503,6 +542,7 @@ def load_library(*, force_cloud_refresh: bool = False) -> dict[str, Any]:
     data.setdefault("strategies", [])
     data.setdefault("research_runs", [])
     data.setdefault("validation_runs", [])
+    data.setdefault("predictive_ml_runs", [])
 
     # Automatically pull newly analyzed YouTube strategies from the original Trading Lab.
     legacy_changed = False
@@ -6910,7 +6950,7 @@ elif module == "Pattern Validation":
                 for key, value in ml_archetype_validation.items()
                 if key != "predictions"
             }
-            st.session_state["til_predictive_ml_result"] = {
+            completed_ml_result = {
                 "symbols": ml_symbols,
                 "days": ml_days,
                 "trading_days": ml_days,
@@ -6929,6 +6969,14 @@ elif module == "Pattern Validation":
                 "generalization": compact_ml_generalization,
                 "archetype_validation": compact_ml_archetype_validation,
             }
+            completed_ml_result["completed_at"] = utc_now().isoformat()
+            st.session_state["til_predictive_ml_result"] = completed_ml_result
+            try:
+                persist_predictive_ml_result(completed_ml_result)
+                st.session_state["til_predictive_ml_persist_error"] = ""
+            except AppError as exc:
+                st.session_state["til_predictive_ml_persist_error"] = str(exc)
+
             ml_status.update(
                 label=(
                     f"Predictive ML research complete · "
@@ -6949,12 +6997,43 @@ elif module == "Pattern Validation":
             st.error(f"Predictive ML research failed: {exc}")
 
     stored_ml_result = st.session_state.get("til_predictive_ml_result") or {}
+    ml_result_source = "session"
+    if not stored_ml_result:
+        durable_ml_runs = [
+            item
+            for item in library.get("predictive_ml_runs") or []
+            if isinstance(item, dict) and item.get("evaluation")
+        ]
+        if durable_ml_runs:
+            durable_ml_runs.sort(
+                key=lambda item: str(item.get("completed_at") or ""),
+                reverse=True,
+            )
+            stored_ml_result = deepcopy(durable_ml_runs[0])
+            ml_result_source = "durable"
+            st.session_state["til_predictive_ml_result"] = stored_ml_result
+
     ml_dataset_summary = stored_ml_result.get("dataset_summary") or {}
     ml_evaluation = stored_ml_result.get("evaluation") or {}
     ml_generalization = stored_ml_result.get("generalization") or {}
     ml_archetype_validation = stored_ml_result.get("archetype_validation") or {}
     if ml_evaluation:
         st.divider()
+        completed_at = str(stored_ml_result.get("completed_at") or "").strip()
+        result_symbols = " · ".join(str(symbol) for symbol in stored_ml_result.get("symbols") or [])
+        result_days = int(stored_ml_result.get("trading_days") or stored_ml_result.get("days") or 0)
+        result_horizon = int(stored_ml_result.get("horizon") or 0)
+        source_note = "restored from durable storage" if ml_result_source == "durable" else "completed in this session"
+        st.caption(
+            f"Latest completed ML result · {result_symbols or 'saved benchmark'} · "
+            f"{result_days} trading days · {result_horizon}-minute horizon · {source_note}"
+            + (f" · {completed_at}" if completed_at else "")
+        )
+        persist_error = str(st.session_state.get("til_predictive_ml_persist_error") or "").strip()
+        if persist_error:
+            st.warning(
+                "These results are visible now, but their durable cloud save failed: " + persist_error
+            )
         if str(ml_evaluation.get("status")) != "EVALUATED":
             st.warning(
                 "The baseline could not be evaluated yet: "
