@@ -1100,10 +1100,10 @@ SEMANTIC_BACKTEST_COVERAGE_GATE = 90.0
 
 
 def strategy_semantic_coverage(strategy: dict[str, Any]) -> dict[str, Any]:
-    """Measure whether executable rules represent the setup's defining source concepts.
+    """Measure how faithfully the deterministic model represents the source strategy.
 
-    This is deliberately conservative: one generic filter such as above-VWAP should not
-    make a multi-part EMA pullback strategy look fully modeled.
+    A strategy is not considered fully modeled merely because *some* machine rules
+    exist. Defining entry, universe, execution, risk, and exit requirements all count.
     """
     effective = effective_strategy_for_research(strategy)
     rules = normalize_machine_rules(effective.get("machine_rules"))
@@ -1113,27 +1113,47 @@ def strategy_semantic_coverage(strategy: dict[str, Any]) -> dict[str, Any]:
         strategy.get("summary"),
         *(strategy.get("indicators") or []),
         *(strategy.get("entry_conditions") or []),
+        *(strategy.get("exit_conditions") or []),
         *(strategy.get("risk_rules") or []),
         *(strategy.get("avoid_conditions") or []),
         *(strategy.get("market_context") or []),
         *(strategy.get("stock_selection") or []),
+        *(strategy.get("unresolved_rules") or []),
     ]
     text = " ".join(str(value or "") for value in pieces).casefold()
+    exit_text = " ".join(str(value or "") for value in strategy.get("exit_conditions") or []).casefold()
+    risk_text = " ".join(str(value or "") for value in strategy.get("risk_rules") or []).casefold()
     requirements: list[dict[str, Any]] = []
 
-    def add(label: str, keys: tuple[str, ...], *, any_key: bool = False) -> None:
-        values = [rules.get(key) for key in keys]
-        modeled = (
-            any(value is not None for value in values)
-            if any_key
-            else all(value is not None for value in values)
-        )
+    def add(
+        label: str,
+        keys: tuple[str, ...] = (),
+        *,
+        any_key: bool = False,
+        dimension: str = "entry",
+        critical: bool = True,
+        modeled_override: bool | None = None,
+        limitation: str = "",
+    ) -> None:
+        if modeled_override is None:
+            values = [rules.get(key) for key in keys]
+            modeled = (
+                any(value is not None for value in values)
+                if any_key
+                else bool(keys) and all(value is not None for value in values)
+            )
+        else:
+            modeled = bool(modeled_override)
         requirements.append({
             "label": label,
             "rule_keys": list(keys),
             "modeled": bool(modeled),
+            "dimension": dimension,
+            "critical": bool(critical),
+            "limitation": limitation,
         })
 
+    # Entry / setup structure.
     if "vwap" in text and any(
         phrase in text for phrase in ("above vwap", "above its moving averages", "and vwap")
     ):
@@ -1183,24 +1203,173 @@ def strategy_semantic_coverage(strategy: dict[str, Any]) -> dict[str, Any]:
         add("First/second pullback preference", ("max_pullback_number",))
 
     if re.search(r"stop[^\.]{0,80}below[^\.]{0,50}(?:\d{1,3}\s*)?ema", text):
-        add("EMA-anchored structural stop", ("stop_below_fast_ema",))
+        add(
+            "EMA-anchored structural stop",
+            ("stop_below_fast_ema",),
+            dimension="risk",
+        )
         if "slightly below" in text:
             add(
                 "Objective buffer below the EMA for the structural stop",
                 ("stop_ema_buffer_pct",),
+                dimension="risk",
             )
+
+    # Exit / position-management fidelity.
+    if any(phrase in exit_text for phrase in ("trailing stop", "trail the stop", "trail stop")):
+        add(
+            "Trailing-stop exit",
+            ("trailing_stop_pct",),
+            dimension="exit",
+            limitation="A trailing stop needs an explicit percentage or a safely compiled research assumption.",
+        )
+    if any(
+        phrase in exit_text
+        for phrase in (
+            "break even",
+            "breakeven",
+            "break-even",
+            "move stop to entry",
+            "move the stop to entry",
+        )
+    ):
+        add(
+            "Move stop to breakeven",
+            ("move_stop_to_breakeven_at_r",),
+            dimension="exit",
+            limitation="The backtester needs the R-multiple that activates the breakeven stop.",
+        )
+    if any(
+        phrase in exit_text
+        for phrase in ("exit below vwap", "lose vwap", "loses vwap", "breaks below vwap", "closes below vwap")
+    ):
+        add(
+            "Exit when VWAP is lost",
+            ("exit_below_vwap",),
+            dimension="exit",
+        )
+    if any(
+        phrase in exit_text
+        for phrase in ("exit below the ema", "lose the ema", "loses the ema", "close below the ema", "closes below the ema")
+    ):
+        add(
+            "Exit when the fast EMA is lost",
+            ("fast_ema_period", "exit_below_fast_ema"),
+            dimension="exit",
+        )
+    if any(phrase in exit_text for phrase in ("scale out", "scaling out", "partial profit", "take partial")):
+        add(
+            "Scale-out / partial-profit management",
+            dimension="exit",
+            modeled_override=False,
+            limitation="Partial exits are preserved from the source but are not yet executed by the deterministic backtester.",
+        )
+    if any(
+        phrase in exit_text
+        for phrase in ("momentum fades", "momentum fade", "momentum failure", "sell into strength", "selling into strength")
+    ):
+        add(
+            "Discretionary momentum/strength exit",
+            dimension="exit",
+            modeled_override=False,
+            limitation="Historical OHLCV alone does not yet reproduce the source's discretionary momentum-exit decision.",
+        )
+
+    # Universe / execution requirements that the current historical dataset cannot reproduce.
+    if any(phrase in text for phrase in ("low float", "low-float", "float under", "share float")):
+        add(
+            "Historical float filter",
+            dimension="universe",
+            modeled_override=False,
+            limitation="Point-in-time historical float data is not currently part of the backtest dataset.",
+        )
+    if any(
+        phrase in text
+        for phrase in ("level 2", "level ii", "order book", "tape speed", "time and sales", "tape reading")
+    ):
+        add(
+            "Level-2 / tape-reading confirmation",
+            dimension="execution",
+            modeled_override=False,
+            limitation="Historical order-book/tape state is not currently available to the deterministic backtester.",
+        )
+    if any(phrase in text for phrase in ("anchored vwap", "avwap")):
+        add(
+            "Anchored VWAP structure",
+            dimension="structure",
+            modeled_override=False,
+            limitation="The current VWAP rule is session VWAP, not a source-defined anchored VWAP.",
+        )
+    if any(phrase in text for phrase in ("proprietary indicator", "custom indicator", "private indicator")):
+        add(
+            "Proprietary/custom indicator",
+            dimension="structure",
+            modeled_override=False,
+            limitation="The source-defined proprietary indicator cannot be reproduced from the saved rule schema.",
+        )
 
     total = len(requirements)
     modeled = sum(1 for item in requirements if item["modeled"])
     coverage = 100.0 if total == 0 else round(modeled / total * 100.0, 1)
+    missing = [item for item in requirements if not item["modeled"]]
+    critical_missing = [item for item in missing if item.get("critical")]
+    dimension_summary: dict[str, dict[str, int]] = {}
+    for item in requirements:
+        bucket = dimension_summary.setdefault(
+            str(item.get("dimension") or "other"),
+            {"requirements": 0, "modeled": 0, "missing": 0},
+        )
+        bucket["requirements"] += 1
+        if item["modeled"]:
+            bucket["modeled"] += 1
+        else:
+            bucket["missing"] += 1
+
     return {
         "coverage_pct": coverage,
         "requirement_count": total,
         "modeled_count": modeled,
         "modeled_requirements": [item["label"] for item in requirements if item["modeled"]],
-        "missing_requirements": [item["label"] for item in requirements if not item["modeled"]],
+        "missing_requirements": [item["label"] for item in missing],
+        "critical_missing_count": len(critical_missing),
+        "critical_missing_requirements": [item["label"] for item in critical_missing],
         "requirements": requirements,
+        "dimension_summary": dimension_summary,
         "gate_pct": SEMANTIC_BACKTEST_COVERAGE_GATE,
+    }
+
+
+def strategy_integrity_report(strategy: dict[str, Any]) -> dict[str, Any]:
+    """Return a plain-language source-to-backtester fidelity verdict."""
+    semantic = strategy_semantic_coverage(strategy)
+    coverage = safe_float(semantic.get("coverage_pct"), 0.0) or 0.0
+    critical_missing = int(semantic.get("critical_missing_count") or 0)
+    if critical_missing:
+        status = "blocked"
+        label = "IMPORTANT LOGIC NOT MODELED"
+    elif semantic.get("requirement_count") and coverage < SEMANTIC_BACKTEST_COVERAGE_GATE:
+        status = "partial"
+        label = "PARTIALLY MODELED"
+    else:
+        status = "faithful"
+        label = "FULLY MODELED FOR CURRENT REQUIREMENTS"
+
+    return {
+        "status": status,
+        "label": label,
+        "coverage_pct": coverage,
+        "requirement_count": int(semantic.get("requirement_count") or 0),
+        "modeled_count": int(semantic.get("modeled_count") or 0),
+        "critical_missing_count": critical_missing,
+        "missing_requirements": list(semantic.get("missing_requirements") or []),
+        "critical_missing_requirements": list(semantic.get("critical_missing_requirements") or []),
+        "requirements": list(semantic.get("requirements") or []),
+        "dimension_summary": dict(semantic.get("dimension_summary") or {}),
+        "gate_pct": semantic.get("gate_pct"),
+        "note": (
+            "This is a fidelity check, not a profitability score. It asks whether the historical "
+            "backtester is actually executing the important strategy described by the source."
+        ),
     }
 
 
@@ -1217,6 +1386,10 @@ def research_readiness(strategy: dict[str, Any]) -> dict[str, Any]:
         "stop_loss_pct",
         "reward_risk",
         "max_hold_minutes",
+        "trailing_stop_pct",
+        "move_stop_to_breakeven_at_r",
+        "exit_below_vwap",
+        "exit_below_fast_ema",
     }
     entry_rules = [key for key in rules if key not in non_entry_fields]
     evidence_count = len(
@@ -1255,6 +1428,12 @@ def research_readiness(strategy: dict[str, Any]) -> dict[str, Any]:
     elif evidence_count == 0 and str(strategy.get("source_type") or "").lower() == "book_or_document":
         label = "needs_evidence_review"
         note = "Machine rules exist, but no source evidence reference was retained for this document strategy."
+    elif semantic.get("critical_missing_count"):
+        label = "partially_modeled"
+        note = (
+            "At least one defining source requirement is not represented by the deterministic "
+            "backtester. Treating this as the original strategy would be misleading."
+        )
     elif (
         semantic["requirement_count"]
         and semantic["coverage_pct"] < SEMANTIC_BACKTEST_COVERAGE_GATE
@@ -1287,6 +1466,9 @@ def research_readiness(strategy: dict[str, Any]) -> dict[str, Any]:
         "semantic_modeled_count": semantic["modeled_count"],
         "semantic_modeled_requirements": semantic["modeled_requirements"],
         "semantic_missing_requirements": semantic["missing_requirements"],
+        "semantic_critical_missing_count": semantic.get("critical_missing_count", 0),
+        "semantic_critical_missing_requirements": semantic.get("critical_missing_requirements", []),
+        "semantic_dimension_summary": semantic.get("dimension_summary", {}),
         "semantic_coverage_gate_pct": semantic["gate_pct"],
         "note": note,
     }
