@@ -181,3 +181,59 @@ def test_single_pass_supervised_features_still_match_live_prefix_snapshot():
                 assert actual == pytest.approx(value)
             else:
                 assert actual == value
+
+def test_supervised_trade_quality_label_detects_target_before_stop():
+    rows = [
+        _bar(29, 0, 10.0, 10.02, 9.98, 10.0, 100),
+        _bar(29, 1, 10.0, 10.15, 9.96, 10.12, 150),
+    ]
+    report = build_supervised_feature_rows(
+        rows,
+        horizons=(1,),
+        swing_radius=1,
+        require_full_horizon=True,
+        profit_target_pct=1.0,
+        stop_loss_pct=0.75,
+    )
+    first = report["records"][0]
+    assert first["label__target_before_stop_1bar"] is True
+    assert first["label__barrier_outcome_1bar"] == "target"
+    assert first["label__max_favorable_excursion_1bar_pct"] >= 1.0
+    assert report["barrier_same_bar_policy"] == "stop_first_conservative"
+
+
+def test_supervised_trade_quality_label_counts_stop_as_failure():
+    rows = [
+        _bar(29, 0, 10.0, 10.02, 9.98, 10.0, 100),
+        _bar(29, 1, 10.0, 10.05, 9.90, 9.94, 150),
+    ]
+    report = build_supervised_feature_rows(
+        rows,
+        horizons=(1,),
+        swing_radius=1,
+        require_full_horizon=True,
+        profit_target_pct=1.0,
+        stop_loss_pct=0.75,
+    )
+    first = report["records"][0]
+    assert first["label__target_before_stop_1bar"] is False
+    assert first["label__barrier_outcome_1bar"] == "stop"
+
+
+def test_same_bar_target_and_stop_is_scored_conservatively_as_stop():
+    rows = [
+        _bar(29, 0, 10.0, 10.02, 9.98, 10.0, 100),
+        _bar(29, 1, 10.0, 10.20, 9.80, 10.05, 200),
+    ]
+    report = build_supervised_feature_rows(
+        rows,
+        horizons=(1,),
+        swing_radius=1,
+        require_full_horizon=True,
+        profit_target_pct=1.0,
+        stop_loss_pct=0.75,
+    )
+    first = report["records"][0]
+    assert first["label__target_before_stop_1bar"] is False
+    assert first["label__barrier_outcome_1bar"] == "stop"
+

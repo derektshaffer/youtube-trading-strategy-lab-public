@@ -49,11 +49,20 @@ def build_cross_stock_training_dataset(
     max_pages: int = 80,
     require_full_horizon: bool = True,
     session_limit: int | None = None,
+    profit_target_pct: float = 1.0,
+    stop_loss_pct: float = 0.75,
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Build one supervised dataset across many symbols from a single batched bar load."""
     clean = parse_symbols(symbols)
     clean_horizons = tuple(sorted({max(1, int(value)) for value in horizons}))
+    clean_profit_target = _number(profit_target_pct)
+    clean_stop_loss = _number(stop_loss_pct)
+    if clean_profit_target is None or clean_profit_target <= 0:
+        raise ValueError("profit_target_pct must be greater than zero.")
+    if clean_stop_loss is None or clean_stop_loss <= 0:
+        raise ValueError("stop_loss_pct must be greater than zero.")
+
     if not clean:
         return {
             "causal_replay": True,
@@ -63,6 +72,9 @@ def build_cross_stock_training_dataset(
             "row_count": 0,
             "feature_columns": [],
             "label_columns": [],
+            "profit_target_pct": float(clean_profit_target),
+            "stop_loss_pct": float(clean_stop_loss),
+            "barrier_same_bar_policy": "stop_first_conservative",
             "records": [],
         }
 
@@ -109,6 +121,8 @@ def build_cross_stock_training_dataset(
             horizons=clean_horizons,
             swing_radius=swing_radius,
             require_full_horizon=require_full_horizon,
+            profit_target_pct=float(clean_profit_target),
+            stop_loss_pct=float(clean_stop_loss),
         )
         symbol_records = []
         for item in report.get("records") or []:
@@ -130,7 +144,13 @@ def build_cross_stock_training_dataset(
             }
         )
 
-    records.sort(key=lambda row: (str(row.get("session") or ""), str(row.get("timestamp") or ""), str(row.get("symbol") or "")))
+    records.sort(
+        key=lambda row: (
+            str(row.get("session") or ""),
+            str(row.get("timestamp") or ""),
+            str(row.get("symbol") or ""),
+        )
+    )
     return {
         "causal_replay": True,
         "symbols_requested": len(clean),
@@ -145,6 +165,9 @@ def build_cross_stock_training_dataset(
         "timeframe": timeframe,
         "horizons": list(clean_horizons),
         "require_full_horizon": bool(require_full_horizon),
+        "profit_target_pct": float(clean_profit_target),
+        "stop_loss_pct": float(clean_stop_loss),
+        "barrier_same_bar_policy": "stop_first_conservative",
         "row_count": len(records),
         "feature_columns": sorted(feature_columns),
         "label_columns": sorted(label_columns),
@@ -152,10 +175,11 @@ def build_cross_stock_training_dataset(
         "by_symbol": by_symbol,
         "note": (
             "Feature columns are point-in-time causal values. label__ columns use only later bars "
-            "from the same market session and must never be supplied to a model as inputs."
+            "from the same market session and must never be supplied to a model as inputs. "
+            "Trade-quality labels count an upside target only when it is reached before the "
+            "downside barrier; same-candle target/stop ambiguity is scored conservatively as stop first."
         ),
     }
-
 
 def save_training_dataset(dataset: dict[str, Any], destination: str | Path) -> dict[str, str]:
     """Atomically persist records as JSONL plus a compact metadata sidecar."""
@@ -280,6 +304,7 @@ def walk_forward_logistic_baseline(
     dataset: dict[str, Any],
     *,
     target_horizon: int = 15,
+    target_mode: str = "positive_return",
     min_train_sessions: int = 10,
     test_sessions_per_fold: int = 2,
     embargo_sessions: int = 1,
@@ -290,22 +315,61 @@ def walk_forward_logistic_baseline(
     Entire market sessions are kept together. The optional embargo removes the
     sessions immediately preceding each test block from training, which is a
     conservative guard against adjacent-period dependence.
+
+    target_mode="positive_return" predicts whether the horizon close is above the
+    observation close. target_mode="target_before_stop" predicts whether the
+    dataset's configured upside barrier is reached before its downside barrier.
     """
     records = [dict(row) for row in dataset.get("records") or [] if isinstance(row, dict)]
-    target = f"label__positive_return_{int(target_horizon)}bar"
+    normalized_target_mode = str(target_mode or "").strip().lower()
+    if normalized_target_mode == "positive_return":
+        target = f"label__positive_return_{int(target_horizon)}bar"
+        target_description = (
+            f"Price closes above the observation price after {int(target_horizon)} bars."
+        )
+    elif normalized_target_mode == "target_before_stop":
+        target = f"label__target_before_stop_{int(target_horizon)}bar"
+        profit_target_pct = _number(dataset.get("profit_target_pct"))
+        stop_loss_pct = _number(dataset.get("stop_loss_pct"))
+        target_description = (
+            f"Price reaches +{profit_target_pct:g}% before -{stop_loss_pct:g}% "
+            f"within {int(target_horizon)} bars."
+            if profit_target_pct is not None and stop_loss_pct is not None
+            else f"Configured upside barrier is reached before the downside barrier within {int(target_horizon)} bars."
+        )
+    else:
+        raise ValueError(
+            "target_mode must be 'positive_return' or 'target_before_stop'."
+        )
+
     feature_columns = sorted(
         column for column in (dataset.get("feature_columns") or [])
         if str(column).startswith("feature__")
     )
     if not records or not feature_columns:
-        return {"status": "INSUFFICIENT_DATA", "reason": "No supervised rows or feature columns are available."}
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "reason": "No supervised rows or feature columns are available.",
+            "target_mode": normalized_target_mode,
+            "target": target,
+        }
 
     frame = pd.DataFrame(records)
     if target not in frame.columns:
-        return {"status": "INSUFFICIENT_DATA", "reason": f"Target {target} is not present in the dataset."}
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "reason": f"Target {target} is not present in the dataset.",
+            "target_mode": normalized_target_mode,
+            "target": target,
+        }
     frame = frame[frame[target].notna() & frame["session"].notna()].copy()
     if frame.empty:
-        return {"status": "INSUFFICIENT_DATA", "reason": "No rows have both a session and target label."}
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "reason": "No rows have both a session and target label.",
+            "target_mode": normalized_target_mode,
+            "target": target,
+        }
 
     frame[target] = frame[target].astype(bool).astype(int)
     frame["_session_key"] = frame["session"].astype(str)
@@ -321,6 +385,8 @@ def walk_forward_logistic_baseline(
             "status": "INSUFFICIENT_DATA",
             "reason": "Not enough distinct market sessions for the requested walk-forward split.",
             "session_count": len(sessions),
+            "target_mode": normalized_target_mode,
+            "target": target,
         }
 
     numeric, categorical = _feature_types(frame, feature_columns)
@@ -402,6 +468,8 @@ def walk_forward_logistic_baseline(
             "reason": "No walk-forward fold met the minimum training requirements.",
             "session_count": len(sessions),
             "row_count": len(frame),
+            "target_mode": normalized_target_mode,
+            "target": target,
         }
 
     model_brier = float(brier_score_loss(all_actual, all_probability))
@@ -411,7 +479,12 @@ def walk_forward_logistic_baseline(
         "status": "EVALUATED",
         "model_type": "logistic_regression",
         "target": target,
+        "target_mode": normalized_target_mode,
+        "target_description": target_description,
         "target_horizon": int(target_horizon),
+        "profit_target_pct": _number(dataset.get("profit_target_pct")),
+        "stop_loss_pct": _number(dataset.get("stop_loss_pct")),
+        "barrier_same_bar_policy": dataset.get("barrier_same_bar_policy"),
         "feature_count": len(feature_columns),
         "numeric_feature_count": len(numeric),
         "categorical_feature_count": len(categorical),
@@ -439,3 +512,4 @@ def walk_forward_logistic_baseline(
             "and is not connected to live rankings or trading decisions."
         ),
     }
+

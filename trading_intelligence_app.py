@@ -6666,12 +6666,59 @@ elif module == "Pattern Validation":
         if token.strip()
     ][:5]
 
-    st.info(
-        "The first model is intentionally simple. Its job is to establish a trustworthy benchmark: "
-        "can causal market features predict whether price is higher after the selected horizon on "
-        "future market sessions better than simply guessing the historical positive-return rate? "
-        "Trading days means actual U.S. market sessions; weekends and market holidays do not count."
-    )
+    with st.expander("ML target settings", expanded=False):
+        ml_target_cols = st.columns([1.35, 1.0, 1.0])
+        ml_target_choice = ml_target_cols[0].selectbox(
+            "Prediction target",
+            options=["Trade-quality move", "Simply higher later"],
+            index=0,
+            help=(
+                "Trade-quality move asks whether a meaningful upside target is reached before "
+                "a downside limit. Simply higher later keeps the original benchmark."
+            ),
+            key="til_ml_target_mode_choice",
+        )
+        ml_target_mode = (
+            "target_before_stop"
+            if ml_target_choice == "Trade-quality move"
+            else "positive_return"
+        )
+        ml_profit_target_pct = float(
+            ml_target_cols[1].slider(
+                "Upside target",
+                min_value=0.25,
+                max_value=5.0,
+                value=1.0,
+                step=0.25,
+                format="%.2f%%",
+                key="til_ml_profit_target_pct",
+            )
+        )
+        ml_stop_loss_pct = float(
+            ml_target_cols[2].slider(
+                "Downside limit",
+                min_value=0.25,
+                max_value=3.0,
+                value=0.75,
+                step=0.25,
+                format="%.2f%%",
+                key="til_ml_stop_loss_pct",
+            )
+        )
+
+    if ml_target_mode == "target_before_stop":
+        st.info(
+            f"The baseline will predict whether price reaches +{ml_profit_target_pct:.2f}% "
+            f"before -{ml_stop_loss_pct:.2f}% within the selected horizon. If both levels are "
+            "touched in the same 1-minute candle, the downside level wins conservatively because "
+            "intrabar ordering is unknown. Trading days means actual U.S. market sessions."
+        )
+    else:
+        st.info(
+            "The baseline will use the original benchmark: whether price is simply higher at the "
+            "end of the selected horizon. This is useful as a control, but it is less trade-relevant "
+            "than the target-before-stop label."
+        )
     ml_slot = st.empty()
     run_ml_baseline = ml_slot.button(
         "◈ Build dataset & run ML baseline",
@@ -6742,6 +6789,8 @@ elif module == "Pattern Validation":
                 max_pages=120,
                 require_full_horizon=True,
                 session_limit=ml_days,
+                profit_target_pct=ml_profit_target_pct,
+                stop_loss_pct=ml_stop_loss_pct,
                 progress=ml_research_progress,
             )
             update_task_bar(
@@ -6753,6 +6802,7 @@ elif module == "Pattern Validation":
             ml_evaluation = walk_forward_logistic_baseline(
                 ml_dataset,
                 target_horizon=ml_horizon,
+                target_mode=ml_target_mode,
                 min_train_sessions=8,
                 test_sessions_per_fold=2,
                 embargo_sessions=1,
@@ -6763,6 +6813,9 @@ elif module == "Pattern Validation":
                 "days": ml_days,
                 "trading_days": ml_days,
                 "horizon": ml_horizon,
+                "target_mode": ml_target_mode,
+                "profit_target_pct": ml_profit_target_pct,
+                "stop_loss_pct": ml_stop_loss_pct,
                 "dataset_summary": {
                     key: value
                     for key, value in ml_dataset.items()
@@ -6812,6 +6865,9 @@ elif module == "Pattern Validation":
                 "Brier skill vs naive",
                 "—" if skill_value is None else f"{skill_value * 100:.1f}%",
             )
+            target_description = str(ml_evaluation.get("target_description") or "").strip()
+            if target_description:
+                st.caption("Prediction target: " + target_description)
 
             if skill_value is not None and skill_value > 0 and auc_value is not None and auc_value > 0.5:
                 st.success(
