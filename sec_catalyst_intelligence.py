@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import gzip
 import json
 import re
 from typing import Any
@@ -66,7 +67,10 @@ def _sec_json(url: str, user_agent: str, *, timeout: int = 35) -> Any:
     )
     try:
         with urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
+            body = response.read()
+            if str(response.headers.get("Content-Encoding") or "").casefold() == "gzip":
+                body = gzip.decompress(body)
+            return json.loads(body.decode("utf-8"))
     except HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:300]
         if exc.code in {403, 429}:
