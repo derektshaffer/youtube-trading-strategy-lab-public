@@ -11,6 +11,8 @@ on:
       - "predictive_ml_backfill.py"
       - "predictive_ml_pipeline.py"
       - "predictive_probability_model.py"
+      - "predictive_boosted_probability_model.py"
+      - "predictive_model_registry.py"
       - "trading_research_orchestrator.py"
       - ".github/workflows/continuous-trading-research.yml"
 
