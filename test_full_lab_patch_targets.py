@@ -118,6 +118,26 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
         self.assertIn("STRATEGY_FIDELITY_ENGINE_VERSION = 1", finder)
         self.assertIn("strategy_fidelity_engine_version", persistence)
 
+    def test_retrospective_teacher_workspace_enforces_causal_boundary(self):
+        source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        teacher = (ROOT / "retrospective_teacher.py").read_text(encoding="utf-8")
+        self.assertIn("Retrospective Teacher → Causal Learner", source)
+        self.assertIn("Build retrospective teaching examples", source)
+        self.assertIn("future_data_allowed_for", teacher)
+        self.assertIn("future_data_forbidden_for", teacher)
+        self.assertIn("validate_no_lookahead", teacher)
+        self.assertIn("known_at", source)
+
+    def test_open_source_repositories_are_reference_evidence_not_profitability_evidence(self):
+        source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        catalog = (ROOT / "open_source_reference_catalog.py").read_text(encoding="utf-8")
+        orchestrator = (ROOT / "trading_research_orchestrator.py").read_text(encoding="utf-8")
+        self.assertIn("Open-source implementation references", source)
+        self.assertIn("implementation/reference evidence", source)
+        self.assertIn("OPEN_SOURCE_REFERENCE_CATALOG", catalog)
+        self.assertIn("not profitability evidence", orchestrator)
+        self.assertIn("Retrospective/smoothed algorithms may be useful teachers", orchestrator)
+
     def test_continuous_research_button_is_clearly_manual(self):
         source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
         self.assertIn("Run today's research cycle now", source)
