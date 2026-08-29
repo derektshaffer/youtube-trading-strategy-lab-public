@@ -1142,6 +1142,7 @@ with st.sidebar:
     st.divider()
     st.markdown("### Required app secrets")
     st.code(
+        'APP_ACCESS_PASSWORD="strong_unique_app_password"\n'
         'ALPACA_API_KEY="your_existing_key"\n'
         'ALPACA_SECRET_KEY="your_existing_secret"\n'
         'GEMINI_API_KEY="your_free_google_key"\n'
