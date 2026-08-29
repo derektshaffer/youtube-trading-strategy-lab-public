@@ -1,6 +1,6 @@
 import pytest
 
-from market_feature_validation import build_supervised_feature_rows, run_detector_event_study
+from market_feature_validation import _ordered_sessions, build_supervised_feature_rows, run_detector_event_study
 
 
 def _bar(day, minute, o, h, l, c, v=100):
@@ -147,3 +147,13 @@ def test_supervised_feature_values_are_unchanged_when_later_future_is_appended()
         left_features = {k: v for k, v in left[index].items() if k.startswith("feature__")}
         right_features = {k: v for k, v in right[index].items() if k.startswith("feature__")}
         assert left_features == right_features
+
+
+def test_session_grouping_uses_new_york_date_not_utc_midnight():
+    rows = [
+        {"t": "2026-08-30T00:00:00Z", "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0, "v": 100},
+        {"t": "2026-08-30T00:30:00Z", "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0, "v": 100},
+    ]
+    sessions = _ordered_sessions(rows)
+    assert len(sessions) == 1
+    assert sessions[0][0] == "2026-08-29"
