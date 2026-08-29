@@ -111,21 +111,35 @@ def run_detector_scorecards(
     summary = summarize_detector_events(all_events, horizons=horizons)
     symbols_by_detector: dict[str, set[str]] = defaultdict(set)
     sessions_by_detector: dict[str, set[tuple[str, str]]] = defaultdict(set)
+    market_days_by_detector: dict[str, set[str]] = defaultdict(set)
+    symbol_event_counts: dict[str, Counter[str]] = defaultdict(Counter)
     for event in all_events:
         detector = str(event.get("detector") or "unknown")
         symbol = str(event.get("symbol") or "")
         session = str(event.get("session") or "")
         if symbol:
             symbols_by_detector[detector].add(symbol)
+            symbol_event_counts[detector][symbol] += 1
         if symbol or session:
             sessions_by_detector[detector].add((symbol, session))
+        if session:
+            market_days_by_detector[detector].add(session)
 
     for detector, item in summary.items():
         symbol_count = len(symbols_by_detector.get(detector) or set())
         session_count = len(sessions_by_detector.get(detector) or set())
+        market_day_count = len(market_days_by_detector.get(detector) or set())
         event_count = int(item.get("event_count") or 0)
+        max_symbol_events = max((symbol_event_counts.get(detector) or {}).values(), default=0)
+        max_symbol_share = (
+            max_symbol_events / event_count * 100.0
+            if event_count > 0
+            else 0.0
+        )
         item["symbols_with_events"] = symbol_count
         item["sessions_with_events"] = session_count
+        item["unique_market_days"] = market_day_count
+        item["max_symbol_event_share_pct"] = max_symbol_share
         item["sample_quality"] = _sample_quality(event_count, symbol_count, session_count)
 
     return {
