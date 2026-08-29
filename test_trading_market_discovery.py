@@ -118,7 +118,8 @@ class MarketDiscoveryTests(unittest.TestCase):
         )
         self.assertEqual(merged, ["AAA", "BBB", "DDD", "CCC", "EEE", "FFF"])
         self.assertEqual(len(merged), len(set(merged)))
-\n    def test_large_market_scan_is_chunked_without_dropping_symbols(self):
+
+    def test_large_market_scan_is_chunked_without_dropping_symbols(self):
         market = FakeMarket()
         symbols = [f"S{i:02d}" for i in range(45)]
         strategies = [
@@ -245,7 +246,8 @@ class MarketDiscoveryTests(unittest.TestCase):
 
         self.assertTrue(any(message.startswith("Batch 1/2") for message in messages))
         self.assertTrue(any(message.startswith("Batch 2/2") for message in messages))
-\n    def test_analyzer_returns_market_features_even_when_strategy_needs_no_chart_rule(self):
+
+    def test_analyzer_returns_market_features_even_when_strategy_needs_no_chart_rule(self):
         market = FakeMarket()
         strategies = [
             {
