@@ -983,6 +983,78 @@ class StrategyIntegrityTests(unittest.TestCase):
         self.assertNotIn("Move stop to breakeven", report["critical_missing_requirements"])
         self.assertNotIn("Exit when VWAP is lost", report["critical_missing_requirements"])
 
+    def test_saved_explicit_multi_stage_exit_is_migrated_without_reupload(self):
+        strategy = {
+            "id": "staged",
+            "name": "Staged runner",
+            "direction": "long",
+            "entry_conditions": ["Buy the breakout above resistance."],
+            "exit_conditions": [
+                "Scale out 25% at 1R and scale out 25% at 2R.",
+                "After the first partial, move the stop to breakeven.",
+                "Trail the remainder below VWAP.",
+            ],
+            "machine_rules": {"breakout_lookback_bars": 20, "stop_loss_pct": 3},
+            "evidence": [{"location": "p.4", "description": "management", "source_excerpt": "short"}],
+            "unresolved_rules": [],
+        }
+        upgraded = upgrade_native_strategy_rules(strategy)
+        rules = upgraded["machine_rules"]
+        self.assertEqual(
+            rules["scale_out_stages"],
+            [
+                {"fraction_pct": 25.0, "at_r": 1.0},
+                {"fraction_pct": 25.0, "at_r": 2.0},
+            ],
+        )
+        self.assertTrue(rules["move_stop_to_breakeven_after_scale_out"])
+        self.assertTrue(rules["trail_below_vwap"])
+        report = strategy_integrity_report(upgraded)
+        self.assertNotIn(
+            "Scale-out / partial-profit management",
+            report["critical_missing_requirements"],
+        )
+        self.assertNotIn("Move stop to breakeven", report["critical_missing_requirements"])
+        self.assertNotIn("Trail remainder beneath VWAP", report["critical_missing_requirements"])
+
+    def test_staged_exit_policy_is_researchable_but_blocked_for_current_paper_auto(self):
+        strategy = {
+            "id": "staged-paper",
+            "name": "Staged paper mismatch",
+            "direction": "long",
+            "entry_conditions": ["Buy the breakout."],
+            "exit_conditions": [
+                "Scale out 25% at 1R and scale out 25% at 2R.",
+                "Trail the remainder below VWAP.",
+            ],
+            "machine_rules": {
+                "breakout_lookback_bars": 20,
+                "stop_loss_pct": 3,
+                "reward_risk": None,
+                "scale_out_stages": [
+                    {"fraction_pct": 25, "at_r": 1},
+                    {"fraction_pct": 25, "at_r": 2},
+                ],
+                "trail_below_vwap": True,
+            },
+            "evidence": [{"location": "p.5", "description": "setup", "source_excerpt": "short"}],
+            "unresolved_rules": [],
+        }
+        report = strategy_integrity_report(strategy)
+        self.assertNotIn(
+            "Scale-out / partial-profit management",
+            report["critical_missing_requirements"],
+        )
+        blocked = paper_execution_fidelity(strategy)
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertIn(
+            "Multi-stage partial-profit management",
+            blocked["unsupported_management"],
+        )
+        self.assertIn(
+            "VWAP-trailing stop management",
+            blocked["unsupported_management"],
+        )
 
 
 
