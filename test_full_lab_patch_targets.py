@@ -96,6 +96,19 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
         self.assertIn("def strategy_integrity_report", core)
         self.assertIn("strategy fidelity audit failed", finder)
 
+    def test_low_fidelity_strategies_are_excluded_from_user_facing_research_paths(self):
+        source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        self.assertIn("integrity_safe_strategies", source)
+        self.assertIn("integrity_blocked_count", source)
+        self.assertIn("excluded from backtesting", source)
+        self.assertIn("excluded from cross-stock research", source)
+        self.assertIn("excluded because", source)
+        self.assertIn("Review integrity gaps", source)
+        self.assertIn(
+            "legacy_changed or native_strategy_changed or sources_changed or canonical_changed",
+            source,
+        )
+
     def test_continuous_research_button_is_clearly_manual(self):
         source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
         self.assertIn("Run today's research cycle now", source)
