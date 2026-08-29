@@ -33,6 +33,10 @@ on:
       - "trading_universe_research.py"
       - "youtube_strategy_engine.py"
       - "anchored_vwap_engine.py"
+      - "test_indicator_cross_validation.py"
+      - "test_causal_volume_profile.py"
+      - "indicator_cross_validation.py"
+      - "causal_volume_profile.py"
       - "retrospective_teacher.py"
       - "open_source_reference_catalog.py"
       - "requirements.txt"
@@ -94,6 +98,10 @@ on:
       - "open_source_reference_catalog.py"
       - "test_retrospective_teacher.py"
       - "test_open_source_reference_catalog.py"
+      - "causal_volume_profile.py"
+      - "indicator_cross_validation.py"
+      - "test_causal_volume_profile.py"
+      - "test_indicator_cross_validation.py"
       - "requirements.txt"
 
 permissions:
@@ -136,5 +144,7 @@ jobs:
           python -m py_compile anchored_vwap_engine.py
           python -m py_compile retrospective_teacher.py
           python -m py_compile open_source_reference_catalog.py
+          python -m py_compile causal_volume_profile.py
+          python -m py_compile indicator_cross_validation.py
       - name: Run Trading Intelligence tests
-        run: python -m unittest test_youtube_strategy_engine.py test_stock_strategy_finder.py test_trading_validation_core.py test_trading_catalyst_core.py test_trading_intelligence_core.py test_trading_strategy_dna.py test_trading_universe_research.py test_trading_auto_research.py test_trading_research_orchestrator.py test_trading_progress_ui.py test_trading_system_health.py test_distributed_stock_finder.py test_full_lab_patch_targets.py test_live_strategy_runner.py test_trading_market_discovery.py test_application_security.py test_anchored_vwap_engine.py test_avwap_integration.py test_retrospective_teacher.py test_open_source_reference_catalog.py -q
+        run: python -m unittest test_youtube_strategy_engine.py test_stock_strategy_finder.py test_trading_validation_core.py test_trading_catalyst_core.py test_trading_intelligence_core.py test_trading_strategy_dna.py test_trading_universe_research.py test_trading_auto_research.py test_trading_research_orchestrator.py test_trading_progress_ui.py test_trading_system_health.py test_distributed_stock_finder.py test_full_lab_patch_targets.py test_live_strategy_runner.py test_trading_market_discovery.py test_application_security.py test_anchored_vwap_engine.py test_avwap_integration.py test_retrospective_teacher.py test_open_source_reference_catalog.py test_causal_volume_profile.py test_indicator_cross_validation.py -q
