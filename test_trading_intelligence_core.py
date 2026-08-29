@@ -11,6 +11,7 @@ from trading_intelligence_core import (
     GeminiBookAnalyzer,
     apply_compiler_suggestions,
     merge_ingestion_checkpoint_strategies,
+    paper_execution_fidelity,
     effective_strategy_for_live,
     effective_strategy_for_research,
     prepare_strategies_with_ai,
@@ -881,6 +882,26 @@ class BookAnalyzerResilienceTests(unittest.TestCase):
 
 
 class StrategyIntegrityTests(unittest.TestCase):
+    def test_paper_execution_fidelity_separates_dynamic_backtest_support_from_live_support(self):
+        fixed = {
+            "id": "fixed",
+            "direction": "long",
+            "machine_rules": {"stop_loss_pct": 3.0, "reward_risk": 2.0},
+        }
+        dynamic = {
+            "id": "dynamic",
+            "direction": "long",
+            "machine_rules": {
+                "stop_loss_pct": 3.0,
+                "reward_risk": 2.0,
+                "exit_below_vwap": True,
+            },
+        }
+        self.assertEqual(paper_execution_fidelity(fixed)["status"], "ready")
+        blocked = paper_execution_fidelity(dynamic)
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertIn("VWAP-loss exit", blocked["unsupported_management"])
+
     def test_legacy_validation_is_invalidated_when_defining_logic_was_never_modeled(self):
         strategy = {
             "id": "old-validated-scaleout",
