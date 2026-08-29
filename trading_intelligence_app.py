@@ -22,7 +22,11 @@ from hot_deploy_imports import load_current_source_module
 from market_feature_scorecards import run_detector_scorecards
 from market_detector_gate import evaluate_scorecard_report
 from market_feature_validation import DETECTOR_SPECS
-from predictive_ml_pipeline import build_cross_stock_training_dataset, walk_forward_logistic_baseline
+from predictive_ml_pipeline import (
+    build_cross_stock_training_dataset,
+    leave_one_symbol_out_walk_forward_logistic_baseline,
+    walk_forward_logistic_baseline,
+)
 from trading_app_runtime import market_client, setting
 from trading_glass_theme import inject_research_glass_theme
 
@@ -6639,7 +6643,7 @@ elif module == "Pattern Validation":
         width="stretch",
         key="til_load_broader_ml_benchmark",
     ):
-        broader_symbols = "SDOT REAX CRMG ACDC FWDI"
+        broader_symbols = "SDOT RR KULR FCEL ACHR"
         st.session_state["til_ml_symbols"] = broader_symbols
         st.session_state["til_ml_symbols_input"] = broader_symbols
         st.session_state["til_ml_history_days"] = 30
@@ -6647,9 +6651,10 @@ elif module == "Pattern Validation":
         st.session_state["til_ml_target_mode_choice"] = "Trade-quality move"
         st.session_state["til_ml_profit_target_pct"] = 1.0
         st.session_state["til_ml_stop_loss_pct"] = 0.75
+        st.session_state["til_ml_session_mode_choice"] = "Regular session"
         st.rerun()
     ml_preset_cols[1].caption(
-        "Broader benchmark preset: SDOT · REAX · CRMG · ACDC · FWDI · "
+        "Broader benchmark preset: SDOT · RR · KULR · FCEL · ACHR · "
         "30 trading days · 15-minute horizon · +1.00% before -0.75%."
     )
 
@@ -6687,7 +6692,7 @@ elif module == "Pattern Validation":
     ][:5]
 
     with st.expander("ML target settings", expanded=False):
-        ml_target_cols = st.columns([1.35, 1.0, 1.0])
+        ml_target_cols = st.columns([1.25, 1.2, 0.9, 0.9])
         ml_target_choice = ml_target_cols[0].selectbox(
             "Prediction target",
             options=["Trade-quality move", "Simply higher later"],
@@ -6703,8 +6708,23 @@ elif module == "Pattern Validation":
             if ml_target_choice == "Trade-quality move"
             else "positive_return"
         )
+        ml_session_choice = ml_target_cols[1].selectbox(
+            "Market hours",
+            options=["Regular session", "Premarket + after-hours"],
+            index=0,
+            help=(
+                "Regular session uses only 9:30 AM-4:00 PM ET. Premarket + after-hours uses "
+                "4:00-9:30 AM and 4:00-8:00 PM ET. The regimes are never mixed."
+            ),
+            key="til_ml_session_mode_choice",
+        )
+        ml_session_mode = (
+            "regular"
+            if ml_session_choice == "Regular session"
+            else "extended"
+        )
         ml_profit_target_pct = float(
-            ml_target_cols[1].slider(
+            ml_target_cols[2].slider(
                 "Upside target",
                 min_value=0.25,
                 max_value=5.0,
@@ -6715,7 +6735,7 @@ elif module == "Pattern Validation":
             )
         )
         ml_stop_loss_pct = float(
-            ml_target_cols[2].slider(
+            ml_target_cols[3].slider(
                 "Downside limit",
                 min_value=0.25,
                 max_value=3.0,
@@ -6731,8 +6751,8 @@ elif module == "Pattern Validation":
             f"The baseline will predict whether price reaches +{ml_profit_target_pct:.2f}% "
             f"before -{ml_stop_loss_pct:.2f}% within the selected horizon. If both levels are "
             "touched in the same 1-minute candle, the downside level wins conservatively because "
-            "intrabar ordering is unknown. Trading days means actual U.S. market sessions; "
-            "weekends and market holidays do not count."
+            f"intrabar ordering is unknown. Market-hours regime: {ml_session_choice}. "
+            "Trading days means actual U.S. market sessions; weekends and market holidays do not count."
         )
     else:
         st.info(
@@ -6812,6 +6832,7 @@ elif module == "Pattern Validation":
                 session_limit=ml_days,
                 profit_target_pct=ml_profit_target_pct,
                 stop_loss_pct=ml_stop_loss_pct,
+                session_mode=ml_session_mode,
                 progress=ml_research_progress,
             )
             update_task_bar(
@@ -6829,6 +6850,22 @@ elif module == "Pattern Validation":
                 embargo_sessions=1,
                 min_train_rows=250,
             )
+            update_task_bar(
+                ml_bar,
+                ml_monitor,
+                0.92,
+                "Running held-out-stock walk-forward generalization test…",
+            )
+            ml_generalization = leave_one_symbol_out_walk_forward_logistic_baseline(
+                ml_dataset,
+                target_horizon=ml_horizon,
+                target_mode=ml_target_mode,
+                min_train_sessions=8,
+                test_sessions_per_fold=2,
+                embargo_sessions=1,
+                min_train_rows=250,
+                min_test_rows=25,
+            )
             st.session_state["til_predictive_ml_result"] = {
                 "symbols": ml_symbols,
                 "days": ml_days,
@@ -6837,12 +6874,15 @@ elif module == "Pattern Validation":
                 "target_mode": ml_target_mode,
                 "profit_target_pct": ml_profit_target_pct,
                 "stop_loss_pct": ml_stop_loss_pct,
+                "session_mode": ml_session_mode,
+                "session_choice": ml_session_choice,
                 "dataset_summary": {
                     key: value
                     for key, value in ml_dataset.items()
                     if key not in {"records"}
                 },
                 "evaluation": ml_evaluation,
+                "generalization": ml_generalization,
             }
             ml_status.update(
                 label=(
@@ -6866,6 +6906,7 @@ elif module == "Pattern Validation":
     stored_ml_result = st.session_state.get("til_predictive_ml_result") or {}
     ml_dataset_summary = stored_ml_result.get("dataset_summary") or {}
     ml_evaluation = stored_ml_result.get("evaluation") or {}
+    ml_generalization = stored_ml_result.get("generalization") or {}
     if ml_evaluation:
         st.divider()
         if str(ml_evaluation.get("status")) != "EVALUATED":
@@ -6920,6 +6961,61 @@ elif module == "Pattern Validation":
                 )
             if fold_rows:
                 st.dataframe(pd.DataFrame(fold_rows), width="stretch", hide_index=True)
+
+            st.markdown("#### Held-out-stock generalization")
+            if str(ml_generalization.get("status") or "") != "EVALUATED":
+                st.warning(
+                    "Held-out-stock validation could not be evaluated yet: "
+                    + str(
+                        ml_generalization.get("reason")
+                        or "not enough stocks or usable future sessions."
+                    )
+                )
+            else:
+                gen_cols = st.columns(4)
+                gen_auc = safe_float(ml_generalization.get("roc_auc"))
+                gen_skill = safe_float(ml_generalization.get("brier_skill_vs_naive"))
+                gen_cols[0].metric(
+                    "Held-out ROC AUC",
+                    "—" if gen_auc is None else f"{gen_auc:.3f}",
+                )
+                gen_cols[1].metric(
+                    "Held-out Brier skill",
+                    "—" if gen_skill is None else f"{gen_skill * 100:.1f}%",
+                )
+                gen_cols[2].metric(
+                    "Held-out predictions",
+                    f"{int(ml_generalization.get('oos_rows') or 0):,}",
+                )
+                gen_cols[3].metric(
+                    "Stocks rotated",
+                    int(ml_generalization.get("symbol_count") or 0),
+                )
+                held_out_rows = []
+                for item in ml_generalization.get("by_symbol") or []:
+                    held_out_rows.append(
+                        {
+                            "Held-out stock": item.get("symbol"),
+                            "Status": item.get("status"),
+                            "OOS predictions": int(item.get("oos_rows") or 0),
+                            "ROC AUC": safe_float(item.get("roc_auc")),
+                            "Brier skill": safe_float(item.get("brier_skill_vs_naive")),
+                            "Positive rate": safe_float(item.get("oos_positive_rate")),
+                            "Folds": int(item.get("fold_count") or 0),
+                        }
+                    )
+                if held_out_rows:
+                    st.dataframe(
+                        pd.DataFrame(held_out_rows),
+                        width="stretch",
+                        hide_index=True,
+                    )
+                st.caption(
+                    "For each row above, that stock was excluded from every training row. "
+                    "The model also trained only on earlier market sessions from the other stocks, "
+                    "so this tests cross-stock transfer without ticker or future-session leakage."
+                )
+
             st.caption(
                 "ROC AUC measures ranking ability (0.5 is random). Brier score measures probability accuracy "
                 "(lower is better). Positive Brier skill means the model improved on a constant probability "
