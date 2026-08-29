@@ -141,6 +141,181 @@ def scan_strategy_universe(
 
 
 
+def scan_market_strategies(
+    market: AlpacaMarketData,
+    symbols: list[str],
+    strategies: list[dict[str, Any]],
+    *,
+    progress: Callable[[str], None] | None = None,
+) -> list[dict[str, Any]]:
+    """Rank a live stock universe against every usable strategy with shared data calls.
+
+    Market data is downloaded once per stock universe, then every compatible
+    strategy is evaluated against that same snapshot/chart/catalyst context.
+    This is intentionally different from calling scan_strategy_universe once
+    per strategy, which would repeat the expensive Alpaca requests.
+    """
+    clean = parse_symbols(symbols)
+    if not clean:
+        return []
+    if len(clean) > 30:
+        clean = clean[:30]
+
+    usable: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for raw in strategies:
+        if not isinstance(raw, dict) or not raw.get("id"):
+            continue
+        effective = effective_strategy_for_live(raw)
+        if str(effective.get("direction", "long")).lower() not in {"long", "both"}:
+            continue
+        rules = normalize_machine_rules(effective.get("machine_rules"))
+        if not any(value is not None for value in rules.values()):
+            continue
+        usable.append((raw, effective))
+    if not usable:
+        raise AppError("No measurable long strategy families are available for market discovery.")
+
+    if progress:
+        progress(f"Loading current snapshots for {len(clean)} stocks…")
+    snapshots = market.snapshots(clean)
+
+    historical_end = utc_now() - timedelta(
+        minutes=16 if market.historical_feed == "sip" and market.live_feed != "sip" else 1
+    )
+    if progress:
+        progress("Building shared relative-volume baselines…")
+    daily = market.bars(
+        clean,
+        start=historical_end - timedelta(days=45),
+        end=historical_end,
+        timeframe="1Day",
+        max_pages=8,
+    )
+
+    any_catalyst = any(
+        normalize_machine_rules(strategy.get("machine_rules")).get("catalyst_required")
+        for _, strategy in usable
+    )
+    news_by_symbol: dict[str, list[dict[str, Any]]] = {}
+    if any_catalyst:
+        if progress:
+            progress("Checking catalysts needed by any strategy…")
+        news_by_symbol = market.news(clean, hours=24)
+
+    any_chart = any(_needs_chart_data(strategy) for _, strategy in usable)
+    chart_rows: dict[str, list[dict[str, Any]]] = {}
+    if any_chart:
+        if progress:
+            progress("Loading shared intraday chart context…")
+        try:
+            chart_rows = market.bars(
+                clean,
+                start=_session_start(),
+                end=utc_now(),
+                timeframe="1Min",
+                feed=market.live_feed,
+                max_pages=10,
+            )
+        except AppError:
+            chart_rows = {}
+
+    status_rank = {"MATCH": 4, "WATCH": 3, "VERIFY": 2, "NO MATCH": 1, "UNKNOWN": 0}
+    results: list[dict[str, Any]] = []
+    for symbol in clean:
+        snapshot = snapshots.get(symbol)
+        if not snapshot:
+            continue
+        average_volume = average_completed_daily_volume(daily.get(symbol, []))
+        metrics = snapshot_metrics(symbol, snapshot, average_daily_volume=average_volume)
+        if metrics is None:
+            continue
+
+        comparisons: list[dict[str, Any]] = []
+        for raw, strategy in usable:
+            rules = normalize_machine_rules(strategy.get("machine_rules"))
+            enriched = dict(metrics)
+            if rules.get("catalyst_required"):
+                enriched["has_catalyst"] = bool(news_by_symbol.get(symbol))
+            if chart_rows.get(symbol) and _needs_chart_data(strategy):
+                enriched["chart_checks"] = chart_trigger_checks(chart_rows[symbol], strategy)
+
+            signal = match_strategy(enriched, strategy)
+            validation_status = str(
+                raw.get("validation_status")
+                or strategy.get("validation_status")
+                or "unvalidated"
+            )
+            validation = (
+                raw.get("last_validation") or strategy.get("last_validation") or {}
+                if validation_status.lower() == "validated"
+                else {}
+            )
+            robustness = validation.get("robustness_score")
+            comparisons.append(
+                {
+                    "strategy_id": raw.get("id") or strategy.get("id"),
+                    "strategy_name": raw.get("name") or strategy.get("name") or "Unnamed strategy",
+                    "validation_status": validation_status,
+                    "robustness_score": robustness,
+                    "source_type": raw.get("source_type") or strategy.get("source_type") or "",
+                    "status": signal.get("status") or "UNKNOWN",
+                    "score": signal.get("score") or 0,
+                    "unknown": signal.get("unknown") or 0,
+                    "signal": signal,
+                    "has_catalyst": enriched.get("has_catalyst"),
+                }
+            )
+
+        comparisons.sort(
+            key=lambda item: (
+                str(item.get("validation_status") or "").lower() == "validated",
+                status_rank.get(str(item.get("status") or "").upper(), 0),
+                float(item.get("robustness_score") or 0),
+                float(item.get("score") or 0),
+            ),
+            reverse=True,
+        )
+        if not comparisons:
+            continue
+
+        best = comparisons[0]
+        actionable = [
+            item
+            for item in comparisons
+            if str(item.get("status") or "").upper() in {"MATCH", "WATCH", "VERIFY"}
+        ]
+        results.append(
+            {
+                "symbol": symbol,
+                "metrics": metrics,
+                "best_strategy_id": best.get("strategy_id"),
+                "best_strategy_name": best.get("strategy_name"),
+                "validation_status": best.get("validation_status"),
+                "robustness_score": best.get("robustness_score"),
+                "status": best.get("status"),
+                "score": best.get("score"),
+                "unknown": best.get("unknown"),
+                "signal": best.get("signal"),
+                "has_catalyst": best.get("has_catalyst"),
+                "matching_strategy_count": len(actionable),
+                "strategy_matches": comparisons[:8],
+            }
+        )
+
+    results.sort(
+        key=lambda item: (
+            str(item.get("validation_status") or "").lower() == "validated",
+            status_rank.get(str(item.get("status") or "").upper(), 0),
+            float(item.get("robustness_score") or 0),
+            float(item.get("score") or 0),
+            float((item.get("metrics") or {}).get("relative_volume") or 0),
+            float((item.get("metrics") or {}).get("day_change_pct") or 0),
+        ),
+        reverse=True,
+    )
+    return results
+
+
 def analyze_stock_strategies(
     market: AlpacaMarketData,
     symbol: str,
