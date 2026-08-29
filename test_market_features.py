@@ -1,4 +1,7 @@
-from market_features import build_market_features
+import pandas as pd
+import pytest
+
+from market_features import MARKET_FEATURE_COLUMNS, add_causal_market_feature_columns, build_market_features
 
 
 def _bar(i, o, h, l, c, v=100):
@@ -232,3 +235,97 @@ def test_bounce_context_uses_structure_not_only_recovery_percentage():
     assert features["bounce_sequence_higher_highs"] is False
     assert features["bounce_structural_weakening"] is True
     assert snapshot["evidence"]["bounce_context"]["weakness_signals"] >= 2
+
+
+def _historical_feature_frame(rows):
+    frame = pd.DataFrame(
+        [
+            {
+                "timestamp": row["t"],
+                "open": row["o"],
+                "high": row["h"],
+                "low": row["l"],
+                "close": row["c"],
+                "volume": row["v"],
+                "session": "2026-08-29",
+            }
+            for row in rows
+        ]
+    )
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+    return frame
+
+
+def test_historical_feature_frame_matches_live_prefix_semantics():
+    rows = [
+        _bar(0, 10.0, 10.1, 9.9, 10.0, 100),
+        _bar(1, 9.9, 10.0, 9.5, 9.6, 120),
+        _bar(2, 9.6, 10.5, 9.8, 10.4, 220),
+        _bar(3, 10.1, 10.1, 9.6, 9.8, 110),
+        _bar(4, 9.8, 10.4, 9.9, 10.3, 180),
+        _bar(5, 10.0, 10.1, 9.7, 9.9, 105),
+        _bar(6, 9.9, 10.3, 9.9, 10.2, 150),
+        _bar(7, 10.2, 10.2, 10.0, 10.1, 100),
+        _bar(8, 10.1, 10.15, 10.0, 10.08, 100),
+        _bar(9, 10.08, 10.16, 10.02, 10.10, 100),
+        _bar(10, 10.10, 10.17, 10.03, 10.11, 100),
+        _bar(11, 10.11, 10.18, 10.04, 10.12, 100),
+        _bar(12, 10.12, 10.19, 10.05, 10.13, 100),
+        _bar(13, 10.13, 10.20, 10.06, 10.14, 100),
+        _bar(14, 10.14, 10.21, 10.07, 10.15, 100),
+        _bar(15, 10.15, 10.22, 10.08, 10.16, 100),
+        _bar(16, 10.16, 10.60, 10.14, 10.55, 260),
+        _bar(17, 10.55, 10.80, 10.45, 10.72, 280),
+    ]
+    historical = add_causal_market_feature_columns(
+        _historical_feature_frame(rows),
+        swing_radius=1,
+        volume_window=5,
+        prior_volume_window=10,
+    )
+    for index in range(len(rows)):
+        expected = build_market_features(
+            rows[: index + 1],
+            swing_radius=1,
+            volume_window=5,
+            prior_volume_window=10,
+        )["features"]
+        actual = historical.iloc[index]
+        for field in MARKET_FEATURE_COLUMNS:
+            left = expected.get(field)
+            right = actual.get(field)
+            if left is None or pd.isna(left):
+                assert right is None or pd.isna(right), (index, field, left, right)
+            elif isinstance(left, float):
+                assert float(right) == pytest.approx(left, rel=1e-9, abs=1e-9), (index, field)
+            else:
+                assert right == left, (index, field, left, right)
+
+
+def test_future_bars_do_not_repaint_historical_feature_rows():
+    rows = [
+        _bar(0, 10.0, 10.2, 9.8, 10.0, 100),
+        _bar(1, 10.0, 10.5, 9.9, 10.4, 100),
+        _bar(2, 10.4, 11.0, 10.2, 10.8, 100),
+        _bar(3, 10.8, 10.9, 10.1, 10.2, 100),
+        _bar(4, 10.2, 10.4, 9.9, 10.0, 100),
+        _bar(5, 10.0, 10.3, 9.7, 10.1, 100),
+        _bar(6, 10.1, 10.6, 10.0, 10.5, 120),
+        _bar(7, 10.5, 11.2, 10.4, 11.0, 140),
+        _bar(8, 11.0, 11.1, 10.5, 10.7, 160),
+        _bar(9, 10.7, 10.8, 10.2, 10.3, 180),
+        _bar(10, 10.3, 11.4, 10.2, 11.3, 300),
+        _bar(11, 11.3, 11.6, 11.1, 11.5, 320),
+    ]
+    cutoff = 10
+    prefix = add_causal_market_feature_columns(_historical_feature_frame(rows[:cutoff]), swing_radius=2)
+    full = add_causal_market_feature_columns(_historical_feature_frame(rows), swing_radius=2)
+    for field in MARKET_FEATURE_COLUMNS:
+        left = prefix.iloc[-1].get(field)
+        right = full.iloc[cutoff - 1].get(field)
+        if left is None or pd.isna(left):
+            assert right is None or pd.isna(right), field
+        elif isinstance(left, float):
+            assert float(right) == pytest.approx(float(left), rel=1e-9, abs=1e-9), field
+        else:
+            assert right == left, field
