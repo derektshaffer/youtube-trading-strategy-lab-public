@@ -1,8 +1,10 @@
-"""Streamlit entrypoint for the simplified trading dashboard."""
+"""Streamlit entrypoint for the Trading Intelligence Lab."""
 
 import runpy
 
 
-# Streamlit reruns this wrapper in the same interpreter. A normal import would
-# be cached after the first render and leave later widget reruns blank.
-runpy.run_module("simple_dashboard_core", run_name="__main__")
+# Streamlit reruns this wrapper in the same interpreter. Run the current
+# Trading Intelligence workspace on every rerun instead of the legacy
+# simplified dashboard so the research sidebar and Stock Strategy Finder
+# are the primary deployed experience.
+runpy.run_module("trading_intelligence_app", run_name="__main__")
