@@ -37,6 +37,65 @@ def _number(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+MARKET_SESSION_MODES = ("regular", "premarket", "afterhours")
+
+
+def _normalize_market_session_mode(value: str) -> str:
+    mode = str(value or "regular").strip().lower()
+    aliases = {
+        "regular": "regular",
+        "regular_hours": "regular",
+        "rth": "regular",
+        "premarket": "premarket",
+        "pre_market": "premarket",
+        "afterhours": "afterhours",
+        "after_hours": "afterhours",
+        "postmarket": "afterhours",
+    }
+    normalized = aliases.get(mode)
+    if normalized is None:
+        raise ValueError("session_mode must be 'regular', 'premarket', or 'afterhours'.")
+    return normalized
+
+
+def _filter_rows_by_market_session(
+    rows: list[dict[str, Any]],
+    session_mode: str,
+) -> list[dict[str, Any]]:
+    """Keep exactly one continuous U.S. equity market-hours regime.
+
+    Regular is 09:30-16:00 ET, premarket is 04:00-09:30 ET, and after-hours is
+    16:00-20:00 ET. Premarket and after-hours are deliberately separate so a
+    forward label can never jump across the regular-session gap.
+    Rows without parseable timestamps are excluded because they cannot be assigned
+    safely to a market-hours regime.
+    """
+    mode = _normalize_market_session_mode(session_mode)
+    selected: list[dict[str, Any]] = []
+    for raw in rows or []:
+        if not isinstance(raw, dict):
+            continue
+        stamp = pd.to_datetime(
+            raw.get("t", raw.get("timestamp", raw.get("time"))),
+            utc=True,
+            errors="coerce",
+        )
+        if pd.isna(stamp):
+            continue
+        local = stamp.tz_convert("America/New_York")
+        minute = int(local.hour) * 60 + int(local.minute)
+        is_regular = (9 * 60 + 30) <= minute < (16 * 60)
+        is_premarket = (4 * 60) <= minute < (9 * 60 + 30)
+        is_afterhours = (16 * 60) <= minute < (20 * 60)
+        if (
+            (mode == "regular" and is_regular)
+            or (mode == "premarket" and is_premarket)
+            or (mode == "afterhours" and is_afterhours)
+        ):
+            selected.append(dict(raw))
+    return selected
+
+
 def build_cross_stock_training_dataset(
     market: Any,
     symbols: list[str],
@@ -51,13 +110,19 @@ def build_cross_stock_training_dataset(
     session_limit: int | None = None,
     profit_target_pct: float = 1.0,
     stop_loss_pct: float = 0.75,
+    session_mode: str = "regular",
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """Build one supervised dataset across many symbols from a single batched bar load."""
+    """Build one supervised dataset across many symbols from a single batched bar load.
+
+    session_mode="regular" keeps 09:30-16:00 ET, "premarket" keeps 04:00-09:30 ET,
+    and "afterhours" keeps 16:00-20:00 ET. Regimes are never mixed in one dataset.
+    """
     clean = parse_symbols(symbols)
     clean_horizons = tuple(sorted({max(1, int(value)) for value in horizons}))
     clean_profit_target = _number(profit_target_pct)
     clean_stop_loss = _number(stop_loss_pct)
+    clean_session_mode = _normalize_market_session_mode(session_mode)
     if clean_profit_target is None or clean_profit_target <= 0:
         raise ValueError("profit_target_pct must be greater than zero.")
     if clean_stop_loss is None or clean_stop_loss <= 0:
@@ -75,6 +140,12 @@ def build_cross_stock_training_dataset(
             "profit_target_pct": float(clean_profit_target),
             "stop_loss_pct": float(clean_stop_loss),
             "barrier_same_bar_policy": "stop_first_conservative",
+            "session_mode": clean_session_mode,
+            "session_window_et": {
+                "regular": "09:30-16:00",
+                "premarket": "04:00-09:30",
+                "afterhours": "16:00-20:00",
+            }[clean_session_mode],
             "records": [],
         }
 
@@ -92,12 +163,15 @@ def build_cross_stock_training_dataset(
     feature_columns: set[str] = set()
     label_columns: set[str] = set()
     by_symbol: list[dict[str, Any]] = []
+    bars_loaded = 0
     bars_analyzed = 0
     sessions_analyzed = 0
     observed_market_sessions: set[str] = set()
 
     for index, symbol in enumerate(clean, start=1):
-        rows = list((rows_by_symbol or {}).get(symbol) or [])
+        raw_rows = list((rows_by_symbol or {}).get(symbol) or [])
+        bars_loaded += len(raw_rows)
+        rows = _filter_rows_by_market_session(raw_rows, clean_session_mode)
         rows, selected_sessions = limit_rows_to_recent_market_sessions(rows, session_limit)
         observed_market_sessions.update(
             session for session in selected_sessions if session != "session-0"
@@ -107,6 +181,7 @@ def build_cross_stock_training_dataset(
             by_symbol.append(
                 {
                     "symbol": symbol,
+                    "raw_bars": len(raw_rows),
                     "bars": 0,
                     "sessions": 0,
                     "market_sessions": selected_sessions,
@@ -137,6 +212,7 @@ def build_cross_stock_training_dataset(
         by_symbol.append(
             {
                 "symbol": symbol,
+                "raw_bars": len(raw_rows),
                 "bars": len(rows),
                 "sessions": sessions,
                 "market_sessions": selected_sessions,
@@ -155,6 +231,7 @@ def build_cross_stock_training_dataset(
         "causal_replay": True,
         "symbols_requested": len(clean),
         "symbols_with_data": sum(1 for item in by_symbol if int(item.get("bars") or 0) > 0),
+        "bars_loaded": bars_loaded,
         "bars_analyzed": bars_analyzed,
         "sessions_analyzed": sessions_analyzed,
         "market_sessions_requested": (
@@ -168,6 +245,12 @@ def build_cross_stock_training_dataset(
         "profit_target_pct": float(clean_profit_target),
         "stop_loss_pct": float(clean_stop_loss),
         "barrier_same_bar_policy": "stop_first_conservative",
+        "session_mode": clean_session_mode,
+        "session_window_et": {
+            "regular": "09:30-16:00",
+            "premarket": "04:00-09:30",
+            "afterhours": "16:00-20:00",
+        }[clean_session_mode],
         "row_count": len(records),
         "feature_columns": sorted(feature_columns),
         "label_columns": sorted(label_columns),
@@ -177,7 +260,8 @@ def build_cross_stock_training_dataset(
             "Feature columns are point-in-time causal values. label__ columns use only later bars "
             "from the same market session and must never be supplied to a model as inputs. "
             "Trade-quality labels count an upside target only when it is reached before the "
-            "downside barrier; same-candle target/stop ambiguity is scored conservatively as stop first."
+            "downside barrier; same-candle target/stop ambiguity is scored conservatively as stop first. "
+            f"Market-hours regime: {clean_session_mode}; regular, premarket, and after-hours rows are never mixed."
         ),
     }
 
@@ -510,6 +594,311 @@ def walk_forward_logistic_baseline(
         "note": (
             "All reported model metrics are out-of-sample. The model is a research baseline only "
             "and is not connected to live rankings or trading decisions."
+        ),
+    }
+
+def leave_one_symbol_out_walk_forward_logistic_baseline(
+    dataset: dict[str, Any],
+    *,
+    target_horizon: int = 15,
+    target_mode: str = "target_before_stop",
+    min_train_sessions: int = 8,
+    test_sessions_per_fold: int = 2,
+    embargo_sessions: int = 1,
+    min_train_rows: int = 250,
+    min_test_rows: int = 25,
+) -> dict[str, Any]:
+    """Test cross-stock transfer while preserving chronological causality.
+
+    Each symbol is held out completely from model training. For that held-out
+    symbol, predictions are made only on later market sessions; training uses
+    earlier sessions from the other symbols, with the requested embargo.
+    """
+
+    records = [dict(row) for row in dataset.get("records") or [] if isinstance(row, dict)]
+    normalized_target_mode = str(target_mode or "").strip().lower()
+    if normalized_target_mode == "positive_return":
+        target = f"label__positive_return_{int(target_horizon)}bar"
+        target_description = (
+            f"Price closes above the observation price after {int(target_horizon)} bars."
+        )
+    elif normalized_target_mode == "target_before_stop":
+        target = f"label__target_before_stop_{int(target_horizon)}bar"
+        profit_target_pct = _number(dataset.get("profit_target_pct"))
+        stop_loss_pct = _number(dataset.get("stop_loss_pct"))
+        target_description = (
+            f"Price reaches +{profit_target_pct:g}% before -{stop_loss_pct:g}% "
+            f"within {int(target_horizon)} bars."
+            if profit_target_pct is not None and stop_loss_pct is not None
+            else f"Configured upside barrier is reached before the downside barrier within {int(target_horizon)} bars."
+        )
+    else:
+        raise ValueError("target_mode must be 'positive_return' or 'target_before_stop'.")
+
+    feature_columns = sorted(
+        column for column in (dataset.get("feature_columns") or [])
+        if str(column).startswith("feature__")
+    )
+    if not records or not feature_columns:
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "reason": "No supervised rows or feature columns are available.",
+            "target_mode": normalized_target_mode,
+            "target": target,
+        }
+
+    frame = pd.DataFrame(records)
+    required_columns = {"symbol", "session", target}
+    if not required_columns.issubset(frame.columns):
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "reason": "Dataset is missing symbol, session, or requested target labels.",
+            "target_mode": normalized_target_mode,
+            "target": target,
+        }
+    frame = frame[
+        frame[target].notna()
+        & frame["session"].notna()
+        & frame["symbol"].notna()
+    ].copy()
+    if frame.empty:
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "reason": "No rows have symbol, session, and target labels.",
+            "target_mode": normalized_target_mode,
+            "target": target,
+        }
+
+    frame[target] = frame[target].astype(bool).astype(int)
+    frame["_session_key"] = frame["session"].astype(str)
+    frame["_symbol_key"] = frame["symbol"].astype(str).str.upper()
+    frame["_time_key"] = pd.to_datetime(frame.get("timestamp"), utc=True, errors="coerce")
+    frame = frame.sort_values(
+        ["_session_key", "_time_key", "_symbol_key"],
+        na_position="last",
+    ).reset_index(drop=True)
+
+    sessions = sorted(frame["_session_key"].unique().tolist())
+    symbols = sorted(frame["_symbol_key"].unique().tolist())
+    min_train_sessions = max(2, int(min_train_sessions))
+    test_sessions_per_fold = max(1, int(test_sessions_per_fold))
+    embargo_sessions = max(0, int(embargo_sessions))
+    min_train_rows = max(1, int(min_train_rows))
+    min_test_rows = max(1, int(min_test_rows))
+
+    if len(symbols) < 2:
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "reason": "At least two symbols are required for held-out-stock validation.",
+            "symbol_count": len(symbols),
+            "target_mode": normalized_target_mode,
+            "target": target,
+        }
+    if len(sessions) < min_train_sessions + embargo_sessions + test_sessions_per_fold:
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "reason": "Not enough market sessions for held-out-stock walk-forward validation.",
+            "session_count": len(sessions),
+            "target_mode": normalized_target_mode,
+            "target": target,
+        }
+
+    numeric, categorical = _feature_types(frame, feature_columns)
+    prepared = _prepare_feature_frame(frame, numeric, categorical)
+
+    symbol_reports: list[dict[str, Any]] = []
+    all_actual: list[int] = []
+    all_probability: list[float] = []
+    all_naive_probability: list[float] = []
+    all_prediction_rows: list[dict[str, Any]] = []
+
+    for held_out_symbol in symbols:
+        folds: list[dict[str, Any]] = []
+        symbol_actual: list[int] = []
+        symbol_probability: list[float] = []
+        symbol_naive: list[float] = []
+        test_start = min_train_sessions + embargo_sessions
+        fold_number = 0
+
+        while test_start < len(sessions):
+            test_sessions = sessions[test_start : test_start + test_sessions_per_fold]
+            if not test_sessions:
+                break
+            train_end = max(0, test_start - embargo_sessions)
+            train_sessions = sessions[:train_end]
+            if len(train_sessions) < min_train_sessions:
+                test_start += test_sessions_per_fold
+                continue
+
+            train_mask = (
+                prepared["_session_key"].isin(train_sessions)
+                & prepared["_symbol_key"].ne(held_out_symbol)
+            )
+            test_mask = (
+                prepared["_session_key"].isin(test_sessions)
+                & prepared["_symbol_key"].eq(held_out_symbol)
+            )
+            train = prepared.loc[train_mask]
+            test = prepared.loc[test_mask]
+            if (
+                len(train) < min_train_rows
+                or len(test) < min_test_rows
+                or train[target].nunique() < 2
+            ):
+                test_start += test_sessions_per_fold
+                continue
+
+            pipeline = _baseline_pipeline(numeric, categorical)
+            pipeline.fit(train[feature_columns], train[target])
+            probability = pipeline.predict_proba(test[feature_columns])[:, 1]
+            actual = test[target].astype(int).tolist()
+            predicted = (probability >= 0.5).astype(int)
+            naive_probability = float(train[target].mean())
+            naive = [naive_probability] * len(actual)
+            model_brier = float(brier_score_loss(actual, probability))
+            naive_brier = float(brier_score_loss(actual, naive))
+
+            fold_number += 1
+            folds.append(
+                {
+                    "fold": fold_number,
+                    "held_out_symbol": held_out_symbol,
+                    "train_symbols": sorted(
+                        symbol for symbol in symbols if symbol != held_out_symbol
+                    ),
+                    "train_sessions": len(train_sessions),
+                    "train_rows": len(train),
+                    "test_sessions": test_sessions,
+                    "test_rows": len(test),
+                    "train_positive_rate": naive_probability,
+                    "test_positive_rate": float(sum(actual) / len(actual)),
+                    "roc_auc": _safe_auc(actual, probability.tolist()),
+                    "brier_score": model_brier,
+                    "naive_brier_score": naive_brier,
+                    "brier_skill_vs_naive": (
+                        None if naive_brier <= 0 else 1.0 - (model_brier / naive_brier)
+                    ),
+                    "accuracy": float(accuracy_score(actual, predicted)),
+                    "log_loss": float(log_loss(actual, probability, labels=[0, 1])),
+                }
+            )
+
+            symbol_actual.extend(actual)
+            symbol_probability.extend(float(value) for value in probability)
+            symbol_naive.extend(naive)
+            all_actual.extend(actual)
+            all_probability.extend(float(value) for value in probability)
+            all_naive_probability.extend(naive)
+            for (_, row), prob in zip(test.iterrows(), probability):
+                prediction = {
+                    "held_out_symbol": held_out_symbol,
+                    "symbol": row.get("symbol"),
+                    "session": row.get("session"),
+                    "timestamp": row.get("timestamp"),
+                    "actual": bool(row[target]),
+                    "probability": float(prob),
+                }
+                all_prediction_rows.append(prediction)
+            test_start += test_sessions_per_fold
+
+        if symbol_actual:
+            symbol_brier = float(brier_score_loss(symbol_actual, symbol_probability))
+            symbol_naive_brier = float(brier_score_loss(symbol_actual, symbol_naive))
+            symbol_reports.append(
+                {
+                    "symbol": held_out_symbol,
+                    "status": "EVALUATED",
+                    "fold_count": len(folds),
+                    "oos_rows": len(symbol_actual),
+                    "oos_positive_rate": float(sum(symbol_actual) / len(symbol_actual)),
+                    "roc_auc": _safe_auc(symbol_actual, symbol_probability),
+                    "brier_score": symbol_brier,
+                    "naive_brier_score": symbol_naive_brier,
+                    "brier_skill_vs_naive": (
+                        None
+                        if symbol_naive_brier <= 0
+                        else 1.0 - (symbol_brier / symbol_naive_brier)
+                    ),
+                    "accuracy": float(
+                        accuracy_score(
+                            symbol_actual,
+                            [int(value >= 0.5) for value in symbol_probability],
+                        )
+                    ),
+                    "folds": folds,
+                }
+            )
+        else:
+            symbol_reports.append(
+                {
+                    "symbol": held_out_symbol,
+                    "status": "INSUFFICIENT_DATA",
+                    "fold_count": 0,
+                    "oos_rows": 0,
+                    "roc_auc": None,
+                    "brier_skill_vs_naive": None,
+                    "folds": [],
+                }
+            )
+
+    if not all_actual:
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "reason": "No held-out-stock fold met the minimum train/test requirements.",
+            "symbol_count": len(symbols),
+            "session_count": len(sessions),
+            "target_mode": normalized_target_mode,
+            "target": target,
+            "by_symbol": symbol_reports,
+        }
+
+    model_brier = float(brier_score_loss(all_actual, all_probability))
+    naive_brier = float(brier_score_loss(all_actual, all_naive_probability))
+    return {
+        "status": "EVALUATED",
+        "validation_type": "leave_one_symbol_out_walk_forward",
+        "model_type": "logistic_regression",
+        "target": target,
+        "target_mode": normalized_target_mode,
+        "target_description": target_description,
+        "target_horizon": int(target_horizon),
+        "profit_target_pct": _number(dataset.get("profit_target_pct")),
+        "stop_loss_pct": _number(dataset.get("stop_loss_pct")),
+        "session_mode": dataset.get("session_mode"),
+        "symbol_count": len(symbols),
+        "held_out_symbols": symbols,
+        "session_count": len(sessions),
+        "feature_count": len(feature_columns),
+        "oos_rows": len(all_actual),
+        "oos_positive_rate": float(sum(all_actual) / len(all_actual)),
+        "roc_auc": _safe_auc(all_actual, all_probability),
+        "brier_score": model_brier,
+        "naive_brier_score": naive_brier,
+        "brier_skill_vs_naive": (
+            None if naive_brier <= 0 else 1.0 - (model_brier / naive_brier)
+        ),
+        "accuracy": float(
+            accuracy_score(
+                all_actual,
+                [int(value >= 0.5) for value in all_probability],
+            )
+        ),
+        "by_symbol": symbol_reports,
+        "predictions": all_prediction_rows,
+        "split_policy": {
+            "type": "leave_one_symbol_out_plus_expanding_session_walk_forward",
+            "held_out_symbol_never_in_training": True,
+            "min_train_sessions": min_train_sessions,
+            "test_sessions_per_fold": test_sessions_per_fold,
+            "embargo_sessions": embargo_sessions,
+            "min_train_rows": min_train_rows,
+            "min_test_rows": min_test_rows,
+        },
+        "note": (
+            "Each symbol is excluded from all training rows for its evaluation. "
+            "Its predictions are also chronological: only earlier sessions from the "
+            "other symbols are used for training. This is a stricter cross-stock "
+            "generalization test than the ordinary walk-forward baseline."
         ),
     }
 

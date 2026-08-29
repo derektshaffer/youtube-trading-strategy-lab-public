@@ -8,6 +8,7 @@ import pytest
 
 from predictive_ml_pipeline import (
     build_cross_stock_training_dataset,
+    leave_one_symbol_out_walk_forward_logistic_baseline,
     load_training_dataset,
     save_training_dataset,
     walk_forward_logistic_baseline,
@@ -239,4 +240,103 @@ def test_walk_forward_rejects_unknown_target_mode():
             target_horizon=1,
             target_mode="not-a-target",
         )
+
+def test_cross_stock_dataset_separates_market_hours_regimes():
+    rows = [
+        {"t": "2026-08-24T12:00:00Z", "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0, "v": 100},
+        {"t": "2026-08-24T12:01:00Z", "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0, "v": 100},
+        {"t": "2026-08-24T13:30:00Z", "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0, "v": 100},
+        {"t": "2026-08-24T13:31:00Z", "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0, "v": 100},
+        {"t": "2026-08-24T13:32:00Z", "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0, "v": 100},
+        {"t": "2026-08-24T20:00:00Z", "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0, "v": 100},
+        {"t": "2026-08-24T20:01:00Z", "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0, "v": 100},
+        {"t": "2026-08-24T20:02:00Z", "o": 10.0, "h": 10.1, "l": 9.9, "c": 10.0, "v": 100},
+    ]
+    market = FakeMarket({"AAA": rows})
+
+    regular = build_cross_stock_training_dataset(
+        market,
+        ["AAA"],
+        start="2026-08-24",
+        end="2026-08-25",
+        horizons=(1,),
+        swing_radius=1,
+        session_limit=1,
+        session_mode="regular",
+    )
+    premarket = build_cross_stock_training_dataset(
+        market,
+        ["AAA"],
+        start="2026-08-24",
+        end="2026-08-25",
+        horizons=(1,),
+        swing_radius=1,
+        session_limit=1,
+        session_mode="premarket",
+    )
+    afterhours = build_cross_stock_training_dataset(
+        market,
+        ["AAA"],
+        start="2026-08-24",
+        end="2026-08-25",
+        horizons=(1,),
+        swing_radius=1,
+        session_limit=1,
+        session_mode="afterhours",
+    )
+
+    assert regular["session_window_et"] == "09:30-16:00"
+    assert premarket["session_window_et"] == "04:00-09:30"
+    assert afterhours["session_window_et"] == "16:00-20:00"
+    assert regular["bars_analyzed"] == 3
+    assert premarket["bars_analyzed"] == 2
+    assert afterhours["bars_analyzed"] == 3
+    assert regular["row_count"] == 2
+    assert premarket["row_count"] == 1
+    assert afterhours["row_count"] == 2
+
+
+def test_leave_one_symbol_out_walk_forward_never_trains_on_held_out_symbol():
+    dataset = _synthetic_dataset(session_count=12, rows_per_session=30)
+    report = leave_one_symbol_out_walk_forward_logistic_baseline(
+        dataset,
+        target_horizon=1,
+        target_mode="positive_return",
+        min_train_sessions=4,
+        test_sessions_per_fold=2,
+        embargo_sessions=1,
+        min_train_rows=30,
+        min_test_rows=5,
+    )
+
+    assert report["status"] == "EVALUATED"
+    assert report["validation_type"] == "leave_one_symbol_out_walk_forward"
+    assert report["split_policy"]["held_out_symbol_never_in_training"] is True
+    assert report["roc_auc"] is not None and report["roc_auc"] > 0.95
+    assert {item["symbol"] for item in report["by_symbol"]} == {"AAA", "BBB"}
+    for item in report["by_symbol"]:
+        assert item["status"] == "EVALUATED"
+        assert item["roc_auc"] is not None and item["roc_auc"] > 0.95
+        for fold in item["folds"]:
+            assert item["symbol"] == fold["held_out_symbol"]
+            assert item["symbol"] not in fold["train_symbols"]
+
+
+def test_leave_one_symbol_out_requires_multiple_symbols():
+    dataset = _synthetic_dataset(session_count=8)
+    dataset["records"] = [
+        row for row in dataset["records"] if row["symbol"] == "AAA"
+    ]
+    report = leave_one_symbol_out_walk_forward_logistic_baseline(
+        dataset,
+        target_horizon=1,
+        target_mode="positive_return",
+        min_train_sessions=4,
+        test_sessions_per_fold=1,
+        embargo_sessions=1,
+        min_train_rows=10,
+        min_test_rows=2,
+    )
+    assert report["status"] == "INSUFFICIENT_DATA"
+    assert "At least two symbols" in report["reason"]
 
