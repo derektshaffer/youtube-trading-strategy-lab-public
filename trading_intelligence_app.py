@@ -2340,6 +2340,14 @@ if module == "Stock Strategy Finder":
         winner = optimization.get("winner") or {}
         holdout = winner.get("holdout_metrics") or {}
 
+        if int(finder_result.get("strategy_fidelity_engine_version") or 0) < 1:
+            st.warning(
+                "**Legacy research result — predates the Strategy Integrity gate.** "
+                "This saved run may have tested a simplified machine version of the source strategy. "
+                "Keep it for historical comparison, but do not treat its verdict as equivalent to a new "
+                "Finder run that first verifies source-to-backtester fidelity."
+            )
+
         verdict_class = {
             "ready_for_paper": "ready",
             "promising": "promising",
