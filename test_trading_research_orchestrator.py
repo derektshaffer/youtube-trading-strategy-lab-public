@@ -65,6 +65,52 @@ class ResearchQueueTests(unittest.TestCase):
         self.assertIn("unverified claim", job["payload"]["existing_context"])
         self.assertIn("Challenge it independently", job["payload"]["existing_context"])
 
+    def test_retrospective_teacher_observations_feed_independent_research(self):
+        library = {
+            "strategies": [],
+            "retrospective_learning_runs": [
+                {
+                    "generated_at": "2026-08-28T10:00:00Z",
+                    "symbol": "SDOT",
+                    "timeframe": "5Min",
+                    "start": "2026-08-20T13:30:00Z",
+                    "end": "2026-08-28T20:00:00Z",
+                    "label_counts": {
+                        "upper_exhaustion_reversal": 7,
+                        "avwap_pinch_upside_expansion": 4,
+                    },
+                    "precursor_feature_medians": {
+                        "upper_exhaustion_reversal": {
+                            "volume_climax_ratio": 3.2,
+                            "vp_distance_to_poc_pct": 4.1,
+                        }
+                    },
+                    "feature_layers": {
+                        "volume_profile": "causal",
+                        "multi_anchor_avwap": "causal",
+                    },
+                    "causality_policy": {
+                        "future_data_allowed_for": "labels only",
+                        "future_data_forbidden_for": "features",
+                    },
+                }
+            ],
+        }
+        library, added = research.seed_continuous_research_cycle(
+            library,
+            topics=[],
+            cycle_date="2026-08-28",
+            maximum_topics=1,
+            source_challenge_limit=1,
+            retrospective_challenge_limit=1,
+        )
+        self.assertEqual(added, 1)
+        job = library["research_queue"][0]
+        self.assertEqual(job["payload"]["origin"], "retrospective_teacher")
+        self.assertEqual(job["payload"]["teacher_symbol"], "SDOT")
+        self.assertIn("descriptive observations", job["payload"]["existing_context"])
+        self.assertIn("not proof", job["payload"]["topic"].lower())
+
     def test_stale_running_job_returns_to_retry_queue(self):
         library, job = research.enqueue_research_job(
             {},
