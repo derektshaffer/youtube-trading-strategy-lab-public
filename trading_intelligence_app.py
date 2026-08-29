@@ -928,20 +928,20 @@ WORKSPACE_PAGE_META = {
     },
     "Overview": {
         "step": "01",
-        "group": "Research",
-        "title": "Overview",
-        "subtitle": "See what the research system knows, what has been validated, and where the workflow should go next.",
+        "group": "Home",
+        "title": "Trading Intelligence Home",
+        "subtitle": "Choose what you want to accomplish. The Lab handles the research pipeline behind the scenes.",
     },
     "Knowledge Sources": {
         "step": "02",
         "group": "Research",
-        "title": "Knowledge Sources",
+        "title": "Add Research Material",
         "subtitle": "Build your evidence library. The AI reads, extracts, and organizes trading intelligence.",
     },
     "AI Research Autopilot": {
         "step": "03",
         "group": "Research",
-        "title": "AI Research Autopilot",
+        "title": "AI Discoveries & Research",
         "subtitle": "Let AI consolidate source ideas, prepare testable hypotheses, and move promising families into research.",
     },
     "Strategy Library": {
@@ -983,7 +983,7 @@ WORKSPACE_PAGE_META = {
     "Market Discovery": {
         "step": "10",
         "group": "Market Research",
-        "title": "Market Discovery",
+        "title": "Find Stocks Worth Watching",
         "subtitle": "Search the current market for stocks that match the conditions of validated or research-ready strategies.",
     },
     "Catalyst Intelligence": {
@@ -995,7 +995,7 @@ WORKSPACE_PAGE_META = {
     "Stock Analyzer": {
         "step": "12",
         "group": "Market Research",
-        "title": "Stock Analyzer",
+        "title": "Analyze a Stock Right Now",
         "subtitle": "Deep-dive one ticker with strategy matches, market structure, catalysts, and current setup quality.",
     },
     "Live / Paper": {
@@ -1201,39 +1201,56 @@ with st.sidebar:
           <div>
             <div class="til-sidebrand-name">Trading<br>Intelligence<br>Lab</div>
           </div>
-          <div class="til-side-collapse">‹‹</div>
         </div>
-        <div class="til-workspace-label">RESEARCH WORKSPACE</div>
+        <div class="til-workspace-label">WHAT DO YOU WANT TO DO?</div>
         """,
         unsafe_allow_html=True,
     )
 
-    dashboard_active = module == "Overview"
-    dashboard_clicked = st.button(
-        "⬡   Dashboard\nWorkspace Home",
-        width="stretch",
-        type="secondary",
-        key="til_dashboard_active" if dashboard_active else "til_dashboard",
-    )
-    if dashboard_clicked and not dashboard_active:
-        st.session_state["til_workspace_section"] = "Overview"
-        st.rerun()
-
-    for group_name, group_sections in WORKSPACE_NAV_GROUPS:
-        st.markdown(
-            f'<div class="til-nav-group">{group_name}</div>',
-            unsafe_allow_html=True,
+    primary_navigation = [
+        ("Overview", "⌂  Home"),
+        ("Stock Strategy Finder", "◆  Find strategy for a stock"),
+        ("Stock Analyzer", "⌕  Analyze a stock now"),
+        ("Market Discovery", "◎  Find stocks worth watching"),
+        ("Knowledge Sources", "◇  Add research material"),
+        ("AI Research Autopilot", "✦  AI discoveries & research"),
+        ("Live / Paper", "↗  Paper & live trading"),
+    ]
+    for section, label in primary_navigation:
+        is_active = section == module
+        clicked = st.button(
+            label,
+            width="stretch",
+            type="primary" if is_active else "secondary",
+            key="til_simple_nav_" + _nav_key(section, active=is_active),
         )
-        for section in group_sections:
-            display = WORKSPACE_DISPLAY_LABELS.get(section, section)
-            number, _, label = display.partition(". ")
-            icon = WORKSPACE_NAV_ICONS.get(section, "◇")
+        if clicked and not is_active:
+            st.session_state["til_workspace_section"] = section
+            st.rerun()
+
+    advanced_sections = [
+        "Strategy Library",
+        "Strategy DNA",
+        "Make Strategy Testable",
+        "Strategy Lab",
+        "Validation",
+        "Universe Research",
+        "Catalyst Intelligence",
+        "System Health",
+    ]
+    with st.expander(
+        "Advanced / Research Details",
+        expanded=module in advanced_sections,
+    ):
+        st.caption("These pages explain or audit what the AI pipeline is doing. You usually do not need them.")
+        for section in advanced_sections:
+            meta = WORKSPACE_PAGE_META.get(section) or {}
             is_active = section == module
             clicked = st.button(
-                f"{icon}   {number.zfill(2)}   {label}",
+                WORKSPACE_NAV_ICONS.get(section, "◇") + "  " + str(meta.get("title") or section),
                 width="stretch",
-                type="secondary",
-                key=_nav_key(section, active=is_active),
+                type="primary" if is_active else "secondary",
+                key="til_advanced_nav_" + _nav_key(section, active=is_active),
             )
             if clicked and not is_active:
                 st.session_state["til_workspace_section"] = section
@@ -1245,13 +1262,9 @@ with st.sidebar:
         <div class="til-side-status">
           <div class="til-side-status-row">
             <div>
-              <div class="til-side-status-label">RESEARCH SYSTEM</div>
+              <div class="til-side-status-label">AI RESEARCH SYSTEM</div>
               <div class="til-side-status-value"><span class="til-live-dot" style="background:{system_status_color};"></span> {html.escape(system_status_word)}</div>
             </div>
-            <svg class="til-mini-spark" viewBox="0 0 90 28" aria-hidden="true">
-              <polyline points="1,22 15,18 28,21 40,12 53,16 67,8 89,11" fill="none" stroke="{system_status_color}" stroke-width="2"/>
-              <polyline points="1,26 15,24 28,25 40,19 53,21 67,15 89,16" fill="none" stroke="#4bcfff" stroke-opacity=".35" stroke-width="1"/>
-            </svg>
           </div>
         </div>
         """,
@@ -2435,56 +2448,125 @@ elif module == "Overview":
         for item in canonical_strategies
         if str(item.get("validation_status") or "").lower() == "validated"
     )
-    st.markdown(
-        (
-            '<div class="til-kpi-grid">'
-            '<div class="til-kpi til-kpi-cyan"><div class="til-kpi-icon">▤</div><div>'
-            '<div class="til-kpi-label">KNOWLEDGE SOURCES</div>'
-            f'<div class="til-kpi-value">{len(sources):,}</div>'
-            '<div class="til-kpi-note">evidence in the library</div></div></div>'
-            '<div class="til-kpi til-kpi-blue"><div class="til-kpi-icon">⌘</div><div>'
-            '<div class="til-kpi-label">AI STRATEGY FAMILIES</div>'
-            f'<div class="til-kpi-value">{len(canonical_strategies):,}</div>'
-            '<div class="til-kpi-note">consolidated research blueprints</div></div></div>'
-            '<div class="til-kpi til-kpi-green"><div class="til-kpi-icon">◇</div><div>'
-            '<div class="til-kpi-label">VALIDATED FAMILIES</div>'
-            f'<div class="til-kpi-value">{overview_validated:,}</div>'
-            '<div class="til-kpi-note">passed current validation gate</div></div></div>'
-            '<div class="til-kpi til-kpi-purple"><div class="til-kpi-icon">✦</div><div>'
-            '<div class="til-kpi-label">RAW SOURCE IDEAS</div>'
-            f'<div class="til-kpi-value">{len(source_strategies):,}</div>'
-            '<div class="til-kpi-note">retained for provenance</div></div></div>'
-            '</div>'
-        ),
-        unsafe_allow_html=True,
+    overview_queue = research_queue_status(library)
+    overview_research_system = dict(library.get("research_system") or {})
+
+    st.markdown("### What do you want to do?")
+    st.caption(
+        "Choose a goal. You do not need to work through the research pages in order."
     )
 
-    st.markdown("### Platform pipeline")
-    cols = st.columns(4)
-    cards = [
-        ("1 · Learn", "Books + PDFs + YouTube + human ideas", "Extract evidence-grounded strategy hypotheses."),
-        ("2 · Test", "Historical Strategy Lab", "Run deterministic backtests and systematic parameter searches."),
-        ("3 · Validate", "Out-of-sample + walk-forward", "Reject unstable strategies and likely overfitting."),
-        ("4 · Apply", "Scanner + analyzer + live runner", "Match validated setups to current stocks and regimes."),
-    ]
-    for col, (title, subtitle, body) in zip(cols, cards):
-        col.markdown(
-            f'<div class="til-card"><strong>{title}</strong><br><span class="muted">{subtitle}</span>'
-            f'<p>{body}</p></div>',
-            unsafe_allow_html=True,
-        )
+    action_row_one = st.columns(3)
+    action_row_two = st.columns(2)
 
-    st.markdown("### What is usable now")
-    st.success(
-        "Book/PDF ingestion, AI strategy extraction, Strategy DNA + cross-book synthesis, automatic "
-        "AI rule preparation, the historical Strategy Lab, validation, catalyst intelligence, universe "
-        "research, market discovery, and the unified strategy library are all connected."
+    home_actions = [
+        (
+            action_row_one[0],
+            "◆ Find the best strategy for a stock",
+            "Enter a ticker and let the Lab search historical strategy/rule combinations for that specific stock.",
+            "Stock Strategy Finder",
+            "Find strategy",
+            "til_home_find_strategy",
+        ),
+        (
+            action_row_one[1],
+            "⌕ Analyze a stock right now",
+            "Compare one ticker against everything the Lab currently knows and see which setup fits the current market.",
+            "Stock Analyzer",
+            "Analyze stock",
+            "til_home_analyze_stock",
+        ),
+        (
+            action_row_one[2],
+            "◎ Find stocks worth watching",
+            "Scan current market leaders against the entire usable strategy library and rank the best stock/strategy matches.",
+            "Market Discovery",
+            "Scan market",
+            "til_home_market_discovery",
+        ),
+        (
+            action_row_two[0],
+            "◇ Add research material",
+            "Add books, PDFs, or videos. AI extracts the ideas and folds them into the research library.",
+            "Knowledge Sources",
+            "Add sources",
+            "til_home_add_sources",
+        ),
+        (
+            action_row_two[1],
+            "✦ See what AI has discovered",
+            "See the automatic research queue, grounded research, hypotheses, and what the AI is working on.",
+            "AI Research Autopilot",
+            "View AI research",
+            "til_home_ai_research",
+        ),
+    ]
+
+    for col, title, body, target, button_label, key in home_actions:
+        with col:
+            st.markdown(
+                f'<div class="til-card"><strong>{title}</strong><p class="muted">{body}</p></div>',
+                unsafe_allow_html=True,
+            )
+            if st.button(button_label, key=key, width="stretch", type="primary"):
+                st.session_state["til_workspace_section"] = target
+                st.rerun()
+
+    st.markdown("### AI research at a glance")
+    status_cols = st.columns(5)
+    status_cols[0].metric(
+        "Automatic research",
+        "ACTIVE" if overview_research_system.get("last_worker_at") else "WAITING",
+        str(overview_research_system.get("last_worker_at") or "No worker heartbeat yet"),
+        delta_color="off",
+    )
+    status_cols[1].metric(
+        "Research queue",
+        int(overview_queue.get("active") or 0),
+        "jobs waiting / running",
+        delta_color="off",
+    )
+    status_cols[2].metric(
+        "Strategy families",
+        len(canonical_strategies),
+        f"{len(source_strategies)} raw source ideas",
+        delta_color="off",
+    )
+    status_cols[3].metric(
+        "Validated",
+        overview_validated,
+        "passed current validation gate",
+        delta_color="off",
+    )
+    status_cols[4].metric(
+        "Cloud system",
+        system_status_word,
+        "open Advanced → System Health for details",
+        delta_color="off",
+    )
+
+    last_cycle = str(
+        overview_research_system.get("last_seeded_at")
+        or overview_research_system.get("last_worker_at")
+        or "No cycle recorded yet"
     )
     st.info(
-        "The normal workflow is AI-managed: upload books/videos, keep every extracted idea for provenance, "
-        "automatically consolidate similar ideas into strategy families, let historical research optimize the "
-        "rule variations, and surface only the families that need your attention or survive validation."
+        "**You normally do not need to manage the pipeline manually.** "
+        "The hourly cloud worker keeps processing research jobs, while the daily research cycle adds fresh topics. "
+        f"Latest recorded research activity: {last_cycle}."
     )
+
+    with st.expander("How the Lab works behind the scenes", expanded=False):
+        st.write(
+            "1. **Learn** — books, videos, and grounded web research produce trading ideas.\\n"
+            "2. **Consolidate** — similar ideas are merged into strategy families instead of becoming endless duplicates.\\n"
+            "3. **Test & validate** — historical optimization, holdout data, walk-forward tests, and robustness checks try to break the idea.\\n"
+            "4. **Apply** — Find Strategy, Market Discovery, and Stock Analyzer use what survived the research process."
+        )
+        st.caption(
+            "Strategy Library, Blueprint, Rule Builder, Strategy Lab, Validation, Market Universe, "
+            "Catalyst Intelligence, and System Health remain available under Advanced / Research Details."
+        )
 
 
 elif module == "System Health":
