@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 import math
 import pandas as pd
 
-from market_features import build_market_features
+from market_features import MARKET_FEATURE_COLUMNS, add_causal_market_feature_columns, build_market_features
 
 
 DEFAULT_HORIZONS = (5, 15, 30)
@@ -308,6 +308,53 @@ def summarize_detector_events(
     return _summarize_events(events, horizons=clean_horizons)
 
 
+def _plain_scalar(value: Any) -> Any:
+    """Convert pandas/numpy scalar values into JSON-friendly Python scalars."""
+    if value is None:
+        return None
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, bool) and missing:
+        return None
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except (TypeError, ValueError):
+            pass
+    return value
+
+
+def _session_feature_frame(
+    session_key: str,
+    rows: list[dict[str, Any]],
+    *,
+    swing_radius: int,
+) -> pd.DataFrame:
+    """Calculate the causal market-feature vocabulary once for a whole session."""
+    frame = pd.DataFrame(
+        [
+            {
+                "timestamp": _timestamp(row),
+                "open": _number(_value(row, "o", "open", "Open")),
+                "high": _high(row),
+                "low": _low(row),
+                "close": _close(row),
+                "volume": _number(_value(row, "v", "volume", "Volume")) or 0.0,
+                "session": session_key,
+            }
+            for row in rows
+        ]
+    )
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
+    return add_causal_market_feature_columns(
+        frame,
+        session_column="session",
+        swing_radius=swing_radius,
+    )
+
+
 def build_supervised_feature_rows(
     rows: list[dict[str, Any]],
     *,
@@ -317,39 +364,44 @@ def build_supervised_feature_rows(
 ) -> dict[str, Any]:
     """Build leakage-safe supervised-learning rows from historical candles.
 
-    Features are computed from a prefix ending at the observation bar. Labels are
-    then measured strictly from later bars in the same session. The result is a
-    flat, JSON-serializable table suitable for persistence or DataFrame/model use.
+    Each session's causal feature frame is calculated once, left-to-right. Labels
+    are still measured strictly from later bars in the same session. This keeps
+    live/backtest feature semantics while making multi-stock ML dataset generation
+    practical instead of replaying every historical prefix independently.
     """
     clean_horizons = tuple(sorted({max(1, int(value)) for value in horizons}))
     max_horizon = max(clean_horizons, default=0)
     sessions = _ordered_sessions(rows)
     records: list[dict[str, Any]] = []
-    feature_names: set[str] = set()
+    feature_names = {f"feature__{name}" for name in MARKET_FEATURE_COLUMNS}
     label_names: set[str] = set()
 
     for session_key, session_rows in sessions:
+        feature_frame = _session_feature_frame(
+            session_key,
+            session_rows,
+            swing_radius=swing_radius,
+        )
+        if len(feature_frame) != len(session_rows):
+            raise ValueError("Causal feature frame did not preserve historical row count.")
+
         for index in range(len(session_rows)):
             if require_full_horizon and index + max_horizon >= len(session_rows):
                 continue
-            prefix = session_rows[: index + 1]
-            snapshot = build_market_features(prefix, swing_radius=swing_radius)
-            features = dict(snapshot.get("features") or {})
             outcomes = _event_outcomes(
                 session_rows,
                 index,
                 horizons=clean_horizons,
                 direction=0,
             )
+            feature_row = feature_frame.iloc[index]
             record: dict[str, Any] = {
                 "session": session_key,
                 "bar_index": index,
                 "timestamp": _timestamp(session_rows[index]),
             }
-            for name, value in features.items():
-                column = f"feature__{name}"
-                record[column] = value
-                feature_names.add(column)
+            for name in MARKET_FEATURE_COLUMNS:
+                record[f"feature__{name}"] = _plain_scalar(feature_row.get(name))
 
             forward = outcomes.get("forward_returns_pct") or {}
             for horizon in clean_horizons:
@@ -377,6 +429,7 @@ def build_supervised_feature_rows(
         "feature_columns": sorted(feature_names),
         "label_columns": sorted(label_names),
         "records": records,
+        "feature_calculation": "single_pass_causal_session_frame",
         "note": (
             "Every feature column is calculated without future bars. Columns prefixed "
             "label__ are calculated only from bars after the observation timestamp."

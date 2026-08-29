@@ -22,6 +22,7 @@ from hot_deploy_imports import load_current_source_module
 from market_feature_scorecards import run_detector_scorecards
 from market_detector_gate import evaluate_scorecard_report
 from market_feature_validation import DETECTOR_SPECS
+from predictive_ml_pipeline import build_cross_stock_training_dataset, walk_forward_logistic_baseline
 from trading_app_runtime import market_client, setting
 from trading_glass_theme import inject_research_glass_theme
 
@@ -6607,6 +6608,218 @@ elif module == "Pattern Validation":
                     width="stretch",
                     hide_index=True,
                 )
+
+
+    st.divider()
+    st.markdown("### Predictive ML Research")
+    st.caption(
+        "Build a cross-stock causal training set and test the Lab's first probability-model baseline. "
+        "Every reported model metric is out-of-sample. This research does not change scanner rankings, "
+        "strategy approval, Paper Auto, or live trading."
+    )
+    ml_cols = st.columns([1.7, 0.9, 0.9, 1.0])
+    ml_symbols_text = ml_cols[0].text_input(
+        "ML research stocks",
+        value=str(st.session_state.get("til_ml_symbols") or pattern_symbols_text or "SDOT REAX"),
+        help="Start with a few related stocks. The backend supports broader cloud batches later.",
+        key="til_ml_symbols_input",
+    )
+    ml_days = int(
+        ml_cols[1].slider(
+            "ML history (days)",
+            12,
+            30,
+            20,
+            1,
+            key="til_ml_history_days",
+        )
+    )
+    ml_horizon = int(
+        ml_cols[2].selectbox(
+            "Prediction horizon",
+            options=[5, 15, 30],
+            index=1,
+            format_func=lambda value: f"{value} min",
+            key="til_ml_target_horizon",
+        )
+    )
+    ml_cols[3].metric("Model", "Logistic baseline")
+    ml_symbols = [
+        token.strip().upper()
+        for token in ml_symbols_text.replace(",", " ").split()
+        if token.strip()
+    ][:5]
+
+    st.info(
+        "The first model is intentionally simple. Its job is to establish a trustworthy benchmark: "
+        "can causal market features predict whether price is higher after the selected horizon on "
+        "future market sessions better than simply guessing the historical positive-return rate?"
+    )
+    ml_slot = st.empty()
+    run_ml_baseline = ml_slot.button(
+        "◈ Build dataset & run ML baseline",
+        type="primary",
+        width="stretch",
+        disabled=not ml_symbols,
+        key="til_run_predictive_ml_baseline",
+    )
+    if run_ml_baseline:
+        ml_slot.button(
+            "◈ Building causal ML dataset…",
+            type="primary",
+            width="stretch",
+            disabled=True,
+            key="til_run_predictive_ml_baseline_busy",
+        )
+        st.session_state["til_ml_symbols"] = " ".join(ml_symbols)
+        ml_monitor = long_task_monitor("predictive_ml_baseline")
+        ml_bar = st.progress(
+            0.03,
+            text=ml_monitor.text(0.03, "Preparing predictive ML research…"),
+        )
+        try:
+            ml_status = st.status("Preparing causal ML dataset…", expanded=True)
+            progress_state = {"built": 0}
+
+            def ml_research_progress(message: str) -> None:
+                ml_status.write(message)
+                text = str(message or "")
+                fraction = 0.10
+                if text.startswith("Loading historical"):
+                    fraction = 0.18
+                elif text.startswith("Building causal ML rows"):
+                    progress_state["built"] += 1
+                    fraction = min(
+                        0.78,
+                        0.20
+                        + 0.58
+                        * progress_state["built"]
+                        / max(1, len(ml_symbols)),
+                    )
+                update_task_bar(
+                    ml_bar,
+                    ml_monitor,
+                    fraction,
+                    text or "Building ML research dataset",
+                )
+
+            ml_end = utc_now()
+            ml_start = ml_end - timedelta(days=ml_days)
+            ml_dataset = build_cross_stock_training_dataset(
+                market_client(),
+                ml_symbols,
+                start=ml_start,
+                end=ml_end,
+                timeframe="1Min",
+                horizons=(5, 15, 30),
+                swing_radius=3,
+                max_pages=120,
+                require_full_horizon=True,
+                progress=ml_research_progress,
+            )
+            update_task_bar(
+                ml_bar,
+                ml_monitor,
+                0.84,
+                "Running chronological walk-forward probability model…",
+            )
+            ml_evaluation = walk_forward_logistic_baseline(
+                ml_dataset,
+                target_horizon=ml_horizon,
+                min_train_sessions=8,
+                test_sessions_per_fold=2,
+                embargo_sessions=1,
+                min_train_rows=250,
+            )
+            st.session_state["til_predictive_ml_result"] = {
+                "symbols": ml_symbols,
+                "days": ml_days,
+                "horizon": ml_horizon,
+                "dataset_summary": {
+                    key: value
+                    for key, value in ml_dataset.items()
+                    if key not in {"records"}
+                },
+                "evaluation": ml_evaluation,
+            }
+            ml_status.update(
+                label=(
+                    f"Predictive ML research complete · "
+                    f"{ml_dataset.get('row_count', 0):,} labeled rows"
+                ),
+                state="complete",
+                expanded=False,
+            )
+            complete_task_bar(
+                ml_bar,
+                ml_monitor,
+                "Predictive ML baseline evaluation complete",
+            )
+            st.rerun()
+        except AppError as exc:
+            st.error(str(exc))
+        except Exception as exc:
+            st.error(f"Predictive ML research failed: {exc}")
+
+    stored_ml_result = st.session_state.get("til_predictive_ml_result") or {}
+    ml_dataset_summary = stored_ml_result.get("dataset_summary") or {}
+    ml_evaluation = stored_ml_result.get("evaluation") or {}
+    if ml_evaluation:
+        st.divider()
+        if str(ml_evaluation.get("status")) != "EVALUATED":
+            st.warning(
+                "The baseline could not be evaluated yet: "
+                + str(ml_evaluation.get("reason") or "not enough usable history.")
+            )
+        else:
+            ml_metric_cols = st.columns(6)
+            ml_metric_cols[0].metric("Training rows", f"{int(ml_dataset_summary.get('row_count') or 0):,}")
+            ml_metric_cols[1].metric("Stocks", int(ml_dataset_summary.get("symbols_with_data") or 0))
+            ml_metric_cols[2].metric("OOS predictions", f"{int(ml_evaluation.get('oos_rows') or 0):,}")
+            ml_metric_cols[3].metric("Walk-forward folds", int(ml_evaluation.get("fold_count") or 0))
+            auc_value = safe_float(ml_evaluation.get("roc_auc"))
+            ml_metric_cols[4].metric("ROC AUC", "—" if auc_value is None else f"{auc_value:.3f}")
+            skill_value = safe_float(ml_evaluation.get("brier_skill_vs_naive"))
+            ml_metric_cols[5].metric(
+                "Brier skill vs naive",
+                "—" if skill_value is None else f"{skill_value * 100:.1f}%",
+            )
+
+            if skill_value is not None and skill_value > 0 and auc_value is not None and auc_value > 0.5:
+                st.success(
+                    "This baseline beat the naive probability benchmark on the combined out-of-sample rows. "
+                    "That is encouraging evidence, not proof of a tradable edge; fold stability and broader "
+                    "cross-stock/time testing still matter."
+                )
+            else:
+                st.warning(
+                    "This run did not demonstrate a reliable advantage over the naive probability benchmark. "
+                    "Do not promote it to live scoring; use the result to improve features, labels, or the model."
+                )
+
+            fold_rows = []
+            for fold in ml_evaluation.get("folds") or []:
+                fold_rows.append(
+                    {
+                        "Fold": fold.get("fold"),
+                        "Train sessions": fold.get("train_sessions"),
+                        "Train rows": fold.get("train_rows"),
+                        "Test sessions": ", ".join(fold.get("test_sessions") or []),
+                        "Test rows": fold.get("test_rows"),
+                        "ROC AUC": safe_float(fold.get("roc_auc")),
+                        "Brier": safe_float(fold.get("brier_score")),
+                        "Naive Brier": safe_float(fold.get("naive_brier_score")),
+                        "Brier skill": safe_float(fold.get("brier_skill_vs_naive")),
+                        "Accuracy": safe_float(fold.get("accuracy")),
+                    }
+                )
+            if fold_rows:
+                st.dataframe(pd.DataFrame(fold_rows), width="stretch", hide_index=True)
+            st.caption(
+                "ROC AUC measures ranking ability (0.5 is random). Brier score measures probability accuracy "
+                "(lower is better). Positive Brier skill means the model improved on a constant probability "
+                "equal to the training-set positive rate. No model from this panel is used live."
+            )
 
 
 elif module == "Catalyst Intelligence":
