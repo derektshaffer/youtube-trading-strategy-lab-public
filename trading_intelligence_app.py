@@ -23,6 +23,7 @@ from market_feature_scorecards import run_detector_scorecards
 from market_detector_gate import evaluate_scorecard_report
 from market_feature_validation import DETECTOR_SPECS
 from predictive_ml_pipeline import (
+    archetype_transfer_walk_forward_logistic_baseline,
     build_cross_stock_training_dataset,
     leave_one_symbol_out_walk_forward_logistic_baseline,
     walk_forward_logistic_baseline,
@@ -6746,6 +6747,16 @@ elif module == "Pattern Validation":
             )
         )
 
+    ml_run_archetype_transfer = st.checkbox(
+        "Also run within-vs-across archetype transfer validation",
+        value=False,
+        help=(
+            "This is a heavier research test. Each stock is held out, then same-archetype training "
+            "is compared with different-archetype training on identical future rows."
+        ),
+        key="til_ml_run_archetype_transfer",
+    )
+
     if ml_target_mode == "target_before_stop":
         st.info(
             f"The baseline will predict whether price reaches +{ml_profit_target_pct:.2f}% "
@@ -6866,6 +6877,24 @@ elif module == "Pattern Validation":
                 min_train_rows=250,
                 min_test_rows=25,
             )
+            ml_archetype_validation = {}
+            if ml_run_archetype_transfer:
+                update_task_bar(
+                    ml_bar,
+                    ml_monitor,
+                    0.96,
+                    "Comparing within-archetype vs across-archetype transfer…",
+                )
+                ml_archetype_validation = archetype_transfer_walk_forward_logistic_baseline(
+                    ml_dataset,
+                    target_horizon=ml_horizon,
+                    target_mode=ml_target_mode,
+                    min_train_sessions=8,
+                    test_sessions_per_fold=2,
+                    embargo_sessions=1,
+                    min_train_rows=200,
+                    min_test_rows=20,
+                )
             compact_ml_evaluation = {
                 key: value
                 for key, value in ml_evaluation.items()
@@ -6874,6 +6903,11 @@ elif module == "Pattern Validation":
             compact_ml_generalization = {
                 key: value
                 for key, value in ml_generalization.items()
+                if key != "predictions"
+            }
+            compact_ml_archetype_validation = {
+                key: value
+                for key, value in ml_archetype_validation.items()
                 if key != "predictions"
             }
             st.session_state["til_predictive_ml_result"] = {
@@ -6893,6 +6927,7 @@ elif module == "Pattern Validation":
                 },
                 "evaluation": compact_ml_evaluation,
                 "generalization": compact_ml_generalization,
+                "archetype_validation": compact_ml_archetype_validation,
             }
             ml_status.update(
                 label=(
@@ -6917,6 +6952,7 @@ elif module == "Pattern Validation":
     ml_dataset_summary = stored_ml_result.get("dataset_summary") or {}
     ml_evaluation = stored_ml_result.get("evaluation") or {}
     ml_generalization = stored_ml_result.get("generalization") or {}
+    ml_archetype_validation = stored_ml_result.get("archetype_validation") or {}
     if ml_evaluation:
         st.divider()
         if str(ml_evaluation.get("status")) != "EVALUATED":
@@ -6940,6 +6976,31 @@ elif module == "Pattern Validation":
             target_description = str(ml_evaluation.get("target_description") or "").strip()
             if target_description:
                 st.caption("Prediction target: " + target_description)
+
+            archetype_distribution = list(ml_dataset_summary.get("archetype_distribution") or [])
+            context_feature_count = len(ml_dataset_summary.get("context_feature_columns") or [])
+            if archetype_distribution:
+                st.markdown("#### Causal stock context")
+                st.caption(
+                    f"{context_feature_count} context features are attached to each ML row using only "
+                    "current/past bars and completed prior sessions. Historical float and catalyst-profile "
+                    "features are intentionally excluded until point-in-time coverage is trustworthy."
+                )
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            {
+                                "Archetype": str(item.get("archetype") or "unknown").replace("_", " ").title(),
+                                "Rows": int(item.get("rows") or 0),
+                                "Stocks": int(item.get("symbol_count") or 0),
+                                "Symbols": ", ".join(item.get("symbols") or []),
+                            }
+                            for item in archetype_distribution
+                        ]
+                    ),
+                    width="stretch",
+                    hide_index=True,
+                )
 
             if skill_value is not None and skill_value > 0 and auc_value is not None and auc_value > 0.5:
                 st.success(
@@ -7025,6 +7086,52 @@ elif module == "Pattern Validation":
                     "The model also trained only on earlier market sessions from the other stocks, "
                     "so this tests cross-stock transfer without ticker or future-session leakage."
                 )
+
+            if ml_archetype_validation:
+                st.markdown("#### Within-archetype vs across-archetype transfer")
+                if str(ml_archetype_validation.get("status") or "") != "EVALUATED":
+                    st.warning(
+                        "Archetype transfer comparison could not be evaluated: "
+                        + str(ml_archetype_validation.get("reason") or "not enough family coverage.")
+                    )
+                else:
+                    archetype_cols = st.columns(4)
+                    within_auc = safe_float(ml_archetype_validation.get("within_roc_auc"))
+                    across_auc = safe_float(ml_archetype_validation.get("across_roc_auc"))
+                    auc_delta = safe_float(ml_archetype_validation.get("within_minus_across_auc"))
+                    paired_rows = int(ml_archetype_validation.get("paired_oos_rows") or 0)
+                    archetype_cols[0].metric(
+                        "Same-family AUC",
+                        "—" if within_auc is None else f"{within_auc:.3f}",
+                    )
+                    archetype_cols[1].metric(
+                        "Other-family AUC",
+                        "—" if across_auc is None else f"{across_auc:.3f}",
+                    )
+                    archetype_cols[2].metric(
+                        "AUC advantage",
+                        "—" if auc_delta is None else f"{auc_delta:+.3f}",
+                    )
+                    archetype_cols[3].metric("Paired OOS rows", f"{paired_rows:,}")
+                    archetype_rows = []
+                    for item in ml_archetype_validation.get("by_archetype") or []:
+                        archetype_rows.append(
+                            {
+                                "Archetype": str(item.get("archetype") or "").replace("_", " ").title(),
+                                "Rows": int(item.get("oos_rows") or 0),
+                                "Same-family AUC": safe_float(item.get("within_roc_auc")),
+                                "Other-family AUC": safe_float(item.get("across_roc_auc")),
+                                "AUC advantage": safe_float(item.get("within_minus_across_auc")),
+                                "Same-family Brier skill": safe_float(item.get("within_brier_skill_vs_naive")),
+                                "Other-family Brier skill": safe_float(item.get("across_brier_skill_vs_naive")),
+                            }
+                        )
+                    if archetype_rows:
+                        st.dataframe(pd.DataFrame(archetype_rows), width="stretch", hide_index=True)
+                    st.caption(
+                        "Both models are scored on the exact same held-out-stock rows. The archetype label "
+                        "is used to choose the training cohort but is removed from model inputs for this comparison."
+                    )
 
             st.caption(
                 "ROC AUC measures ranking ability (0.5 is random). Brier score measures probability accuracy "
