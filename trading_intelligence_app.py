@@ -1080,13 +1080,34 @@ requested_workspace = WORKSPACE_DISPLAY_TO_INTERNAL.get(
     requested_workspace,
     requested_workspace,
 )
+
+try:
+    remembered_workspace = str(st.query_params.get("workspace") or "").strip()
+except (AttributeError, KeyError, RuntimeError, TypeError):
+    remembered_workspace = ""
+remembered_workspace = WORKSPACE_DISPLAY_TO_INTERNAL.get(
+    remembered_workspace,
+    remembered_workspace,
+)
+
 if requested_workspace in WORKSPACE_SECTIONS:
     st.session_state["til_workspace_section"] = requested_workspace
+elif (
+    "til_workspace_section" not in st.session_state
+    and remembered_workspace in WORKSPACE_SECTIONS
+):
+    st.session_state["til_workspace_section"] = remembered_workspace
 
 module = str(st.session_state.get("til_workspace_section") or "Overview")
 if module not in WORKSPACE_SECTIONS:
     module = "Overview"
     st.session_state["til_workspace_section"] = module
+
+try:
+    if str(st.query_params.get("workspace") or "") != module:
+        st.query_params["workspace"] = module
+except (AttributeError, KeyError, RuntimeError, TypeError):
+    pass
 
 library: dict[str, Any] = {}
 library_load_error: AppError | None = None
