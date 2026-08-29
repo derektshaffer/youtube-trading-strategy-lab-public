@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections import defaultdict
 from statistics import mean, median
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import math
 import pandas as pd
@@ -22,6 +23,7 @@ from market_features import build_market_features
 
 
 DEFAULT_HORIZONS = (5, 15, 30)
+MARKET_TZ = ZoneInfo("America/New_York")
 
 DETECTOR_SPECS: dict[str, dict[str, Any]] = {
     "vwap_retest_held": {
@@ -127,7 +129,7 @@ def _low(row: dict[str, Any]) -> float | None:
 
 
 def _ordered_sessions(rows: list[dict[str, Any]]) -> list[tuple[str, list[dict[str, Any]]]]:
-    """Split timestamped rows by UTC date; undated rows stay in one session."""
+    """Split timestamped rows by U.S. equity session date; undated rows stay together."""
     valid = [dict(row) for row in rows or [] if isinstance(row, dict)]
     if not valid:
         return []
@@ -143,7 +145,7 @@ def _ordered_sessions(rows: list[dict[str, Any]]) -> list[tuple[str, list[dict[s
         order: list[str] = []
         for stamp, _, row in parsed:
             assert stamp is not None
-            key = stamp.date().isoformat()
+            key = stamp.tz_convert(MARKET_TZ).date().isoformat()
             if key not in grouped:
                 order.append(key)
             grouped[key].append(row)
