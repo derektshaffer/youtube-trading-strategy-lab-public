@@ -24,7 +24,11 @@ def test_predictive_ml_workspace_is_bounded_for_interactive_use():
     assert 'options=[5, 15, 30]' in block
     assert 'max_pages=120' in block
     assert '[:5]' in block
-    assert '"ML history (days)"' in block
+    assert '"Trading days"' in block
+    assert '"ML history (days)"' not in block
+    assert "session_limit=ml_days" in block
+    assert "ml_calendar_lookback_days" in block
+    assert "weekends and market holidays do not count" in block
 
 
 def test_predictive_ml_workspace_respects_alpaca_sip_delay():
