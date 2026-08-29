@@ -147,3 +147,28 @@ def test_pending_helpers_scope_to_current_symbols():
     assert earliest_pending_observed_at([a, b], only_symbols=["REAX"]) == datetime(
         2026, 8, 29, 15, 5, tzinfo=timezone.utc
     )
+
+
+def test_shadow_observation_keeps_model_probability_for_later_calibration():
+    observed = datetime(2026, 8, 29, 15, 0, tzinfo=timezone.utc)
+    result = scan_result()
+    result["ml_prediction"] = {
+        "status": "SCORED",
+        "probability": 0.72,
+        "raw_probability": 0.69,
+        "model_id": "model-123",
+        "target": "label__target_before_stop_15bar",
+        "target_description": "Price reaches +1% before -0.75% within 15 bars.",
+        "feature_coverage": 0.84,
+    }
+    item = build_shadow_observation(
+        result,
+        source="market_discovery",
+        observed_at=observed,
+    )
+
+    assert item is not None
+    assert item["context"]["ml_probability"] == 0.72
+    assert item["context"]["ml_raw_probability"] == 0.69
+    assert item["context"]["ml_model_id"] == "model-123"
+    assert item["context"]["ml_feature_coverage"] == 0.84
