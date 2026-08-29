@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
+from market_features import build_market_features
 from trading_intelligence_core import effective_strategy_for_live
 from youtube_strategy_engine import (
     ET,
@@ -42,6 +43,30 @@ def _session_start() -> datetime:
     while session_day.weekday() >= 5:
         session_day -= timedelta(days=1)
     return datetime.combine(session_day, datetime.min.time(), tzinfo=ET).replace(hour=4)
+
+
+def _load_intraday_context(
+    market: AlpacaMarketData,
+    symbols: list[str],
+    *,
+    max_pages: int,
+    progress: Callable[[str], None] | None = None,
+    message: str = "Loading intraday market features…",
+) -> dict[str, list[dict[str, Any]]]:
+    """Load one shared intraday pass for observational features and strategy checks."""
+    if progress:
+        progress(message)
+    try:
+        return market.bars(
+            symbols,
+            start=_session_start(),
+            end=utc_now(),
+            timeframe="1Min",
+            feed=market.live_feed,
+            max_pages=max_pages,
+        )
+    except AppError:
+        return {}
 
 
 def scan_strategy_universe(
@@ -83,21 +108,13 @@ def scan_strategy_universe(
             progress("Checking current catalysts…")
         news_by_symbol = market.news(clean, hours=24)
 
-    chart_rows: dict[str, list[dict[str, Any]]] = {}
-    if _needs_chart_data(strategy):
-        if progress:
-            progress("Checking intraday chart triggers…")
-        try:
-            chart_rows = market.bars(
-                clean,
-                start=_session_start(),
-                end=utc_now(),
-                timeframe="1Min",
-                feed=market.live_feed,
-                max_pages=10,
-            )
-        except AppError:
-            chart_rows = {}
+    chart_rows = _load_intraday_context(
+        market,
+        clean,
+        max_pages=10,
+        progress=progress,
+        message="Loading intraday market features and chart context…",
+    )
 
     results: list[dict[str, Any]] = []
     for symbol in clean:
@@ -111,9 +128,10 @@ def scan_strategy_universe(
         enriched = dict(metrics)
         if rules.get("catalyst_required"):
             enriched["has_catalyst"] = bool(news_by_symbol.get(symbol))
-        if chart_rows.get(symbol):
+        if chart_rows.get(symbol) and _needs_chart_data(strategy):
             enriched["chart_checks"] = chart_trigger_checks(chart_rows[symbol], strategy)
 
+        market_features = build_market_features(chart_rows.get(symbol, []))
         signal = match_strategy(enriched, strategy)
         results.append(
             {
@@ -122,6 +140,7 @@ def scan_strategy_universe(
                 "score": signal.get("score") or 0,
                 "unknown": signal.get("unknown") or 0,
                 "metrics": metrics,
+                "market_features": market_features,
                 "signal": signal,
                 "has_catalyst": enriched.get("has_catalyst"),
             }
@@ -152,8 +171,8 @@ def scan_market_strategies(
 
     Market data is downloaded once per stock universe, then every compatible
     strategy is evaluated against that same snapshot/chart/catalyst context.
-    This is intentionally different from calling scan_strategy_universe once
-    per strategy, which would repeat the expensive Alpaca requests.
+    The new market-feature layer is observational here: it is calculated once
+    per stock and returned to callers, but does not change strategy scores yet.
     """
     clean = parse_symbols(symbols)
     if not clean:
@@ -202,22 +221,13 @@ def scan_market_strategies(
             progress("Checking catalysts needed by any strategy…")
         news_by_symbol = market.news(clean, hours=24)
 
-    any_chart = any(_needs_chart_data(strategy) for _, strategy in usable)
-    chart_rows: dict[str, list[dict[str, Any]]] = {}
-    if any_chart:
-        if progress:
-            progress("Loading shared intraday chart context…")
-        try:
-            chart_rows = market.bars(
-                clean,
-                start=_session_start(),
-                end=utc_now(),
-                timeframe="1Min",
-                feed=market.live_feed,
-                max_pages=10,
-            )
-        except AppError:
-            chart_rows = {}
+    chart_rows = _load_intraday_context(
+        market,
+        clean,
+        max_pages=10,
+        progress=progress,
+        message="Loading shared intraday market features…",
+    )
 
     status_rank = {"MATCH": 4, "WATCH": 3, "VERIFY": 2, "NO MATCH": 1, "UNKNOWN": 0}
     results: list[dict[str, Any]] = []
@@ -230,6 +240,7 @@ def scan_market_strategies(
         if metrics is None:
             continue
 
+        market_features = build_market_features(chart_rows.get(symbol, []))
         comparisons: list[dict[str, Any]] = []
         for raw, strategy in usable:
             rules = normalize_machine_rules(strategy.get("machine_rules"))
@@ -288,6 +299,7 @@ def scan_market_strategies(
             {
                 "symbol": symbol,
                 "metrics": metrics,
+                "market_features": market_features,
                 "best_strategy_id": best.get("strategy_id"),
                 "best_strategy_name": best.get("strategy_name"),
                 "validation_status": best.get("validation_status"),
@@ -370,22 +382,14 @@ def analyze_stock_strategies(
             progress("Checking recent catalysts…")
         news_items = market.news([ticker], hours=24).get(ticker, [])
 
-    any_chart = any(_needs_chart_data(item) for item in usable)
-    intraday_rows: list[dict[str, Any]] = []
-    if any_chart:
-        if progress:
-            progress("Loading intraday chart context…")
-        try:
-            intraday_rows = market.bars(
-                [ticker],
-                start=_session_start(),
-                end=utc_now(),
-                timeframe="1Min",
-                feed=market.live_feed,
-                max_pages=8,
-            ).get(ticker, [])
-        except AppError:
-            intraday_rows = []
+    intraday_rows = _load_intraday_context(
+        market,
+        [ticker],
+        max_pages=8,
+        progress=progress,
+        message="Loading intraday market features…",
+    ).get(ticker, [])
+    market_features = build_market_features(intraday_rows)
 
     comparisons: list[dict[str, Any]] = []
     for strategy in usable:
@@ -430,6 +434,7 @@ def analyze_stock_strategies(
     return {
         "symbol": ticker,
         "metrics": metrics,
+        "market_features": market_features,
         "news_count": len(news_items),
         "comparisons": comparisons,
     }
