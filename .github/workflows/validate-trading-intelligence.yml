@@ -31,6 +31,7 @@ on:
       - "trading_catalyst_core.py"
       - "trading_universe_research.py"
       - "youtube_strategy_engine.py"
+      - "anchored_vwap_engine.py"
       - "requirements.txt"
       - "test_youtube_strategy_engine.py"
       - "test_trading_validation_core.py"
@@ -45,6 +46,8 @@ on:
       - "test_live_strategy_runner.py"
       - "test_trading_market_discovery.py"
       - "test_application_security.py"
+      - "test_anchored_vwap_engine.py"
+      - "test_avwap_integration.py"
       - ".github/workflows/validate-trading-intelligence.yml"
   pull_request:
     paths:
@@ -71,6 +74,7 @@ on:
       - "test_trading_research_orchestrator.py"
       - "trading_validation_core.py"
       - "youtube_strategy_engine.py"
+      - "anchored_vwap_engine.py"
       - "stock_strategy_finder.py"
       - "test_stock_strategy_finder.py"
       - "test_trading_auto_research.py"
@@ -79,6 +83,8 @@ on:
       - "test_live_strategy_runner.py"
       - "test_trading_market_discovery.py"
       - "test_application_security.py"
+      - "test_anchored_vwap_engine.py"
+      - "test_avwap_integration.py"
       - "requirements.txt"
 
 permissions:
@@ -118,5 +124,6 @@ jobs:
           python -m py_compile trading_catalyst_core.py
           python -m py_compile trading_universe_research.py
           python -m py_compile youtube_strategy_engine.py
+          python -m py_compile anchored_vwap_engine.py
       - name: Run Trading Intelligence tests
-        run: python -m unittest test_youtube_strategy_engine.py test_stock_strategy_finder.py test_trading_validation_core.py test_trading_catalyst_core.py test_trading_intelligence_core.py test_trading_strategy_dna.py test_trading_universe_research.py test_trading_auto_research.py test_trading_research_orchestrator.py test_trading_progress_ui.py test_trading_system_health.py test_distributed_stock_finder.py test_full_lab_patch_targets.py test_live_strategy_runner.py test_trading_market_discovery.py test_application_security.py -q
+        run: python -m unittest test_youtube_strategy_engine.py test_stock_strategy_finder.py test_trading_validation_core.py test_trading_catalyst_core.py test_trading_intelligence_core.py test_trading_strategy_dna.py test_trading_universe_research.py test_trading_auto_research.py test_trading_research_orchestrator.py test_trading_progress_ui.py test_trading_system_health.py test_distributed_stock_finder.py test_full_lab_patch_targets.py test_live_strategy_runner.py test_trading_market_discovery.py test_application_security.py test_anchored_vwap_engine.py test_avwap_integration.py -q
