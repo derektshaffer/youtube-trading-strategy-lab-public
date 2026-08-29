@@ -52,6 +52,7 @@ SUPPORTED_RESEARCH_JOB_TYPES = frozenset(
         "web_research",
         "specialist_review",
         "autonomous_validation",
+        "predictive_ml_backfill",
         "stock_finder",
     }
 )
@@ -313,6 +314,64 @@ def enqueue_research_job(
         "result_ref": None,
     }
     data["research_queue"] = [job, *data["research_queue"]][:300]
+    return data, job
+
+
+def ensure_predictive_ml_backfill_job(
+    library: dict[str, Any],
+    *,
+    now: datetime | None = None,
+    freshness_hours: int = 20,
+    payload: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Queue one high-priority automatic ML bootstrap/retrain when due."""
+    data = ensure_research_collections(library)
+    current = (now or datetime.now(UTC)).astimezone(UTC)
+    day = current.date().isoformat()
+    dedupe_key = f"predictive-ml-backfill:{day}"
+
+    # Never create duplicate same-day work, including after a terminal failure.
+    # Retry semantics belong to the original durable job.
+    for item in data["research_queue"]:
+        if str(item.get("dedupe_key") or "") == dedupe_key:
+            return data, None
+
+    system = dict(data.get("research_system") or {})
+    status = (
+        dict(system.get("predictive_ml_backfill_status") or {})
+        if isinstance(system.get("predictive_ml_backfill_status"), dict)
+        else {}
+    )
+    completed_at = _parse_iso(status.get("completed_at"))
+    if completed_at is not None:
+        age = current - completed_at
+        if age < timedelta(hours=max(1, int(freshness_hours))):
+            return data, None
+
+    job_payload = {
+        "origin": "automatic_predictive_ml_backfill",
+        "cycle_date": day,
+        **dict(payload or {}),
+    }
+    data, job = enqueue_research_job(
+        data,
+        "predictive_ml_backfill",
+        job_payload,
+        priority=95,
+        dedupe_key=dedupe_key,
+        max_attempts=3,
+    )
+    if job:
+        system = dict(data.get("research_system") or {})
+        system["predictive_ml_backfill_status"] = {
+            "status": "queued",
+            "queued_at": utc_iso(),
+            "job_id": job.get("id"),
+            "research_only": True,
+            "affects_live_ranking": False,
+            "affects_execution": False,
+        }
+        data["research_system"] = system
     return data, job
 
 
