@@ -34,6 +34,7 @@ from predictive_probability_model import (
     build_portable_probability_model,
     score_scan_result_probability,
 )
+from predictive_boosted_probability_model import score_boosted_probability_model
 from predictive_model_monitor import build_shadow_model_monitor
 from predictive_model_registry import (
     build_model_registry,
@@ -549,7 +550,10 @@ def apply_shadow_probability_scores(
         predictions = []
         primary = None
         for model in candidates:
-            score = score_scan_result_probability(model, item)
+            if str(model.get("model_type") or "") == "portable_gradient_boosted_trees":
+                score = score_boosted_probability_model(model, item)
+            else:
+                score = score_scan_result_probability(model, item)
             if score.get("status") != "SCORED":
                 continue
             predictions.append(score)
@@ -561,18 +565,12 @@ def apply_shadow_probability_scores(
     return results
 
 def shadow_probability_model_lookup(library: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Index saved probability artifacts by model id for compact live monitoring."""
-    output: dict[str, dict[str, Any]] = {}
-    for run in library.get("predictive_ml_runs") or []:
-        if not isinstance(run, dict):
-            continue
-        model = run.get("probability_model")
-        if not isinstance(model, dict):
-            continue
-        model_id = str(model.get("id") or "").strip()
-        if model_id:
-            output[model_id] = model
-    return output
+    """Index every saved portable probability artifact by model id."""
+    return {
+        str(model.get("id") or ""): model
+        for model in shadow_probability_models(library)
+        if str(model.get("id") or "").strip()
+    }
 
 
 LIVE_LEARNING_STATUS_KEY = "live_learning_status"
@@ -6988,14 +6986,15 @@ elif module == "Pattern Validation":
         )
     elif ml_backfill_state == "complete":
         backfill_model_ready = bool(ml_backfill_status.get("shadow_scoring_enabled"))
+        ready_model_count = int(ml_backfill_status.get("ready_model_count") or 0)
         st.caption(
             "🧠 Automatic ML backfill complete · "
             f"{int(ml_backfill_status.get('symbols_with_data') or 0)} stocks · "
             f"{int(ml_backfill_status.get('labeled_rows') or 0):,} labeled rows · "
             + (
-                "shadow probability model ready."
+                f"{ready_model_count or 1} shadow model(s) passed historical gates."
                 if backfill_model_ready
-                else "latest candidate remains validation-gated."
+                else "all current candidates remain validation-gated."
             )
         )
     elif ml_backfill_state == "failed":
@@ -7033,9 +7032,22 @@ elif module == "Pattern Validation":
             shadow_registry.get("status") or "CHAMPION_PROVISIONAL"
         ).replace("_", " ").title()
         challenger_count = len(shadow_registry.get("challenger_model_ids") or [])
+        champion_model = next(
+            (
+                item for item in shadow_probability_models(library)
+                if str(item.get("id") or "") == shadow_champion_id
+            ),
+            {},
+        )
+        champion_family = str(
+            champion_model.get("model_family")
+            or champion_model.get("model_type")
+            or "model"
+        ).replace("_", " ")
         st.caption(
             "🏆 Shadow model registry · "
-            f"{registry_status} · {challenger_count} compatible challenger(s) · "
+            f"{registry_status} · champion: {champion_family} · "
+            f"{challenger_count} compatible challenger(s) · "
             + str(shadow_registry.get("decision_reason") or "")
         )
     if shadow_latest:
