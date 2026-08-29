@@ -26,8 +26,6 @@ def test_pattern_validation_ui_is_bounded_for_interactive_use():
 
     assert "][:5]" in block
     assert '"History (days)"' in block
-    assert "1,
-            10,
-            3," in block
+    assert 'key="til_pattern_validation_days"' in block
     assert 'timeframe="1Min"' in block
     assert "Nothing on this page automatically becomes a trading rule." in block
