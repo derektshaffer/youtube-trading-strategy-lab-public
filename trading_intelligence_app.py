@@ -22,6 +22,14 @@ from hot_deploy_imports import load_current_source_module
 from market_feature_scorecards import run_detector_scorecards
 from market_detector_gate import evaluate_scorecard_report
 from market_feature_validation import DETECTOR_SPECS
+from live_learning import (
+    DEFAULT_MAX_OBSERVATIONS,
+    build_scan_shadow_observations,
+    earliest_pending_observed_at,
+    mature_shadow_observations,
+    merge_shadow_observations,
+    pending_symbols,
+)
 import predictive_ml_pipeline as _predictive_ml_pipeline
 
 archetype_transfer_walk_forward_logistic_baseline = (
@@ -471,6 +479,138 @@ def load_cloud_status_library() -> dict[str, Any]:
 
 
 MAX_PREDICTIVE_ML_RUN_HISTORY = 12
+LIVE_LEARNING_STORAGE_KEY = "live_learning_observations"
+LIVE_LEARNING_STATUS_KEY = "live_learning_status"
+LIVE_LEARNING_MAX_NEW_PER_SCAN = 50
+LIVE_LEARNING_MAX_MATURATION_SYMBOLS = 25
+
+
+def persist_live_learning_cycle(
+    market: Any,
+    results: list[dict[str, Any]],
+    *,
+    source: str,
+    max_new: int = LIVE_LEARNING_MAX_NEW_PER_SCAN,
+) -> dict[str, Any]:
+    """Durably log causal live observations and mature prior outcomes.
+
+    This is research-only. It never changes scanner ranking, strategy matching,
+    execution, or any live recommendation.
+    """
+    observed_at = utc_now()
+    incoming = build_scan_shadow_observations(
+        results,
+        source=source,
+        observed_at=observed_at,
+        max_items=max_new,
+    )
+    if not incoming:
+        return {
+            "logged": 0,
+            "matured": 0,
+            "total": 0,
+            "complete": 0,
+            "partial": 0,
+            "pending": 0,
+            "research_only": True,
+        }
+
+    store = intelligence_store()
+    try:
+        data = store.load_latest()
+    except AppError as exc:
+        data = _recover_cloud_library_conflict(store, exc)
+
+    research_system = data.setdefault("research_system", {})
+    existing = [
+        dict(item)
+        for item in research_system.get(LIVE_LEARNING_STORAGE_KEY) or []
+        if isinstance(item, dict)
+    ]
+
+    current_symbols = sorted(
+        {
+            str(item.get("symbol") or "").strip().upper()
+            for item in incoming
+            if str(item.get("symbol") or "").strip()
+        }
+    )
+    maturation_summary = {
+        "updated": 0,
+        "completed": 0,
+        "partial": 0,
+        "pending": 0,
+    }
+
+    # Keep live scans responsive: mature only a bounded subset of symbols that
+    # are already being inspected, and never fail the scan if history is unavailable.
+    scoped_pending = pending_symbols(existing, only_symbols=current_symbols)
+    scoped_pending = scoped_pending[:LIVE_LEARNING_MAX_MATURATION_SYMBOLS]
+    if scoped_pending:
+        earliest = earliest_pending_observed_at(
+            existing,
+            only_symbols=scoped_pending,
+        )
+        if earliest is not None:
+            history_start = max(
+                earliest - timedelta(minutes=2),
+                observed_at - timedelta(days=7),
+            )
+            try:
+                future_bars = market.bars(
+                    scoped_pending,
+                    start=history_start,
+                    end=observed_at,
+                    timeframe="1Min",
+                    feed=market.live_feed,
+                    max_pages=60,
+                )
+                existing, maturation_summary = mature_shadow_observations(
+                    existing,
+                    future_bars,
+                    now=observed_at,
+                    only_symbols=scoped_pending,
+                )
+            except AppError:
+                # Logging the observation is more important than making outcome
+                # maturation a hard dependency of an interactive scan.
+                pass
+
+    combined = merge_shadow_observations(
+        existing,
+        incoming,
+        max_records=DEFAULT_MAX_OBSERVATIONS,
+    )
+    counts = {"complete": 0, "partial": 0, "pending": 0}
+    for item in combined:
+        status = str(item.get("outcome_status") or "PENDING").strip().lower()
+        if status in counts:
+            counts[status] += 1
+        else:
+            counts["pending"] += 1
+
+    status_record = {
+        "last_logged_at": observed_at.isoformat(),
+        "last_source": source,
+        "last_logged": len(incoming),
+        "last_matured": int(maturation_summary.get("updated") or 0),
+        "total": len(combined),
+        **counts,
+        "horizons_minutes": [5, 15, 30, 60],
+        "research_only": True,
+        "affects_live_ranking": False,
+    }
+    research_system[LIVE_LEARNING_STORAGE_KEY] = combined
+    research_system[LIVE_LEARNING_STATUS_KEY] = status_record
+    data["research_system"] = research_system
+    store.save(data)
+    return {
+        "logged": len(incoming),
+        "matured": int(maturation_summary.get("updated") or 0),
+        "total": len(combined),
+        **counts,
+        "research_only": True,
+    }
 
 
 def persist_predictive_ml_result(result: dict[str, Any]) -> dict[str, Any]:
@@ -8042,6 +8182,19 @@ elif module == "Market Discovery":
                     discovery_strategies,
                     progress=market_scan_progress,
                 )
+                try:
+                    st.session_state["til_live_learning_market_discovery_status"] = (
+                        persist_live_learning_cycle(
+                            market,
+                            results,
+                            source="market_discovery",
+                        )
+                    )
+                except AppError as exc:
+                    st.session_state["til_live_learning_market_discovery_status"] = {
+                        "error": str(exc),
+                        "research_only": True,
+                    }
                 st.session_state["til_market_discovery_result"] = {
                     "universe_mode": universe_mode,
                     "requested_candidates": candidate_count,
@@ -8071,6 +8224,23 @@ elif module == "Market Discovery":
         if live_results:
             st.divider()
             st.markdown("### Best opportunities found")
+            live_learning_status = (
+                st.session_state.get("til_live_learning_market_discovery_status") or {}
+            )
+            if live_learning_status.get("error"):
+                st.caption(
+                    "Live learning is research-only and did not affect this scan. "
+                    "Its durable save/outcome update was unavailable: "
+                    + str(live_learning_status.get("error"))
+                )
+            elif live_learning_status.get("logged"):
+                st.caption(
+                    "🧠 Live learning (research only) · "
+                    f"logged {int(live_learning_status.get('logged') or 0)} shadow observations · "
+                    f"matured {int(live_learning_status.get('matured') or 0)} prior outcomes · "
+                    f"{int(live_learning_status.get('total') or 0)} durable observations total. "
+                    "This does not affect live rankings."
+                )
             scanned_candidates = len(discovery_result.get("candidate_symbols") or [])
             scan_batch_size = int(discovery_result.get("batch_size") or LIVE_SCAN_BATCH_SIZE)
             scanned_batches = max(
@@ -8272,8 +8442,9 @@ elif module == "Stock Analyzer":
                         fraction = 0.78
                     update_task_bar(analyzer_bar, analyzer_monitor, fraction, message)
 
+                analyzer_market = market_client()
                 analysis = analyze_stock_strategies(
-                    market_client(),
+                    analyzer_market,
                     analyzer_ticker,
                     analyzer_strategies,
                     progress=stock_analysis_progress,
@@ -8320,6 +8491,20 @@ elif module == "Stock Analyzer":
                 analysis["sec_summary"] = sec_filing_summary(analyzer_sec_filings)
                 analysis["sec_error"] = analyzer_sec_error
                 analysis["sec_enabled"] = bool(analyzer_sec_user_agent)
+                try:
+                    st.session_state["til_live_learning_stock_analyzer_status"] = (
+                        persist_live_learning_cycle(
+                            analyzer_market,
+                            [analysis],
+                            source="stock_analyzer",
+                            max_new=1,
+                        )
+                    )
+                except AppError as exc:
+                    st.session_state["til_live_learning_stock_analyzer_status"] = {
+                        "error": str(exc),
+                        "research_only": True,
+                    }
                 st.session_state["til_stock_analysis"] = analysis
                 status_box.update(label=f"{analyzer_ticker} analysis complete", state="complete", expanded=False)
                 complete_task_bar(analyzer_bar, analyzer_monitor, f"{analyzer_ticker} analysis complete")
@@ -8335,6 +8520,23 @@ elif module == "Stock Analyzer":
             comparisons = list(stock_result.get("comparisons") or [])
             st.divider()
             st.markdown(f"### {analyzer_ticker} strategy-fit report")
+            analyzer_learning_status = (
+                st.session_state.get("til_live_learning_stock_analyzer_status") or {}
+            )
+            if analyzer_learning_status.get("error"):
+                st.caption(
+                    "Live learning is research-only and did not affect this analysis. "
+                    "Its durable save/outcome update was unavailable: "
+                    + str(analyzer_learning_status.get("error"))
+                )
+            elif analyzer_learning_status.get("logged"):
+                st.caption(
+                    "🧠 Live learning (research only) · "
+                    f"logged {int(analyzer_learning_status.get('logged') or 0)} observation · "
+                    f"matured {int(analyzer_learning_status.get('matured') or 0)} prior outcomes · "
+                    f"{int(analyzer_learning_status.get('total') or 0)} durable observations total. "
+                    "This does not affect strategy ranking."
+                )
 
             market_cols = st.columns(5)
             market_cols[0].metric("Price", f"${safe_float(metrics.get('price'), 0.0):,.4f}")
