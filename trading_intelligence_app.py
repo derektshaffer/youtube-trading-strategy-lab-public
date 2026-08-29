@@ -6887,6 +6887,36 @@ elif module == "Pattern Validation":
         "Every reported model metric is out-of-sample. This research does not change scanner rankings, "
         "strategy approval, Paper Auto, or live trading."
     )
+    ml_backfill_status = (
+        (library.get("research_system") or {}).get("predictive_ml_backfill_status")
+        if isinstance(library.get("research_system"), dict)
+        else {}
+    ) or {}
+    ml_backfill_state = str(ml_backfill_status.get("status") or "").strip().lower()
+    if ml_backfill_state in {"queued", "running"}:
+        state_label = "Queued" if ml_backfill_state == "queued" else "Running"
+        st.info(
+            f"🧠 Automatic ML backfill: {state_label}. "
+            "The cloud worker is building historical labeled examples and retraining the "
+            "research-only probability model without requiring this page to stay open."
+        )
+    elif ml_backfill_state == "complete":
+        backfill_model_ready = bool(ml_backfill_status.get("shadow_scoring_enabled"))
+        st.caption(
+            "🧠 Automatic ML backfill complete · "
+            f"{int(ml_backfill_status.get('symbols_with_data') or 0)} stocks · "
+            f"{int(ml_backfill_status.get('labeled_rows') or 0):,} labeled rows · "
+            + (
+                "shadow probability model ready."
+                if backfill_model_ready
+                else "latest candidate remains validation-gated."
+            )
+        )
+    elif ml_backfill_state == "failed":
+        st.warning(
+            "Automatic ML backfill hit an error and will use the durable retry path: "
+            + str(ml_backfill_status.get("last_error") or "unknown worker error")
+        )
     ml_preset_cols = st.columns([1.35, 2.65])
     if ml_preset_cols[0].button(
         "Load broader 5-stock benchmark",
