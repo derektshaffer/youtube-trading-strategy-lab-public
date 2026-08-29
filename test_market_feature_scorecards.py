@@ -65,6 +65,8 @@ def test_scorecard_reuses_one_batched_history_request():
     assert report["symbols_with_data"] == 2
     assert report["summary"]["breakout_holding"]["event_count"] == 2
     assert report["summary"]["breakout_holding"]["symbols_with_events"] == 2
+    assert report["summary"]["breakout_holding"]["unique_market_days"] == 2
+    assert report["summary"]["breakout_holding"]["max_symbol_event_share_pct"] == 50.0
     assert report["summary"]["breakout_holding"]["sample_quality"] == "SPARSE"
 
 
