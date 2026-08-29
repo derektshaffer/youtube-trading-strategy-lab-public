@@ -1032,6 +1032,16 @@ if module not in WORKSPACE_SECTIONS:
     module = "Overview"
     st.session_state["til_workspace_section"] = module
 
+library: dict[str, Any] = {}
+library_load_error: AppError | None = None
+try:
+    # Refresh durable storage before deriving health state so a stale local
+    # cloud_backup_status.json error cannot keep cloud research disabled after
+    # a newer worker/save has already repaired the private GitHub library.
+    library = load_library()
+except AppError as exc:
+    library_load_error = exc
+
 system_config_checks = configuration_checks(
     setting,
     backup_repository=resolved_backup_repository(),
@@ -1145,10 +1155,8 @@ with st.sidebar:
     )
 
 
-try:
-    library = load_library()
-except AppError as exc:
-    st.error(str(exc))
+if library_load_error is not None:
+    st.error(str(library_load_error))
     st.stop()
 
 if st.session_state.pop("_til_cloud_conflict_recovered", False):
@@ -1289,6 +1297,59 @@ if module == "Stock Strategy Finder":
         except AppError as exc:
             st.error(f"Cloud research status could not refresh: {exc}")
             return
+
+        recent_cloud_runs = [
+            item
+            for item in fresh_library.get("stock_strategy_finder_runs") or []
+            if isinstance(item, dict)
+            and (
+                bool((item.get("distributed") or {}).get("enabled"))
+                or str(item.get("parallelized_by") or "")
+                == "distributed_strategy_family_timeframe"
+            )
+        ]
+        recent_cloud_runs.sort(
+            key=lambda item: str(item.get("generated_at") or ""),
+            reverse=True,
+        )
+        if recent_cloud_runs:
+            st.markdown("### Recent completed cloud research")
+            for summary in recent_cloud_runs[:3]:
+                completed_symbol = str(summary.get("symbol") or "Stock").strip().upper()
+                completed_profile = str(summary.get("profile") or "Research").strip()
+                completed_configs = int(summary.get("unique_configurations_tested") or 0)
+                distributed = dict(summary.get("distributed") or {})
+                completed_shards = int(distributed.get("shard_count") or 0)
+                completed_at = str(summary.get("generated_at") or "").strip()
+                st.markdown(
+                    (
+                        '<div class="til-finder-notice til-finder-complete-note">'
+                        f'<div class="til-finder-notice-title">☁ {html.escape(completed_symbol)} · '
+                        f'{html.escape(completed_profile)} · CLOUD COMPLETE</div>'
+                        '<div class="til-finder-notice-body">'
+                        f'{completed_configs:,} configurations tested'
+                        + (f' · {completed_shards} distributed shards' if completed_shards else '')
+                        + (f' · completed {html.escape(completed_at)}' if completed_at else '')
+                        + '. This result stays visible even when the controls below are set to another depth.'
+                        '</div></div>'
+                    ),
+                    unsafe_allow_html=True,
+                )
+                if st.button(
+                    f"Open {completed_symbol} {completed_profile} result",
+                    key=(
+                        "til_open_completed_cloud_"
+                        + "".join(
+                            char.lower() if char.isalnum() else "_"
+                            for char in f"{completed_symbol}_{completed_profile}_{completed_at}"
+                        ).strip("_")
+                    ),
+                    width="stretch",
+                ):
+                    st.session_state["til_finder_symbol"] = completed_symbol
+                    if completed_profile in SEARCH_PROFILES:
+                        st.session_state["til_finder_profile"] = completed_profile
+                    st.rerun()
 
         active_jobs = [
             item
@@ -1584,6 +1645,10 @@ if module == "Stock Strategy Finder":
         finder_symbol,
         finder_profile.name,
     )
+    latest_symbol_finder_result = latest_completed_finder_report(
+        library,
+        finder_symbol,
+    )
     finder_result = session_finder_result if session_result_matches else saved_finder_result
 
     checkpoint_status = str((saved_finder_checkpoint or {}).get("status") or "").lower()
@@ -1635,9 +1700,20 @@ if module == "Stock Strategy Finder":
             f"Loaded the last completed {finder_symbol} {finder_profile.name} research result from durable storage."
         )
     elif not finder_result:
-        st.caption(
-            f"No completed {finder_symbol} {finder_profile.name} Finder result is saved yet."
-        )
+        latest_profile_name = str(
+            (latest_symbol_finder_result.get("profile") or {}).get("name")
+            or ""
+        ).strip()
+        if latest_symbol_finder_result and latest_profile_name:
+            st.info(
+                f"No completed {finder_symbol} {finder_profile.name} Finder result is saved yet. "
+                f"The latest saved {finder_symbol} result is **{latest_profile_name}**. "
+                "Use the Recent completed cloud research panel above to open it."
+            )
+        else:
+            st.caption(
+                f"No completed {finder_symbol} {finder_profile.name} Finder result is saved yet."
+            )
 
     active_cloud_finders = [
         item
