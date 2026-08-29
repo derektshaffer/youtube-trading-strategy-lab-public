@@ -360,8 +360,13 @@ def classify_sec_filing(filing: dict[str, Any]) -> dict[str, Any]:
         rationale = "Withdrawal can remove a pending registration, but the reason and market impact require review."
 
     accepted = _parse_timestamp(filing.get("accepted_at") or filing.get("acceptanceDateTime") or filing.get("filingDate"))
+    description = str(filing.get("primaryDocDescription") or "").strip()
+    headline = f"{form or 'SEC filing'}"
+    if description and description.casefold() not in headline.casefold():
+        headline += f" — {description}"
     return {
         **filing,
+        "headline": headline,
         "form": form,
         "base_form": base_form,
         "items_list": sorted(items),
