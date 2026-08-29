@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections import defaultdict
 import json
 import os
+import re
 from typing import Any
 
 from trading_intelligence_core import (
@@ -155,6 +156,94 @@ def run_audit() -> dict[str, Any]:
 
     gaps = _aggregate_gaps(upgraded_sources)
 
+    # Safe aggregate pattern inventory for deciding what to implement next.
+    scale_patterns = {
+        "strategies": 0,
+        "explicit_position_fraction": 0,
+        "half_position_language": 0,
+        "explicit_r_target": 0,
+        "runner_language": 0,
+        "trailing_runner_language": 0,
+        "breakeven_runner_language": 0,
+    }
+    avwap_patterns = {
+        "strategies": 0,
+        "event_or_catalyst_anchor": 0,
+        "swing_high_or_low_anchor": 0,
+        "day_or_session_anchor": 0,
+        "ipo_anchor": 0,
+        "earnings_anchor": 0,
+        "gap_anchor": 0,
+        "handoff_or_reanchor": 0,
+    }
+    float_patterns = {
+        "strategies": 0,
+        "explicit_share_threshold": 0,
+        "qualitative_low_float_only": 0,
+    }
+
+    for strategy in upgraded_sources:
+        text = " ".join(
+            str(value or "")
+            for value in (
+                strategy.get("summary"),
+                *(strategy.get("entry_conditions") or []),
+                *(strategy.get("exit_conditions") or []),
+                *(strategy.get("risk_rules") or []),
+                *(strategy.get("stock_selection") or []),
+                *(strategy.get("market_context") or []),
+                *(strategy.get("unresolved_rules") or []),
+            )
+        ).casefold()
+
+        has_scale = any(
+            phrase in text
+            for phrase in ("scale out", "scaling out", "partial profit", "take partial")
+        )
+        if has_scale:
+            scale_patterns["strategies"] += 1
+            if re.search(r"\b(?:\d+(?:\.\d+)?)\s*%\b", text):
+                scale_patterns["explicit_position_fraction"] += 1
+            if any(phrase in text for phrase in ("half the position", "half position", "sell half", "take half")):
+                scale_patterns["half_position_language"] += 1
+            if re.search(r"\b\d+(?:\.\d+)?\s*r\b", text):
+                scale_patterns["explicit_r_target"] += 1
+            if "runner" in text:
+                scale_patterns["runner_language"] += 1
+            if "runner" in text and any(phrase in text for phrase in ("trail", "trailing stop")):
+                scale_patterns["trailing_runner_language"] += 1
+            if "runner" in text and any(
+                phrase in text for phrase in ("breakeven", "break even", "break-even")
+            ):
+                scale_patterns["breakeven_runner_language"] += 1
+
+        if "anchored vwap" in text or "avwap" in text:
+            avwap_patterns["strategies"] += 1
+            if any(word in text for word in ("catalyst", "event", "news")):
+                avwap_patterns["event_or_catalyst_anchor"] += 1
+            if any(phrase in text for phrase in ("swing high", "swing low", "pivot high", "pivot low")):
+                avwap_patterns["swing_high_or_low_anchor"] += 1
+            if any(phrase in text for phrase in ("day one", "session open", "opening print", "start of day")):
+                avwap_patterns["day_or_session_anchor"] += 1
+            if "ipo" in text:
+                avwap_patterns["ipo_anchor"] += 1
+            if "earnings" in text:
+                avwap_patterns["earnings_anchor"] += 1
+            if "gap" in text:
+                avwap_patterns["gap_anchor"] += 1
+            if any(phrase in text for phrase in ("handoff", "re-anchor", "reanchor", "new anchor")):
+                avwap_patterns["handoff_or_reanchor"] += 1
+
+        if any(phrase in text for phrase in ("low float", "low-float", "float under", "share float")):
+            float_patterns["strategies"] += 1
+            if re.search(
+                r"(?:float|shares?)[^\.]{0,60}\b\d+(?:\.\d+)?\s*(?:m|million|k|thousand)\b",
+                text,
+            ):
+                float_patterns["explicit_share_threshold"] += 1
+            else:
+                float_patterns["qualitative_low_float_only"] += 1
+
     return {
         "library_updated_at": str(library.get("updated_at") or ""),
         "total_saved_strategy_records": len(all_strategies),
@@ -170,6 +259,9 @@ def run_audit() -> dict[str, Any]:
             name: int(dynamic_exit_usage.get(name, 0))
             for name in DYNAMIC_EXIT_RULES
         },
+        "scale_out_pattern_inventory": scale_patterns,
+        "anchored_vwap_pattern_inventory": avwap_patterns,
+        "float_pattern_inventory": float_patterns,
         "missing_capabilities": gaps[:30],
     }
 
