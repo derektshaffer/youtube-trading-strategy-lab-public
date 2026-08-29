@@ -833,18 +833,22 @@ def upgrade_native_strategy_rules(strategy: dict[str, Any]) -> dict[str, Any]:
     # activates when at least two exact percent + R pairs are present; qualitative
     # language still remains a research assumption rather than an invented rule.
     explicit_stage_pairs: list[tuple[float, float]] = []
-    for pattern in (
-        r"(?:scale out|scaling out|take partial|sell)[^\.]{0,35}(?<![\d.])(\d+(?:\.\d+)?)\s*%[^\.]{0,55}?(\d+(?:\.\d+)?)\s*r\b",
-        r"(?<![\d.])(\d+(?:\.\d+)?)\s*%[^\.]{0,55}?(\d+(?:\.\d+)?)\s*r\b",
-    ):
-        for fraction_text, r_text in re.findall(pattern, exit_text):
-            fraction_value = safe_float(fraction_text)
-            r_value = safe_float(r_text)
-            if fraction_value is None or r_value is None:
-                continue
-            pair = (float(fraction_value), float(r_value))
-            if pair not in explicit_stage_pairs:
-                explicit_stage_pairs.append(pair)
+    # Pair each percentage with the nearest R multiple that follows it inside
+    # the same clause. A single permissive prefix regex can cross-pair the first
+    # percentage with a later target when a sentence contains several stages.
+    stage_pattern = (
+        r"(?<![\d.])(\d+(?:\.\d+)?)\s*%"
+        r"[^\.;]{0,36}?"
+        r"(\d+(?:\.\d+)?)\s*r\b"
+    )
+    for fraction_text, r_text in re.findall(stage_pattern, exit_text):
+        fraction_value = safe_float(fraction_text)
+        r_value = safe_float(r_text)
+        if fraction_value is None or r_value is None:
+            continue
+        pair = (float(fraction_value), float(r_value))
+        if pair not in explicit_stage_pairs:
+            explicit_stage_pairs.append(pair)
     if len(explicit_stage_pairs) >= 2 and not rules.get("scale_out_stages"):
         normalized_stages = normalize_machine_rules({
             "scale_out_stages": [
