@@ -28,7 +28,7 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
 
     def test_side_effect_core_entrypoints_render_on_every_streamlit_rerun(self):
         entrypoints = {
-            ROOT / "youtube_strategy_app.py": "simple_dashboard_core",
+            ROOT / "youtube_strategy_app.py": "trading_intelligence_app",
             ROOT / "pages" / "Full_Trading_Lab.py": "youtube_strategy_app_core",
             ROOT / "pages" / "Machine_Learning_Lab.py": "machine_learning_lab_core",
             ROOT / "pages" / "Trading_Intelligence_Lab.py": "trading_intelligence_app",
