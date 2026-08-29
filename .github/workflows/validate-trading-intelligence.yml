@@ -1,5 +1,6 @@
 name: Validate Trading Intelligence Lab
 
+# Full regression gate for the strategy-fidelity and causal AVWAP engine.
 on:
   push:
     branches: [main]
