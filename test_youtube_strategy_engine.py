@@ -1926,3 +1926,116 @@ class DynamicExitBacktestTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MLReadyMarketFeatureRuleTests(unittest.TestCase):
+    def test_market_feature_rules_normalize(self):
+        rules = engine.normalize_machine_rules(
+            {
+                "minimum_vwap_hold_bars": "3",
+                "require_vwap_reclaim_hold": "true",
+                "avoid_vwap_rejection": True,
+                "min_volume_acceleration_ratio": "1.75",
+                "require_volume_accelerating": True,
+                "min_atr_pct": "2.5",
+                "max_atr_pct": "12.0",
+                "require_uptrend_structure": True,
+                "require_breakout_above_confirmed_swing_high": True,
+                "avoid_failed_breakout": True,
+            }
+        )
+        self.assertEqual(rules["minimum_vwap_hold_bars"], 3)
+        self.assertEqual(rules["min_volume_acceleration_ratio"], 1.75)
+        self.assertEqual(rules["min_atr_pct"], 2.5)
+        self.assertEqual(rules["max_atr_pct"], 12.0)
+        self.assertTrue(rules["require_vwap_reclaim_hold"])
+        self.assertTrue(rules["require_volume_accelerating"])
+        self.assertTrue(rules["require_uptrend_structure"])
+        self.assertTrue(rules["require_breakout_above_confirmed_swing_high"])
+        self.assertTrue(rules["avoid_failed_breakout"])
+
+    def test_market_feature_rules_gate_signal_deterministically(self):
+        rules = engine.normalize_machine_rules(
+            {
+                "minimum_vwap_hold_bars": 3,
+                "require_vwap_reclaim_hold": True,
+                "avoid_vwap_rejection": True,
+                "min_volume_acceleration_ratio": 1.5,
+                "require_volume_accelerating": True,
+                "min_atr_pct": 2.0,
+                "max_atr_pct": 10.0,
+                "require_uptrend_structure": True,
+                "require_breakout_above_confirmed_swing_high": True,
+                "avoid_failed_breakout": True,
+            }
+        )
+        row = {
+            "close": 10.5,
+            "session_minute": 20,
+            "vwap_hold_bars": 4,
+            "vwap_reclaim_recent": True,
+            "vwap_rejection_recent": False,
+            "volume_acceleration_ratio": 1.8,
+            "volume_accelerating": True,
+            "atr_pct": 5.0,
+            "uptrend_structure": True,
+            "breakout_above_last_swing_high": True,
+            "failed_breakout_last_swing_high": False,
+        }
+        self.assertTrue(engine.evaluate_signal(row, rules))
+
+        weak_volume = dict(row)
+        weak_volume["volume_acceleration_ratio"] = 1.2
+        weak_volume["volume_accelerating"] = False
+        self.assertFalse(engine.evaluate_signal(weak_volume, rules))
+
+        failed_breakout = dict(row)
+        failed_breakout["failed_breakout_last_swing_high"] = True
+        self.assertFalse(engine.evaluate_signal(failed_breakout, rules))
+
+    def test_backtest_indicator_frame_contains_ml_ready_market_features(self):
+        rows = []
+        price = 10.0
+        for minute in range(20):
+            volume = 1000 if minute < 15 else 3000
+            rows.append(
+                bar(
+                    18,
+                    minute,
+                    price,
+                    price + 0.12,
+                    price - 0.08,
+                    price + 0.05,
+                    volume,
+                )
+            )
+            price += 0.05
+        frame = engine.add_indicators(engine.bars_to_frame(rows), simple_strategy())
+        for field in (
+            "atr_pct",
+            "vwap_hold_bars",
+            "vwap_reclaim_recent",
+            "vwap_rejection_recent",
+            "volume_acceleration_ratio",
+            "volume_accelerating",
+            "last_swing_high_structure",
+            "last_swing_low_structure",
+            "uptrend_structure",
+            "breakout_above_last_swing_high",
+            "failed_breakout_last_swing_high",
+        ):
+            self.assertIn(field, frame.columns)
+        self.assertGreaterEqual(int(frame.iloc[-1]["vwap_hold_bars"]), 1)
+
+    def test_optimizer_can_tune_market_feature_thresholds(self):
+        strategy = simple_strategy(
+            minimum_vwap_hold_bars=4,
+            min_volume_acceleration_ratio=1.8,
+            min_atr_pct=2.0,
+            max_atr_pct=12.0,
+        )
+        variants = engine.generate_strategy_variants(strategy, maximum=120)
+        self.assertTrue(any(item["minimum_vwap_hold_bars"] != 4 for item in variants))
+        self.assertTrue(
+            any(item["min_volume_acceleration_ratio"] != 1.8 for item in variants)
+        )
