@@ -22,13 +22,35 @@ from hot_deploy_imports import load_current_source_module
 from market_feature_scorecards import run_detector_scorecards
 from market_detector_gate import evaluate_scorecard_report
 from market_feature_validation import DETECTOR_SPECS
-from predictive_ml_pipeline import (
-    archetype_transfer_walk_forward_logistic_baseline,
-    build_cross_stock_training_dataset,
-    leave_one_symbol_out_walk_forward_logistic_baseline,
-    similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline,
-    walk_forward_logistic_baseline,
+import predictive_ml_pipeline as _predictive_ml_pipeline
+
+archetype_transfer_walk_forward_logistic_baseline = (
+    _predictive_ml_pipeline.archetype_transfer_walk_forward_logistic_baseline
 )
+build_cross_stock_training_dataset = (
+    _predictive_ml_pipeline.build_cross_stock_training_dataset
+)
+leave_one_symbol_out_walk_forward_logistic_baseline = (
+    _predictive_ml_pipeline.leave_one_symbol_out_walk_forward_logistic_baseline
+)
+walk_forward_logistic_baseline = (
+    _predictive_ml_pipeline.walk_forward_logistic_baseline
+)
+
+try:
+    similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline = (
+        _predictive_ml_pipeline.similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline
+    )
+except AttributeError:
+    # During a Streamlit hot deploy the app page can update before the cached
+    # predictive_ml_pipeline module does. Load the current source under a private
+    # versioned alias rather than mutating the shared import cache in place.
+    _current_predictive_ml_pipeline = load_current_source_module(
+        "predictive_ml_pipeline"
+    )
+    similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline = (
+        _current_predictive_ml_pipeline.similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline
+    )
 from trading_app_runtime import market_client, setting
 from trading_glass_theme import inject_research_glass_theme
 
