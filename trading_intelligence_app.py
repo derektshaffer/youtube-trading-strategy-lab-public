@@ -374,72 +374,100 @@ def intelligence_store() -> StrategyStore:
 LIBRARY_CLOUD_REFRESH_SECONDS = 60.0
 _LIBRARY_RENDER_CACHE_KEY = "_til_library_render_cache"
 _LIBRARY_LAST_CLOUD_REFRESH_KEY = "_til_library_last_cloud_refresh_monotonic"
+_LIBRARY_REMOTE_SHA_KEY = "_til_library_remote_sha"
+
+
+def _local_library_mtime_ns(store: StrategyStore) -> int:
+    try:
+        return int(store.path.stat().st_mtime_ns)
+    except OSError:
+        return -1
+
+
+def _recover_cloud_library_conflict(store: StrategyStore, exc: AppError) -> dict[str, Any]:
+    conflict_marker = (
+        "Both the local Trading Lab library and the private GitHub library changed "
+        "since their last shared version."
+    )
+    if conflict_marker not in str(exc):
+        raise exc
+    data = store.restore_cloud_backup()
+    st.session_state["_til_cloud_conflict_recovered"] = True
+    return data
+
+
+def load_cloud_status_library() -> dict[str, Any]:
+    """Refresh raw durable queue/results without rebuilding strategy families."""
+    store = intelligence_store()
+    try:
+        return store.load_latest()
+    except AppError as exc:
+        return _recover_cloud_library_conflict(store, exc)
 
 
 def load_library(*, force_cloud_refresh: bool = False) -> dict[str, Any]:
-    """Load the unified library without paying full cloud/rebuild cost on every rerun.
-
-    Streamlit reruns the entire script for ordinary UI interactions. The durable
-    GitHub library can be large, so downloading it and rebuilding canonical
-    strategy families on every click makes navigation unnecessarily slow.
-
-    Normal reruns reuse a prepared session snapshot when the local saved version
-    has not changed. Cloud reconciliation is refreshed at a short interval, and
-    callers that are about to coordinate cloud work can force a fresh read.
-    """
+    """Load the prepared library while keeping ordinary Streamlit reruns lightweight."""
     store = intelligence_store()
     now = time.monotonic()
     cached = st.session_state.get(_LIBRARY_RENDER_CACHE_KEY)
+    cached_data = cached.get("data") if isinstance(cached, dict) else None
+    current_mtime_ns = _local_library_mtime_ns(store)
+    cached_mtime_ns = (
+        int(cached.get("local_mtime_ns") or -1)
+        if isinstance(cached, dict)
+        else -2
+    )
+    local_unchanged = (
+        isinstance(cached_data, dict)
+        and current_mtime_ns == cached_mtime_ns
+    )
+
     last_cloud_refresh = float(
         st.session_state.get(_LIBRARY_LAST_CLOUD_REFRESH_KEY) or 0.0
     )
     cloud_refresh_due = (
         force_cloud_refresh
-        or not isinstance(cached, dict)
+        or not isinstance(cached_data, dict)
         or now - last_cloud_refresh >= LIBRARY_CLOUD_REFRESH_SECONDS
     )
 
-    def prepared_cache_for(version: str) -> dict[str, Any] | None:
-        if not isinstance(cached, dict):
-            return None
-        cached_data = cached.get("data")
+    # Most UI interactions land here: no disk JSON parse, no network request,
+    # and no strategy-family rebuild when neither local nor cloud refresh is due.
+    if local_unchanged and not cloud_refresh_due:
+        return deepcopy(cached_data)
+
+    remote_sha = ""
+    if cloud_refresh_due and store.cloud_backup is not None:
+        try:
+            revision = store.cloud_backup.library_revision()
+            remote_sha = str((revision or {}).get("sha") or "")
+        except AppError:
+            revision = None
+
+        previous_remote_sha = str(
+            st.session_state.get(_LIBRARY_REMOTE_SHA_KEY) or ""
+        )
         if (
-            str(cached.get("updated_at") or "") == str(version or "")
+            local_unchanged
+            and remote_sha
+            and previous_remote_sha == remote_sha
             and isinstance(cached_data, dict)
         ):
+            st.session_state[_LIBRARY_LAST_CLOUD_REFRESH_KEY] = now
             return deepcopy(cached_data)
-        return None
 
-    if not cloud_refresh_due and isinstance(cached, dict):
-        local = store.load()
-        prepared = prepared_cache_for(str(local.get("updated_at") or ""))
-        if prepared is not None:
-            return prepared
-        data = local
-    else:
+    if cloud_refresh_due:
         try:
             data = store.load_latest()
-            st.session_state[_LIBRARY_LAST_CLOUD_REFRESH_KEY] = now
-            prepared = prepared_cache_for(str(data.get("updated_at") or ""))
-            if prepared is not None:
-                return prepared
         except AppError as exc:
-            # Streamlit Cloud can retain a local working copy while the durable
-            # private GitHub library is updated by another app run/worker. The
-            # store correctly refuses to guess which divergent copy should win.
-            # For the unified Trading Intelligence workspace, recover by preserving
-            # the current local file in StrategyStore's automatic backups, restoring
-            # the durable private GitHub copy, and continuing instead of blocking
-            # the entire UI.
-            conflict_marker = (
-                "Both the local Trading Lab library and the private GitHub library changed "
-                "since their last shared version."
-            )
-            if conflict_marker not in str(exc):
-                raise
-            data = store.restore_cloud_backup()
-            st.session_state["_til_cloud_conflict_recovered"] = True
-            st.session_state[_LIBRARY_LAST_CLOUD_REFRESH_KEY] = now
+            data = _recover_cloud_library_conflict(store, exc)
+        st.session_state[_LIBRARY_LAST_CLOUD_REFRESH_KEY] = now
+        if remote_sha:
+            st.session_state[_LIBRARY_REMOTE_SHA_KEY] = remote_sha
+    else:
+        # The local file changed since the prepared snapshot, usually because a
+        # save completed in this session. Rebuild from that local copy only.
+        data = store.load()
 
     data.setdefault("knowledge_sources", [])
     data.setdefault("strategies", [])
@@ -447,7 +475,6 @@ def load_library(*, force_cloud_refresh: bool = False) -> dict[str, Any]:
     data.setdefault("validation_runs", [])
 
     # Automatically pull newly analyzed YouTube strategies from the original Trading Lab.
-    # The user should not have to remember to import them before the family manager can use them.
     legacy_changed = False
     try:
         legacy_data = build_legacy_store().load()
@@ -469,7 +496,6 @@ def load_library(*, force_cloud_refresh: bool = False) -> dict[str, Any]:
             )
             legacy_changed = True
     except AppError:
-        # The unified library remains usable even if the older YouTube library is temporarily unavailable.
         pass
 
     upgraded_strategies: list[dict[str, Any]] = []
@@ -481,7 +507,6 @@ def load_library(*, force_cloud_refresh: bool = False) -> dict[str, Any]:
         upgraded_strategies.append(upgraded)
     data["strategies"] = upgraded_strategies
 
-    # Older Trading Lab versions saved source provenance only on strategy records.
     data, sources_changed = reconcile_knowledge_sources(data)
 
     existing_canonical = [
@@ -514,14 +539,16 @@ def load_library(*, force_cloud_refresh: bool = False) -> dict[str, Any]:
     if legacy_changed or sources_changed or canonical_changed:
         try:
             data = store.save(data)
+            # save() created a new remote commit, so learn its SHA cheaply on
+            # the next scheduled revision probe instead of assuming the old one.
+            st.session_state.pop(_LIBRARY_REMOTE_SHA_KEY, None)
+            st.session_state[_LIBRARY_LAST_CLOUD_REFRESH_KEY] = now
         except AppError:
-            # save() writes the repaired local copy before attempting cloud backup.
-            # Keep that local version/cache coherent even if the permanent backup
-            # needs to recover on a later synchronization.
             data = store.load()
 
     st.session_state[_LIBRARY_RENDER_CACHE_KEY] = {
         "updated_at": str(data.get("updated_at") or ""),
+        "local_mtime_ns": _local_library_mtime_ns(store),
         "data": deepcopy(data),
     }
     return data
@@ -1426,7 +1453,7 @@ if module == "Stock Strategy Finder":
     def render_global_cloud_finder_activity() -> None:
         """Auto-refresh cloud Finder status only while a job is active."""
         try:
-            fresh_library = load_library(force_cloud_refresh=True)
+            fresh_library = load_cloud_status_library()
         except AppError as exc:
             st.error(f"Cloud research status could not refresh: {exc}")
             return
