@@ -98,10 +98,18 @@ def _usable_numeric_features(
         seen = 0
         converted = 0
         for row in records:
-            if name not in row or row.get(name) is None:
+            if name not in row:
                 continue
+            raw = row.get(name)
+            if raw is None:
+                continue
+            try:
+                if bool(pd.isna(raw)):
+                    continue
+            except (TypeError, ValueError):
+                pass
             seen += 1
-            if _number(row.get(name)) is not None:
+            if _number(raw) is not None:
                 converted += 1
         if seen >= max(1, int(minimum_non_null)) and converted == seen:
             output.append(name)
