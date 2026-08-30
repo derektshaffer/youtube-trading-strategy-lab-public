@@ -916,6 +916,39 @@ def _safe_auc(y_true: list[int], probabilities: list[float]) -> float | None:
     return float(roc_auc_score(y_true, probabilities))
 
 
+def _cross_symbol_auc_summary(
+    rows: list[dict[str, Any]],
+    *,
+    auc_key: str = "roc_auc",
+    row_key: str = "oos_rows",
+) -> dict[str, float | None]:
+    pairs: list[tuple[float, int]] = []
+    for row in rows:
+        auc = _number(row.get(auc_key))
+        count = int(row.get(row_key) or 0)
+        if auc is not None and count > 0:
+            pairs.append((float(auc), count))
+    if not pairs:
+        return {"weighted": None, "median": None}
+    total = sum(count for _, count in pairs)
+    weighted = (
+        sum(auc * count for auc, count in pairs) / total
+        if total > 0
+        else None
+    )
+    ordered = sorted(auc for auc, _ in pairs)
+    middle = len(ordered) // 2
+    median_auc = (
+        ordered[middle]
+        if len(ordered) % 2
+        else (ordered[middle - 1] + ordered[middle]) / 2.0
+    )
+    return {
+        "weighted": float(weighted) if weighted is not None else None,
+        "median": float(median_auc),
+    }
+
+
 def walk_forward_logistic_baseline(
     dataset: dict[str, Any],
     *,
@@ -1258,6 +1291,12 @@ def ticker_specific_walk_forward_logistic_baseline(
                 "fold_count": int(report.get("fold_count") or 0),
                 "oos_rows": oos_rows,
                 "oos_positive_rate": _number(report.get("oos_positive_rate")),
+                "oos_positive_count": sum(
+                    1 for item in symbol_predictions if bool(item.get("actual"))
+                ),
+                "oos_negative_count": sum(
+                    1 for item in symbol_predictions if not bool(item.get("actual"))
+                ),
                 "roc_auc": _number(report.get("roc_auc")),
                 "brier_score": _number(report.get("brier_score")),
                 "naive_brier_score": naive_brier,
@@ -1291,6 +1330,7 @@ def ticker_specific_walk_forward_logistic_baseline(
         for value in (_number(item.get("brier_skill_vs_naive")) for item in by_symbol)
         if value is not None
     ]
+    auc_summary = _cross_symbol_auc_summary(by_symbol)
     return {
         "status": "EVALUATED",
         "validation_type": "ticker_specific_expanding_walk_forward",
@@ -1306,6 +1346,9 @@ def ticker_specific_walk_forward_logistic_baseline(
         "macro_roc_auc": (
             float(sum(symbol_aucs) / len(symbol_aucs)) if symbol_aucs else None
         ),
+        "weighted_macro_roc_auc": auc_summary["weighted"],
+        "median_ticker_roc_auc": auc_summary["median"],
+        "micro_roc_auc": _safe_auc(all_actual, all_probability),
         "brier_score": model_brier,
         "naive_brier_score": naive_brier,
         "brier_skill_vs_naive": (
@@ -1561,6 +1604,8 @@ def leave_one_symbol_out_walk_forward_logistic_baseline(
                     "fold_count": len(folds),
                     "oos_rows": len(symbol_actual),
                     "oos_positive_rate": float(sum(symbol_actual) / len(symbol_actual)),
+                    "oos_positive_count": int(sum(symbol_actual)),
+                    "oos_negative_count": int(len(symbol_actual) - sum(symbol_actual)),
                     "roc_auc": _safe_auc(symbol_actual, symbol_probability),
                     "brier_score": symbol_brier,
                     "naive_brier_score": symbol_naive_brier,
@@ -1604,6 +1649,7 @@ def leave_one_symbol_out_walk_forward_logistic_baseline(
 
     model_brier = float(brier_score_loss(all_actual, all_probability))
     naive_brier = float(brier_score_loss(all_actual, all_naive_probability))
+    broad_auc_summary = _cross_symbol_auc_summary(symbol_reports)
     return {
         "status": "EVALUATED",
         "validation_type": "leave_one_symbol_out_walk_forward",
@@ -1622,6 +1668,9 @@ def leave_one_symbol_out_walk_forward_logistic_baseline(
         "oos_rows": len(all_actual),
         "oos_positive_rate": float(sum(all_actual) / len(all_actual)),
         "roc_auc": _safe_auc(all_actual, all_probability),
+        "micro_roc_auc": _safe_auc(all_actual, all_probability),
+        "weighted_macro_roc_auc": broad_auc_summary["weighted"],
+        "median_ticker_roc_auc": broad_auc_summary["median"],
         "brier_score": model_brier,
         "naive_brier_score": naive_brier,
         "brier_skill_vs_naive": (
