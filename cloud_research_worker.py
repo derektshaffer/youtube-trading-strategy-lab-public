@@ -391,6 +391,12 @@ def execute_job(
             worker_payload["max_symbols"] = int(env("PREDICTIVE_ML_BACKFILL_MAX_SYMBOLS"))
         if env("PREDICTIVE_ML_BACKFILL_HORIZON"):
             worker_payload["horizon"] = int(env("PREDICTIVE_ML_BACKFILL_HORIZON"))
+        if env("PREDICTIVE_ML_BACKFILL_HORIZONS"):
+            worker_payload["horizons"] = env("PREDICTIVE_ML_BACKFILL_HORIZONS")
+        if env("PREDICTIVE_ML_SIMILARITY_MAX_SYMBOLS"):
+            worker_payload["similarity_max_symbols"] = int(
+                env("PREDICTIVE_ML_SIMILARITY_MAX_SYMBOLS")
+            )
         if env("PREDICTIVE_ML_BACKFILL_STRIDE"):
             worker_payload["observation_stride_bars"] = int(
                 env("PREDICTIVE_ML_BACKFILL_STRIDE")
@@ -428,8 +434,11 @@ def execute_job(
             status="complete",
             detail=(
                 f"Automatic ML backfill completed with "
-                f"{int((result.get('dataset_summary') or {}).get('row_count') or 0):,} labeled rows; "
-                f"shadow model status {model.get('status') or 'unknown'}."
+                f"{int((result.get('dataset_summary') or {}).get('row_count') or 0):,} labeled rows across "
+                f"{len(result.get('symbols') or [])} stocks and "
+                f"{len(result.get('horizons') or [result.get('horizon')])} horizon(s); "
+                f"shadow model status {model.get('status') or 'unknown'}; "
+                f"similarity validation {str((result.get('similarity_validation') or {}).get('status') or 'unknown')}."
             ),
         )
         store.save(latest)
