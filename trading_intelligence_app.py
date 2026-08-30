@@ -790,9 +790,20 @@ def persist_predictive_ml_result(result: dict[str, Any]) -> dict[str, Any]:
     return record
 
 
-def load_library(*, force_cloud_refresh: bool = False) -> dict[str, Any]:
-    """Load the prepared library while keeping ordinary Streamlit reruns lightweight."""
+def load_library(
+    *,
+    force_cloud_refresh: bool = False,
+    mutable: bool = False,
+) -> dict[str, Any]:
+    """Load the prepared library while keeping ordinary Streamlit reruns lightweight.
+
+    Rendering gets the cached object directly. Explicit update/save actions opt
+    into a defensive deep copy with mutable=True.
+    """
     store = intelligence_store()
+
+    def result(value: dict[str, Any]) -> dict[str, Any]:
+        return deepcopy(value) if mutable else value
     now = time.monotonic()
     cached = st.session_state.get(_LIBRARY_RENDER_CACHE_KEY)
     cached_data = cached.get("data") if isinstance(cached, dict) else None
@@ -819,7 +830,7 @@ def load_library(*, force_cloud_refresh: bool = False) -> dict[str, Any]:
     # Most UI interactions land here: no disk JSON parse, no network request,
     # and no strategy-family rebuild when neither local nor cloud refresh is due.
     if local_unchanged and not cloud_refresh_due:
-        return deepcopy(cached_data)
+        return result(cached_data)
 
     remote_sha = ""
     if cloud_refresh_due and store.cloud_backup is not None:
@@ -839,13 +850,33 @@ def load_library(*, force_cloud_refresh: bool = False) -> dict[str, Any]:
             and isinstance(cached_data, dict)
         ):
             st.session_state[_LIBRARY_LAST_CLOUD_REFRESH_KEY] = now
-            return deepcopy(cached_data)
+            return result(cached_data)
 
     if cloud_refresh_due:
-        try:
-            data = store.load_latest()
-        except AppError as exc:
-            data = _recover_cloud_library_conflict(store, exc)
+        # On a fresh browser session there is no Streamlit render cache yet.
+        # Compare Git blob SHAs first: if the local file is byte-identical to
+        # cloud, parse the local file and avoid a ~75 MB remote download.
+        local_matches_remote = False
+        if (
+            not isinstance(cached_data, dict)
+            and remote_sha
+            and store.path.exists()
+        ):
+            try:
+                local_revision = store.local_library_revision()
+                local_matches_remote = (
+                    str((local_revision or {}).get("sha") or "") == remote_sha
+                )
+            except AppError:
+                local_matches_remote = False
+
+        if local_matches_remote:
+            data = store.load()
+        else:
+            try:
+                data = store.load_latest()
+            except AppError as exc:
+                data = _recover_cloud_library_conflict(store, exc)
         st.session_state[_LIBRARY_LAST_CLOUD_REFRESH_KEY] = now
         if remote_sha:
             st.session_state[_LIBRARY_REMOTE_SHA_KEY] = remote_sha
@@ -939,9 +970,9 @@ def load_library(*, force_cloud_refresh: bool = False) -> dict[str, Any]:
     st.session_state[_LIBRARY_RENDER_CACHE_KEY] = {
         "updated_at": str(data.get("updated_at") or ""),
         "local_mtime_ns": _local_library_mtime_ns(store),
-        "data": deepcopy(data),
+        "data": data,
     }
-    return data
+    return result(data)
 
 
 def save_ingestion_checkpoint(
@@ -2397,7 +2428,7 @@ if module == "Stock Strategy Finder":
         }
         try:
             queued_library, queued_job = enqueue_research_job(
-                load_library(force_cloud_refresh=True),
+                load_library(force_cloud_refresh=True, mutable=True),
                 "stock_finder",
                 queue_payload,
                 priority=90 if finder_profile.name == "Very Deep" else 75,
@@ -2414,7 +2445,7 @@ if module == "Stock Strategy Finder":
                 "trading_research_orchestrator"
             )
             queued_library, queued_job = _research_orchestrator.enqueue_research_job(
-                load_library(force_cloud_refresh=True),
+                load_library(force_cloud_refresh=True, mutable=True),
                 "stock_finder",
                 queue_payload,
                 priority=90 if finder_profile.name == "Very Deep" else 75,
@@ -3176,7 +3207,7 @@ elif module == "Retrospective Learning":
                         breakout_outcome_bars=breakout_outcome,
                         breakout_success_move_pct=breakout_move,
                     )
-                    fresh_library = load_library(force_cloud_refresh=True)
+                    fresh_library = load_library(force_cloud_refresh=True, mutable=True)
                     updated_library = merge_retrospective_teacher_run(
                         fresh_library,
                         teacher_run,
@@ -5540,7 +5571,7 @@ elif module == "AI Research Autopilot":
             width="stretch",
             key="til_seed_continuous_research",
         ):
-            queued_library, added_jobs = seed_continuous_research_cycle(load_library(force_cloud_refresh=True))
+            queued_library, added_jobs = seed_continuous_research_cycle(load_library(force_cloud_refresh=True, mutable=True))
             if added_jobs:
                 intelligence_store().save(queued_library)
                 st.success(
@@ -5747,7 +5778,7 @@ elif module == "AI Research Autopilot":
                     minimum_confidence=65.0,
                     progress_callback=on_family_prepare,
                 )
-                prepared_library = load_library()
+                prepared_library = load_library(mutable=True)
                 for prepared_family in research_candidates:
                     prepared_family["research_readiness"] = research_readiness(prepared_family)
                     prepared_library = upsert_strategy_record(
@@ -5789,7 +5820,7 @@ elif module == "AI Research Autopilot":
                     or 0
                 ),
             )
-            data = merge_autonomous_research_into_library(load_library(), report)
+            data = merge_autonomous_research_into_library(load_library(mutable=True), report)
             intelligence_store().save(data)
             st.session_state["til_auto_research_result"] = report
             validated_count = sum(
