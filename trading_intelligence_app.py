@@ -7137,7 +7137,7 @@ elif module == "Pattern Validation":
         registry_reason = str(shadow_registry.get("decision_reason") or "")
         if (
             historical_status == "PROVISIONAL_HISTORICAL_LEADER"
-            and registry_status != "Champion Confirmed"
+            and registry_status == "Champion Provisional"
         ):
             registry_reason = (
                 "Historical OOS leader is being used provisionally while live outcomes collect."
