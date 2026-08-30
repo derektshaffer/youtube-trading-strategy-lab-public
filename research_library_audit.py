@@ -27,7 +27,7 @@ def parse_dt(value: Any) -> datetime | None:
 
 
 def counter_dict(values) -> dict[str, int]:
-    return dict(sorted(Counter(str(v or "missing") for v in values).items()))
+    return dict(sorted(Counter(str(v if v is not None else "missing") for v in values).items()))
 
 
 def status_fields(rows: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
@@ -40,13 +40,13 @@ def status_fields(rows: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
     return {key: counter_dict(vals) for key, vals in sorted(fields.items())}
 
 
-def fingerprint_payload(job: dict[str, Any]) -> str:
+def payload_fp(job: dict[str, Any]) -> str:
     material = json.dumps(
         {"type": job.get("type"), "payload": job.get("payload") or {}},
         sort_keys=True,
         separators=(",", ":"),
         default=str,
-    ).encode("utf-8")
+    ).encode()
     return hashlib.sha256(material).hexdigest()[:16]
 
 
@@ -55,87 +55,105 @@ def topic_of(job: dict[str, Any]) -> str:
     return " ".join(str(payload.get("topic") or "").casefold().split())
 
 
+def compact_router(router: dict[str, Any]) -> dict[str, Any]:
+    rows = []
+    for raw in router.get("by_symbol") or []:
+        if not isinstance(raw, dict):
+            continue
+        routes = raw.get("routes") if isinstance(raw.get("routes"), dict) else {}
+        compact_routes = {}
+        for route_name in ("same_ticker_history", "similarity_weighted_transfer", "broad_cross_stock_transfer"):
+            route = routes.get(route_name) if isinstance(routes.get(route_name), dict) else {}
+            compact_routes[route_name] = {
+                "brier_score": route.get("brier_score"),
+                "roc_auc": route.get("roc_auc"),
+                "rows": route.get("rows") or route.get("test_rows"),
+            }
+        rows.append({
+            "symbol": raw.get("symbol"),
+            "status": raw.get("status"),
+            "route_status": raw.get("route_status"),
+            "recommended_route": raw.get("recommended_route"),
+            "provisional_lowest_brier_route": raw.get("provisional_lowest_brier_route"),
+            "paired_oos_rows": raw.get("paired_oos_rows"),
+            "reason": raw.get("reason"),
+            "routes": compact_routes,
+        })
+    return {
+        "status": router.get("status"),
+        "symbols_compared": router.get("symbols_compared"),
+        "symbols_with_clear_route": router.get("symbols_with_clear_route"),
+        "route_counts": router.get("route_counts"),
+        "by_symbol": rows,
+    }
+
+
 def summarize(path: Path) -> dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
     now = datetime.now(UTC)
-
     queue = [x for x in data.get("research_queue") or [] if isinstance(x, dict)]
     workers = [x for x in data.get("research_worker_runs") or [] if isinstance(x, dict)]
     runs = [x for x in data.get("external_research_runs") or [] if isinstance(x, dict)]
-    hypotheses = [x for x in data.get("research_hypotheses") or [] if isinstance(x, dict)]
+    hyps = [x for x in data.get("research_hypotheses") or [] if isinstance(x, dict)]
     ml_runs = [x for x in data.get("predictive_ml_runs") or [] if isinstance(x, dict)]
     strategies = [x for x in data.get("strategies") or [] if isinstance(x, dict)]
+    web_strats = [x for x in strategies if str(x.get("source_type") or "") == "autonomous_web_research"]
 
     active = [x for x in queue if str(x.get("status") or "") in ACTIVE]
     terminal = [x for x in queue if str(x.get("status") or "") not in ACTIVE]
 
-    duplicate_dedupe = defaultdict(list)
-    duplicate_payload = defaultdict(list)
-    duplicate_topic = defaultdict(list)
-    for job in active:
-        dedupe = str(job.get("dedupe_key") or "").strip()
-        if dedupe:
-            duplicate_dedupe[dedupe].append(str(job.get("id") or ""))
-        duplicate_payload[fingerprint_payload(job)].append(str(job.get("id") or ""))
-        topic = topic_of(job)
-        if topic:
-            duplicate_topic[topic].append(str(job.get("id") or ""))
-
+    by_dedupe, by_payload, by_topic = defaultdict(list), defaultdict(list), defaultdict(list)
     stale = []
-    for job in active:
-        stamp = parse_dt(job.get("updated_at") or job.get("started_at") or job.get("created_at"))
-        age_h = (now - stamp).total_seconds() / 3600 if stamp else None
-        if age_h is not None and age_h >= 6:
-            stale.append({
-                "id": job.get("id"),
-                "type": job.get("type"),
-                "status": job.get("status"),
-                "age_hours": round(age_h, 2),
-                "attempts": job.get("attempts"),
-                "max_attempts": job.get("max_attempts"),
-                "dedupe_key": job.get("dedupe_key"),
-                "topic": (job.get("payload") or {}).get("topic") if isinstance(job.get("payload"), dict) else None,
-            })
-
     active_detail = []
     for job in active:
-        stamp = parse_dt(job.get("created_at"))
-        age_h = (now - stamp).total_seconds() / 3600 if stamp else None
+        jid = str(job.get("id") or "")
+        dedupe = str(job.get("dedupe_key") or "").strip()
+        if dedupe:
+            by_dedupe[dedupe].append(jid)
+        by_payload[payload_fp(job)].append(jid)
+        topic_norm = topic_of(job)
+        if topic_norm:
+            by_topic[topic_norm].append(jid)
+
+        created = parse_dt(job.get("created_at"))
+        updated = parse_dt(job.get("updated_at") or job.get("started_at") or job.get("created_at"))
+        created_age = (now - created).total_seconds() / 3600 if created else None
+        updated_age = (now - updated).total_seconds() / 3600 if updated else None
         payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
-        active_detail.append({
-            "id": job.get("id"),
+        row = {
+            "id": jid,
             "type": job.get("type"),
             "status": job.get("status"),
             "priority": job.get("priority"),
             "attempts": job.get("attempts"),
             "max_attempts": job.get("max_attempts"),
-            "age_hours": round(age_h, 2) if age_h is not None else None,
+            "created_age_hours": round(created_age, 2) if created_age is not None else None,
+            "updated_age_hours": round(updated_age, 2) if updated_age is not None else None,
             "dedupe_key": job.get("dedupe_key"),
             "topic": payload.get("topic"),
             "hypothesis_id": payload.get("hypothesis_id"),
             "research_run_id": payload.get("research_run_id"),
             "cycle_date": payload.get("cycle_date"),
-            "last_error": str(job.get("last_error") or "")[:500] or None,
-        })
+            "last_error": str(job.get("last_error") or "")[:350] or None,
+        }
+        active_detail.append(row)
+        if updated_age is not None and updated_age >= 6:
+            stale.append(row)
+
     active_detail.sort(key=lambda x: (-(int(x.get("priority") or 0)), str(x.get("type") or ""), str(x.get("id") or "")))
 
-    web_strategies = [x for x in strategies if str(x.get("source_type") or "") == "autonomous_web_research"]
-
-    worker_times = [parse_dt(x.get("completed_at") or x.get("created_at") or x.get("started_at")) for x in workers]
+    completed_ids = {str(x.get("job_id") or "") for x in workers if str(x.get("status") or "") == "complete" and x.get("job_id")}
+    failed_ids = {str(x.get("job_id") or "") for x in workers if str(x.get("status") or "") == "failed" and x.get("job_id")}
+    worker_times = [parse_dt(x.get("completed_at") or x.get("started_at") or x.get("created_at")) for x in workers]
     worker_times = [x for x in worker_times if x]
-    complete_worker_ids = {
-        str(x.get("job_id") or "") for x in workers
-        if str(x.get("status") or "") == "complete" and str(x.get("job_id") or "")
-    }
-    failed_worker_ids = {
-        str(x.get("job_id") or "") for x in workers
-        if str(x.get("status") or "") == "failed" and str(x.get("job_id") or "")
-    }
+
+    run_topics = Counter(str(x.get("topic") or "missing") for x in runs)
+    repeated_run_topics = dict(sorted((k, v) for k, v in run_topics.items() if v > 1))
 
     latest_ml = None
     if ml_runs:
-        ordered = sorted(ml_runs, key=lambda x: str(x.get("completed_at") or ""), reverse=True)
-        latest = ordered[0]
+        latest = sorted(ml_runs, key=lambda x: str(x.get("completed_at") or ""), reverse=True)[0]
+        ds = latest.get("dataset_summary") if isinstance(latest.get("dataset_summary"), dict) else {}
         router = latest.get("stock_learning_router") if isinstance(latest.get("stock_learning_router"), dict) else {}
         latest_ml = {
             "id": latest.get("id"),
@@ -144,31 +162,28 @@ def summarize(path: Path) -> dict[str, Any]:
             "runtime_seconds": latest.get("runtime_seconds"),
             "symbols": latest.get("symbols"),
             "horizons": latest.get("horizons"),
-            "dataset_summary": latest.get("dataset_summary"),
-            "router": {
-                "status": router.get("status"),
-                "symbols_compared": router.get("symbols_compared"),
-                "symbols_with_clear_route": router.get("symbols_with_clear_route"),
-                "route_counts": router.get("route_counts"),
-                "by_symbol": router.get("by_symbol"),
+            "dataset": {
+                "row_count": ds.get("row_count"),
+                "bars_loaded": ds.get("bars_loaded"),
+                "bars_analyzed": ds.get("bars_analyzed"),
+                "symbol_count": len(ds.get("by_symbol") or []),
             },
+            "router": compact_router(router),
         }
 
     system = data.get("research_system") if isinstance(data.get("research_system"), dict) else {}
-
     return {
         "generated_at": now.isoformat().replace("+00:00", "Z"),
-        "source_file": str(path),
         "source_size_bytes": path.stat().st_size,
         "library_version": data.get("version"),
         "research_system": system,
         "stored_collection_counts": {
             "strategies": len(strategies),
-            "autonomous_web_research_strategies": len(web_strategies),
+            "autonomous_web_research_strategies": len(web_strats),
             "research_queue": len(queue),
             "research_worker_runs": len(workers),
             "external_research_runs": len(runs),
-            "research_hypotheses": len(hypotheses),
+            "research_hypotheses": len(hyps),
             "predictive_ml_runs": len(ml_runs),
         },
         "queue": {
@@ -177,56 +192,48 @@ def summarize(path: Path) -> dict[str, Any]:
             "active_count": len(active),
             "active_type_counts": counter_dict(x.get("type") for x in active),
             "terminal_count": len(terminal),
-            "active_jobs": active_detail,
             "stale_active_6h_count": len(stale),
-            "stale_active_jobs": sorted(stale, key=lambda x: -(x.get("age_hours") or 0)),
-            "duplicate_active_dedupe_keys": {k: v for k, v in duplicate_dedupe.items() if len(v) > 1},
-            "duplicate_active_exact_payloads": {k: v for k, v in duplicate_payload.items() if len(v) > 1},
-            "duplicate_active_exact_topics": {k: v for k, v in duplicate_topic.items() if len(v) > 1},
+            "duplicate_active_dedupe_key_groups": {k: v for k, v in by_dedupe.items() if len(v) > 1},
+            "duplicate_active_exact_payload_groups": {k: v for k, v in by_payload.items() if len(v) > 1},
+            "duplicate_active_exact_topic_groups": {k: v for k, v in by_topic.items() if len(v) > 1},
+            "active_jobs": active_detail,
         },
         "worker_history": {
             "stored_records": len(workers),
             "status_counts": counter_dict(x.get("status") for x in workers),
             "type_counts": counter_dict(x.get("job_type") or x.get("type") for x in workers),
-            "unique_completed_job_ids": len(complete_worker_ids),
-            "unique_failed_job_ids": len(failed_worker_ids),
+            "unique_completed_job_ids": len(completed_ids),
+            "unique_failed_job_ids": len(failed_ids),
             "earliest_record_time": min(worker_times).isoformat().replace("+00:00", "Z") if worker_times else None,
             "latest_record_time": max(worker_times).isoformat().replace("+00:00", "Z") if worker_times else None,
         },
         "external_research": {
             "stored_runs": len(runs),
+            "repeated_topic_counts": repeated_run_topics,
             "status_fields": status_fields(runs),
-            "topic_counts": counter_dict(x.get("topic") for x in runs),
         },
-        "hypotheses": {
-            "stored": len(hypotheses),
-            "status_fields": status_fields(hypotheses),
-        },
+        "hypotheses": {"stored": len(hyps), "status_fields": status_fields(hyps)},
         "autonomous_web_strategies": {
-            "stored": len(web_strategies),
-            "validation_status_counts": counter_dict(x.get("validation_status") for x in web_strategies),
-            "approved_counts": counter_dict(x.get("approved") for x in web_strategies),
-            "category_counts": counter_dict(x.get("category") for x in web_strategies),
+            "stored": len(web_strats),
+            "validation_status_counts": counter_dict(x.get("validation_status") for x in web_strats),
+            "approved_counts": counter_dict(x.get("approved") for x in web_strats),
         },
-        "predictive_ml": {
-            "stored_runs": len(ml_runs),
-            "latest": latest_ml,
-        },
+        "predictive_ml": {"stored_runs": len(ml_runs), "latest": latest_ml},
         "interpretation_notes": [
-            "Counts are counts of records currently retained in the durable library, not automatically guaranteed all-time lifetime counts if a collection has retention caps.",
-            "Exact duplicate checks only flag identical active dedupe keys, payloads, or normalized web-research topics; semantically similar wording may still need human/model review.",
-            "Stale means an active queued/running/retry job whose latest useful timestamp is at least six hours old; it is an audit flag, not an automatic deletion recommendation.",
+            "Counts are records currently retained in the durable library; if collections are retention-capped they are not guaranteed all-time lifetime totals.",
+            "Duplicate checks flag exact active dedupe keys, payloads, or normalized topics; semantically similar wording may still require review.",
+            "Stale is an audit flag for active jobs not updated for at least six hours, not an automatic deletion recommendation."
         ],
     }
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("library")
-    parser.add_argument("output")
-    args = parser.parse_args()
-    report = summarize(Path(args.library))
-    out = Path(args.output)
+    p = argparse.ArgumentParser()
+    p.add_argument("library")
+    p.add_argument("output")
+    a = p.parse_args()
+    report = summarize(Path(a.library))
+    out = Path(a.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
     print(json.dumps(report["stored_collection_counts"], indent=2, sort_keys=True))
