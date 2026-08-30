@@ -616,7 +616,7 @@ def build_cross_stock_training_dataset(
             "label_columns": [],
             "profit_target_pct": float(clean_profit_target),
             "stop_loss_pct": float(clean_stop_loss),
-            "barrier_same_bar_policy": "stop_first_conservative",
+            "barrier_same_bar_policy": "ambiguous_exclude",
             "session_mode": clean_session_mode,
             "session_window_et": {
                 "regular": "09:30-16:00",
@@ -799,7 +799,7 @@ def build_cross_stock_training_dataset(
         "require_full_horizon": bool(require_full_horizon),
         "profit_target_pct": float(clean_profit_target),
         "stop_loss_pct": float(clean_stop_loss),
-        "barrier_same_bar_policy": "stop_first_conservative",
+        "barrier_same_bar_policy": "ambiguous_exclude",
         "observation_stride_bars": max(1, int(observation_stride_bars)),
         "feature_workers": worker_count,
         "session_mode": clean_session_mode,
@@ -820,7 +820,7 @@ def build_cross_stock_training_dataset(
             "Feature columns are point-in-time causal values. label__ columns use only later bars "
             "from the same market session and must never be supplied to a model as inputs. "
             "Trade-quality labels count an upside target only when it is reached before the "
-            "downside barrier; same-candle target/stop ambiguity is scored conservatively as stop first. "
+            "downside barrier; same-candle target/stop ambiguity is excluded because intrabar ordering is unknown. "
             f"Market-hours regime: {clean_session_mode}; regular, premarket, and after-hours rows are never mixed. "
             f"Supervised observations are sampled every {max(1, int(observation_stride_bars))} bar(s) while "
             "all causal features still use every underlying candle. "
