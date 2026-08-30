@@ -78,7 +78,7 @@ def _target_name(
 
 
 def _usable_numeric_features(
-    records: list[dict[str, Any]],
+    records: list[dict[str, Any]] | pd.DataFrame,
     feature_columns: list[str],
     *,
     minimum_non_null: int = 20,
@@ -90,7 +90,28 @@ def _usable_numeric_features(
     context vector. Missing live-compatible detector values may still be imputed, but
     the scorer enforces a minimum observed-feature coverage before emitting a number.
     """
+    minimum = max(1, int(minimum_non_null))
     output: list[str] = []
+
+    if isinstance(records, pd.DataFrame):
+        frame = records
+        for column in feature_columns:
+            name = str(column or "")
+            if (
+                not name.startswith("feature__")
+                or name.startswith("feature__context_")
+                or name not in frame.columns
+            ):
+                continue
+            raw = frame[name]
+            non_null = raw[raw.notna()]
+            if len(non_null) < minimum:
+                continue
+            numeric = pd.to_numeric(non_null, errors="coerce")
+            if numeric.notna().all():
+                output.append(name)
+        return sorted(output)
+
     for column in feature_columns:
         name = str(column or "")
         if not name.startswith("feature__") or name.startswith("feature__context_"):
@@ -111,7 +132,7 @@ def _usable_numeric_features(
             seen += 1
             if _number(raw) is not None:
                 converted += 1
-        if seen >= max(1, int(minimum_non_null)) and converted == seen:
+        if seen >= minimum and converted == seen:
             output.append(name)
     return sorted(output)
 
@@ -339,7 +360,7 @@ def build_portable_probability_model(
             continue
 
         fold_feature_columns = _usable_numeric_features(
-            train.to_dict("records"),
+            train,
             candidate_feature_columns,
             minimum_non_null=max(10, min(50, len(train) // 20)),
         )
@@ -399,7 +420,7 @@ def build_portable_probability_model(
         }
 
     feature_columns = _usable_numeric_features(
-        frame.to_dict("records"),
+        frame,
         candidate_feature_columns,
         minimum_non_null=max(10, min(50, len(frame) // 20)),
     )
