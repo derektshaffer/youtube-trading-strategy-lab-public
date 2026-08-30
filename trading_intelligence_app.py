@@ -102,6 +102,8 @@ estimate_search_work = _stock_strategy_finder.estimate_search_work
 latest_finder_checkpoint = _stock_strategy_finder.latest_finder_checkpoint
 merge_finder_checkpoint_into_library = _stock_strategy_finder.merge_finder_checkpoint_into_library
 merge_finder_report_into_library = _stock_strategy_finder.merge_finder_report_into_library
+finder_evidence_verdict = _stock_strategy_finder.finder_evidence_verdict
+parameter_stability_test = _stock_strategy_finder.parameter_stability_test
 run_stock_strategy_finder = _stock_strategy_finder.run_stock_strategy_finder
 search_profile = _stock_strategy_finder.search_profile
 selected_strategies_for_profile = _stock_strategy_finder.selected_strategies_for_profile
@@ -2794,6 +2796,8 @@ if module == "Stock Strategy Finder":
         verdict_class = {
             "ready_for_paper": "ready",
             "promising": "promising",
+            "historical_candidate": "promising",
+            "historically_robust_execution_gap": "promising",
             "no_robust_strategy": "reject",
         }.get(str(verdict.get("code") or ""), "promising")
         st.markdown(
@@ -2847,6 +2851,45 @@ if module == "Stock Strategy Finder":
                 }
             )
         st.dataframe(pd.DataFrame(evidence_rows), width="stretch", hide_index=True)
+
+        regime_report = finder_result.get("regime_diagnostics") or {}
+        regime_windows = [
+            item
+            for item in regime_report.get("windows") or []
+            if isinstance(item, dict)
+        ]
+        if regime_windows:
+            st.markdown("### Same winning rules across recent market regimes")
+            regime_rows = []
+            for regime in regime_windows:
+                metrics = regime.get("metrics") or {}
+                regime_rows.append(
+                    {
+                        "Regime": regime.get("label"),
+                        "Sessions": int(regime.get("session_count") or 0),
+                        "Period": f"{regime.get('start_session')} → {regime.get('end_session')}",
+                        "Trades": int(safe_float(metrics.get("trade_count"), 0) or 0),
+                        "Net P/L": safe_float(metrics.get("net_pnl"), 0.0) or 0.0,
+                        "Return %": safe_float(metrics.get("return_pct"), 0.0) or 0.0,
+                        "Win rate %": safe_float(metrics.get("win_rate_pct"), 0.0) or 0.0,
+                        "Profit factor": metrics.get("profit_factor"),
+                    }
+                )
+            st.dataframe(
+                pd.DataFrame(regime_rows),
+                width="stretch",
+                hide_index=True,
+            )
+            st.caption(
+                str(regime_report.get("note") or "")
+                + " This is especially useful for stocks whose behavior changes materially over time."
+            )
+
+        if str(verdict.get("code") or "") in {"historical_candidate", "promising"}:
+            st.info(
+                "The best candidate is intentionally shown even though it is **not validated**. "
+                "This lets you inspect a setup that may work in the current stock regime without pretending it has proven durable."
+            )
 
         with st.expander("Winning optimized rules", expanded=False):
             st.json(winner.get("optimized_rules") or {})
@@ -6170,11 +6213,12 @@ elif module == "Strategy Lab":
             minimum_training_trades = v3.number_input("Minimum training trades", 1, 50, 5, 1)
             minimum_validation_trades = v4.number_input("Minimum validation/holdout trades", 1, 25, 2, 1)
             run_walk_forward = st.checkbox(
-                "Also run rolling walk-forward re-optimization",
+                "Run rolling walk-forward re-optimization",
                 value=False,
                 help=(
-                    "Much more computationally expensive. Each fold re-optimizes using only earlier "
-                    "sessions, freezes the winner, and tests it on the next unseen block."
+                    "Required before a manual Strategy Lab result can be saved as validated. "
+                    "Each fold re-optimizes using only earlier sessions, freezes the winner, "
+                    "and tests it on the next unseen block."
                 ),
             )
             if run_walk_forward:
@@ -6335,6 +6379,52 @@ elif module == "Strategy Lab":
                     update_task_bar(task_bar, lab_monitor, 0.96, "Optimization and holdout validation complete")
 
                 strength = validation_strength(report, walk_report)
+                winner = report.get("winner") or {}
+                winner_source_id = str(winner.get("source_strategy_id") or "")
+                winner_source = next(
+                    (
+                        item
+                        for item in candidates
+                        if str(item.get("id") or "") == winner_source_id
+                    ),
+                    None,
+                )
+                stability_report = {}
+                if walk_report and winner_source is not None:
+                    update_task_bar(
+                        task_bar,
+                        lab_monitor,
+                        0.97,
+                        "Testing nearby parameter stability on untouched holdout",
+                    )
+                    stability_report = parameter_stability_test(
+                        rows,
+                        winner_source,
+                        report,
+                        maximum=min(24, max(12, int(search_depth) // 4)),
+                    )
+
+                evidence_verdict = finder_evidence_verdict(
+                    strength,
+                    stability_report,
+                    walk_report or {},
+                    report,
+                )
+                paper_fidelity = {}
+                if winner_source is not None:
+                    paper_fidelity = paper_execution_fidelity(
+                        {
+                            **winner_source,
+                            "validation_status": "research_only",
+                            "validated_rules": None,
+                            "machine_rules": (
+                                winner.get("optimized_rules")
+                                or winner_source.get("machine_rules")
+                                or {}
+                            ),
+                        }
+                    )
+
                 st.session_state["til_strategy_lab_result"] = {
                     "ticker": ticker,
                     "timeframe": timeframe,
@@ -6342,6 +6432,9 @@ elif module == "Strategy Lab":
                     "report": report,
                     "walk_forward": walk_report,
                     "strength": strength,
+                    "parameter_stability": stability_report,
+                    "evidence_verdict": evidence_verdict,
+                    "paper_execution_fidelity": paper_fidelity,
                     "compared_all": compare_all,
                     "catalyst_summary": catalyst_summary,
                 }
@@ -6358,6 +6451,14 @@ elif module == "Strategy Lab":
             winner = report.get("winner") or {}
             strength = lab_result.get("strength") or validation_strength(report)
             walk_report = lab_result.get("walk_forward")
+            stability_report = lab_result.get("parameter_stability") or {}
+            evidence_verdict = lab_result.get("evidence_verdict") or finder_evidence_verdict(
+                strength,
+                stability_report,
+                walk_report or {},
+                report,
+            )
+            paper_fidelity = lab_result.get("paper_execution_fidelity") or {}
             training = winner.get("training_metrics") or {}
             validation = winner.get("validation_metrics") or {}
             holdout = winner.get("holdout_metrics") or {}
@@ -6365,13 +6466,23 @@ elif module == "Strategy Lab":
 
             st.divider()
             st.markdown(f"## Result · {lab_result.get('ticker')}")
-            headline = st.columns(5)
+            headline = st.columns(6)
             headline[0].metric("Robustness score", f"{safe_float(strength.get('score'), 0.0):.1f}/100")
             headline[1].metric("Grade", strength.get("label") or "—")
-            headline[2].metric("Selected strategy", winner.get("strategy_name") or "—")
-            headline[3].metric("Optimizer status", winner.get("status") or "—")
-            headline[4].metric("Variants tested", f"{int(report.get('variants_tested') or 0):,}")
+            headline[2].metric("Evidence tier", str(evidence_verdict.get("research_tier") or "research").replace("_", " ").title())
+            headline[3].metric("Selected strategy", winner.get("strategy_name") or "—")
+            headline[4].metric("Optimizer status", winner.get("status") or "—")
+            headline[5].metric("Variants tested", f"{int(report.get('variants_tested') or 0):,}")
             st.caption(strength.get("note") or "")
+            if not walk_report:
+                st.info(
+                    "This manual result is exploratory. Walk-forward was not run, so it cannot be saved as validated even if the selected historical period is profitable."
+                )
+            elif str(evidence_verdict.get("code") or "") != "ready_for_paper":
+                st.warning(
+                    f"**{evidence_verdict.get('label') or 'Research-only result'}** — "
+                    f"{evidence_verdict.get('reason') or 'One or more validation gates were not met.'}"
+                )
 
             catalyst_summary = lab_result.get("catalyst_summary")
             if catalyst_summary:
@@ -6444,9 +6555,9 @@ elif module == "Strategy Lab":
 
             winner_id = str(winner.get("source_strategy_id") or "")
             can_mark_validated = (
-                winner.get("status") == "VALIDATED"
-                and bool(strength.get("independently_positive"))
-                and safe_float(strength.get("score"), 0.0) >= 65.0
+                bool(walk_report)
+                and str(evidence_verdict.get("code") or "") == "ready_for_paper"
+                and str(paper_fidelity.get("status") or "") == "ready"
             )
             save_validation = st.button(
                 "💾 Save this validation result to the strategy library",
@@ -6462,6 +6573,10 @@ elif module == "Strategy Lab":
                             item["validated_rules"] = winner.get("optimized_rules") or {}
                             item["validated_backtest_settings"] = winner.get("optimized_backtest_settings") or {}
                             item["validated_at"] = report.get("generated_at")
+                        else:
+                            item.pop("validated_rules", None)
+                            item.pop("validated_backtest_settings", None)
+                            item.pop("validated_at", None)
                         item["last_validation"] = {
                             "symbol": report.get("symbol"),
                             "generated_at": report.get("generated_at"),
@@ -6473,6 +6588,9 @@ elif module == "Strategy Lab":
                             "holdout_metrics": holdout,
                             "stress_metrics": stress,
                             "walk_forward_summary": (walk_report or {}).get("summary"),
+                            "parameter_stability": stability_report,
+                            "evidence_verdict": evidence_verdict,
+                            "paper_execution_fidelity": paper_fidelity,
                         }
                         break
 
@@ -6493,6 +6611,9 @@ elif module == "Strategy Lab":
                     "holdout_metrics": holdout,
                     "stress_metrics": stress,
                     "walk_forward_summary": (walk_report or {}).get("summary"),
+                    "parameter_stability": stability_report,
+                    "evidence_verdict": evidence_verdict,
+                    "paper_execution_fidelity": paper_fidelity,
                     "optimized_rules": winner.get("optimized_rules") or {},
                     "optimized_backtest_settings": winner.get("optimized_backtest_settings") or {},
                 }
@@ -6505,9 +6626,12 @@ elif module == "Strategy Lab":
                 st.success(
                     "Validation saved. "
                     + (
-                        "This candidate met the current validation gate."
+                        "This candidate met the same strict validation gate used by Stock Strategy Finder."
                         if validation_status == "validated"
-                        else "It remains research-only because one or more validation gates were not met."
+                        else (
+                            f"It remains research-only as {str(evidence_verdict.get('research_tier') or 'research').replace('_', ' ')}. "
+                            "Historical profitability is still saved and visible; it is simply not labeled validated."
+                        )
                     )
                 )
 
