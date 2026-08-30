@@ -382,13 +382,10 @@ def finder_evidence_verdict(
         int(safe_float(metrics.get("trade_count"), 0) or 0)
         for metrics in periods
     ]
-    positive_periods = sum(
-        1
-        for pnl, trades in zip(period_pnls, period_trades)
-        if trades > 0 and pnl > 0
-    )
     aggregate_pnl = sum(period_pnls)
     aggregate_trades = sum(period_trades)
+    validation_positive = period_trades[1] > 0 and period_pnls[1] > 0
+    holdout_positive = period_trades[2] > 0 and period_pnls[2] > 0
 
     if independent and score >= 65.0 and stable_pct >= 55.0 and walk_pct >= 50.0:
         return {
@@ -410,7 +407,11 @@ def finder_evidence_verdict(
             "reason": "Meaningful evidence survived, but one or more robustness gates still failed. Keep the candidate visible for research instead of treating it as validated.",
         }
 
-    if aggregate_trades > 0 and (aggregate_pnl > 0 or positive_periods >= 2):
+    if (
+        aggregate_trades > 0
+        and aggregate_pnl > 0
+        and (validation_positive or holdout_positive)
+    ):
         return {
             "code": "historical_candidate",
             "label": "HISTORICALLY PROFITABLE CANDIDATE — NOT VALIDATED",
