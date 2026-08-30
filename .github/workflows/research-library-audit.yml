@@ -1,0 +1,60 @@
+name: Research Library Audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "research_library_audit.py"
+      - ".github/workflows/research-library-audit.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BACKUP_REPOSITORY: ${{ secrets.TRADING_LAB_BACKUP_REPOSITORY }}
+      BACKUP_TOKEN: ${{ secrets.TRADING_LAB_BACKUP_TOKEN }}
+      BACKUP_BRANCH: ${{ vars.GITHUB_BACKUP_BRANCH || 'main' }}
+      BACKUP_PATH: ${{ vars.TRADING_INTELLIGENCE_BACKUP_PATH || 'trading-intelligence-lab/intelligence_library.json' }}
+      AUDIT_PATH: trading-intelligence-lab/research_audit_summary.json
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate backup settings
+        shell: bash
+        run: |
+          test -n "$BACKUP_REPOSITORY" || { echo "::error::Missing TRADING_LAB_BACKUP_REPOSITORY"; exit 1; }
+          test -n "$BACKUP_TOKEN" || { echo "::error::Missing TRADING_LAB_BACKUP_TOKEN"; exit 1; }
+
+      - name: Clone durable research library
+        shell: bash
+        run: |
+          git clone --depth 1 --branch "$BACKUP_BRANCH" --single-branch \
+            "https://x-access-token:${BACKUP_TOKEN}@github.com/${BACKUP_REPOSITORY}.git" backup-repo
+          test -f "backup-repo/$BACKUP_PATH" || { echo "::error::Library not found at $BACKUP_PATH"; exit 1; }
+
+      - name: Build compact audit
+        shell: bash
+        run: |
+          python research_library_audit.py "backup-repo/$BACKUP_PATH" /tmp/research_audit_summary.json
+          cp /tmp/research_audit_summary.json "backup-repo/$AUDIT_PATH"
+
+      - name: Publish audit beside durable library
+        shell: bash
+        working-directory: backup-repo
+        run: |
+          git config user.name "Trading Intelligence Lab Audit"
+          git config user.email "trading-intelligence-lab@users.noreply.github.com"
+          git add "$AUDIT_PATH"
+          if git diff --cached --quiet; then
+            echo "Audit report unchanged."
+            exit 0
+          fi
+          git commit -m "Update research library audit summary"
+          git pull --rebase origin "$BACKUP_BRANCH"
+          git push origin "HEAD:$BACKUP_BRANCH"
