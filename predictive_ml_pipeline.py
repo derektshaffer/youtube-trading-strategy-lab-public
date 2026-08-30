@@ -2274,9 +2274,6 @@ def archetype_transfer_walk_forward_logistic_baseline(
             "target": target,
         }
 
-    numeric, categorical = _feature_types(frame, model_features)
-    prepared = _prepare_feature_frame(frame, numeric, categorical)
-
     paired_rows: list[dict[str, Any]] = []
     slice_reports: list[dict[str, Any]] = []
     test_start_initial = min_train_sessions + embargo_sessions
@@ -2293,14 +2290,25 @@ def archetype_transfer_walk_forward_logistic_baseline(
                 test_start += test_sessions_per_fold
                 continue
 
-            base_train = prepared[
-                prepared["_session_key"].isin(train_sessions)
-                & prepared["_symbol_key"].ne(held_out_symbol)
-            ]
-            held_out_test = prepared[
-                prepared["_session_key"].isin(test_sessions)
-                & prepared["_symbol_key"].eq(held_out_symbol)
-            ]
+            base_train = frame[
+                frame["_session_key"].isin(train_sessions)
+                & frame["_symbol_key"].ne(held_out_symbol)
+            ].copy()
+            held_out_test = frame[
+                frame["_session_key"].isin(test_sessions)
+                & frame["_symbol_key"].eq(held_out_symbol)
+            ].copy()
+            numeric, categorical = _feature_types(base_train, model_features)
+            active_features = [*numeric, *categorical]
+            if not active_features:
+                test_start += test_sessions_per_fold
+                continue
+            base_train = _prepare_feature_frame(
+                base_train, numeric, categorical
+            )
+            held_out_test = _prepare_feature_frame(
+                held_out_test, numeric, categorical
+            )
             for archetype in sorted(held_out_test["_archetype_key"].unique().tolist()):
                 test = held_out_test[held_out_test["_archetype_key"].eq(archetype)]
                 within_train = base_train[base_train["_archetype_key"].eq(archetype)]
@@ -2316,10 +2324,10 @@ def archetype_transfer_walk_forward_logistic_baseline(
 
                 within_pipeline = _baseline_pipeline(numeric, categorical)
                 across_pipeline = _baseline_pipeline(numeric, categorical)
-                within_pipeline.fit(within_train[model_features], within_train[target])
-                across_pipeline.fit(across_train[model_features], across_train[target])
-                within_probability = within_pipeline.predict_proba(test[model_features])[:, 1]
-                across_probability = across_pipeline.predict_proba(test[model_features])[:, 1]
+                within_pipeline.fit(within_train[active_features], within_train[target])
+                across_pipeline.fit(across_train[active_features], across_train[target])
+                within_probability = within_pipeline.predict_proba(test[active_features])[:, 1]
+                across_probability = across_pipeline.predict_proba(test[active_features])[:, 1]
                 actual = test[target].astype(int).tolist()
                 within_naive_probability = float(within_train[target].mean())
                 across_naive_probability = float(across_train[target].mean())
@@ -2337,6 +2345,7 @@ def archetype_transfer_walk_forward_logistic_baseline(
                         "train_sessions": len(train_sessions),
                         "test_sessions": test_sessions,
                         "test_rows": len(test),
+                        "feature_columns": list(active_features),
                         "within_train_rows": len(within_train),
                         "across_train_rows": len(across_train),
                         "within_train_symbols": sorted(
