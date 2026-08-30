@@ -104,6 +104,7 @@ merge_finder_checkpoint_into_library = _stock_strategy_finder.merge_finder_check
 merge_finder_report_into_library = _stock_strategy_finder.merge_finder_report_into_library
 finder_evidence_verdict = _stock_strategy_finder.finder_evidence_verdict
 parameter_stability_test = _stock_strategy_finder.parameter_stability_test
+validated_status_ready = _stock_strategy_finder.validated_status_ready
 run_stock_strategy_finder = _stock_strategy_finder.run_stock_strategy_finder
 search_profile = _stock_strategy_finder.search_profile
 selected_strategies_for_profile = _stock_strategy_finder.selected_strategies_for_profile
@@ -6554,10 +6555,10 @@ elif module == "Strategy Lab":
                 st.warning(str(warning))
 
             winner_id = str(winner.get("source_strategy_id") or "")
-            can_mark_validated = (
-                bool(walk_report)
-                and str(evidence_verdict.get("code") or "") == "ready_for_paper"
-                and str(paper_fidelity.get("status") or "") == "ready"
+            can_mark_validated = validated_status_ready(
+                evidence_verdict,
+                paper_fidelity,
+                walk_report,
             )
             save_validation = st.button(
                 "💾 Save this validation result to the strategy library",
