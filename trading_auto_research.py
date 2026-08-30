@@ -37,6 +37,10 @@ AUTO_SYMBOLS_PER_STRATEGY = 6
 AUTO_DAILY_LOOKBACK_DAYS = 1825
 AUTO_EVENT_WINDOW_DAYS = 120
 AUTO_EVENT_WINDOW_BUFFER_DAYS = 30
+# Final autonomous validation must occur strictly after the information used to
+# choose symbols. This prevents end-of-day/event-window hindsight from deciding
+# which earlier intraday bars are allowed into the test sample.
+AUTO_VALIDATION_WINDOW_DAYS = 180
 AUTO_TIMEFRAME = "5Min"
 
 
@@ -995,7 +999,9 @@ def _global_validation_gate(
     if not broad_universe:
         reasons.append("Only a current-screener fallback universe was available, so selection bias is too high.")
 
-    if walk_forward:
+    if not walk_forward:
+        reasons.append("Walk-forward validation is missing or failed; validation fails closed.")
+    else:
         wf = walk_forward.get("summary") or {}
         if (safe_float(wf.get("profitable_fold_pct"), 0.0) or 0.0) < 50.0:
             reasons.append("Fewer than half of rolling walk-forward folds were profitable.")
@@ -1046,17 +1052,27 @@ def run_autonomous_research(
     if market.historical_feed == "sip" and market.live_feed != "sip":
         historical_end -= timedelta(minutes=16)
 
+    # Point-in-time sampling boundary: discovery may use only data that existed
+    # before the untouched validation period begins. No final close/high/volume
+    # from a validation day may influence symbol or window selection.
+    validation_end = historical_end
+    validation_start = validation_end - timedelta(days=AUTO_VALIDATION_WINDOW_DAYS)
+    discovery_end = validation_start
+    universe["discovery_cutoff"] = discovery_end.isoformat()
+    universe["validation_start"] = validation_start.isoformat()
+    universe["validation_end"] = validation_end.isoformat()
+
     _notify(
         progress,
         f"Screening {len(symbols)} active + inactive stocks across about "
-        f"{AUTO_DAILY_LOOKBACK_DAYS // 365} years of daily history…",
+        f"{AUTO_DAILY_LOOKBACK_DAYS // 365} years of PRE-TEST daily history…",
     )
     skipped_historical_symbols: list[str] = []
     daily_rows = _batched_bars(
         market,
         symbols,
-        start=historical_end - timedelta(days=AUTO_DAILY_LOOKBACK_DAYS),
-        end=historical_end,
+        start=discovery_end - timedelta(days=AUTO_DAILY_LOOKBACK_DAYS),
+        end=discovery_end,
         timeframe="1Day",
         batch_size=100,
         max_pages=24,
@@ -1131,16 +1147,30 @@ def run_autonomous_research(
                     existing_dates.add(event_date)
             opportunities_by_symbol[symbol] = merged
 
+    validation_symbols = list(opportunities_by_symbol)
     _notify(
         progress,
-        f"Selecting historical event windows for {len(opportunities_by_symbol)} finalist stocks…",
+        f"Loading untouched post-cutoff validation history for {len(validation_symbols)} finalist stocks…",
     )
-    intraday_rows, research_windows = load_point_in_time_intraday(
+    intraday_rows = _batched_bars(
         market,
-        opportunities_by_symbol,
+        validation_symbols,
+        start=validation_start,
+        end=validation_end,
         timeframe=AUTO_TIMEFRAME,
+        batch_size=25,
+        max_pages=64,
         progress=progress,
     )
+    research_windows = {
+        symbol: {
+            "selection_mode": "fixed_post_cutoff",
+            "discovery_cutoff": discovery_end.isoformat(),
+            "start_date": validation_start.date().isoformat(),
+            "end_date": validation_end.date().isoformat(),
+        }
+        for symbol in intraday_rows
+    }
     intraday_symbols = list(intraday_rows)
 
     needs_catalysts = any(
@@ -1158,10 +1188,10 @@ def run_autonomous_research(
             window = research_windows.get(symbol) or {}
             if not window:
                 continue
-            start, end = _window_datetimes(window)
+            start, end = validation_start, validation_end
             _notify(
                 progress,
-                f"Historical catalyst window {index}/{len(intraday_symbols)}: {symbol}…",
+                f"Untouched validation catalyst window {index}/{len(intraday_symbols)}: {symbol}…",
             )
             try:
                 symbol_articles = historical_news(
@@ -1258,12 +1288,15 @@ def run_autonomous_research(
             cross_settings = _backtest_settings_from_dict(
                 winner.get("optimized_backtest_settings") or {}
             )
+            # Generalization evidence must be independent of the anchor stock
+            # used for optimization. Excluding the anchor prevents it from
+            # helping itself pass the portability gate.
             cross_rows = {
                 symbol: list(intraday_rows.get(symbol) or [])
                 for symbol in candidate_symbols
-                if intraday_rows.get(symbol)
+                if symbol != anchor and intraday_rows.get(symbol)
             }
-            _notify(progress, f"Testing frozen {strategy.get('name')} rules across {len(cross_rows)} stocks…")
+            _notify(progress, f"Testing frozen {strategy.get('name')} rules across {len(cross_rows)} non-anchor stocks…")
             generalization = cross_stock_generalization(
                 cross_rows,
                 frozen,
@@ -1349,7 +1382,13 @@ def run_autonomous_research(
         "universe": universe,
         "daily_lookback_days": AUTO_DAILY_LOOKBACK_DAYS,
         "event_window_days": AUTO_EVENT_WINDOW_DAYS,
-        "intraday_lookback_days": AUTO_EVENT_WINDOW_DAYS,
+        "intraday_lookback_days": AUTO_VALIDATION_WINDOW_DAYS,
+        "sampling_boundary": {
+            "mode": "pretest_discovery_fixed_postcutoff_validation",
+            "discovery_cutoff": discovery_end.isoformat(),
+            "validation_start": validation_start.isoformat(),
+            "validation_end": validation_end.isoformat(),
+        },
         "point_in_time_horizon_years": round(AUTO_DAILY_LOOKBACK_DAYS / 365.0, 1),
         "timeframe": AUTO_TIMEFRAME,
         "eligible_strategies": len(eligible),
@@ -1371,7 +1410,8 @@ def run_autonomous_research(
         "results": research_results,
         "limitations": [
             str(universe.get("selection_bias_warning") or ""),
-            "Historical opportunity ranking uses only information available in each daily bar and prior-volume history; it does not use future trade P/L.",
+            "Historical opportunity ranking is frozen at a strict pre-test cutoff. Final close/high/volume from validation sessions cannot influence symbol selection.",
+            "The post-cutoff validation window retains every available session for the fixed finalist symbols, including fades and failed momentum days.",
             "Point-in-time membership is inferred from actual dated bar availability. Symbol renames, mergers, and corporate actions can create separate ticker identities across time.",
             "The scan samples the active + inactive Alpaca asset master rather than exhaustively downloading every listed security in one run; repeated runs can broaden coverage without requiring manual ticker selection.",
             "Autonomous validation is historical evidence, not a guarantee of future profitability.",
@@ -1387,6 +1427,38 @@ def merge_autonomous_research_into_library(
     data = dict(library or {})
     strategies = [dict(item) for item in data.get("strategies") or [] if isinstance(item, dict)]
     by_id = {str(item.get("id") or ""): item for item in strategies if item.get("id")}
+
+    # Terminalize candidates that could not be tested so they do not consume
+    # every future validation batch forever. A materially changed strategy gets
+    # a new strategy id and may be evaluated again.
+    for failure in report.get("failed_finalists") or []:
+        if not isinstance(failure, dict):
+            continue
+        strategy_id = str(failure.get("strategy_id") or "")
+        item = by_id.get(strategy_id)
+        if item is None:
+            continue
+        error_text = str(failure.get("error") or "Autonomous validation could not test this strategy.")
+        lowered = error_text.casefold()
+        status = (
+            "insufficient_data"
+            if any(token in lowered for token in ("no candidate", "no usable", "insufficient", "no cross-stock"))
+            else "validation_failed"
+        )
+        retryable = any(token in lowered for token in ("rate limit", "temporar", "timeout", "provider"))
+        item["validation_status"] = "research_only"
+        item["optimization_status"] = "not_run"
+        item["last_autonomous_research"] = {
+            "generated_at": report.get("generated_at"),
+            "validation_status": status,
+            "gate_reasons": [error_text],
+            "retryable": retryable,
+            "retry_after": None,
+            "universe_source": (report.get("universe") or {}).get("source"),
+        }
+        item.pop("validated_rules", None)
+        item.pop("validated_backtest_settings", None)
+        item.pop("validated_at", None)
 
     validation_records: list[dict[str, Any]] = []
     for result in report.get("results") or []:
