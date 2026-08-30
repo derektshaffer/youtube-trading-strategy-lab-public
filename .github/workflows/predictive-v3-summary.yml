@@ -1,0 +1,28 @@
+name: Predictive V3 Summary
+
+on:
+  push:
+    branches:
+      - diagnostic/v3-summary
+    paths:
+      - print_predictive_v3_summary.py
+      - .github/workflows/predictive-v3-summary.yml
+
+jobs:
+  summary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITHUB_BACKUP_REPOSITORY: ${{ secrets.GITHUB_BACKUP_REPOSITORY }}
+      GITHUB_BACKUP_TOKEN: ${{ secrets.GITHUB_BACKUP_TOKEN }}
+      GITHUB_BACKUP_BRANCH: ${{ vars.GITHUB_BACKUP_BRANCH }}
+      GITHUB_BACKUP_PATH: ${{ vars.GITHUB_BACKUP_PATH }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Print compact predictive summary
+        run: python print_predictive_v3_summary.py
