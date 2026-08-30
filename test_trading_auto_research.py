@@ -535,7 +535,7 @@ class ValidationIntegrityRegressionTests(unittest.TestCase):
             "strategies": [
                 {
                     "id": "legacy",
-                    "source_type": "autonomous_web_research",
+                    "source_type": "book_or_document",
                     "research_hypothesis_id": "h1",
                     "validation_status": "validated",
                     "validated_rules": {"min_relative_volume": 2.0},
@@ -561,6 +561,22 @@ class ValidationIntegrityRegressionTests(unittest.TestCase):
             updated["research_hypotheses"][0]["status"],
             "queued_for_validation",
         )
+
+    def test_manual_validation_without_autonomous_record_is_preserved(self):
+        library = {
+            "strategies": [
+                {
+                    "id": "manual",
+                    "source_type": "book_or_document",
+                    "validation_status": "validated",
+                    "validated_rules": {"min_relative_volume": 2.0},
+                }
+            ]
+        }
+        updated, changed = invalidate_legacy_autonomous_validations(library)
+        self.assertEqual(changed, 0)
+        self.assertEqual(updated["strategies"][0]["validation_status"], "validated")
+        self.assertIn("validated_rules", updated["strategies"][0])
 
 
 if __name__ == "__main__":
