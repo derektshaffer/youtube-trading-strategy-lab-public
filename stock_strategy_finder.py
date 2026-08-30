@@ -452,7 +452,9 @@ def regime_diagnostics(
         include_extended_hours=True,
     )
     frame = bars_to_frame(timeframe_rows, include_extended_hours=True)
-    sessions = list(dict.fromkeys(frame.get("session", []).tolist()))
+    if "session" not in frame.columns:
+        return {"status": "unavailable", "windows": []}
+    sessions = list(dict.fromkeys(frame["session"].tolist()))
     if not sessions:
         return {"status": "unavailable", "windows": []}
 
@@ -655,6 +657,8 @@ def complete_stock_strategy_finder_from_optimization(
             "code": "historically_robust_execution_gap",
             "label": "ROBUST HISTORICALLY — PAPER ENGINE NOT YET FAITHFUL",
             "tone": "warning",
+            "research_tier": "historically_robust_execution_gap",
+            "paper_ready": False,
             "reason": (
                 "The strategy survived the historical robustness gates, but Paper Auto cannot yet "
                 "reproduce the same trade-management rules. Keep it in research/paper-manual mode "
