@@ -441,6 +441,51 @@ def run_predictive_ml_backfill(
         f"with {int(dataset.get('row_count') or 0):,} labeled rows."
     )
 
+    model_suite_version = int(payload.get("model_suite_version") or MODEL_SUITE_VERSION)
+    code_fingerprint = str(payload.get("code_fingerprint") or "").strip()
+    fingerprint_started = perf_counter()
+    dataset_fingerprint = _dataset_fingerprint(dataset)
+    notify(
+        f"Verified dataset fingerprint {dataset_fingerprint[:12]}… "
+        f"in {perf_counter() - fingerprint_started:.1f}s."
+    )
+    reusable_stages = _checkpoint_stages(
+        checkpoint,
+        dataset_fingerprint=dataset_fingerprint,
+        model_suite_version=model_suite_version,
+        code_fingerprint=code_fingerprint,
+    )
+    checkpoint_state: dict[str, Any] = {
+        "checkpoint_version": ML_CHECKPOINT_VERSION,
+        "model_suite_version": model_suite_version,
+        "code_fingerprint": code_fingerprint,
+        "dataset_fingerprint": dataset_fingerprint,
+        "dataset_summary": {
+            key: deepcopy(value)
+            for key, value in dataset.items()
+            if key != "records"
+        },
+        "research_start": start.isoformat(),
+        "research_end": end.isoformat(),
+        "stages": deepcopy(reusable_stages),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    def persist_stage(stage: str, value: Any) -> None:
+        checkpoint_state["stages"][stage] = deepcopy(value)
+        checkpoint_state["last_completed_stage"] = stage
+        checkpoint_state["updated_at"] = datetime.now(timezone.utc).isoformat()
+        if checkpoint_callback:
+            checkpoint_callback(deepcopy(checkpoint_state))
+
+    if checkpoint_callback:
+        checkpoint_callback(deepcopy(checkpoint_state))
+    if reusable_stages:
+        notify(
+            "Matched a durable checkpoint to the exact rebuilt dataset; "
+            "completed core stages will be reused."
+        )
+
     def evaluate_horizon(horizon: int) -> tuple[str, dict[str, Any]]:
         report = walk_forward_logistic_baseline(
             dataset,
