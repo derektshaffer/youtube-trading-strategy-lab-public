@@ -41,6 +41,7 @@ AUTO_EVENT_WINDOW_BUFFER_DAYS = 30
 # choose symbols. This prevents end-of-day/event-window hindsight from deciding
 # which earlier intraday bars are allowed into the test sample.
 AUTO_VALIDATION_WINDOW_DAYS = 180
+AUTONOMOUS_VALIDATION_METHOD_VERSION = 2
 AUTO_TIMEFRAME = "5Min"
 
 
@@ -1379,6 +1380,7 @@ def run_autonomous_research(
 
     return {
         "generated_at": utc_now().isoformat(),
+        "validation_method_version": AUTONOMOUS_VALIDATION_METHOD_VERSION,
         "universe": universe,
         "daily_lookback_days": AUTO_DAILY_LOOKBACK_DAYS,
         "event_window_days": AUTO_EVENT_WINDOW_DAYS,
@@ -1419,6 +1421,72 @@ def run_autonomous_research(
     }
 
 
+def invalidate_legacy_autonomous_validations(
+    library: dict[str, Any],
+) -> tuple[dict[str, Any], int]:
+    """Demote trusted results produced by the old hindsight-selected validator."""
+    data = dict(library or {})
+    strategies = [
+        dict(item) for item in data.get("strategies") or [] if isinstance(item, dict)
+    ]
+    invalidated_hypotheses: set[str] = set()
+    changed = 0
+    for item in strategies:
+        if str(item.get("source_type") or "") != "autonomous_web_research":
+            continue
+        if str(item.get("validation_status") or "") != "validated":
+            continue
+        last = item.get("last_autonomous_research")
+        version = (
+            int((last or {}).get("validation_method_version") or 0)
+            if isinstance(last, dict)
+            else 0
+        )
+        if version >= AUTONOMOUS_VALIDATION_METHOD_VERSION:
+            continue
+        item["validation_status"] = "research_only"
+        item["optimization_status"] = "revalidation_required"
+        item["last_autonomous_research"] = {
+            **(dict(last) if isinstance(last, dict) else {}),
+            "validation_status": "stale_methodology",
+            "stale_reason": (
+                "Previous autonomous validation used hindsight-selected event windows. "
+                "Revalidation under method v2 is required."
+            ),
+            "required_validation_method_version": AUTONOMOUS_VALIDATION_METHOD_VERSION,
+        }
+        item.pop("validated_rules", None)
+        item.pop("validated_backtest_settings", None)
+        item.pop("validated_at", None)
+        hypothesis_id = str(item.get("research_hypothesis_id") or "")
+        if hypothesis_id:
+            invalidated_hypotheses.add(hypothesis_id)
+        changed += 1
+
+    data["strategies"] = strategies
+    if invalidated_hypotheses:
+        refreshed = []
+        for raw in data.get("research_hypotheses") or []:
+            if not isinstance(raw, dict):
+                continue
+            item = dict(raw)
+            if str(item.get("id") or "") in invalidated_hypotheses:
+                item["status"] = "queued_for_validation"
+                summary = (
+                    dict(item.get("validation_summary") or {})
+                    if isinstance(item.get("validation_summary"), dict)
+                    else {}
+                )
+                item["validation_summary"] = {
+                    **summary,
+                    "validation_status": "stale_methodology",
+                    "required_validation_method_version": AUTONOMOUS_VALIDATION_METHOD_VERSION,
+                }
+            refreshed.append(item)
+        data["research_hypotheses"] = refreshed
+    return data, changed
+
+
 def merge_autonomous_research_into_library(
     library: dict[str, Any],
     report: dict[str, Any],
@@ -1450,6 +1518,9 @@ def merge_autonomous_research_into_library(
         item["optimization_status"] = "not_run"
         item["last_autonomous_research"] = {
             "generated_at": report.get("generated_at"),
+            "validation_method_version": int(
+                report.get("validation_method_version") or AUTONOMOUS_VALIDATION_METHOD_VERSION
+            ),
             "validation_status": status,
             "gate_reasons": [error_text],
             "retryable": retryable,
@@ -1477,6 +1548,9 @@ def merge_autonomous_research_into_library(
         item["optimization_status"] = str(winner.get("status") or "not_run").lower().replace(" ", "_")
         item["last_autonomous_research"] = {
             "generated_at": report.get("generated_at"),
+            "validation_method_version": int(
+                report.get("validation_method_version") or AUTONOMOUS_VALIDATION_METHOD_VERSION
+            ),
             "anchor_symbol": result.get("anchor_symbol"),
             "candidate_symbols": result.get("candidate_symbols") or [],
             "global_score": result.get("global_score"),
@@ -1518,6 +1592,9 @@ def merge_autonomous_research_into_library(
                 "optimized_rules": winner.get("optimized_rules") or {},
                 "optimized_backtest_settings": winner.get("optimized_backtest_settings") or {},
                 "autonomous": True,
+                "validation_method_version": int(
+                    report.get("validation_method_version") or AUTONOMOUS_VALIDATION_METHOD_VERSION
+                ),
                 "global_score": result.get("global_score"),
                 "generalization_summary": generalization.get("summary") or {},
                 "gate_reasons": result.get("gate_reasons") or [],
@@ -1536,6 +1613,9 @@ def merge_autonomous_research_into_library(
         "id": f"autonomous:{report.get('generated_at')}",
         "generated_at": report.get("generated_at"),
         "kind": "autonomous_research",
+        "validation_method_version": int(
+            report.get("validation_method_version") or AUTONOMOUS_VALIDATION_METHOD_VERSION
+        ),
         "universe": report.get("universe") or {},
         "daily_lookback_days": report.get("daily_lookback_days"),
         "event_window_days": report.get("event_window_days"),
