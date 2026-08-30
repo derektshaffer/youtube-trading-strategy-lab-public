@@ -397,6 +397,10 @@ def execute_job(
             worker_payload["similarity_max_symbols"] = int(
                 env("PREDICTIVE_ML_SIMILARITY_MAX_SYMBOLS")
             )
+        if env("PREDICTIVE_ML_TICKER_SPECIFIC_MAX_SYMBOLS"):
+            worker_payload["ticker_specific_max_symbols"] = int(
+                env("PREDICTIVE_ML_TICKER_SPECIFIC_MAX_SYMBOLS")
+            )
         if env("PREDICTIVE_ML_BACKFILL_STRIDE"):
             worker_payload["observation_stride_bars"] = int(
                 env("PREDICTIVE_ML_BACKFILL_STRIDE")
@@ -438,6 +442,7 @@ def execute_job(
                 f"{len(result.get('symbols') or [])} stocks and "
                 f"{len(result.get('horizons') or [result.get('horizon')])} horizon(s); "
                 f"shadow model status {model.get('status') or 'unknown'}; "
+                f"ticker-specific validation {str((result.get('ticker_specific') or {}).get('status') or 'unknown')}; "
                 f"similarity validation {str((result.get('similarity_validation') or {}).get('status') or 'unknown')}."
             ),
         )
