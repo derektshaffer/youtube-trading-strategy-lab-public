@@ -553,40 +553,58 @@ def run_predictive_ml_backfill(
         horizon_evaluations.get(str(int(config["horizon"]))) or {}
     )
 
-    notify("Running held-out-stock generalization validation.")
-    generalization = leave_one_symbol_out_walk_forward_logistic_baseline(
-        dataset,
-        target_horizon=int(config["horizon"]),
-        target_mode="target_before_stop",
-        min_train_sessions=8,
-        test_sessions_per_fold=2,
-        embargo_sessions=1,
-        min_train_rows=250,
-        min_test_rows=25,
-    )
+    saved_generalization = reusable_stages.get("generalization")
+    if isinstance(saved_generalization, dict):
+        notify("Reusing held-out-stock generalization from the durable checkpoint.")
+        generalization = deepcopy(saved_generalization)
+    else:
+        notify("Running held-out-stock generalization validation.")
+        generalization = leave_one_symbol_out_walk_forward_logistic_baseline(
+            dataset,
+            target_horizon=int(config["horizon"]),
+            target_mode="target_before_stop",
+            min_train_sessions=8,
+            test_sessions_per_fold=2,
+            embargo_sessions=1,
+            min_train_rows=250,
+            min_test_rows=25,
+        )
+        persist_stage("generalization", _compact(generalization))
 
-    notify("Training gated portable logistic shadow-probability model.")
-    probability_model = build_portable_probability_model(
-        dataset,
-        target_horizon=int(config["horizon"]),
-        target_mode="target_before_stop",
-        generalization=generalization,
-        min_train_sessions=8,
-        test_sessions_per_fold=2,
-        embargo_sessions=1,
-        min_train_rows=250,
-    )
+    saved_probability_model = reusable_stages.get("probability_model")
+    if isinstance(saved_probability_model, dict):
+        notify("Reusing portable logistic model from the durable checkpoint.")
+        probability_model = deepcopy(saved_probability_model)
+    else:
+        notify("Training gated portable logistic shadow-probability model.")
+        probability_model = build_portable_probability_model(
+            dataset,
+            target_horizon=int(config["horizon"]),
+            target_mode="target_before_stop",
+            generalization=generalization,
+            min_train_sessions=8,
+            test_sessions_per_fold=2,
+            embargo_sessions=1,
+            min_train_rows=250,
+        )
+        persist_stage("probability_model", probability_model)
 
-    notify("Training nonlinear gradient-boosted challenger with its own validation gates.")
-    boosted_probability_model = build_boosted_probability_model(
-        dataset,
-        target_horizon=int(config["horizon"]),
-        target_mode="target_before_stop",
-        min_train_sessions=8,
-        test_sessions_per_fold=2,
-        embargo_sessions=1,
-        min_train_rows=250,
-    )
+    saved_boosted = reusable_stages.get("boosted_probability_model")
+    if isinstance(saved_boosted, dict):
+        notify("Reusing boosted challenger from the durable checkpoint.")
+        boosted_probability_model = deepcopy(saved_boosted)
+    else:
+        notify("Training nonlinear gradient-boosted challenger with its own validation gates.")
+        boosted_probability_model = build_boosted_probability_model(
+            dataset,
+            target_horizon=int(config["horizon"]),
+            target_mode="target_before_stop",
+            min_train_sessions=8,
+            test_sessions_per_fold=2,
+            embargo_sessions=1,
+            min_train_rows=250,
+        )
+        persist_stage("boosted_probability_model", boosted_probability_model)
     probability_models = [
         model
         for model in (probability_model, boosted_probability_model)
@@ -693,7 +711,9 @@ def run_predictive_ml_backfill(
         "feature_workers": int(config["feature_workers"]),
         "validation_workers": int(config["validation_workers"]),
         "runtime_seconds": round(perf_counter() - run_started, 3),
-        "model_suite_version": int((payload or {}).get("model_suite_version") or MODEL_SUITE_VERSION),
+        "model_suite_version": model_suite_version,
+        "dataset_fingerprint": dataset_fingerprint,
+        "checkpoint_reused_stages": sorted(reusable_stages),
         "dataset_summary": {
             key: deepcopy(value)
             for key, value in dataset.items()
