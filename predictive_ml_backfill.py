@@ -332,7 +332,7 @@ def _dataset_fingerprint(dataset: dict[str, Any]) -> str:
             sort_keys=True,
             separators=(",", ":"),
             default=str,
-            allow_nan=False,
+            allow_nan=True,
         ).encode("utf-8")
     )
     digest.update(b"\n")
