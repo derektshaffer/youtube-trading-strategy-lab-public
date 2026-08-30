@@ -161,13 +161,15 @@ def _dataset_for_symbols(
     symbols: list[str],
 ) -> dict[str, Any]:
     allowed = set(_clean_symbols(symbols))
+    # Validation functions construct their own DataFrames/copies, so this bounded
+    # view can safely share immutable metadata and row dictionaries.
     subset = {
-        key: deepcopy(value)
+        key: value
         for key, value in dataset.items()
         if key != "records"
     }
     subset["records"] = [
-        dict(row)
+        row
         for row in dataset.get("records") or []
         if isinstance(row, dict)
         and str(row.get("symbol") or "").strip().upper() in allowed
