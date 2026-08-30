@@ -7312,10 +7312,16 @@ elif module == "Pattern Validation":
         "30 trading days · 15-minute horizon · +1.00% before -0.75%."
     )
 
+    if "til_ml_symbols_input" not in st.session_state:
+        st.session_state["til_ml_symbols_input"] = str(
+            st.session_state.get("til_ml_symbols")
+            or pattern_symbols_text
+            or "SDOT REAX"
+        )
+
     ml_cols = st.columns([1.7, 0.9, 0.9, 1.0])
     ml_symbols_text = ml_cols[0].text_input(
         "ML research stocks",
-        value=str(st.session_state.get("til_ml_symbols") or pattern_symbols_text or "SDOT REAX"),
         help="Start with a few related stocks. The backend supports broader cloud batches later.",
         key="til_ml_symbols_input",
     )
