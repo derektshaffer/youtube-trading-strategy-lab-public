@@ -665,6 +665,10 @@ def build_cross_stock_training_dataset(
                 "label_columns": [],
             }
 
+        if progress and worker_count == 1:
+            progress(
+                f"ML stock {index}/{len(clean)} · calculating causal features for {symbol}…"
+            )
         report = build_supervised_feature_rows(
             rows,
             horizons=clean_horizons,
@@ -674,6 +678,10 @@ def build_cross_stock_training_dataset(
             stop_loss_pct=float(clean_stop_loss),
             observation_stride_bars=observation_stride_bars,
         )
+        if progress and worker_count == 1:
+            progress(
+                f"ML stock {index}/{len(clean)} · adding causal context for {symbol}…"
+            )
         _attach_context_features(
             report,
             rows,
