@@ -505,3 +505,222 @@ def test_older_model_suite_forces_same_day_backfill_upgrade():
     assert job is not None
     assert job["payload"]["model_suite_version"] == research.PREDICTIVE_ML_BACKFILL_SUITE_VERSION
     assert f"v{research.PREDICTIVE_ML_BACKFILL_SUITE_VERSION}" in job["dedupe_key"]
+
+
+class QueueReliabilityRegressionTests(unittest.TestCase):
+    def test_equal_priority_claims_oldest_job_first(self):
+        now = datetime(2026, 8, 30, 20, 0, tzinfo=timezone.utc)
+        library, older = research.enqueue_research_job(
+            {}, "web_research", {"topic": "older"}, priority=50, dedupe_key="older"
+        )
+        library, newer = research.enqueue_research_job(
+            library, "web_research", {"topic": "newer"}, priority=50, dedupe_key="newer"
+        )
+        for item in library["research_queue"]:
+            if item["id"] == older["id"]:
+                item["created_at"] = "2026-08-30T10:00:00Z"
+            elif item["id"] == newer["id"]:
+                item["created_at"] = "2026-08-30T11:00:00Z"
+        library, claimed = research.claim_next_research_job(library, "worker", now=now)
+        self.assertEqual(claimed["id"], older["id"])
+
+    def test_validation_precedes_fresh_followup_research(self):
+        now = datetime(2026, 8, 30, 20, 0, tzinfo=timezone.utc)
+        library, followup = research.enqueue_research_job(
+            {}, "web_research", {"topic": "followup"}, priority=60, dedupe_key="followup"
+        )
+        library, validation = research.enqueue_research_job(
+            library,
+            "autonomous_validation",
+            {},
+            priority=45,
+            dedupe_key="validation",
+        )
+        library, claimed = research.claim_next_research_job(library, "worker", now=now)
+        self.assertEqual(claimed["id"], validation["id"])
+
+    def test_very_old_work_ages_ahead_of_fresh_high_priority_work(self):
+        now = datetime(2026, 8, 30, 20, 0, tzinfo=timezone.utc)
+        library, old = research.enqueue_research_job(
+            {}, "specialist_review", {}, priority=30, dedupe_key="old"
+        )
+        library, fresh = research.enqueue_research_job(
+            library, "specialist_review", {}, priority=90, dedupe_key="fresh"
+        )
+        for item in library["research_queue"]:
+            if item["id"] == old["id"]:
+                item["created_at"] = "2026-08-28T19:00:00Z"
+            elif item["id"] == fresh["id"]:
+                item["created_at"] = "2026-08-30T19:59:00Z"
+        library, claimed = research.claim_next_research_job(library, "worker", now=now)
+        self.assertEqual(claimed["id"], old["id"])
+
+    def test_retention_never_drops_active_jobs(self):
+        terminal = [
+            {
+                "id": f"complete-{index}",
+                "type": "web_research",
+                "status": "complete",
+                "priority": 1,
+                "created_at": f"2026-08-01T00:{index % 60:02d}:00Z",
+            }
+            for index in range(305)
+        ]
+        active = [
+            {
+                "id": "old-active",
+                "type": "specialist_review",
+                "status": "queued",
+                "priority": 10,
+                "created_at": "2026-08-01T00:00:00Z",
+            }
+        ]
+        library, new_job = research.enqueue_research_job(
+            {"research_queue": active + terminal},
+            "web_research",
+            {"topic": "new"},
+            dedupe_key="new-active",
+        )
+        active_ids = {
+            item["id"]
+            for item in library["research_queue"]
+            if item.get("status") in research.ACTIVE_RESEARCH_JOB_STATUSES
+        }
+        self.assertIn("old-active", active_ids)
+        self.assertIn(new_job["id"], active_ids)
+        self.assertEqual(
+            len(
+                [
+                    item
+                    for item in library["research_queue"]
+                    if item.get("status") not in research.ACTIVE_RESEARCH_JOB_STATUSES
+                ]
+            ),
+            research.MAX_TERMINAL_QUEUE_HISTORY,
+        )
+
+    def test_completed_job_is_not_requeued_by_failure_handler(self):
+        library = {
+            "research_queue": [
+                {
+                    "id": "done",
+                    "type": "web_research",
+                    "status": "complete",
+                    "attempts": 1,
+                    "max_attempts": 3,
+                }
+            ]
+        }
+        updated = research.fail_research_job(library, "done", "cloud write failed")
+        self.assertEqual(updated["research_queue"][0]["status"], "complete")
+
+    def test_specialist_followup_does_not_branch_recursively(self):
+        library = {
+            "research_hypotheses": [
+                {
+                    "id": "h-child",
+                    "research_run_id": "run-child",
+                    "status": "awaiting_specialist",
+                }
+            ],
+            "external_research_runs": [
+                {"id": "run-child", "origin_job_id": "followup-job"}
+            ],
+            "research_queue": [
+                {
+                    "id": "followup-job",
+                    "type": "web_research",
+                    "status": "complete",
+                    "payload": {
+                        "origin": "specialist_follow_up",
+                        "followup_depth": 1,
+                    },
+                }
+            ],
+        }
+        review = {
+            "decision": "keep_researching",
+            "reason": "More evidence needed.",
+            "confidence": 60,
+            "follow_up_questions": ["Should this branch again?"],
+            "generated_at": "2026-08-30T20:00:00Z",
+        }
+        updated, _ = research.apply_specialist_review(library, "h-child", review)
+        new_web_jobs = [
+            item
+            for item in updated["research_queue"]
+            if item.get("type") == "web_research" and item.get("id") != "followup-job"
+        ]
+        self.assertEqual(new_web_jobs, [])
+
+
+class ResearchMemoryRegressionTests(unittest.TestCase):
+    def _packet(self, generated_at: str, interaction_id: str, quality_type: str = "academic_peer_reviewed"):
+        return {
+            "generated_at": generated_at,
+            "interaction_id": interaction_id,
+            "title": "Repeated concept",
+            "summary": "Repeated concept research.",
+            "model": research.DEFAULT_GEMINI_BULK_RESEARCH_MODEL,
+            "model_role": "bulk_research",
+            "paid_fallback_used": False,
+            "retrieved_sources": [],
+            "contradictions": [],
+            "follow_up_questions": [],
+            "sources": [
+                {
+                    "id": "src",
+                    "title": "Underlying study",
+                    "url": "https://doi.org/10.1000/repeated",
+                    "source_type": quality_type,
+                    "published_at": "2025-01-01",
+                    "support_summary": "Same evidence base.",
+                    "source_quality_score": research.SOURCE_TYPE_SCORES[quality_type],
+                }
+            ],
+            "hypotheses": [
+                {
+                    "name": "Repeated RVOL concept",
+                    "category": "momentum",
+                    "direction": "long",
+                    "statement": "High RVOL may improve continuation.",
+                    "why_it_might_work": "Liquidity concentration.",
+                    "market_scope": "US equities",
+                    "machine_rules": {"min_relative_volume": 3.0},
+                    "unresolved_rules": [],
+                    "supporting_source_ids": ["src"],
+                    "contradicting_source_ids": [],
+                    "confidence": 70,
+                    "novelty": 30,
+                }
+            ],
+        }
+
+    def test_prior_rejected_concept_is_suppressed_without_materially_better_evidence(self):
+        library, _, first_ids = research.merge_grounded_research(
+            {}, self._packet("2026-08-29T10:00:00Z", "one"), topic="rvol"
+        )
+        for item in library["research_hypotheses"]:
+            if item["id"] == first_ids[0]:
+                item["status"] = "rejected"
+        before_jobs = len(
+            [item for item in library["research_queue"] if item.get("type") == "specialist_review"]
+        )
+        library, _, second_ids = research.merge_grounded_research(
+            library, self._packet("2026-08-30T10:00:00Z", "two"), topic="rvol"
+        )
+        second = research.find_research_hypothesis(library, second_ids[0])
+        self.assertEqual(second["status"], "duplicate_prior_outcome")
+        after_jobs = len(
+            [item for item in library["research_queue"] if item.get("type") == "specialist_review"]
+        )
+        self.assertEqual(after_jobs, before_jobs)
+
+    def test_fake_sec_reference_in_query_string_gets_no_government_boost(self):
+        score = research.source_quality_score(
+            {
+                "source_type": "unknown",
+                "url": "https://example.invalid/?next=sec.gov/report",
+            }
+        )
+        self.assertEqual(score, research.SOURCE_TYPE_SCORES["unknown"])
