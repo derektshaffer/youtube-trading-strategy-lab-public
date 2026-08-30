@@ -35,6 +35,7 @@ def finder_summary_to_report(summary: dict[str, Any]) -> dict[str, Any]:
         "walk_forward": {"summary": summary.get("walk_forward_summary") or {}},
         "robustness": summary.get("robustness") or {},
         "parameter_stability": summary.get("parameter_stability") or {},
+        "regime_diagnostics": summary.get("regime_diagnostics") or {},
         "paper_execution_fidelity": summary.get("paper_execution_fidelity") or {},
         "verdict": summary.get("verdict") or {},
         "winner_source_strategy_id": summary.get("winner_source_strategy_id"),
