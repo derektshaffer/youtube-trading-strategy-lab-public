@@ -199,7 +199,7 @@ def test_supervised_trade_quality_label_detects_target_before_stop():
     assert first["label__target_before_stop_1bar"] is True
     assert first["label__barrier_outcome_1bar"] == "target"
     assert first["label__max_favorable_excursion_1bar_pct"] >= 1.0
-    assert report["barrier_same_bar_policy"] == "stop_first_conservative"
+    assert report["barrier_same_bar_policy"] == "ambiguous_exclude"
 
 
 def test_supervised_trade_quality_label_counts_stop_as_failure():
@@ -220,7 +220,7 @@ def test_supervised_trade_quality_label_counts_stop_as_failure():
     assert first["label__barrier_outcome_1bar"] == "stop"
 
 
-def test_same_bar_target_and_stop_is_scored_conservatively_as_stop():
+def test_same_bar_target_and_stop_is_excluded_from_predictive_label_by_default():
     rows = [
         _bar(29, 0, 10.0, 10.02, 9.98, 10.0, 100),
         _bar(29, 1, 10.0, 10.20, 9.80, 10.05, 200),
@@ -232,6 +232,25 @@ def test_same_bar_target_and_stop_is_scored_conservatively_as_stop():
         require_full_horizon=True,
         profit_target_pct=1.0,
         stop_loss_pct=0.75,
+    )
+    first = report["records"][0]
+    assert first["label__target_before_stop_1bar"] is None
+    assert first["label__barrier_outcome_1bar"] == "ambiguous"
+
+
+def test_same_bar_target_and_stop_can_still_use_conservative_backtest_policy():
+    rows = [
+        _bar(29, 0, 10.0, 10.02, 9.98, 10.0, 100),
+        _bar(29, 1, 10.0, 10.20, 9.80, 10.05, 200),
+    ]
+    report = build_supervised_feature_rows(
+        rows,
+        horizons=(1,),
+        swing_radius=1,
+        require_full_horizon=True,
+        profit_target_pct=1.0,
+        stop_loss_pct=0.75,
+        barrier_same_bar_policy="stop_first_conservative",
     )
     first = report["records"][0]
     assert first["label__target_before_stop_1bar"] is False
