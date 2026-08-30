@@ -35,6 +35,7 @@ def test_merge_backfill_result_persists_visible_status_and_run():
         "symbols": ["AAA", "BBB", "CCC"],
         "trading_days": 30,
         "horizon": 15,
+        "horizons": [5, 15, 30, 60],
         "completed_at": "2026-08-29T22:00:00+00:00",
         "dataset_summary": {
             "row_count": 12345,
@@ -42,8 +43,18 @@ def test_merge_backfill_result_persists_visible_status_and_run():
         },
         "evaluation": {"status": "EVALUATED"},
         "probability_model": {
+            "id": "logistic-1",
             "status": "READY_FOR_SHADOW_SCORING",
             "shadow_scoring_enabled": True,
+        },
+        "similarity_validation": {
+            "status": "EVALUATED",
+            "automatic_subset_symbols": ["AAA", "BBB", "CCC"],
+        },
+        "historical_head_to_head": {
+            "status": "PROVISIONAL_HISTORICAL_LEADER",
+            "leader_model_id": "logistic-1",
+            "leader_model_family": "Logistic Regression",
         },
     }
     library = {
@@ -57,6 +68,10 @@ def test_merge_backfill_result_persists_visible_status_and_run():
     assert status["status"] == "complete"
     assert status["labeled_rows"] == 12345
     assert status["symbols_with_data"] == 3
+    assert status["horizons"] == [5, 15, 30, 60]
+    assert status["similarity_status"] == "EVALUATED"
+    assert status["similarity_symbols"] == ["AAA", "BBB", "CCC"]
+    assert status["historical_leader_model_id"] == "logistic-1"
     assert status["shadow_scoring_enabled"] is True
     assert status["affects_live_ranking"] is False
     assert status["affects_execution"] is False
@@ -128,7 +143,24 @@ def test_run_backfill_reuses_causal_dataset_and_validation_stack():
         backfill,
         "build_boosted_probability_model",
         return_value=boosted_model,
-    ) as boosted:
+    ) as boosted, patch.object(
+        backfill,
+        "similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline",
+        return_value={
+            "status": "EVALUATED",
+            "paired_oos_rows": 250,
+            "similarity_minus_baseline_auc": 0.01,
+            "predictions": [{"probability": 0.6}],
+        },
+    ) as similarity, patch.object(
+        backfill,
+        "build_historical_model_head_to_head",
+        return_value={
+            "status": "PROVISIONAL_HISTORICAL_LEADER",
+            "leader_model_id": "boosted-1",
+            "leader_model_family": "Gradient Boosting",
+        },
+    ) as head_to_head:
         result = backfill.run_predictive_ml_backfill(
             FakeMarket(),
             {},
@@ -141,19 +173,26 @@ def test_run_backfill_reuses_causal_dataset_and_validation_stack():
         )
 
     assert build_dataset.call_count == 1
-    assert baseline.call_count == 1
+    assert baseline.call_count == 4
     assert held_out.call_count == 1
     assert portable.call_count == 1
     assert boosted.call_count == 1
+    assert similarity.call_count == 1
+    assert head_to_head.call_count == 1
     kwargs = build_dataset.call_args.kwargs
     assert kwargs["timeframe"] == "1Min"
     assert kwargs["session_limit"] == 30
+    assert kwargs["horizons"] == (5, 15, 30, 60)
     assert kwargs["observation_stride_bars"] == 5
     assert kwargs["require_full_horizon"] is True
     assert result["origin"] == "automatic_cloud_backfill"
     assert result["dataset_summary"]["row_count"] == 5000
     assert "predictions" not in result["evaluation"]
     assert "predictions" not in result["generalization"]
+    assert sorted(result["horizon_evaluations"]) == ["15", "30", "5", "60"]
+    assert result["similarity_validation"]["status"] == "EVALUATED"
+    assert "predictions" not in result["similarity_validation"]
+    assert result["historical_head_to_head"]["leader_model_id"] == "boosted-1"
     assert result["probability_model"]["shadow_scoring_enabled"] is True
     assert [item["id"] for item in result["probability_models"]] == [
         "logistic-1",
@@ -180,5 +219,39 @@ def test_worker_and_ui_are_wired_for_automatic_backfill():
     assert '"predictive_ml_backfill_status"' in app
     assert "Automatic ML backfill" in app
     assert 'PREDICTIVE_ML_BACKFILL_TRADING_DAYS' in workflow
+    assert 'PREDICTIVE_ML_BACKFILL_HORIZONS' in workflow
+    assert 'PREDICTIVE_ML_SIMILARITY_MAX_SYMBOLS' in workflow
     assert 'predictive_ml_backfill.py' in workflow
     assert 'predictive_boosted_probability_model.py' in workflow
+
+
+
+def test_accelerated_defaults_use_more_history_and_multiple_horizons():
+    config = backfill.build_backfill_configuration({})
+    assert config["trading_days"] == 45
+    assert config["horizon"] == 15
+    assert config["horizons"] == [5, 15, 30, 60]
+    assert len(config["symbols"]) == 24
+    assert backfill.MODEL_SUITE_VERSION == 3
+
+
+def test_explicit_primary_horizon_is_added_without_discarding_other_labels():
+    config = backfill.build_backfill_configuration(
+        {},
+        {
+            "symbols": ["AAA", "BBB", "CCC", "DDD", "EEE"],
+            "horizon": 20,
+            "horizons": "5,15,30,60",
+        },
+    )
+    assert config["horizon"] == 20
+    assert config["horizons"] == [5, 15, 20, 30, 60]
+
+
+def test_similarity_subset_spreads_across_full_universe():
+    symbols = [f"S{i:02d}" for i in range(24)]
+    chosen = backfill._spread_symbol_subset(symbols, maximum=10)
+    assert len(chosen) == 10
+    assert chosen[0] == "S00"
+    assert chosen[-1] == "S23"
+    assert len(set(chosen)) == 10

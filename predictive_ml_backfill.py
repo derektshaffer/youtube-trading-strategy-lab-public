@@ -16,10 +16,12 @@ from typing import Any, Callable
 from predictive_ml_pipeline import (
     build_cross_stock_training_dataset,
     leave_one_symbol_out_walk_forward_logistic_baseline,
+    similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline,
     walk_forward_logistic_baseline,
 )
 from predictive_probability_model import build_portable_probability_model
 from predictive_boosted_probability_model import build_boosted_probability_model
+from predictive_model_head_to_head import build_historical_model_head_to_head
 
 
 DEFAULT_BOOTSTRAP_SYMBOLS: tuple[str, ...] = (
@@ -35,16 +37,30 @@ DEFAULT_BOOTSTRAP_SYMBOLS: tuple[str, ...] = (
     "RCAT",
     "SERV",
     "QBTS",
+    "IONQ",
+    "RGTI",
+    "JOBY",
+    "ASTS",
+    "RKLB",
+    "OPEN",
+    "APLD",
+    "CLSK",
+    "MARA",
+    "MVST",
+    "OPTT",
+    "LAES",
 )
-DEFAULT_TRADING_DAYS = 30
+DEFAULT_TRADING_DAYS = 45
 DEFAULT_HORIZON_MINUTES = 15
+DEFAULT_HORIZONS_MINUTES: tuple[int, ...] = (5, 15, 30, 60)
 DEFAULT_PROFIT_TARGET_PCT = 1.0
 DEFAULT_STOP_LOSS_PCT = 0.75
 DEFAULT_SESSION_MODE = "regular"
 DEFAULT_OBSERVATION_STRIDE_BARS = 5
-DEFAULT_MAX_SYMBOLS = 12
+DEFAULT_MAX_SYMBOLS = 24
+DEFAULT_SIMILARITY_SYMBOLS = 10
 MAX_AUTOMATIC_ML_RUN_HISTORY = 12
-MODEL_SUITE_VERSION = 2
+MODEL_SUITE_VERSION = 3
 
 
 def _clean_symbols(values: Any) -> list[str]:
@@ -60,6 +76,70 @@ def _clean_symbols(values: Any) -> list[str]:
         if symbol and symbol not in output:
             output.append(symbol)
     return output
+
+
+def _clean_horizons(values: Any) -> list[int]:
+    if isinstance(values, str):
+        raw = values.replace(",", " ").split()
+    elif isinstance(values, (list, tuple, set)):
+        raw = list(values)
+    else:
+        raw = []
+    output: list[int] = []
+    for value in raw:
+        try:
+            horizon = max(1, min(120, int(value)))
+        except (TypeError, ValueError):
+            continue
+        if horizon not in output:
+            output.append(horizon)
+    return sorted(output)
+
+
+def _spread_symbol_subset(
+    symbols: list[str],
+    maximum: int = DEFAULT_SIMILARITY_SYMBOLS,
+) -> list[str]:
+    """Choose a deterministic spread across the full training universe."""
+    clean = _clean_symbols(symbols)
+    limit = max(3, min(len(clean), int(maximum))) if clean else 0
+    if limit >= len(clean):
+        return clean
+    if limit <= 1:
+        return clean[:limit]
+    indexes = {
+        round(index * (len(clean) - 1) / (limit - 1))
+        for index in range(limit)
+    }
+    return [clean[index] for index in sorted(indexes)][:limit]
+
+
+def _dataset_for_symbols(
+    dataset: dict[str, Any],
+    symbols: list[str],
+) -> dict[str, Any]:
+    allowed = set(_clean_symbols(symbols))
+    subset = {
+        key: deepcopy(value)
+        for key, value in dataset.items()
+        if key != "records"
+    }
+    subset["records"] = [
+        dict(row)
+        for row in dataset.get("records") or []
+        if isinstance(row, dict)
+        and str(row.get("symbol") or "").strip().upper() in allowed
+    ]
+    subset["row_count"] = len(subset["records"])
+    subset["symbols_requested"] = len(allowed)
+    subset["symbols_with_data"] = len(
+        {
+            str(row.get("symbol") or "").strip().upper()
+            for row in subset["records"]
+            if str(row.get("symbol") or "").strip()
+        }
+    )
+    return subset
 
 
 def choose_backfill_symbols(
@@ -132,16 +212,24 @@ def build_backfill_configuration(
         configured_symbols=payload.get("symbols"),
         maximum=int(payload.get("max_symbols") or DEFAULT_MAX_SYMBOLS),
     )
+    primary_horizon = max(
+        5,
+        min(60, int(payload.get("horizon") or DEFAULT_HORIZON_MINUTES)),
+    )
+    horizons = _clean_horizons(payload.get("horizons"))
+    if not horizons:
+        horizons = list(DEFAULT_HORIZONS_MINUTES)
+    if primary_horizon not in horizons:
+        horizons.append(primary_horizon)
+        horizons.sort()
     return {
         "symbols": symbols,
         "trading_days": max(
             12,
             min(90, int(payload.get("trading_days") or DEFAULT_TRADING_DAYS)),
         ),
-        "horizon": max(
-            5,
-            min(60, int(payload.get("horizon") or DEFAULT_HORIZON_MINUTES)),
-        ),
+        "horizon": primary_horizon,
+        "horizons": horizons,
         "profit_target_pct": max(
             0.1,
             float(payload.get("profit_target_pct") or DEFAULT_PROFIT_TARGET_PCT),
@@ -217,7 +305,7 @@ def run_predictive_ml_backfill(
         start=start,
         end=end,
         timeframe="1Min",
-        horizons=(int(config["horizon"]),),
+        horizons=tuple(int(value) for value in config["horizons"]),
         swing_radius=3,
         max_pages=300,
         require_full_horizon=True,
@@ -229,15 +317,24 @@ def run_predictive_ml_backfill(
         progress=progress,
     )
 
-    notify("Running chronological walk-forward probability validation.")
-    evaluation = walk_forward_logistic_baseline(
-        dataset,
-        target_horizon=int(config["horizon"]),
-        target_mode="target_before_stop",
-        min_train_sessions=8,
-        test_sessions_per_fold=2,
-        embargo_sessions=1,
-        min_train_rows=250,
+    horizon_evaluations: dict[str, dict[str, Any]] = {}
+    for horizon in config["horizons"]:
+        notify(
+            f"Running chronological walk-forward probability validation for {int(horizon)} minutes."
+        )
+        horizon_evaluations[str(int(horizon))] = _compact(
+            walk_forward_logistic_baseline(
+                dataset,
+                target_horizon=int(horizon),
+                target_mode="target_before_stop",
+                min_train_sessions=8,
+                test_sessions_per_fold=2,
+                embargo_sessions=1,
+                min_train_rows=250,
+            )
+        )
+    evaluation = deepcopy(
+        horizon_evaluations.get(str(int(config["horizon"]))) or {}
     )
 
     notify("Running held-out-stock generalization validation.")
@@ -280,6 +377,34 @@ def run_predictive_ml_backfill(
         if isinstance(model, dict)
     ]
 
+    similarity_symbols = _spread_symbol_subset(
+        symbols,
+        maximum=int((payload or {}).get("similarity_max_symbols") or DEFAULT_SIMILARITY_SYMBOLS),
+    )
+    notify(
+        "Running bounded continuous stock-similarity validation on "
+        f"{len(similarity_symbols)} representative stocks."
+    )
+    similarity_dataset = _dataset_for_symbols(dataset, similarity_symbols)
+    similarity_validation = similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline(
+        similarity_dataset,
+        target_horizon=int(config["horizon"]),
+        target_mode="target_before_stop",
+        min_train_sessions=8,
+        test_sessions_per_fold=2,
+        embargo_sessions=1,
+        min_train_rows=250,
+        min_test_rows=20,
+    )
+    similarity_validation = _compact(similarity_validation)
+    similarity_validation["automatic_subset_symbols"] = similarity_symbols
+    similarity_validation["automatic_subset_reason"] = (
+        "Bounded representative subset keeps automatic cloud retraining fast while still "
+        "testing continuous behavioral similarity with held-out stocks."
+    )
+
+    historical_head_to_head = build_historical_model_head_to_head(probability_models)
+
     completed_at = datetime.now(timezone.utc).isoformat()
     identity = "|".join(
         [
@@ -298,6 +423,7 @@ def run_predictive_ml_backfill(
         "days": int(config["trading_days"]),
         "trading_days": int(config["trading_days"]),
         "horizon": int(config["horizon"]),
+        "horizons": [int(value) for value in config["horizons"]],
         "target_mode": "target_before_stop",
         "profit_target_pct": float(config["profit_target_pct"]),
         "stop_loss_pct": float(config["stop_loss_pct"]),
@@ -310,6 +436,7 @@ def run_predictive_ml_backfill(
             if key != "records"
         },
         "evaluation": _compact(evaluation),
+        "horizon_evaluations": deepcopy(horizon_evaluations),
         "generalization": _compact(generalization),
         "probability_model": deepcopy(probability_model),
         "probability_models": deepcopy(probability_models),
@@ -322,14 +449,8 @@ def run_predictive_ml_backfill(
                 "remains available in the interactive ML lab."
             ),
         },
-        "similarity_validation": {
-            "status": "DEFERRED_FOR_SPEED",
-            "reason": (
-                "Continuous behavioral-similarity validation remains available in the "
-                "interactive research workflow; the cloud bootstrap omits it to produce "
-                "a validated first model faster."
-            ),
-        },
+        "similarity_validation": deepcopy(similarity_validation),
+        "historical_head_to_head": deepcopy(historical_head_to_head),
         "completed_at": completed_at,
         "checkpoint_stage": "automatic_backfill_complete",
         "research_only": True,
@@ -397,6 +518,11 @@ def merge_backfill_result_into_library(
         "symbols": list(record.get("symbols") or []),
         "trading_days": int(record.get("trading_days") or 0),
         "horizon": int(record.get("horizon") or 0),
+        "horizons": [
+            int(value)
+            for value in record.get("horizons") or [record.get("horizon")]
+            if value is not None
+        ],
         "labeled_rows": int(dataset_summary.get("row_count") or 0),
         "symbols_with_data": int(dataset_summary.get("symbols_with_data") or 0),
         "model_status": model.get("status"),
@@ -406,6 +532,24 @@ def merge_backfill_result_into_library(
             str(item.get("model_type") or "unknown")
             for item in ready_models
         ],
+        "similarity_status": str(
+            (record.get("similarity_validation") or {}).get("status")
+            if isinstance(record.get("similarity_validation"), dict)
+            else ""
+        ),
+        "similarity_symbols": list(
+            (record.get("similarity_validation") or {}).get("automatic_subset_symbols") or []
+        ) if isinstance(record.get("similarity_validation"), dict) else [],
+        "historical_leader_model_id": (
+            (record.get("historical_head_to_head") or {}).get("leader_model_id")
+            if isinstance(record.get("historical_head_to_head"), dict)
+            else None
+        ),
+        "historical_leader_model_family": (
+            (record.get("historical_head_to_head") or {}).get("leader_model_family")
+            if isinstance(record.get("historical_head_to_head"), dict)
+            else None
+        ),
         "shadow_scoring_enabled": bool(ready_models),
         "research_only": True,
         "affects_live_ranking": False,
