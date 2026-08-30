@@ -1,0 +1,32 @@
+name: ML Router Summary
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - router_summary_report.py
+      - .github/workflows/ml-router-summary.yml
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GITHUB_BACKUP_REPOSITORY: ${{ secrets.GITHUB_BACKUP_REPOSITORY }}
+      GITHUB_BACKUP_TOKEN: ${{ secrets.GITHUB_BACKUP_TOKEN }}
+      GITHUB_BACKUP_BRANCH: ${{ secrets.GITHUB_BACKUP_BRANCH }}
+      GITHUB_BACKUP_PATH: trading-intelligence-lab/intelligence_library.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Print latest ML router summary
+        run: python router_summary_report.py
