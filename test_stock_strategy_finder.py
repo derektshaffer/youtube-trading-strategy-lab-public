@@ -251,6 +251,34 @@ class FinderEvidenceTierTests(unittest.TestCase):
         self.assertEqual(verdict["research_tier"], "validated")
         self.assertTrue(verdict["paper_ready"])
 
+    def test_validated_status_gate_requires_walk_forward_and_paper_fidelity(self):
+        verdict = {
+            "code": "ready_for_paper",
+            "research_tier": "validated",
+            "paper_ready": True,
+        }
+        self.assertFalse(
+            finder.validated_status_ready(
+                verdict,
+                {"status": "ready"},
+                None,
+            )
+        )
+        self.assertFalse(
+            finder.validated_status_ready(
+                verdict,
+                {"status": "gap"},
+                {"summary": {"profitable_fold_pct": 75}},
+            )
+        )
+        self.assertTrue(
+            finder.validated_status_ready(
+                verdict,
+                {"status": "ready"},
+                {"summary": {"profitable_fold_pct": 75}},
+            )
+        )
+
     def test_regime_diagnostics_are_descriptive_and_use_frozen_winner(self):
         rows = []
         for day in (18, 19, 20, 21, 22, 23):
