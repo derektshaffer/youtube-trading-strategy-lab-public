@@ -2134,6 +2134,8 @@ def research_readiness(strategy: dict[str, Any]) -> dict[str, Any]:
         "exit_below_fast_ema",
         "exit_below_avwap",
         "max_spread_pct",
+        "stop_below_avwap",
+        "stop_below_fast_ema",
         "fast_ema_period",
         "slow_ema_period",
         "trend_ema_period",
