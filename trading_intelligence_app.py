@@ -3982,7 +3982,7 @@ elif module == "Knowledge Sources":
                 )
                 # Rebuild the canonical family layer now that this source is saved. New ideas join
                 # existing blueprints automatically instead of becoming another manual research queue.
-                data = load_library()
+                data = load_library(mutable=True)
 
                 autonomous_report = None
                 autonomous_error = ""
@@ -5042,7 +5042,7 @@ elif module == "Strategy DNA":
                     )
 
                 if save_candidate:
-                    data = load_library()
+                    data = load_library(mutable=True)
                     executable["research_readiness"] = readiness
                     data = upsert_strategy_record(data, executable)
                     intelligence_store().save(data)
@@ -5109,7 +5109,7 @@ elif module == "Strategy DNA":
                                 "rule that the deterministic backtester can enforce."
                             )
 
-                        data = load_library()
+                        data = load_library(mutable=True)
                         data = upsert_strategy_record(data, candidate_to_run)
                         intelligence_store().save(data)
                         update_task_bar(
@@ -5141,7 +5141,7 @@ elif module == "Strategy DNA":
                             deep_strategy_limit=1,
                             progress=on_synth_research,
                         )
-                        data = load_library()
+                        data = load_library(mutable=True)
                         data = merge_autonomous_research_into_library(data, report)
                         intelligence_store().save(data)
                         st.session_state["til_synth_research_result"] = {
@@ -5341,7 +5341,7 @@ elif module == "Make Strategy Testable":
                         compiled,
                         minimum_confidence=65.0,
                     )
-                    data = load_library()
+                    data = load_library(mutable=True)
                     for item in data.get("strategies") or []:
                         if str(item.get("id") or "") != str(compiler_strategy.get("id") or ""):
                             continue
@@ -5477,7 +5477,7 @@ elif module == "Make Strategy Testable":
             "Remove all AI test assumptions",
             width="stretch",
         ):
-            data = load_library()
+            data = load_library(mutable=True)
             for item in data.get("strategies") or []:
                 if str(item.get("id") or "") == str(compiler_strategy.get("id") or ""):
                     item["research_rule_overrides"] = {}
@@ -6453,7 +6453,7 @@ elif module == "Strategy Lab":
                 width="stretch",
             )
             if save_validation:
-                data = load_library()
+                data = load_library(mutable=True)
                 validation_status = "validated" if can_mark_validated else "research_only"
                 for item in data.get("strategies") or []:
                     if str(item.get("id") or "") == winner_id:
