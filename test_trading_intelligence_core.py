@@ -1123,3 +1123,22 @@ class ReadinessFailClosedRegressionTests(unittest.TestCase):
         )
         self.assertEqual(result["label"], "needs_translation")
         self.assertEqual(result["entry_rule_count"], 0)
+
+
+def test_stop_placement_rule_alone_does_not_make_strategy_entry_testable():
+    result = research_readiness(
+        {
+            "source_type": "autonomous_web_research",
+            "machine_rules": {"stop_below_fast_ema": True},
+            "evidence": [
+                {
+                    "location": "research",
+                    "description": "Stop below EMA",
+                    "source_excerpt": "short",
+                }
+            ],
+            "unresolved_rules": [],
+        }
+    )
+    assert result["label"] == "needs_translation"
+    assert result["entry_rule_count"] == 0
