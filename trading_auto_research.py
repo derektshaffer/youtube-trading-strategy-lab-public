@@ -1449,16 +1449,14 @@ def invalidate_legacy_autonomous_validations(
     invalidated_hypotheses: set[str] = set()
     changed = 0
     for item in strategies:
-        if str(item.get("source_type") or "") != "autonomous_web_research":
-            continue
         if str(item.get("validation_status") or "") != "validated":
             continue
+        # Only statuses produced by the autonomous validator are affected.
+        # Manual/other validation paths without this record remain untouched.
         last = item.get("last_autonomous_research")
-        version = (
-            int((last or {}).get("validation_method_version") or 0)
-            if isinstance(last, dict)
-            else 0
-        )
+        if not isinstance(last, dict):
+            continue
+        version = int(last.get("validation_method_version") or 0)
         if version >= AUTONOMOUS_VALIDATION_METHOD_VERSION:
             continue
         item["validation_status"] = "research_only"
