@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import ast
+import hashlib
 import json
 from pathlib import Path
 import runpy
@@ -804,6 +805,17 @@ class StorageTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def test_local_library_revision_matches_git_blob_sha_without_json_parse(self):
+        self.store.save({"strategies": [simple_strategy()]})
+        raw = self.store.path.read_bytes()
+        expected = hashlib.sha1(
+            f"blob {len(raw)}\0".encode("utf-8") + raw
+        ).hexdigest()
+        revision = self.store.local_library_revision()
+        self.assertEqual(revision["sha"], expected)
+        self.assertEqual(revision["size"], len(raw))
+        self.assertGreater(revision["mtime_ns"], 0)
 
     def test_predictive_ml_run_history_is_normalized_and_preserved(self):
         blank = engine.StrategyStore.blank()
