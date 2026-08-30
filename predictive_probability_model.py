@@ -108,7 +108,9 @@ def _usable_numeric_features(
             if len(non_null) < minimum:
                 continue
             numeric = pd.to_numeric(non_null, errors="coerce")
-            if numeric.notna().all():
+            if numeric.notna().all() and numeric.map(
+                lambda value: math.isfinite(float(value))
+            ).all():
                 output.append(name)
         return sorted(output)
 
