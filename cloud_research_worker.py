@@ -21,6 +21,10 @@ from predictive_ml_backfill import (
     merge_backfill_result_into_library,
     run_predictive_ml_backfill,
 )
+from predictive_ml_comparison import (
+    compare_predictive_ml_runs,
+    compact_comparison_lines,
+)
 from stock_strategy_finder import (
     latest_finder_checkpoint,
     merge_finder_checkpoint_into_library,
@@ -642,6 +646,11 @@ def print_predictive_ml_router_summary(library: dict[str, Any]) -> None:
             f"reason={reason}",
             flush=True,
         )
+
+    if len(runs) >= 2:
+        comparison = compare_predictive_ml_runs(runs[1], runs[0])
+        for line in compact_comparison_lines(comparison):
+            print(line, flush=True)
 
 
 def main() -> int:
