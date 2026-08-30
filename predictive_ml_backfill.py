@@ -17,6 +17,7 @@ from predictive_ml_pipeline import (
     build_cross_stock_training_dataset,
     leave_one_symbol_out_walk_forward_logistic_baseline,
     similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline,
+    ticker_specific_walk_forward_logistic_baseline,
     walk_forward_logistic_baseline,
 )
 from predictive_probability_model import build_portable_probability_model
@@ -59,8 +60,9 @@ DEFAULT_SESSION_MODE = "regular"
 DEFAULT_OBSERVATION_STRIDE_BARS = 5
 DEFAULT_MAX_SYMBOLS = 24
 DEFAULT_SIMILARITY_SYMBOLS = 10
+DEFAULT_TICKER_SPECIFIC_SYMBOLS = 6
 MAX_AUTOMATIC_ML_RUN_HISTORY = 12
-MODEL_SUITE_VERSION = 3
+MODEL_SUITE_VERSION = 4
 
 
 def _clean_symbols(values: Any) -> list[str]:
@@ -112,6 +114,40 @@ def _spread_symbol_subset(
         for index in range(limit)
     }
     return [clean[index] for index in sorted(indexes)][:limit]
+
+
+def _priority_spread_symbol_subset(
+    symbols: list[str],
+    *,
+    maximum: int = DEFAULT_TICKER_SPECIFIC_SYMBOLS,
+    priority: Any = ("SDOT",),
+) -> list[str]:
+    """Keep priority tickers, then spread remaining slots across the universe."""
+    clean = _clean_symbols(symbols)
+    if not clean:
+        return []
+    limit = max(1, min(len(clean), int(maximum)))
+    priority_symbols = [
+        symbol for symbol in _clean_symbols(priority)
+        if symbol in clean
+    ]
+    selected = priority_symbols[:limit]
+    remaining = [symbol for symbol in clean if symbol not in selected]
+    slots = limit - len(selected)
+    if slots <= 0:
+        return selected
+    if slots >= len(remaining):
+        return [*selected, *remaining]
+
+    if slots == 1:
+        indexes = {round((len(remaining) - 1) / 2)}
+    else:
+        indexes = {
+            round(index * (len(remaining) - 1) / (slots - 1))
+            for index in range(slots)
+        }
+    selected.extend(remaining[index] for index in sorted(indexes))
+    return selected[:limit]
 
 
 def _dataset_for_symbols(
@@ -377,6 +413,38 @@ def run_predictive_ml_backfill(
         if isinstance(model, dict)
     ]
 
+    ticker_specific_symbols = _priority_spread_symbol_subset(
+        symbols,
+        maximum=int(
+            (payload or {}).get("ticker_specific_max_symbols")
+            or DEFAULT_TICKER_SPECIFIC_SYMBOLS
+        ),
+        priority=(payload or {}).get("ticker_specific_priority_symbols") or ("SDOT",),
+    )
+    notify(
+        "Running bounded ticker-specific validation on "
+        f"{len(ticker_specific_symbols)} stocks, prioritizing "
+        + ", ".join(ticker_specific_symbols[:1])
+        + "."
+    )
+    ticker_specific_dataset = _dataset_for_symbols(dataset, ticker_specific_symbols)
+    ticker_specific = ticker_specific_walk_forward_logistic_baseline(
+        ticker_specific_dataset,
+        target_horizon=int(config["horizon"]),
+        target_mode="target_before_stop",
+        min_train_sessions=8,
+        test_sessions_per_fold=2,
+        embargo_sessions=1,
+        min_train_rows=150,
+    )
+    ticker_specific = _compact(ticker_specific)
+    ticker_specific["automatic_subset_symbols"] = ticker_specific_symbols
+    ticker_specific["automatic_subset_reason"] = (
+        "Priority tickers are tested first, then a deterministic spread across the "
+        "remaining universe keeps same-stock historical validation useful without "
+        "making every automatic cloud retrain substantially slower."
+    )
+
     similarity_symbols = _spread_symbol_subset(
         symbols,
         maximum=int((payload or {}).get("similarity_max_symbols") or DEFAULT_SIMILARITY_SYMBOLS),
@@ -441,14 +509,7 @@ def run_predictive_ml_backfill(
         "probability_model": deepcopy(probability_model),
         "probability_models": deepcopy(probability_models),
         "boosted_probability_model": deepcopy(boosted_probability_model),
-        "ticker_specific": {
-            "status": "SKIPPED_FOR_SPEED",
-            "reason": (
-                "Automatic bootstrap prioritizes the cross-stock baseline, held-out-stock "
-                "generalization, and portable probability gate. Ticker-specific research "
-                "remains available in the interactive ML lab."
-            ),
-        },
+        "ticker_specific": deepcopy(ticker_specific),
         "similarity_validation": deepcopy(similarity_validation),
         "historical_head_to_head": deepcopy(historical_head_to_head),
         "completed_at": completed_at,
@@ -540,6 +601,14 @@ def merge_backfill_result_into_library(
         "similarity_symbols": list(
             (record.get("similarity_validation") or {}).get("automatic_subset_symbols") or []
         ) if isinstance(record.get("similarity_validation"), dict) else [],
+        "ticker_specific_status": str(
+            (record.get("ticker_specific") or {}).get("status")
+            if isinstance(record.get("ticker_specific"), dict)
+            else ""
+        ),
+        "ticker_specific_symbols": list(
+            (record.get("ticker_specific") or {}).get("automatic_subset_symbols") or []
+        ) if isinstance(record.get("ticker_specific"), dict) else [],
         "historical_leader_model_id": (
             (record.get("historical_head_to_head") or {}).get("leader_model_id")
             if isinstance(record.get("historical_head_to_head"), dict)

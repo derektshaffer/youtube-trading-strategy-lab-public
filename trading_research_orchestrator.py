@@ -43,7 +43,7 @@ DEFAULT_GEMINI_BULK_RESEARCH_MODEL = "gemini-3.7-flash"
 DEFAULT_GEMINI_BULK_FALLBACK_MODEL = "gemini-3.6-flash"
 DEFAULT_GEMINI_SPECIALIST_MODEL = "gemini-3.1-pro-preview"
 DEFAULT_GEMINI_SPECIALIST_FALLBACK_MODEL = "gemini-2.5-pro"
-PREDICTIVE_ML_BACKFILL_SUITE_VERSION = 3
+PREDICTIVE_ML_BACKFILL_SUITE_VERSION = 4
 
 # Keep the durable queue contract in one place. Executors can intentionally
 # claim only a subset (the distributed Finder owns stock_finder jobs), but every

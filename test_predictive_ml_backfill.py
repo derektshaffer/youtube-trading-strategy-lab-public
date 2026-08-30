@@ -51,6 +51,10 @@ def test_merge_backfill_result_persists_visible_status_and_run():
             "status": "EVALUATED",
             "automatic_subset_symbols": ["AAA", "BBB", "CCC"],
         },
+        "ticker_specific": {
+            "status": "EVALUATED",
+            "automatic_subset_symbols": ["AAA", "CCC"],
+        },
         "historical_head_to_head": {
             "status": "PROVISIONAL_HISTORICAL_LEADER",
             "leader_model_id": "logistic-1",
@@ -71,6 +75,8 @@ def test_merge_backfill_result_persists_visible_status_and_run():
     assert status["horizons"] == [5, 15, 30, 60]
     assert status["similarity_status"] == "EVALUATED"
     assert status["similarity_symbols"] == ["AAA", "BBB", "CCC"]
+    assert status["ticker_specific_status"] == "EVALUATED"
+    assert status["ticker_specific_symbols"] == ["AAA", "CCC"]
     assert status["historical_leader_model_id"] == "logistic-1"
     assert status["shadow_scoring_enabled"] is True
     assert status["affects_live_ranking"] is False
@@ -145,6 +151,16 @@ def test_run_backfill_reuses_causal_dataset_and_validation_stack():
         return_value=boosted_model,
     ) as boosted, patch.object(
         backfill,
+        "ticker_specific_walk_forward_logistic_baseline",
+        return_value={
+            "status": "EVALUATED",
+            "oos_rows": 180,
+            "roc_auc": 0.63,
+            "brier_skill_vs_naive": 0.05,
+            "predictions": [{"probability": 0.58}],
+        },
+    ) as ticker_specific, patch.object(
+        backfill,
         "similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline",
         return_value={
             "status": "EVALUATED",
@@ -177,6 +193,7 @@ def test_run_backfill_reuses_causal_dataset_and_validation_stack():
     assert held_out.call_count == 1
     assert portable.call_count == 1
     assert boosted.call_count == 1
+    assert ticker_specific.call_count == 1
     assert similarity.call_count == 1
     assert head_to_head.call_count == 1
     kwargs = build_dataset.call_args.kwargs
@@ -190,6 +207,11 @@ def test_run_backfill_reuses_causal_dataset_and_validation_stack():
     assert "predictions" not in result["evaluation"]
     assert "predictions" not in result["generalization"]
     assert sorted(result["horizon_evaluations"]) == ["15", "30", "5", "60"]
+    assert result["ticker_specific"]["status"] == "EVALUATED"
+    assert "predictions" not in result["ticker_specific"]
+    assert result["ticker_specific"]["automatic_subset_symbols"] == [
+        "AAA", "BBB", "CCC", "DDD", "EEE"
+    ]
     assert result["similarity_validation"]["status"] == "EVALUATED"
     assert "predictions" not in result["similarity_validation"]
     assert result["historical_head_to_head"]["leader_model_id"] == "boosted-1"
@@ -200,7 +222,6 @@ def test_run_backfill_reuses_causal_dataset_and_validation_stack():
     ]
     assert result["boosted_probability_model"]["model_type"] == "portable_gradient_boosted_trees"
     assert result["model_suite_version"] == backfill.MODEL_SUITE_VERSION
-    assert result["ticker_specific"]["status"] == "SKIPPED_FOR_SPEED"
     assert result["research_only"] is True
     assert result["affects_live_ranking"] is False
 
@@ -221,6 +242,7 @@ def test_worker_and_ui_are_wired_for_automatic_backfill():
     assert 'PREDICTIVE_ML_BACKFILL_TRADING_DAYS' in workflow
     assert 'PREDICTIVE_ML_BACKFILL_HORIZONS' in workflow
     assert 'PREDICTIVE_ML_SIMILARITY_MAX_SYMBOLS' in workflow
+    assert 'PREDICTIVE_ML_TICKER_SPECIFIC_MAX_SYMBOLS' in workflow
     assert 'predictive_ml_backfill.py' in workflow
     assert 'predictive_boosted_probability_model.py' in workflow
 
@@ -232,7 +254,7 @@ def test_accelerated_defaults_use_more_history_and_multiple_horizons():
     assert config["horizon"] == 15
     assert config["horizons"] == [5, 15, 30, 60]
     assert len(config["symbols"]) == 24
-    assert backfill.MODEL_SUITE_VERSION == 3
+    assert backfill.MODEL_SUITE_VERSION == 4
 
 
 def test_explicit_primary_horizon_is_added_without_discarding_other_labels():
@@ -255,3 +277,27 @@ def test_similarity_subset_spreads_across_full_universe():
     assert chosen[0] == "S00"
     assert chosen[-1] == "S23"
     assert len(set(chosen)) == 10
+
+
+def test_ticker_specific_subset_prioritizes_sdot_then_spreads_remaining_slots():
+    symbols = ["AAA", "BBB", "CCC", "SDOT", "DDD", "EEE", "FFF", "GGG"]
+    chosen = backfill._priority_spread_symbol_subset(
+        symbols,
+        maximum=4,
+        priority=("SDOT",),
+    )
+    assert len(chosen) == 4
+    assert chosen[0] == "SDOT"
+    assert len(set(chosen)) == 4
+    assert all(symbol in symbols for symbol in chosen)
+
+
+def test_ticker_specific_subset_honors_explicit_priority_order():
+    symbols = ["AAA", "BBB", "SDOT", "REAX", "CCC", "DDD"]
+    chosen = backfill._priority_spread_symbol_subset(
+        symbols,
+        maximum=3,
+        priority=("REAX", "SDOT"),
+    )
+    assert chosen[:2] == ["REAX", "SDOT"]
+    assert len(chosen) == 3
