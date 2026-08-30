@@ -911,6 +911,32 @@ class DurableStorageTests(unittest.TestCase):
             self.assertEqual(restored["knowledge_sources"][0]["title"], "Saved Book")
             self.assertTrue(restarted.path.exists())
 
+    def test_verified_persistence_status_uses_metadata_not_full_library_download(self):
+        class FakeCloud:
+            repository = "owner/private-backups"
+            path = "trading-intelligence-lab/intelligence_library.json"
+
+            def __init__(self):
+                self.revision_calls = 0
+                self.read_calls = 0
+
+            def library_revision(self):
+                self.revision_calls += 1
+                return {"sha": "a" * 40, "size": 75_000_000}
+
+            def read_library(self):
+                self.read_calls += 1
+                raise AssertionError("health verification should not download the full library")
+
+        with tempfile.TemporaryDirectory() as directory:
+            cloud = FakeCloud()
+            store = engine.StrategyStore(directory, cloud_backup=cloud)
+            status = store.persistence_status(verify=True)
+            self.assertTrue(status["verified"])
+            self.assertTrue(status["library_exists"])
+            self.assertEqual(cloud.revision_calls, 1)
+            self.assertEqual(cloud.read_calls, 0)
+
     def test_persistence_status_reports_cloud_durability(self):
         class FakeCloud:
             repository = "owner/private-backups"
