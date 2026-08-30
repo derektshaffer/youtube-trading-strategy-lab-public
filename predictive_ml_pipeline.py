@@ -835,11 +835,24 @@ def load_training_dataset(source: str | Path) -> dict[str, Any]:
 
 
 def _feature_types(frame: pd.DataFrame, feature_columns: list[str]) -> tuple[list[str], list[str]]:
+    """Infer feature types from the supplied training slice only.
+
+    Columns with no populated training values are intentionally excluded. This
+    prevents a feature that appears only in later sessions from changing an
+    earlier walk-forward fold's schema.
+    """
     numeric: list[str] = []
     categorical: list[str] = []
     for column in feature_columns:
+        if column not in frame.columns:
+            continue
         values = [value for value in frame[column].dropna().tolist()]
-        if all(isinstance(value, (bool, int, float)) and not isinstance(value, complex) for value in values):
+        if not values:
+            continue
+        if all(
+            isinstance(value, (bool, int, float)) and not isinstance(value, complex)
+            for value in values
+        ):
             numeric.append(column)
         else:
             categorical.append(column)
@@ -992,9 +1005,6 @@ def walk_forward_logistic_baseline(
             "target": target,
         }
 
-    numeric, categorical = _feature_types(frame, feature_columns)
-    prepared = _prepare_feature_frame(frame, numeric, categorical)
-
     folds: list[dict[str, Any]] = []
     all_actual: list[int] = []
     all_probability: list[float] = []
@@ -1013,17 +1023,23 @@ def walk_forward_logistic_baseline(
             test_start += test_sessions_per_fold
             continue
 
-        train_mask = prepared["_session_key"].isin(train_sessions)
-        test_mask = prepared["_session_key"].isin(test_sessions)
-        train = prepared.loc[train_mask]
-        test = prepared.loc[test_mask]
+        train = frame[frame["_session_key"].isin(train_sessions)].copy()
+        test = frame[frame["_session_key"].isin(test_sessions)].copy()
         if len(train) < min_train_rows or test.empty or train[target].nunique() < 2:
             test_start += test_sessions_per_fold
             continue
 
+        numeric, categorical = _feature_types(train, feature_columns)
+        active_features = [*numeric, *categorical]
+        if not active_features:
+            test_start += test_sessions_per_fold
+            continue
+        train = _prepare_feature_frame(train, numeric, categorical)
+        test = _prepare_feature_frame(test, numeric, categorical)
+
         pipeline = _baseline_pipeline(numeric, categorical)
-        pipeline.fit(train[feature_columns], train[target])
-        probability = pipeline.predict_proba(test[feature_columns])[:, 1]
+        pipeline.fit(train[active_features], train[target])
+        probability = pipeline.predict_proba(test[active_features])[:, 1]
         actual = test[target].astype(int).tolist()
         predicted = (probability >= 0.5).astype(int)
         naive_probability = float(train[target].mean())
@@ -1039,6 +1055,9 @@ def walk_forward_logistic_baseline(
                 "train_rows": len(train),
                 "test_sessions": test_sessions,
                 "test_rows": len(test),
+                "feature_columns": list(active_features),
+                "numeric_feature_columns": list(numeric),
+                "categorical_feature_columns": list(categorical),
                 "train_positive_rate": naive_probability,
                 "test_positive_rate": float(sum(actual) / len(actual)),
                 "roc_auc": _safe_auc(actual, probability.tolist()),
@@ -1075,6 +1094,23 @@ def walk_forward_logistic_baseline(
             "target": target,
         }
 
+    used_numeric_features = sorted(
+        {
+            str(column)
+            for fold in folds
+            for column in (fold.get("numeric_feature_columns") or [])
+        }
+    )
+    used_categorical_features = sorted(
+        {
+            str(column)
+            for fold in folds
+            for column in (fold.get("categorical_feature_columns") or [])
+        }
+    )
+    used_feature_columns = sorted(
+        set(used_numeric_features) | set(used_categorical_features)
+    )
     model_brier = float(brier_score_loss(all_actual, all_probability))
     naive_brier = float(brier_score_loss(all_actual, all_naive_probability))
     auc = _safe_auc(all_actual, all_probability)
@@ -1088,9 +1124,10 @@ def walk_forward_logistic_baseline(
         "profit_target_pct": _number(dataset.get("profit_target_pct")),
         "stop_loss_pct": _number(dataset.get("stop_loss_pct")),
         "barrier_same_bar_policy": dataset.get("barrier_same_bar_policy"),
-        "feature_count": len(feature_columns),
-        "numeric_feature_count": len(numeric),
-        "categorical_feature_count": len(categorical),
+        "feature_count": len(used_feature_columns),
+        "feature_columns_used_oos": used_feature_columns,
+        "numeric_feature_count": len(used_numeric_features),
+        "categorical_feature_count": len(used_categorical_features),
         "session_count": len(sessions),
         "fold_count": len(folds),
         "oos_rows": len(all_actual),
@@ -1412,9 +1449,6 @@ def leave_one_symbol_out_walk_forward_logistic_baseline(
             "target": target,
         }
 
-    numeric, categorical = _feature_types(frame, feature_columns)
-    prepared = _prepare_feature_frame(frame, numeric, categorical)
-
     symbol_reports: list[dict[str, Any]] = []
     all_actual: list[int] = []
     all_probability: list[float] = []
@@ -1439,16 +1473,14 @@ def leave_one_symbol_out_walk_forward_logistic_baseline(
                 test_start += test_sessions_per_fold
                 continue
 
-            train_mask = (
-                prepared["_session_key"].isin(train_sessions)
-                & prepared["_symbol_key"].ne(held_out_symbol)
-            )
-            test_mask = (
-                prepared["_session_key"].isin(test_sessions)
-                & prepared["_symbol_key"].eq(held_out_symbol)
-            )
-            train = prepared.loc[train_mask]
-            test = prepared.loc[test_mask]
+            train = frame[
+                frame["_session_key"].isin(train_sessions)
+                & frame["_symbol_key"].ne(held_out_symbol)
+            ].copy()
+            test = frame[
+                frame["_session_key"].isin(test_sessions)
+                & frame["_symbol_key"].eq(held_out_symbol)
+            ].copy()
             if (
                 len(train) < min_train_rows
                 or len(test) < min_test_rows
@@ -1457,9 +1489,17 @@ def leave_one_symbol_out_walk_forward_logistic_baseline(
                 test_start += test_sessions_per_fold
                 continue
 
+            numeric, categorical = _feature_types(train, feature_columns)
+            active_features = [*numeric, *categorical]
+            if not active_features:
+                test_start += test_sessions_per_fold
+                continue
+            train = _prepare_feature_frame(train, numeric, categorical)
+            test = _prepare_feature_frame(test, numeric, categorical)
+
             pipeline = _baseline_pipeline(numeric, categorical)
-            pipeline.fit(train[feature_columns], train[target])
-            probability = pipeline.predict_proba(test[feature_columns])[:, 1]
+            pipeline.fit(train[active_features], train[target])
+            probability = pipeline.predict_proba(test[active_features])[:, 1]
             actual = test[target].astype(int).tolist()
             predicted = (probability >= 0.5).astype(int)
             naive_probability = float(train[target].mean())
@@ -1479,6 +1519,7 @@ def leave_one_symbol_out_walk_forward_logistic_baseline(
                     "train_rows": len(train),
                     "test_sessions": test_sessions,
                     "test_rows": len(test),
+                    "feature_columns": list(active_features),
                     "train_positive_rate": naive_probability,
                     "test_positive_rate": float(sum(actual) / len(actual)),
                     "roc_auc": _safe_auc(actual, probability.tolist()),
@@ -1834,9 +1875,6 @@ def similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline(
             "target": target,
         }
 
-    numeric, categorical = _feature_types(frame, model_features)
-    prepared = _prepare_feature_frame(frame, numeric, categorical)
-
     paired_rows: list[dict[str, Any]] = []
     slice_reports: list[dict[str, Any]] = []
     test_start_initial = min_train_sessions + embargo_sessions
@@ -1853,20 +1891,30 @@ def similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline(
                 test_start += test_sessions_per_fold
                 continue
 
-            train = prepared[
-                prepared["_session_key"].isin(train_sessions)
-                & prepared["_symbol_key"].ne(held_out_symbol)
-            ]
-            held_out_test = prepared[
-                prepared["_session_key"].isin(test_sessions)
-                & prepared["_symbol_key"].eq(held_out_symbol)
-            ]
+            train = frame[
+                frame["_session_key"].isin(train_sessions)
+                & frame["_symbol_key"].ne(held_out_symbol)
+            ].copy()
+            held_out_test = frame[
+                frame["_session_key"].isin(test_sessions)
+                & frame["_symbol_key"].eq(held_out_symbol)
+            ].copy()
             if len(train) < min_train_rows or train[target].nunique() < 2:
                 test_start += test_sessions_per_fold
                 continue
 
+            numeric, categorical = _feature_types(train, model_features)
+            active_features = [*numeric, *categorical]
+            if not active_features:
+                test_start += test_sessions_per_fold
+                continue
+            train = _prepare_feature_frame(train, numeric, categorical)
+            held_out_test = _prepare_feature_frame(
+                held_out_test, numeric, categorical
+            )
+
             baseline_pipeline = _baseline_pipeline(numeric, categorical)
-            baseline_pipeline.fit(train[model_features], train[target])
+            baseline_pipeline.fit(train[active_features], train[target])
 
             for test_session in test_sessions:
                 test = held_out_test[held_out_test["_session_key"].eq(test_session)]
@@ -1885,13 +1933,13 @@ def similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline(
 
                 similarity_pipeline = _baseline_pipeline(numeric, categorical)
                 similarity_pipeline.fit(
-                    train[model_features],
+                    train[active_features],
                     train[target],
                     model__sample_weight=weights.to_numpy(),
                 )
 
-                baseline_probability = baseline_pipeline.predict_proba(test[model_features])[:, 1]
-                similarity_probability = similarity_pipeline.predict_proba(test[model_features])[:, 1]
+                baseline_probability = baseline_pipeline.predict_proba(test[active_features])[:, 1]
+                similarity_probability = similarity_pipeline.predict_proba(test[active_features])[:, 1]
                 actual = test[target].astype(int).tolist()
                 naive_probability = float(train[target].mean())
                 naive = [naive_probability] * len(actual)
@@ -1925,6 +1973,7 @@ def similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline(
                         "train_sessions": len(train_sessions),
                         "train_rows": len(train),
                         "test_rows": len(test),
+                        "feature_columns": list(active_features),
                         "baseline_roc_auc": _safe_auc(actual, baseline_probability.tolist()),
                         "similarity_roc_auc": _safe_auc(actual, similarity_probability.tolist()),
                         "baseline_brier_score": baseline_brier,
