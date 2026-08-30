@@ -93,6 +93,20 @@ class ValidationStrengthTests(unittest.TestCase):
         self.assertLessEqual(result["score"], 49.0)
         self.assertFalse(result["independently_positive"])
 
+    def test_small_unseen_samples_cannot_receive_high_robustness(self):
+        report = self._report(True)
+        report["winner"]["validation_metrics"]["trade_count"] = 4
+        report["winner"]["holdout_metrics"]["trade_count"] = 4
+        result = validation_strength(
+            report,
+            {"summary": {"score": 99.0, "profitable_fold_pct": 100.0}},
+        )
+        self.assertLessEqual(result["score"], 50.0)
+        self.assertEqual(result["minimum_unseen_trades_for_high_confidence"], 15)
+        self.assertTrue(
+            any("at least 15 validation trades" in reason for reason in result["reasons"])
+        )
+
     def test_walk_forward_score_is_blended_not_treated_as_probability(self):
         base = self._report(True)
         result = validation_strength(

@@ -29,6 +29,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from trading_progress_ui import LongTaskMonitor, session_task_profiles
+from ml_session_features import add_session_aware_ml_features, add_session_outcome_labels
 from youtube_strategy_engine import (
     DEFAULT_GITHUB_BACKUP_PATH,
     AlpacaMarketData,
@@ -76,6 +77,7 @@ FEATURE_LABELS = {
     "relative_volume": "Relative volume",
     "volume_surge": "Volume surge",
     "volume_z20": "Volume z-score",
+    "overnight_gap_pct": "Prior-session gap %",
     "day_change_pct": "Day change %",
     "vwap_distance_signed_pct": "Signed VWAP distance %",
     "green_streak": "Green-bar streak",
@@ -141,62 +143,40 @@ def market_client() -> AlpacaMarketData:
 
 def add_ml_features(frame: pd.DataFrame, strategy: dict[str, Any]) -> pd.DataFrame:
     data = add_indicators(frame, strategy).copy()
+    data = add_session_aware_ml_features(data)
     close = pd.to_numeric(data["close"], errors="coerce")
-    open_ = pd.to_numeric(data["open"], errors="coerce")
-    high = pd.to_numeric(data["high"], errors="coerce")
-    low = pd.to_numeric(data["low"], errors="coerce")
-    volume = pd.to_numeric(data["volume"], errors="coerce")
-
-    data["return_1"] = close.pct_change() * 100.0
-    data["return_3"] = close.pct_change(3) * 100.0
-    data["return_12"] = close.pct_change(12) * 100.0
-    data["range_pct"] = (high - low).div(close.replace(0, np.nan)) * 100.0
-    data["body_pct"] = (close - open_).div(open_.replace(0, np.nan)) * 100.0
-
-    previous_close = close.shift(1)
-    true_range = pd.concat(
-        [
-            high - low,
-            (high - previous_close).abs(),
-            (low - previous_close).abs(),
-        ],
-        axis=1,
-    ).max(axis=1)
-    atr = true_range.rolling(14, min_periods=5).mean()
-    data["atr_14_pct"] = atr.div(close.replace(0, np.nan)) * 100.0
-
-    delta = close.diff()
-    gain = delta.clip(lower=0).rolling(14, min_periods=5).mean()
-    loss = (-delta.clip(upper=0)).rolling(14, min_periods=5).mean()
-    rs = gain.div(loss.replace(0, np.nan))
-    data["rsi_14"] = 100.0 - (100.0 / (1.0 + rs))
-    data.loc[(loss == 0) & (gain > 0), "rsi_14"] = 100.0
-    data.loc[(loss == 0) & (gain == 0), "rsi_14"] = 50.0
-
-    ema8 = close.ewm(span=8, adjust=False, min_periods=3).mean()
-    ema21 = close.ewm(span=21, adjust=False, min_periods=5).mean()
-    data["ema_8_gap_pct"] = (close / ema8.replace(0, np.nan) - 1.0) * 100.0
-    data["ema_21_gap_pct"] = (close / ema21.replace(0, np.nan) - 1.0) * 100.0
-    data["ema_8_21_spread_pct"] = (ema8 / ema21.replace(0, np.nan) - 1.0) * 100.0
-    data["rolling_volatility_20"] = data["return_1"].rolling(20, min_periods=6).std()
-
-    rolling_volume_mean = volume.shift(1).rolling(20, min_periods=5).mean()
-    rolling_volume_std = volume.shift(1).rolling(20, min_periods=5).std()
-    data["volume_z20"] = (volume - rolling_volume_mean).div(rolling_volume_std.replace(0, np.nan))
 
     if "vwap" in data:
-        data["vwap_distance_signed_pct"] = (close / pd.to_numeric(data["vwap"], errors="coerce").replace(0, np.nan) - 1.0) * 100.0
+        data["vwap_distance_signed_pct"] = (
+            close
+            / pd.to_numeric(data["vwap"], errors="coerce").replace(0, np.nan)
+            - 1.0
+        ) * 100.0
     else:
         data["vwap_distance_signed_pct"] = np.nan
 
-    data["session_progress"] = pd.to_numeric(data["session_minute"], errors="coerce").clip(lower=0, upper=389) / 389.0
-    cumulative_dollars = pd.to_numeric(data.get("cum_dollar_volume"), errors="coerce")
+    data["session_progress"] = (
+        pd.to_numeric(data["session_minute"], errors="coerce")
+        .clip(lower=0, upper=389)
+        / 389.0
+    )
+    cumulative_dollars = pd.to_numeric(
+        data.get("cum_dollar_volume"), errors="coerce"
+    )
     data["log_cum_dollar_volume"] = np.log1p(cumulative_dollars.clip(lower=0))
 
-    prior_breakout = pd.to_numeric(data.get("prior_breakout_high"), errors="coerce")
-    opening_high = pd.to_numeric(data.get("opening_range_high"), errors="coerce")
-    data["breakout_gap_pct"] = (close / prior_breakout.replace(0, np.nan) - 1.0) * 100.0
-    data["opening_range_gap_pct"] = (close / opening_high.replace(0, np.nan) - 1.0) * 100.0
+    prior_breakout = pd.to_numeric(
+        data.get("prior_breakout_high"), errors="coerce"
+    )
+    opening_high = pd.to_numeric(
+        data.get("opening_range_high"), errors="coerce"
+    )
+    data["breakout_gap_pct"] = (
+        close / prior_breakout.replace(0, np.nan) - 1.0
+    ) * 100.0
+    data["opening_range_gap_pct"] = (
+        close / opening_high.replace(0, np.nan) - 1.0
+    ) * 100.0
 
     rules = normalize_machine_rules(strategy.get("machine_rules"))
     data["strategy_match"] = [
@@ -212,57 +192,18 @@ def add_outcome_labels(
     stop_pct: float,
     reward_risk: float,
     horizon_bars: int,
+    same_bar_policy: str = "ambiguous_exclude",
+    require_full_horizon: bool = True,
 ) -> pd.DataFrame:
-    """Label each bar using a next-bar entry and target/stop path within the same session."""
-    data = frame.copy().reset_index(drop=True)
-    labels = np.full(len(data), np.nan, dtype=float)
-    outcome_return = np.full(len(data), np.nan, dtype=float)
-
-    opens = pd.to_numeric(data["open"], errors="coerce").to_numpy(dtype=float)
-    highs = pd.to_numeric(data["high"], errors="coerce").to_numpy(dtype=float)
-    lows = pd.to_numeric(data["low"], errors="coerce").to_numpy(dtype=float)
-    closes = pd.to_numeric(data["close"], errors="coerce").to_numpy(dtype=float)
-    sessions = data["session"].astype(str).to_numpy()
-
-    stop_fraction = stop_pct / 100.0
-    horizon = max(1, int(horizon_bars))
-
-    for signal_index in range(len(data) - 1):
-        entry_index = signal_index + 1
-        if sessions[entry_index] != sessions[signal_index]:
-            continue
-        entry = opens[entry_index]
-        if not np.isfinite(entry) or entry <= 0:
-            continue
-
-        stop_price = entry * (1.0 - stop_fraction)
-        target_price = entry + (entry - stop_price) * reward_risk
-        final_index = entry_index
-        resolved = False
-
-        for idx in range(entry_index, min(len(data), entry_index + horizon)):
-            if sessions[idx] != sessions[entry_index]:
-                break
-            final_index = idx
-            if lows[idx] <= stop_price:
-                labels[signal_index] = 0.0
-                outcome_return[signal_index] = (stop_price / entry - 1.0) * 100.0
-                resolved = True
-                break
-            if highs[idx] >= target_price:
-                labels[signal_index] = 1.0
-                outcome_return[signal_index] = (target_price / entry - 1.0) * 100.0
-                resolved = True
-                break
-
-        if not resolved and final_index >= entry_index and np.isfinite(closes[final_index]):
-            final_return = (closes[final_index] / entry - 1.0) * 100.0
-            labels[signal_index] = 1.0 if final_return > 0 else 0.0
-            outcome_return[signal_index] = final_return
-
-    data["profitable_outcome"] = labels
-    data["outcome_return_pct"] = outcome_return
-    return data
+    """Label predictive outcomes without crossing session boundaries."""
+    return add_session_outcome_labels(
+        frame,
+        stop_pct=stop_pct,
+        reward_risk=reward_risk,
+        horizon_bars=horizon_bars,
+        same_bar_policy=same_bar_policy,
+        require_full_horizon=require_full_horizon,
+    )
 
 
 def build_pipeline() -> Pipeline:

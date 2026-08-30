@@ -783,3 +783,50 @@ def test_ticker_specific_walk_forward_refuses_too_little_same_stock_history():
         min_train_rows=20,
     )
     assert report["status"] == "INSUFFICIENT_DATA"
+
+
+
+def test_walk_forward_feature_schema_uses_training_slice_only():
+    dataset = _synthetic_dataset(session_count=12, rows_per_session=24)
+    dataset["feature_columns"].append("feature__late_only")
+    for row in dataset["records"]:
+        session_day = int(str(row["session"]).rsplit("-", 1)[-1])
+        row["feature__late_only"] = (
+            float(session_day) if session_day >= 9 else None
+        )
+
+    report = walk_forward_logistic_baseline(
+        dataset,
+        target_horizon=1,
+        target_mode="positive_return",
+        min_train_sessions=4,
+        test_sessions_per_fold=2,
+        embargo_sessions=1,
+        min_train_rows=50,
+    )
+    assert report["status"] == "EVALUATED"
+    folds = report["folds"]
+    assert "feature__late_only" not in folds[0]["feature_columns"]
+    assert any(
+        "feature__late_only" in fold["feature_columns"]
+        for fold in folds[1:]
+    )
+
+
+def test_ticker_specific_reports_sample_aware_auc_diagnostics():
+    report = ticker_specific_walk_forward_logistic_baseline(
+        _opposite_ticker_relationship_dataset(),
+        target_horizon=1,
+        target_mode="target_before_stop",
+        min_train_sessions=4,
+        test_sessions_per_fold=2,
+        embargo_sessions=1,
+        min_train_rows=50,
+    )
+    assert report["status"] == "EVALUATED"
+    assert report["micro_roc_auc"] == pytest.approx(report["roc_auc"])
+    assert report["weighted_macro_roc_auc"] is not None
+    assert report["median_ticker_roc_auc"] is not None
+    for item in report["by_symbol"]:
+        if item["status"] == "EVALUATED":
+            assert item["oos_positive_count"] + item["oos_negative_count"] == item["oos_rows"]

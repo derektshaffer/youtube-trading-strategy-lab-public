@@ -98,10 +98,18 @@ def _usable_numeric_features(
         seen = 0
         converted = 0
         for row in records:
-            if name not in row or row.get(name) is None:
+            if name not in row:
                 continue
+            raw = row.get(name)
+            if raw is None:
+                continue
+            try:
+                if bool(pd.isna(raw)):
+                    continue
+            except (TypeError, ValueError):
+                pass
             seen += 1
-            if _number(row.get(name)) is not None:
+            if _number(raw) is not None:
                 converted += 1
         if seen >= max(1, int(minimum_non_null)) and converted == seen:
             output.append(name)
@@ -281,19 +289,20 @@ def build_portable_probability_model(
         ["_session_key", "_time_key", "symbol"], na_position="last"
     ).reset_index(drop=True)
 
-    feature_columns = _usable_numeric_features(
-        records,
-        list(dataset.get("feature_columns") or []),
-        minimum_non_null=max(10, min(50, len(frame) // 20)),
+    candidate_feature_columns = sorted(
+        str(column)
+        for column in (dataset.get("feature_columns") or [])
+        if str(column).startswith("feature__")
+        and not str(column).startswith("feature__context_")
     )
-    if len(feature_columns) < max(1, int(minimum_feature_count)):
+    if len(candidate_feature_columns) < max(1, int(minimum_feature_count)):
         return {
             "status": "INSUFFICIENT_DATA",
             "reason": (
-                "Not enough live-compatible numeric detector features are populated "
+                "Not enough live-compatible detector feature columns are available "
                 "to build the portable probability model."
             ),
-            "feature_count": len(feature_columns),
+            "feature_count": len(candidate_feature_columns),
             "research_only": True,
             "affects_live_ranking": False,
             "shadow_scoring_enabled": False,
@@ -329,7 +338,16 @@ def build_portable_probability_model(
             test_start += test_sessions_per_fold
             continue
 
-        state = _fit_state(train, feature_columns, target)
+        fold_feature_columns = _usable_numeric_features(
+            train.to_dict("records"),
+            candidate_feature_columns,
+            minimum_non_null=max(10, min(50, len(train) // 20)),
+        )
+        if len(fold_feature_columns) < max(1, int(minimum_feature_count)):
+            test_start += test_sessions_per_fold
+            continue
+
+        state = _fit_state(train, fold_feature_columns, target)
         probability = _predict_frame(state, test)
         actual = test[target].astype(int).tolist()
         naive_probability = float(train[target].mean())
@@ -344,6 +362,8 @@ def build_portable_probability_model(
                 "train_rows": len(train),
                 "test_sessions": list(test_sessions),
                 "test_rows": len(test),
+                "feature_count": len(fold_feature_columns),
+                "feature_columns": list(fold_feature_columns),
                 "roc_auc": _safe_auc(actual, probability),
                 "brier_score": model_brier,
                 "naive_brier_score": naive_brier,
@@ -372,6 +392,24 @@ def build_portable_probability_model(
             "status": "INSUFFICIENT_DATA",
             "reason": "No chronological walk-forward fold met the training requirements.",
             "session_count": len(sessions),
+            "feature_count": len(candidate_feature_columns),
+            "research_only": True,
+            "affects_live_ranking": False,
+            "shadow_scoring_enabled": False,
+        }
+
+    feature_columns = _usable_numeric_features(
+        frame.to_dict("records"),
+        candidate_feature_columns,
+        minimum_non_null=max(10, min(50, len(frame) // 20)),
+    )
+    if len(feature_columns) < max(1, int(minimum_feature_count)):
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "reason": (
+                "Not enough live-compatible numeric detector features are populated "
+                "in the full training history to build the final portable model."
+            ),
             "feature_count": len(feature_columns),
             "research_only": True,
             "affects_live_ranking": False,
@@ -385,8 +423,8 @@ def build_portable_probability_model(
         None if naive_brier <= 0 else 1.0 - (model_brier / naive_brier)
     )
 
-    # Calibrator is selected using an OOS chronological holdout, then refit on all
-    # OOS predictions only after that holdout check passes.
+    # Calibration is fit on the earlier OOS calibration slice and evaluated on a
+    # later chronological OOS holdout. The holdout is never reused for fitting.
     ordered = sorted(
         zip(prediction_rows, all_actual, all_probability),
         key=lambda item: (
@@ -420,13 +458,11 @@ def build_portable_probability_model(
                 brier_score_loss(cal_test_actual, calibrated_test)
             )
             if calibrated_test_brier <= raw_test_brier + 0.002:
-                calibrator = _fit_platt_calibrator(
-                    all_actual, all_probability
-                )
+                calibrator = trial
                 calibration_report = {
                     "method": "platt_logit",
                     "enabled": bool(calibrator),
-                    "fit_rows": len(all_actual),
+                    "fit_rows": len(cal_train_actual),
                     "selection_holdout_rows": len(cal_test_actual),
                     "raw_holdout_brier": raw_test_brier,
                     "calibrated_holdout_brier": calibrated_test_brier,
