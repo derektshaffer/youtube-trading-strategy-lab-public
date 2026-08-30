@@ -40,6 +40,7 @@ from predictive_model_registry import (
     build_model_registry,
     ready_shadow_models,
 )
+from predictive_model_head_to_head import build_historical_model_head_to_head
 import predictive_ml_pipeline as _predictive_ml_pipeline
 
 archetype_transfer_walk_forward_logistic_baseline = (
@@ -496,6 +497,11 @@ def shadow_probability_models(library: dict[str, Any]) -> list[dict[str, Any]]:
     return ready_shadow_models(library.get("predictive_ml_runs") or [])
 
 
+def historical_shadow_head_to_head(library: dict[str, Any]) -> dict[str, Any]:
+    """Reuse already-saved OOS validation metrics for a fast paired model comparison."""
+    return build_historical_model_head_to_head(shadow_probability_models(library))
+
+
 def active_shadow_champion_id(library: dict[str, Any]) -> str:
     research_system = (
         library.get("research_system")
@@ -507,7 +513,24 @@ def active_shadow_champion_id(library: dict[str, Any]) -> str:
         if isinstance(research_system.get("predictive_model_registry"), dict)
         else {}
     )
-    return str(registry.get("champion_model_id") or "").strip()
+    registry_id = str(registry.get("champion_model_id") or "").strip()
+    registry_status = str(registry.get("status") or "").strip().upper()
+
+    # Once live evidence has confirmed a champion (or flagged it for drift),
+    # the live registry owns selection. Before that, use the fair historical
+    # head-to-head so we do not waste several trading days waiting for an answer
+    # that the already-computed untouched historical folds can provide.
+    if registry_id and registry_status in {
+        "CHAMPION_CONFIRMED",
+        "CHAMPION_DRIFT_ALERT",
+    }:
+        return registry_id
+
+    historical = historical_shadow_head_to_head(library)
+    historical_id = str(historical.get("leader_model_id") or "").strip()
+    if historical_id:
+        return historical_id
+    return registry_id
 
 
 def latest_shadow_probability_model(library: dict[str, Any]) -> dict[str, Any]:
@@ -7003,6 +7026,73 @@ elif module == "Pattern Validation":
             + str(ml_backfill_status.get("last_error") or "unknown worker error")
         )
 
+    historical_head_to_head = historical_shadow_head_to_head(library)
+    historical_status = str(historical_head_to_head.get("status") or "")
+    historical_models = list(historical_head_to_head.get("models") or [])
+    if historical_status == "PROVISIONAL_HISTORICAL_LEADER":
+        leader_family = str(
+            historical_head_to_head.get("leader_model_family") or "Model"
+        )
+        st.success(
+            "⚡ Historical head-to-head: "
+            f"**{leader_family}** is the provisional historical leader. "
+            + str(historical_head_to_head.get("reason") or "")
+            + " Live shadow results will confirm or overturn this."
+        )
+    elif historical_status == "NO_CLEAR_HISTORICAL_LEADER":
+        st.info(
+            "⚖️ Historical head-to-head: no clear leader yet. "
+            + str(historical_head_to_head.get("reason") or "")
+            + " Live shadow evidence will break the tie."
+        )
+
+    if len(historical_models) >= 2:
+        with st.expander("Historical model head-to-head", expanded=True):
+            st.caption(
+                "Fast path: this reuses the OOS results already produced by the completed "
+                "historical backfill. No retraining is required. Models are compared only "
+                "when they used the exact same target, training snapshot, and chronological "
+                "untouched test folds."
+            )
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "Model": item.get("model_family"),
+                            "OOS predictions": int(item.get("oos_rows") or 0),
+                            "Walk-forward folds": int(item.get("fold_count") or 0),
+                            "ROC AUC": safe_float(item.get("roc_auc")),
+                            "Brier skill vs naive": (
+                                None
+                                if safe_float(item.get("brier_skill_vs_naive")) is None
+                                else safe_float(item.get("brier_skill_vs_naive")) * 100.0
+                            ),
+                            "Brier score": safe_float(item.get("brier_score")),
+                            "Held-out stock AUC": safe_float(item.get("held_out_roc_auc")),
+                            "Held-out stock Brier skill": (
+                                None
+                                if safe_float(item.get("held_out_brier_skill_vs_naive")) is None
+                                else safe_float(item.get("held_out_brier_skill_vs_naive")) * 100.0
+                            ),
+                        }
+                        for item in historical_models
+                    ]
+                ),
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "ROC AUC": st.column_config.NumberColumn(format="%.3f"),
+                    "Brier skill vs naive": st.column_config.NumberColumn(format="%.2f%%"),
+                    "Brier score": st.column_config.NumberColumn(format="%.4f"),
+                    "Held-out stock AUC": st.column_config.NumberColumn(format="%.3f"),
+                    "Held-out stock Brier skill": st.column_config.NumberColumn(format="%.2f%%"),
+                },
+            )
+            st.caption(
+                "Historical leader = provisional champion. Live results remain the confirmation "
+                "layer and can replace it once enough real matured decisions accumulate."
+            )
+
     shadow_monitor = (
         (library.get("research_system") or {}).get("predictive_model_monitor")
         if isinstance(library.get("research_system"), dict)
@@ -7018,7 +7108,7 @@ elif module == "Pattern Validation":
         for item in shadow_monitor.get("models") or []
         if isinstance(item, dict) and str(item.get("model_id") or "").strip()
     }
-    shadow_champion_id = str(shadow_registry.get("champion_model_id") or "").strip()
+    shadow_champion_id = active_shadow_champion_id(library)
     shadow_latest = (
         shadow_models_by_id.get(shadow_champion_id)
         or (
@@ -7044,11 +7134,19 @@ elif module == "Pattern Validation":
             or champion_model.get("model_type")
             or "model"
         ).replace("_", " ")
+        registry_reason = str(shadow_registry.get("decision_reason") or "")
+        if (
+            historical_status == "PROVISIONAL_HISTORICAL_LEADER"
+            and registry_status != "Champion Confirmed"
+        ):
+            registry_reason = (
+                "Historical OOS leader is being used provisionally while live outcomes collect."
+            )
         st.caption(
             "🏆 Shadow model registry · "
             f"{registry_status} · champion: {champion_family} · "
             f"{challenger_count} compatible challenger(s) · "
-            + str(shadow_registry.get("decision_reason") or "")
+            + registry_reason
         )
     if shadow_latest:
         shadow_status = str(shadow_latest.get("status") or "COLLECTING").upper()
