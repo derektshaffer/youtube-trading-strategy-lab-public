@@ -2380,6 +2380,33 @@ class StrategyStore:
                 return True
         return False
 
+    def local_library_revision(self) -> dict[str, Any] | None:
+        """Return the local file's Git-blob SHA without parsing the JSON.
+
+        GitHub's Contents API exposes the same blob SHA. Comparing these hashes
+        lets the UI prove a local ~75 MB library already matches cloud without
+        downloading and decoding the entire remote file.
+        """
+        if not self.path.exists():
+            return None
+        try:
+            stat = self.path.stat()
+            digest = hashlib.sha1()
+            digest.update(f"blob {stat.st_size}\0".encode("utf-8"))
+            with self.path.open("rb") as handle:
+                while True:
+                    chunk = handle.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+        except OSError as exc:
+            raise AppError("The local strategy library could not be fingerprinted.") from exc
+        return {
+            "sha": digest.hexdigest(),
+            "size": int(stat.st_size),
+            "mtime_ns": int(stat.st_mtime_ns),
+        }
+
     def load_latest(self) -> dict[str, Any]:
         """Reconcile local/cloud copies using their last shared version, never timestamp winner-takes-all."""
         local = self.load()
