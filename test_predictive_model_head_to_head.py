@@ -145,3 +145,13 @@ def test_single_model_does_not_fake_a_winner():
     )
     assert result["status"] == "INSUFFICIENT_MODELS"
     assert result["leader_model_id"] is None
+
+
+
+def test_app_uses_historical_leader_before_live_confirmation():
+    app = open("trading_intelligence_app.py", encoding="utf-8").read()
+    assert "historical_shadow_head_to_head" in app
+    assert "PROVISIONAL_HISTORICAL_LEADER" in app
+    assert "Historical model head-to-head" in app
+    assert "Historical OOS leader is being used provisionally" in app
+    assert '"CHAMPION_CONFIRMED"' in app
