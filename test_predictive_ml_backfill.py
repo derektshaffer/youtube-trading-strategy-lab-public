@@ -269,6 +269,7 @@ def test_worker_and_ui_are_wired_for_automatic_backfill():
     assert "run_predictive_ml_backfill" in worker
     assert '"predictive_ml_backfill_status"' in app
     assert "Automatic ML backfill" in app
+    assert "Per-stock learning route comparison" in app
     assert 'PREDICTIVE_ML_BACKFILL_TRADING_DAYS' in workflow
     assert 'PREDICTIVE_ML_BACKFILL_HORIZONS' in workflow
     assert 'PREDICTIVE_ML_SIMILARITY_MAX_SYMBOLS' in workflow
