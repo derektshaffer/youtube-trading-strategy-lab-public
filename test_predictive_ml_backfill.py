@@ -275,6 +275,7 @@ def test_worker_and_ui_are_wired_for_automatic_backfill():
     assert 'PREDICTIVE_ML_TICKER_SPECIFIC_MAX_SYMBOLS' in workflow
     assert 'predictive_ml_backfill.py' in workflow
     assert 'predictive_boosted_probability_model.py' in workflow
+    assert 'predictive_learning_router.py' in workflow
 
 
 
