@@ -267,6 +267,9 @@ def test_worker_and_ui_are_wired_for_automatic_backfill():
     assert 'job_type == "predictive_ml_backfill"' in worker
     assert "ensure_predictive_ml_backfill_job" in worker
     assert "run_predictive_ml_backfill" in worker
+    assert "persist_ml_checkpoint" in worker
+    assert '"predictive_ml_checkpoint"' in worker
+    assert '"code_fingerprint"] = env("GITHUB_SHA")' in worker
     assert '"predictive_ml_backfill_status"' in app
     assert "Automatic ML backfill" in app
     assert "Per-stock learning route comparison" in app
