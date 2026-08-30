@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import hashlib
+import json
 import os
 from time import perf_counter
 from typing import Any, Callable
@@ -69,6 +70,7 @@ DEFAULT_FEATURE_WORKERS = 4
 DEFAULT_VALIDATION_WORKERS = 4
 MAX_AUTOMATIC_ML_RUN_HISTORY = 12
 MODEL_SUITE_VERSION = 6
+ML_CHECKPOINT_VERSION = 1
 
 
 def _clean_symbols(values: Any) -> list[str]:
@@ -320,6 +322,59 @@ def _compact(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _dataset_fingerprint(dataset: dict[str, Any]) -> str:
+    """Hash the exact supervised dataset so stale checkpoints cannot be reused."""
+    digest = hashlib.sha256()
+    metadata = {key: value for key, value in dataset.items() if key != "records"}
+    digest.update(
+        json.dumps(
+            metadata,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+            allow_nan=False,
+        ).encode("utf-8")
+    )
+    digest.update(b"\n")
+    for record in dataset.get("records") or []:
+        digest.update(
+            json.dumps(
+                record,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+                allow_nan=False,
+            ).encode("utf-8")
+        )
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _checkpoint_stages(
+    checkpoint: dict[str, Any] | None,
+    *,
+    dataset_fingerprint: str,
+    model_suite_version: int,
+    code_fingerprint: str,
+) -> dict[str, Any]:
+    """Return reusable stages only when data, suite, and code all match exactly."""
+    if not isinstance(checkpoint, dict):
+        return {}
+    if int(checkpoint.get("checkpoint_version") or 0) != ML_CHECKPOINT_VERSION:
+        return {}
+    if str(checkpoint.get("dataset_fingerprint") or "") != str(dataset_fingerprint):
+        return {}
+    if int(checkpoint.get("model_suite_version") or 0) != int(model_suite_version):
+        return {}
+    expected_code = str(code_fingerprint or "").strip()
+    checkpoint_code = str(checkpoint.get("code_fingerprint") or "").strip()
+    # No source fingerprint means no durable reuse: conservative by default.
+    if not expected_code or checkpoint_code != expected_code:
+        return {}
+    stages = checkpoint.get("stages")
+    return deepcopy(stages) if isinstance(stages, dict) else {}
+
+
 def run_predictive_ml_backfill(
     market: Any,
     library: dict[str, Any],
@@ -327,8 +382,11 @@ def run_predictive_ml_backfill(
     payload: dict[str, Any] | None = None,
     now: datetime | None = None,
     progress: Callable[[str], None] | None = None,
+    checkpoint: dict[str, Any] | None = None,
+    checkpoint_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Run one batched historical replay -> validation -> portable-model cycle."""
+    payload = dict(payload or {})
     config = build_backfill_configuration(library, payload)
     symbols = list(config["symbols"])
     if len(symbols) < 3:
