@@ -286,7 +286,7 @@ def test_accelerated_defaults_use_more_history_and_multiple_horizons():
     assert config["horizon"] == 15
     assert config["horizons"] == [5, 15, 30, 60]
     assert len(config["symbols"]) == 24
-    assert backfill.MODEL_SUITE_VERSION == 5
+    assert backfill.MODEL_SUITE_VERSION == 6
 
 
 def test_explicit_primary_horizon_is_added_without_discarding_other_labels():
