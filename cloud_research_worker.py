@@ -39,6 +39,7 @@ from trading_research_orchestrator import (
     DEFAULT_GEMINI_SPECIALIST_FALLBACK_MODEL,
     DEFAULT_GEMINI_SPECIALIST_MODEL,
     SUPPORTED_RESEARCH_JOB_TYPES,
+    AUTONOMOUS_VALIDATION_PRIORITY,
     GeminiResearchRouter,
     apply_specialist_review,
     claim_next_research_job,
@@ -49,6 +50,7 @@ from trading_research_orchestrator import (
     merge_grounded_research,
     record_worker_run,
     ensure_predictive_ml_backfill_job,
+    enqueue_research_job,
     research_queue_status,
     seed_continuous_research_cycle,
     sync_hypothesis_validation_results,
@@ -128,13 +130,19 @@ def _pending_web_strategies(data: dict[str, Any], maximum: int = 3) -> list[dict
         if str(item.get("validation_status") or "") == "validated":
             continue
         last = item.get("last_autonomous_research")
-        if isinstance(last, dict) and str(last.get("validation_status") or "") in {
-            "validated",
-            "research_only",
-        }:
-            # Avoid repeatedly burning compute on the same hypothesis until a
-            # later research cycle changes its rules/evidence.
-            continue
+        if isinstance(last, dict):
+            last_status = str(last.get("validation_status") or "")
+            terminal = {
+                "validated",
+                "research_only",
+                "validation_failed",
+                "insufficient_data",
+                "untestable",
+            }
+            if last_status in terminal and not bool(last.get("retryable")):
+                # Avoid repeatedly burning compute on the same hypothesis until
+                # materially changed rules/evidence produce a new strategy id.
+                continue
         candidates.append(dict(item))
     candidates.sort(
         key=lambda item: (
@@ -550,6 +558,17 @@ def execute_job(
             str(job.get("id") or ""),
             result_ref=result_ref,
         )
+        remaining = _pending_web_strategies(latest, maximum=1)
+        continuation_queued = False
+        if remaining:
+            latest, continuation = enqueue_research_job(
+                latest,
+                "autonomous_validation",
+                {"origin": "validation_batch_continuation"},
+                priority=AUTONOMOUS_VALIDATION_PRIORITY,
+                dedupe_key="autonomous_validation:pending_web_research",
+            )
+            continuation_queued = continuation is not None
         latest = record_worker_run(
             latest,
             worker_id=worker_id,
@@ -558,7 +577,8 @@ def execute_job(
             status="complete",
             detail=(
                 f"Validated {int(report.get('deep_strategies_tested') or 0)} hypothesis strategy "
-                f"candidate(s); {int(report.get('deep_strategies_failed') or 0)} skipped."
+                f"candidate(s); {int(report.get('deep_strategies_failed') or 0)} skipped; "
+                f"continuation_queued={continuation_queued}."
             ),
         )
         store.save(latest)
