@@ -139,6 +139,9 @@ def main():
     print("PREDICTIVE_V3_SUMMARY_START")
     print(json.dumps(summary, indent=2, sort_keys=True, default=str))
     print("PREDICTIVE_V3_SUMMARY_END")
+    print("STORAGE_BREAKDOWN_START")
+    print(json.dumps(size_breakdown(data), indent=2, sort_keys=True, default=str))
+    print("STORAGE_BREAKDOWN_END")
 
 
 if __name__ == "__main__":
