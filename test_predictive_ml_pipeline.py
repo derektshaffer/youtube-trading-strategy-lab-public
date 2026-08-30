@@ -830,3 +830,39 @@ def test_ticker_specific_reports_sample_aware_auc_diagnostics():
     for item in report["by_symbol"]:
         if item["status"] == "EVALUATED":
             assert item["oos_positive_count"] + item["oos_negative_count"] == item["oos_rows"]
+
+
+
+def test_parallel_feature_build_matches_sequential_exactly():
+    rows_by_symbol = {
+        "AAA": [_bar(24, i, 10.0 + i * 0.03) for i in range(20)],
+        "BBB": [_bar(24, i, 20.0 + i * 0.02) for i in range(20)],
+        "CCC": [_bar(24, i, 30.0 + i * 0.01) for i in range(20)],
+    }
+    sequential = build_cross_stock_training_dataset(
+        FakeMarket(rows_by_symbol),
+        ["AAA", "BBB", "CCC"],
+        start="2026-08-24",
+        end="2026-08-25",
+        horizons=(1, 2),
+        swing_radius=1,
+        feature_workers=1,
+    )
+    parallel = build_cross_stock_training_dataset(
+        FakeMarket(rows_by_symbol),
+        ["AAA", "BBB", "CCC"],
+        start="2026-08-24",
+        end="2026-08-25",
+        horizons=(1, 2),
+        swing_radius=1,
+        feature_workers=3,
+    )
+
+    ignored = {"feature_workers"}
+    assert {
+        key: value for key, value in parallel.items() if key not in ignored
+    } == {
+        key: value for key, value in sequential.items() if key not in ignored
+    }
+    assert sequential["feature_workers"] == 1
+    assert parallel["feature_workers"] == 3
