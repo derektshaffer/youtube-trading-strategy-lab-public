@@ -2496,9 +2496,16 @@ class StrategyStore:
                 # Health rendering only needs to prove the private destination is
                 # reachable and the library path exists. Do not download/parse the
                 # entire large library on every Streamlit rerun.
-                revision = self.cloud_backup.library_revision()
+                revision_reader = getattr(self.cloud_backup, "library_revision", None)
+                if callable(revision_reader):
+                    revision = revision_reader()
+                    library_exists = revision is not None
+                else:
+                    # Compatibility for tests/custom backup adapters that predate
+                    # the lightweight metadata API.
+                    remote = self.cloud_backup.read_library()
+                    library_exists = remote is not None
                 verified = True
-                library_exists = revision is not None
                 # A successful metadata probe proves reachability, not that the
                 # last write succeeded. Preserve write/conflict errors until an
                 # actual synchronization succeeds.
