@@ -34,6 +34,7 @@ from trading_catalyst_core import (
     enrich_bars_with_point_in_time_catalysts,
     historical_news,
 )
+from trading_intelligence_core import research_readiness
 from trading_research_orchestrator import (
     DEFAULT_GEMINI_BULK_FALLBACK_MODEL,
     DEFAULT_GEMINI_BULK_RESEARCH_MODEL,
@@ -158,6 +159,8 @@ def _pending_web_strategies(data: dict[str, Any], maximum: int = 3) -> list[dict
         if str(item.get("source_type") or "") != "autonomous_web_research":
             continue
         if str(item.get("validation_status") or "") == "validated":
+            continue
+        if research_readiness(item).get("label") != "ready_for_backtest":
             continue
         last = item.get("last_autonomous_research")
         if isinstance(last, dict):
@@ -577,6 +580,13 @@ def execute_job(
                 int(env("RESEARCH_VALIDATION_DEEP_LIMIT", "3") or 3),
             ),
             symbols_per_strategy=int(env("RESEARCH_VALIDATION_SYMBOLS_PER_STRATEGY", "6") or 6),
+            parallel_workers=max(
+                1,
+                min(
+                    3,
+                    int(env("RESEARCH_VALIDATION_PARALLEL_WORKERS", "2") or 2),
+                ),
+            ),
             progress=progress,
         )
         latest = store.load_latest()
