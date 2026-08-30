@@ -23,6 +23,7 @@ import re
 from typing import Any
 from urllib import error as urllib_error
 from urllib import request as urllib_request
+from urllib.parse import urlparse
 
 from youtube_strategy_engine import (
     AppError,
@@ -253,12 +254,16 @@ def ensure_research_collections(library: dict[str, Any] | None) -> dict[str, Any
 def source_quality_score(source: dict[str, Any]) -> int:
     kind = str(source.get("source_type") or "unknown").strip().lower()
     score = int(SOURCE_TYPE_SCORES.get(kind, SOURCE_TYPE_SCORES["unknown"]))
-    url = str(source.get("url") or "").casefold()
-    if any(domain in url for domain in (".gov/", "sec.gov", "federalreserve.gov")):
+    raw_url = str(source.get("url") or "").strip()
+    try:
+        host = str(urlparse(raw_url).hostname or "").casefold().rstrip(".")
+    except ValueError:
+        host = ""
+    if host.endswith(".gov") or host in {"sec.gov", "www.sec.gov", "federalreserve.gov", "www.federalreserve.gov"}:
         score = max(score, 95)
-    if any(domain in url for domain in (".edu/", "doi.org", "ssrn.com", "arxiv.org")):
+    if host.endswith(".edu") or host in {"doi.org", "www.doi.org", "ssrn.com", "www.ssrn.com", "arxiv.org", "www.arxiv.org"}:
         score = max(score, 80)
-    if any(domain in url for domain in ("reddit.com", "x.com/", "twitter.com", "stocktwits.com")):
+    if host in {"reddit.com", "www.reddit.com", "x.com", "www.x.com", "twitter.com", "www.twitter.com", "stocktwits.com", "www.stocktwits.com"}:
         score = min(score, 30)
     return max(0, min(100, score))
 
@@ -269,6 +274,46 @@ def _normalized_rules(raw: Any) -> dict[str, Any]:
         for key, value in normalize_machine_rules(raw).items()
         if value is not None
     }
+
+
+def hypothesis_concept_fingerprint(hypothesis: dict[str, Any]) -> str:
+    """Stable identity for an idea across repeated web-research runs."""
+    rules = _normalized_rules(hypothesis.get("machine_rules"))
+    direction = str(hypothesis.get("direction") or "unclear").strip().casefold()
+    category = " ".join(str(hypothesis.get("category") or "").casefold().split())
+    if rules:
+        material = {
+            "direction": direction,
+            "category": category,
+            "machine_rules": rules,
+        }
+    else:
+        statement = re.sub(
+            r"[^a-z0-9]+",
+            " ",
+            str(hypothesis.get("statement") or hypothesis.get("name") or "").casefold(),
+        )
+        material = {
+            "direction": direction,
+            "category": category,
+            "statement": " ".join(statement.split()),
+        }
+    encoded = json.dumps(material, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
+
+
+def _source_lineage_key(source: dict[str, Any]) -> str:
+    raw_url = str(source.get("url") or "").strip()
+    try:
+        parsed = urlparse(raw_url)
+        host = str(parsed.hostname or "").casefold().rstrip(".")
+        path = str(parsed.path or "").casefold().rstrip("/")
+    except ValueError:
+        host, path = "", ""
+    if host in {"doi.org", "www.doi.org"} and path:
+        return f"doi:{path.lstrip('/')}"
+    title = re.sub(r"[^a-z0-9]+", " ", str(source.get("title") or "").casefold())
+    return f"{host}|{' '.join(title.split())}"
 
 
 def _job_id(job_type: str, dedupe_key: str, created_at: str) -> str:
@@ -1147,17 +1192,22 @@ def _hypothesis_quality(
         for value in hypothesis.get("supporting_source_ids") or []
         if str(value or "")
     ]
-    scores = [
-        int(source_map[source_id].get("source_quality_score") or 0)
-        for source_id in ids
-        if source_id in source_map
-    ]
+    independent_sources: dict[str, int] = {}
+    for source_id in ids:
+        source = source_map.get(source_id)
+        if not isinstance(source, dict):
+            continue
+        lineage = _source_lineage_key(source) or source_id
+        independent_sources[lineage] = max(
+            independent_sources.get(lineage, 0),
+            int(source.get("source_quality_score") or 0),
+        )
+    scores = sorted(independent_sources.values(), reverse=True)
     if not scores:
         return 25
-    scores.sort(reverse=True)
     top = scores[:3]
     average = sum(top) / len(top)
-    corroboration_bonus = min(10, max(0, len(set(ids)) - 1) * 4)
+    corroboration_bonus = min(10, max(0, len(independent_sources) - 1) * 4)
     contradiction_penalty = min(12, len(hypothesis.get("contradicting_source_ids") or []) * 3)
     return max(0, min(100, round(average + corroboration_bonus - contradiction_penalty)))
 
@@ -1176,8 +1226,18 @@ def merge_grounded_research(
     ).hexdigest()[:22]
     sources = [dict(item) for item in research.get("sources") or [] if isinstance(item, dict)]
     source_map = {str(item.get("id") or ""): item for item in sources}
+    prior_by_concept: dict[str, dict[str, Any]] = {}
+    for prior in data["research_hypotheses"]:
+        if not isinstance(prior, dict):
+            continue
+        fingerprint = str(prior.get("concept_fingerprint") or hypothesis_concept_fingerprint(prior))
+        existing = prior_by_concept.get(fingerprint)
+        if existing is None or int(prior.get("source_quality_score") or 0) > int(existing.get("source_quality_score") or 0):
+            prior_by_concept[fingerprint] = prior
+
     hypotheses: list[dict[str, Any]] = []
     hypothesis_ids: list[str] = []
+    suppressed_duplicates = 0
     for index, raw in enumerate(research.get("hypotheses") or [], start=1):
         if not isinstance(raw, dict):
             continue
@@ -1195,10 +1255,33 @@ def merge_grounded_research(
         item["status"] = "awaiting_specialist"
         item["machine_rules"] = _normalized_rules(item.get("machine_rules"))
         item["source_quality_score"] = _hypothesis_quality(item, source_map)
+        item["concept_fingerprint"] = hypothesis_concept_fingerprint(item)
+        prior = prior_by_concept.get(item["concept_fingerprint"])
+        if isinstance(prior, dict):
+            prior_status = str(prior.get("status") or "")
+            prior_quality = int(prior.get("source_quality_score") or 0)
+            terminal_prior = prior_status in {
+                "validated",
+                "rejected",
+                "historically_rejected_or_unconfirmed",
+                "validation_failed",
+                "insufficient_data",
+                "untestable",
+                "duplicate_prior_outcome",
+            }
+            materially_better_evidence = int(item["source_quality_score"]) >= prior_quality + 10
+            if terminal_prior and prior_status != "validated" and materially_better_evidence:
+                pass
+            elif terminal_prior:
+                item["status"] = "duplicate_prior_outcome"
+                item["prior_hypothesis_id"] = prior.get("id")
+                item["prior_outcome_status"] = prior_status
+                suppressed_duplicates += 1
         item["specialist_review"] = None
         item["strategy_id"] = None
         hypotheses.append(item)
         hypothesis_ids.append(hypothesis_id)
+        prior_by_concept[item["concept_fingerprint"]] = item
 
     run = {
         "id": run_id,
@@ -1258,7 +1341,10 @@ def merge_grounded_research(
     # than being used as a high-volume reader. Rank every hypothesis, then send only
     # the top two from each grounded research run to specialist review.
     ranked_for_specialist = sorted(
-        hypotheses,
+        [
+            item for item in hypotheses
+            if str(item.get("status") or "") == "awaiting_specialist"
+        ],
         key=lambda item: (
             int(item.get("source_quality_score") or 0) * 0.55
             + (safe_float(item.get("confidence"), 0.0) or 0.0) * 0.35
@@ -1288,10 +1374,26 @@ def merge_grounded_research(
                 priority=priority,
                 dedupe_key=f"specialist:{hypothesis_id}",
             )
-        elif str(item.get("research_run_id") or "") == run_id:
+        elif (
+            str(item.get("research_run_id") or "") == run_id
+            and str(item.get("status") or "") == "awaiting_specialist"
+        ):
             item["status"] = "research_backlog"
         refreshed_hypotheses.append(item)
     data["research_hypotheses"] = refreshed_hypotheses
+    system = dict(data.get("research_system") or {})
+    system["concept_memory"] = {
+        "known_fingerprints": len(
+            {
+                str(item.get("concept_fingerprint") or "")
+                for item in refreshed_hypotheses
+                if str(item.get("concept_fingerprint") or "")
+            }
+        ),
+        "last_suppressed_duplicates": suppressed_duplicates,
+        "updated_at": generated_at,
+    }
+    data["research_system"] = system
     return data, run_id, hypothesis_ids
 
 
