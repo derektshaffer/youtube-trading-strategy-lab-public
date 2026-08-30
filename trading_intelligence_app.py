@@ -7010,16 +7010,41 @@ elif module == "Pattern Validation":
     elif ml_backfill_state == "complete":
         backfill_model_ready = bool(ml_backfill_status.get("shadow_scoring_enabled"))
         ready_model_count = int(ml_backfill_status.get("ready_model_count") or 0)
+        learned_horizons = [
+            int(value)
+            for value in ml_backfill_status.get("horizons") or []
+            if value is not None
+        ]
+        similarity_status = str(
+            ml_backfill_status.get("similarity_status") or ""
+        ).replace("_", " ").title()
         st.caption(
             "🧠 Automatic ML backfill complete · "
             f"{int(ml_backfill_status.get('symbols_with_data') or 0)} stocks · "
+            f"{int(ml_backfill_status.get('trading_days') or 0)} trading days · "
             f"{int(ml_backfill_status.get('labeled_rows') or 0):,} labeled rows · "
+            + (
+                "horizons " + "/".join(str(value) for value in learned_horizons) + " min · "
+                if learned_horizons
+                else ""
+            )
             + (
                 f"{ready_model_count or 1} shadow model(s) passed historical gates."
                 if backfill_model_ready
                 else "all current candidates remain validation-gated."
             )
         )
+        if similarity_status:
+            similarity_count = len(ml_backfill_status.get("similarity_symbols") or [])
+            st.caption(
+                f"🔗 Automatic stock-similarity validation: {similarity_status}"
+                + (
+                    f" · {similarity_count} representative held-out stocks"
+                    if similarity_count
+                    else ""
+                )
+                + "."
+            )
     elif ml_backfill_state == "failed":
         st.warning(
             "Automatic ML backfill hit an error and will use the durable retry path: "
