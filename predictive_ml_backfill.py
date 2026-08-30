@@ -498,29 +498,50 @@ def run_predictive_ml_backfill(
         )
         return str(int(horizon)), _compact(report)
 
-    horizon_evaluations: dict[str, dict[str, Any]] = {}
+    saved_horizons = reusable_stages.get("horizon_evaluations")
+    horizon_evaluations: dict[str, dict[str, Any]] = (
+        deepcopy(saved_horizons)
+        if isinstance(saved_horizons, dict)
+        else {}
+    )
+    required_horizon_keys = [str(int(value)) for value in config["horizons"]]
+    horizon_evaluations = {
+        key: value
+        for key, value in horizon_evaluations.items()
+        if key in required_horizon_keys and isinstance(value, dict)
+    }
+    missing_horizons = [
+        int(value)
+        for value in config["horizons"]
+        if str(int(value)) not in horizon_evaluations
+    ]
     validation_worker_count = max(
-        1, min(int(config["validation_workers"]), len(config["horizons"]))
+        1, min(int(config["validation_workers"]), max(1, len(missing_horizons)))
     )
     horizons_started = perf_counter()
-    notify(
-        f"Running {len(config['horizons'])} chronological horizon validations "
-        f"with {validation_worker_count} independent worker(s)."
-    )
-    if validation_worker_count == 1:
-        for horizon in config["horizons"]:
-            key, report = evaluate_horizon(int(horizon))
-            horizon_evaluations[key] = report
-    else:
-        with ThreadPoolExecutor(max_workers=validation_worker_count) as executor:
-            futures = {
-                executor.submit(evaluate_horizon, int(horizon)): int(horizon)
-                for horizon in config["horizons"]
-            }
-            for future in as_completed(futures):
-                key, report = future.result()
+    if missing_horizons:
+        notify(
+            f"Running {len(missing_horizons)} remaining chronological horizon validation(s) "
+            f"with {validation_worker_count} independent worker(s)."
+        )
+        if validation_worker_count == 1:
+            for horizon in missing_horizons:
+                key, report = evaluate_horizon(int(horizon))
                 horizon_evaluations[key] = report
-                notify(f"Completed {key}-minute chronological validation.")
+                persist_stage("horizon_evaluations", horizon_evaluations)
+        else:
+            with ThreadPoolExecutor(max_workers=validation_worker_count) as executor:
+                futures = {
+                    executor.submit(evaluate_horizon, int(horizon)): int(horizon)
+                    for horizon in missing_horizons
+                }
+                for future in as_completed(futures):
+                    key, report = future.result()
+                    horizon_evaluations[key] = report
+                    persist_stage("horizon_evaluations", horizon_evaluations)
+                    notify(f"Completed {key}-minute chronological validation.")
+    else:
+        notify("Reusing all chronological horizon validations from the durable checkpoint.")
     horizon_evaluations = {
         str(int(horizon)): horizon_evaluations[str(int(horizon))]
         for horizon in config["horizons"]
