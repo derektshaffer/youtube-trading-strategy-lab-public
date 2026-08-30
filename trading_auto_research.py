@@ -67,6 +67,37 @@ def _notify(callback: Callable[[str], None] | None, message: str) -> None:
         callback(message)
 
 
+def _run_independent_finalist_tasks(
+    finalists: list[dict[str, Any]],
+    task: Callable[
+        [int, dict[str, Any]],
+        tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any]],
+    ],
+    *,
+    parallel_workers: int,
+) -> list[tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any]]]:
+    """Execute independent finalist validations without changing their inputs."""
+    workers = min(max(1, int(parallel_workers or 1)), max(1, len(finalists)))
+    if workers <= 1 or len(finalists) <= 1:
+        return [
+            task(number, finalist)
+            for number, finalist in enumerate(finalists, start=1)
+        ]
+
+    completed = []
+    with ThreadPoolExecutor(
+        max_workers=workers,
+        thread_name_prefix="autonomous-validation",
+    ) as executor:
+        futures = [
+            executor.submit(task, number, finalist)
+            for number, finalist in enumerate(finalists, start=1)
+        ]
+        for future in as_completed(futures):
+            completed.append(future.result())
+    return completed
+
+
 AUTONOMOUS_STOCK_SPECIFIC_FIELDS = {
     "optimized_for_symbol",
     "parent_strategy_id",
@@ -1435,29 +1466,16 @@ def run_autonomous_research(
             f"Running {len(finalists)} independent finalist validations with "
             f"{validation_workers} parallel workers…",
         )
-        with ThreadPoolExecutor(
-            max_workers=validation_workers,
-            thread_name_prefix="autonomous-validation",
-        ) as executor:
-            future_map = {
-                executor.submit(validate_finalist, number, finalist): number
-                for number, finalist in enumerate(finalists, start=1)
-            }
-            for future in as_completed(future_map):
-                result, failure, timing = future.result()
-                if result is not None:
-                    research_results.append(result)
-                if failure is not None:
-                    failed_finalists.append(failure)
-                deep_durations.append(timing)
-    else:
-        for finalist_number, finalist in enumerate(finalists, start=1):
-            result, failure, timing = validate_finalist(finalist_number, finalist)
-            if result is not None:
-                research_results.append(result)
-            if failure is not None:
-                failed_finalists.append(failure)
-            deep_durations.append(timing)
+    for result, failure, timing in _run_independent_finalist_tasks(
+        finalists,
+        validate_finalist,
+        parallel_workers=validation_workers,
+    ):
+        if result is not None:
+            research_results.append(result)
+        if failure is not None:
+            failed_finalists.append(failure)
+        deep_durations.append(timing)
 
     deep_validation_seconds = round(time_module.monotonic() - deep_started, 3)
     failed_finalists.sort(key=lambda item: int(item.get("finalist_number") or 0))
