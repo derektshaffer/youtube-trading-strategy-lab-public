@@ -981,6 +981,7 @@ def _automatic_optimization_settings() -> OptimizationSettings:
         minimum_validation_trades=2,
         training_fraction=0.60,
         validation_fraction=0.20,
+        automatic_slippage=True,
         maximum_drawdown_pct=15.0,
         selection_mode="validated",
     )
