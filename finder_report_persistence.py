@@ -39,6 +39,8 @@ def finder_summary_to_report(summary: dict[str, Any]) -> dict[str, Any]:
         "paper_execution_fidelity": summary.get("paper_execution_fidelity") or {},
         "verdict": summary.get("verdict") or {},
         "winner_source_strategy_id": summary.get("winner_source_strategy_id"),
+        "stock_specific_strategy_id": summary.get("stock_specific_strategy_id"),
+        "paper_validation_status": summary.get("paper_validation_status"),
         "winner_strategy_name": summary.get("winner_strategy_name"),
         "timeframe": summary.get("timeframe"),
         "unique_configurations_tested": int(summary.get("unique_configurations_tested") or 0),
