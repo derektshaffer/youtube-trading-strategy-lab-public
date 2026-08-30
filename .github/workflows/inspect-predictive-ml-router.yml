@@ -1,0 +1,46 @@
+name: Inspect Predictive ML Router
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - predictive_ml_router_inspector.py
+      - .github/workflows/inspect-predictive-ml-router.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-router:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITHUB_BACKUP_REPOSITORY: ${{ secrets.GITHUB_BACKUP_REPOSITORY }}
+      GITHUB_BACKUP_TOKEN: ${{ secrets.GITHUB_BACKUP_TOKEN }}
+      GITHUB_BACKUP_BRANCH: ${{ secrets.GITHUB_BACKUP_BRANCH }}
+      GITHUB_BACKUP_PATH: trading-intelligence-lab/intelligence_library.json
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate required backup secrets
+        shell: bash
+        run: |
+          test -n "$GITHUB_BACKUP_REPOSITORY" || { echo "::error::Missing GITHUB_BACKUP_REPOSITORY"; exit 1; }
+          test -n "$GITHUB_BACKUP_TOKEN" || { echo "::error::Missing GITHUB_BACKUP_TOKEN"; exit 1; }
+
+      - name: Extract latest ML router summary
+        run: python predictive_ml_router_inspector.py
+
+      - name: Upload compact router summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: predictive-ml-router-summary
+          path: predictive_ml_router_summary.json
+          if-no-files-found: error
+          retention-days: 7
