@@ -213,7 +213,7 @@ def _chronological_oos(
             continue
 
         fold_feature_columns = _usable_numeric_features(
-            train.to_dict("records"),
+            train,
             candidate_feature_columns,
             minimum_non_null=max(10, min(50, len(train) // 20)),
         )
@@ -601,7 +601,7 @@ def build_boosted_probability_model(
             )
 
     feature_columns = _usable_numeric_features(
-        frame.to_dict("records"),
+        frame,
         candidate_feature_columns,
         minimum_non_null=max(10, min(50, len(frame) // 20)),
     )

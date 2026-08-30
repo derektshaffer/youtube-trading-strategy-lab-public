@@ -7,6 +7,7 @@ simple probabilistic classifiers with chronological expanding-window folds.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 import json
@@ -586,6 +587,7 @@ def build_cross_stock_training_dataset(
     stop_loss_pct: float = 0.75,
     session_mode: str = "regular",
     observation_stride_bars: int = 1,
+    feature_workers: int = 1,
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Build one supervised dataset across many symbols from a single batched bar load.
@@ -614,7 +616,7 @@ def build_cross_stock_training_dataset(
             "label_columns": [],
             "profit_target_pct": float(clean_profit_target),
             "stop_loss_pct": float(clean_stop_loss),
-            "barrier_same_bar_policy": "stop_first_conservative",
+            "barrier_same_bar_policy": "ambiguous_exclude",
             "session_mode": clean_session_mode,
             "session_window_et": {
                 "regular": "09:30-16:00",
@@ -642,29 +644,28 @@ def build_cross_stock_training_dataset(
     bars_analyzed = 0
     sessions_analyzed = 0
     observed_market_sessions: set[str] = set()
+    worker_count = max(1, min(int(feature_workers or 1), len(clean)))
 
-    for index, symbol in enumerate(clean, start=1):
+    def process_symbol(index: int, symbol: str) -> dict[str, Any]:
         raw_rows = list((rows_by_symbol or {}).get(symbol) or [])
-        bars_loaded += len(raw_rows)
         rows = _filter_rows_by_market_session(raw_rows, clean_session_mode)
-        rows, selected_sessions = limit_rows_to_recent_market_sessions(rows, session_limit)
-        observed_market_sessions.update(
-            session for session in selected_sessions if session != "session-0"
+        rows, selected_sessions = limit_rows_to_recent_market_sessions(
+            rows, session_limit
         )
-        bars_analyzed += len(rows)
         if not rows:
-            by_symbol.append(
-                {
-                    "symbol": symbol,
-                    "raw_bars": len(raw_rows),
-                    "bars": 0,
-                    "sessions": 0,
-                    "market_sessions": selected_sessions,
-                    "rows": 0,
-                }
-            )
-            continue
-        if progress:
+            return {
+                "index": index,
+                "symbol": symbol,
+                "raw_bars": len(raw_rows),
+                "bars": 0,
+                "sessions": 0,
+                "market_sessions": selected_sessions,
+                "records": [],
+                "feature_columns": [],
+                "label_columns": [],
+            }
+
+        if progress and worker_count == 1:
             progress(
                 f"ML stock {index}/{len(clean)} · calculating causal features for {symbol}…"
             )
@@ -677,7 +678,7 @@ def build_cross_stock_training_dataset(
             stop_loss_pct=float(clean_stop_loss),
             observation_stride_bars=observation_stride_bars,
         )
-        if progress:
+        if progress and worker_count == 1:
             progress(
                 f"ML stock {index}/{len(clean)} · adding causal context for {symbol}…"
             )
@@ -686,27 +687,78 @@ def build_cross_stock_training_dataset(
             rows,
             session_mode=clean_session_mode,
         )
-        if progress:
-            progress(
-                f"ML stock {index}/{len(clean)} · finished {symbol} "
-                f"({len(report.get('records') or []):,} labeled rows)"
-            )
-        symbol_records = []
+        symbol_records: list[dict[str, Any]] = []
         for item in report.get("records") or []:
             row = dict(item)
             row["symbol"] = symbol
             symbol_records.append(row)
+        return {
+            "index": index,
+            "symbol": symbol,
+            "raw_bars": len(raw_rows),
+            "bars": len(rows),
+            "sessions": int(report.get("sessions_analyzed") or 0),
+            "market_sessions": selected_sessions,
+            "records": symbol_records,
+            "feature_columns": list(report.get("feature_columns") or []),
+            "label_columns": list(report.get("label_columns") or []),
+        }
+
+    if progress:
+        if worker_count > 1:
+            progress(
+                f"Calculating causal features for {len(clean)} stocks with "
+                f"{worker_count} independent workers…"
+            )
+        else:
+            progress(f"Calculating causal features for {len(clean)} stocks…")
+
+    symbol_results: list[dict[str, Any]] = []
+    if worker_count == 1:
+        for index, symbol in enumerate(clean, start=1):
+            result = process_symbol(index, symbol)
+            symbol_results.append(result)
+            if progress:
+                progress(
+                    f"ML stock {index}/{len(clean)} · finished {symbol} "
+                    f"({len(result.get('records') or []):,} labeled rows)"
+                )
+    else:
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {
+                executor.submit(process_symbol, index, symbol): (index, symbol)
+                for index, symbol in enumerate(clean, start=1)
+            }
+            completed = 0
+            for future in as_completed(futures):
+                result = future.result()
+                symbol_results.append(result)
+                completed += 1
+                if progress:
+                    progress(
+                        f"ML stocks {completed}/{len(clean)} complete · "
+                        f"{result.get('symbol')} "
+                        f"({len(result.get('records') or []):,} labeled rows)"
+                    )
+
+    for result in sorted(symbol_results, key=lambda item: int(item["index"])):
+        bars_loaded += int(result.get("raw_bars") or 0)
+        bars_analyzed += int(result.get("bars") or 0)
+        sessions_analyzed += int(result.get("sessions") or 0)
+        selected_sessions = list(result.get("market_sessions") or [])
+        observed_market_sessions.update(
+            session for session in selected_sessions if session != "session-0"
+        )
+        symbol_records = list(result.get("records") or [])
         records.extend(symbol_records)
-        feature_columns.update(report.get("feature_columns") or [])
-        label_columns.update(report.get("label_columns") or [])
-        sessions = int(report.get("sessions_analyzed") or 0)
-        sessions_analyzed += sessions
+        feature_columns.update(result.get("feature_columns") or [])
+        label_columns.update(result.get("label_columns") or [])
         by_symbol.append(
             {
-                "symbol": symbol,
-                "raw_bars": len(raw_rows),
-                "bars": len(rows),
-                "sessions": sessions,
+                "symbol": result.get("symbol"),
+                "raw_bars": int(result.get("raw_bars") or 0),
+                "bars": int(result.get("bars") or 0),
+                "sessions": int(result.get("sessions") or 0),
                 "market_sessions": selected_sessions,
                 "rows": len(symbol_records),
             }
@@ -755,8 +807,9 @@ def build_cross_stock_training_dataset(
         "require_full_horizon": bool(require_full_horizon),
         "profit_target_pct": float(clean_profit_target),
         "stop_loss_pct": float(clean_stop_loss),
-        "barrier_same_bar_policy": "stop_first_conservative",
+        "barrier_same_bar_policy": "ambiguous_exclude",
         "observation_stride_bars": max(1, int(observation_stride_bars)),
+        "feature_workers": worker_count,
         "session_mode": clean_session_mode,
         "session_window_et": {
             "regular": "09:30-16:00",
@@ -775,7 +828,7 @@ def build_cross_stock_training_dataset(
             "Feature columns are point-in-time causal values. label__ columns use only later bars "
             "from the same market session and must never be supplied to a model as inputs. "
             "Trade-quality labels count an upside target only when it is reached before the "
-            "downside barrier; same-candle target/stop ambiguity is scored conservatively as stop first. "
+            "downside barrier; same-candle target/stop ambiguity is excluded because intrabar ordering is unknown. "
             f"Market-hours regime: {clean_session_mode}; regular, premarket, and after-hours rows are never mixed. "
             f"Supervised observations are sampled every {max(1, int(observation_stride_bars))} bar(s) while "
             "all causal features still use every underlying candle. "
