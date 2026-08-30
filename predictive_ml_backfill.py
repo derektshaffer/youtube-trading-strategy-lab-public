@@ -528,7 +528,6 @@ def run_predictive_ml_backfill(
             for horizon in missing_horizons:
                 key, report = evaluate_horizon(int(horizon))
                 horizon_evaluations[key] = report
-                persist_stage("horizon_evaluations", horizon_evaluations)
         else:
             with ThreadPoolExecutor(max_workers=validation_worker_count) as executor:
                 futures = {
@@ -538,7 +537,6 @@ def run_predictive_ml_backfill(
                 for future in as_completed(futures):
                     key, report = future.result()
                     horizon_evaluations[key] = report
-                    persist_stage("horizon_evaluations", horizon_evaluations)
                     notify(f"Completed {key}-minute chronological validation.")
     else:
         notify("Reusing all chronological horizon validations from the durable checkpoint.")
@@ -546,6 +544,8 @@ def run_predictive_ml_backfill(
         str(int(horizon)): horizon_evaluations[str(int(horizon))]
         for horizon in config["horizons"]
     }
+    if missing_horizons:
+        persist_stage("horizon_evaluations", horizon_evaluations)
     notify(
         f"All horizon validations finished in {perf_counter() - horizons_started:.1f}s."
     )
