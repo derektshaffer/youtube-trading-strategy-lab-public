@@ -1,3 +1,4 @@
+import predictive_boosted_probability_model as boosted_model
 import math
 
 import pandas as pd
@@ -108,3 +109,39 @@ def test_boosted_live_scorer_uses_feature_coverage_gate():
     }
     blocked = score_boosted_probability_model(model, missing)
     assert blocked["status"] == "INSUFFICIENT_FEATURE_COVERAGE"
+
+
+
+def test_future_only_feature_does_not_enter_earlier_boosted_folds():
+    dataset = nonlinear_dataset()
+    dataset["feature_columns"].append("feature__late_only")
+    for row in dataset["records"]:
+        session_day = int(str(row["session"]).rsplit("-", 1)[-1])
+        row["feature__late_only"] = (
+            float(session_day) if session_day >= 12 else None
+        )
+
+    model = build_boosted_probability_model(dataset)
+    folds = model["validation"]["folds"]
+    assert folds
+    assert "feature__late_only" not in folds[0]["feature_columns"]
+    assert any(
+        "feature__late_only" in fold["feature_columns"]
+        for fold in folds[1:]
+    )
+
+
+def test_boosted_platt_calibrator_keeps_validation_holdout_untouched(monkeypatch):
+    monkeypatch.setattr(
+        boosted_model,
+        "_fit_platt_calibrator",
+        lambda actual, probability: {"coefficient": 1.0, "intercept": 0.0},
+    )
+    model = build_boosted_probability_model(nonlinear_dataset())
+    calibration = model["calibration"]
+    assert calibration["enabled"] is True
+    assert calibration["fit_rows"] < model["validation"]["oos_rows"]
+    assert (
+        calibration["fit_rows"] + calibration["selection_holdout_rows"]
+        == model["validation"]["oos_rows"]
+    )
