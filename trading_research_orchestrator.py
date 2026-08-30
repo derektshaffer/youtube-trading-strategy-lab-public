@@ -420,12 +420,6 @@ def recover_stale_research_jobs(
         if heartbeat is None or heartbeat > threshold:
             queue.append(item)
             continue
-        # Only an actively running job may be converted into retry/failed.
-        # If the computation already completed locally and only cloud
-        # persistence failed, never turn the completed job back into execution.
-        if str(item.get("status") or "") != "running":
-            updated.append(item)
-            continue
         attempts = int(item.get("attempts") or 0)
         max_attempts = int(item.get("max_attempts") or 3)
         retry = attempts < max_attempts
@@ -680,6 +674,12 @@ def fail_research_job(
     for raw in data["research_queue"]:
         item = dict(raw)
         if str(item.get("id") or "") != str(job_id or ""):
+            updated.append(item)
+            continue
+        # Only an actively running job may be converted into retry/failed.
+        # Completed local work must not be re-executed because cloud persistence
+        # had a transient failure.
+        if str(item.get("status") or "") != "running":
             updated.append(item)
             continue
         attempts = int(item.get("attempts") or 0)
