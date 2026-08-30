@@ -567,6 +567,80 @@ def execute_job(
     raise AppError(f"Unknown cloud research job type: {job_type}")
 
 
+
+def print_predictive_ml_router_summary(library: dict[str, Any]) -> None:
+    """Print a compact latest-run learning-router summary for cloud diagnostics."""
+    runs = [
+        item
+        for item in (library.get("predictive_ml_runs") or [])
+        if isinstance(item, dict)
+    ]
+    if not runs:
+        print("[predictive-ml-summary] no saved predictive ML runs.", flush=True)
+        return
+
+    runs.sort(
+        key=lambda item: str(item.get("completed_at") or ""),
+        reverse=True,
+    )
+    run = runs[0]
+    router = (
+        run.get("stock_learning_router")
+        if isinstance(run.get("stock_learning_router"), dict)
+        else {}
+    )
+
+    route_counts = (
+        dict(router.get("route_counts") or {})
+        if isinstance(router.get("route_counts"), dict)
+        else {}
+    )
+    print(
+        "[predictive-ml-summary] "
+        f"run_id={run.get('id') or 'unknown'} "
+        f"suite={int(run.get('model_suite_version') or 0)} "
+        f"completed_at={run.get('completed_at') or 'unknown'} "
+        f"router_status={router.get('status') or 'missing'} "
+        f"symbols_compared={int(router.get('symbols_compared') or 0)} "
+        f"clear_routes={int(router.get('symbols_with_clear_route') or 0)} "
+        f"route_counts={route_counts}",
+        flush=True,
+    )
+
+    def metric(routes: dict[str, Any], route: str, field: str) -> str:
+        row = routes.get(route) if isinstance(routes.get(route), dict) else {}
+        value = row.get(field)
+        if value is None:
+            return "na"
+        try:
+            return f"{float(value):.6f}"
+        except (TypeError, ValueError, OverflowError):
+            return str(value)
+
+    for raw in router.get("by_symbol") or []:
+        if not isinstance(raw, dict):
+            continue
+        routes = raw.get("routes") if isinstance(raw.get("routes"), dict) else {}
+        reason = " ".join(str(raw.get("reason") or "").split())
+        print(
+            "[predictive-ml-route] "
+            f"symbol={raw.get('symbol') or 'unknown'} "
+            f"status={raw.get('status') or 'unknown'} "
+            f"route_status={raw.get('route_status') or 'unknown'} "
+            f"recommended={raw.get('recommended_route') or 'none'} "
+            f"provisional={raw.get('provisional_lowest_brier_route') or 'none'} "
+            f"paired_oos_rows={int(raw.get('paired_oos_rows') or 0)} "
+            f"same_brier={metric(routes, 'same_ticker_history', 'brier_score')} "
+            f"similar_brier={metric(routes, 'similarity_weighted_transfer', 'brier_score')} "
+            f"broad_brier={metric(routes, 'broad_cross_stock_transfer', 'brier_score')} "
+            f"same_auc={metric(routes, 'same_ticker_history', 'roc_auc')} "
+            f"similar_auc={metric(routes, 'similarity_weighted_transfer', 'roc_auc')} "
+            f"broad_auc={metric(routes, 'broad_cross_stock_transfer', 'roc_auc')} "
+            f"reason={reason}",
+            flush=True,
+        )
+
+
 def main() -> int:
     store = build_store()
     worker_id = env("RESEARCH_WORKER_ID") or (
@@ -578,6 +652,7 @@ def main() -> int:
     # work automatically, so this is a bounded self-feeding queue rather than an
     # uncontrolled infinite API loop.
     data = store.load_latest()
+    print_predictive_ml_router_summary(data)
     data, seeded = seed_continuous_research_cycle(
         data,
         maximum_topics=int(env("RESEARCH_TOPICS_PER_CYCLE", "10") or 10),
