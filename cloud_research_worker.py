@@ -374,6 +374,11 @@ def execute_job(
             if isinstance(latest.get("research_system"), dict)
             else {}
         )
+        previous_ml_checkpoint = (
+            dict(research_system.get("predictive_ml_checkpoint") or {})
+            if isinstance(research_system.get("predictive_ml_checkpoint"), dict)
+            else {}
+        )
         research_system["predictive_ml_backfill_status"] = {
             "status": "running",
             "started_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -409,20 +414,44 @@ def execute_job(
             worker_payload["observation_stride_bars"] = int(
                 env("PREDICTIVE_ML_BACKFILL_STRIDE")
             )
+        worker_payload["code_fingerprint"] = env("GITHUB_SHA")
 
         market = build_market()
 
         def ml_progress(message: str) -> None:
             print(f"[predictive-ml] {message}", flush=True)
 
+        def persist_ml_checkpoint(checkpoint_state: dict[str, Any]) -> None:
+            current = store.load_latest()
+            current_system = (
+                dict(current.get("research_system") or {})
+                if isinstance(current.get("research_system"), dict)
+                else {}
+            )
+            saved = dict(checkpoint_state or {})
+            saved["job_id"] = str(job.get("id") or "")
+            saved["status"] = "running"
+            current_system["predictive_ml_checkpoint"] = saved
+            current["research_system"] = current_system
+            store.save(current)
+
         result = run_predictive_ml_backfill(
             market,
             latest,
             payload=worker_payload,
             progress=ml_progress,
+            checkpoint=previous_ml_checkpoint,
+            checkpoint_callback=persist_ml_checkpoint,
         )
         latest = store.load_latest()
         latest = merge_backfill_result_into_library(latest, result)
+        latest_system = (
+            dict(latest.get("research_system") or {})
+            if isinstance(latest.get("research_system"), dict)
+            else {}
+        )
+        latest_system.pop("predictive_ml_checkpoint", None)
+        latest["research_system"] = latest_system
         result_ref = f"predictive-ml:{result.get('id')}"
         latest = finish_research_job(
             latest,
