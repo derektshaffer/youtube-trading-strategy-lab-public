@@ -450,6 +450,11 @@ class FinderPersistenceTests(unittest.TestCase):
         restored = finder.latest_completed_finder_report(merged, "SDOT", "Deep")
         self.assertTrue(restored.get("restored_from_library"))
         self.assertEqual(restored["winner_strategy_name"], source["name"])
+        self.assertEqual(
+            restored["stock_specific_strategy_id"],
+            child["id"],
+        )
+        self.assertEqual(restored["paper_validation_status"], "ready")
         self.assertEqual(restored["timeframe"], "5Min")
         self.assertEqual(restored["strategy_fidelity_engine_version"], 1)
         self.assertEqual(restored["paper_execution_fidelity"]["status"], "ready")
