@@ -55,6 +55,16 @@ def test_merge_backfill_result_persists_visible_status_and_run():
             "status": "EVALUATED",
             "automatic_subset_symbols": ["AAA", "CCC"],
         },
+        "stock_learning_router": {
+            "status": "EVALUATED",
+            "symbols_compared": 2,
+            "symbols_with_clear_route": 1,
+            "route_counts": {
+                "same_ticker_history": 1,
+                "similarity_weighted_transfer": 0,
+                "broad_cross_stock_transfer": 0,
+            },
+        },
         "historical_head_to_head": {
             "status": "PROVISIONAL_HISTORICAL_LEADER",
             "leader_model_id": "logistic-1",
@@ -77,6 +87,10 @@ def test_merge_backfill_result_persists_visible_status_and_run():
     assert status["similarity_symbols"] == ["AAA", "BBB", "CCC"]
     assert status["ticker_specific_status"] == "EVALUATED"
     assert status["ticker_specific_symbols"] == ["AAA", "CCC"]
+    assert status["learning_router_status"] == "EVALUATED"
+    assert status["learning_router_symbols_compared"] == 2
+    assert status["learning_router_clear_routes"] == 1
+    assert status["learning_router_route_counts"]["same_ticker_history"] == 1
     assert status["historical_leader_model_id"] == "logistic-1"
     assert status["shadow_scoring_enabled"] is True
     assert status["affects_live_ranking"] is False
@@ -170,6 +184,19 @@ def test_run_backfill_reuses_causal_dataset_and_validation_stack():
         },
     ) as similarity, patch.object(
         backfill,
+        "build_stock_learning_router",
+        return_value={
+            "status": "EVALUATED",
+            "symbols_compared": 5,
+            "symbols_with_clear_route": 3,
+            "route_counts": {
+                "same_ticker_history": 2,
+                "similarity_weighted_transfer": 1,
+                "broad_cross_stock_transfer": 0,
+            },
+        },
+    ) as learning_router, patch.object(
+        backfill,
         "build_historical_model_head_to_head",
         return_value={
             "status": "PROVISIONAL_HISTORICAL_LEADER",
@@ -195,6 +222,7 @@ def test_run_backfill_reuses_causal_dataset_and_validation_stack():
     assert boosted.call_count == 1
     assert ticker_specific.call_count == 1
     assert similarity.call_count == 1
+    assert learning_router.call_count == 1
     assert head_to_head.call_count == 1
     kwargs = build_dataset.call_args.kwargs
     assert kwargs["timeframe"] == "1Min"
@@ -214,6 +242,8 @@ def test_run_backfill_reuses_causal_dataset_and_validation_stack():
     ]
     assert result["similarity_validation"]["status"] == "EVALUATED"
     assert "predictions" not in result["similarity_validation"]
+    assert result["stock_learning_router"]["status"] == "EVALUATED"
+    assert result["stock_learning_router"]["symbols_with_clear_route"] == 3
     assert result["historical_head_to_head"]["leader_model_id"] == "boosted-1"
     assert result["probability_model"]["shadow_scoring_enabled"] is True
     assert [item["id"] for item in result["probability_models"]] == [
@@ -254,7 +284,7 @@ def test_accelerated_defaults_use_more_history_and_multiple_horizons():
     assert config["horizon"] == 15
     assert config["horizons"] == [5, 15, 30, 60]
     assert len(config["symbols"]) == 24
-    assert backfill.MODEL_SUITE_VERSION == 4
+    assert backfill.MODEL_SUITE_VERSION == 5
 
 
 def test_explicit_primary_horizon_is_added_without_discarding_other_labels():
@@ -301,3 +331,17 @@ def test_ticker_specific_subset_honors_explicit_priority_order():
     )
     assert chosen[:2] == ["REAX", "SDOT"]
     assert len(chosen) == 3
+
+
+
+def test_similarity_subset_can_guarantee_ticker_specific_coverage():
+    symbols = [f"S{i:02d}" for i in range(24)]
+    ticker_symbols = ["S00", "S07", "S12", "S18", "S23"]
+    chosen = backfill._priority_spread_symbol_subset(
+        symbols,
+        maximum=10,
+        priority=ticker_symbols,
+    )
+    assert chosen[: len(ticker_symbols)] == ticker_symbols
+    assert len(chosen) == 10
+    assert all(symbol in chosen for symbol in ticker_symbols)
