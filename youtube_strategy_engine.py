@@ -2380,6 +2380,33 @@ class StrategyStore:
                 return True
         return False
 
+    def local_library_revision(self) -> dict[str, Any] | None:
+        """Return the local file's Git-blob SHA without parsing the JSON.
+
+        GitHub's Contents API exposes the same blob SHA. Comparing these hashes
+        lets the UI prove a local ~75 MB library already matches cloud without
+        downloading and decoding the entire remote file.
+        """
+        if not self.path.exists():
+            return None
+        try:
+            stat = self.path.stat()
+            digest = hashlib.sha1()
+            digest.update(f"blob {stat.st_size}\0".encode("utf-8"))
+            with self.path.open("rb") as handle:
+                while True:
+                    chunk = handle.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+        except OSError as exc:
+            raise AppError("The local strategy library could not be fingerprinted.") from exc
+        return {
+            "sha": digest.hexdigest(),
+            "size": int(stat.st_size),
+            "mtime_ns": int(stat.st_mtime_ns),
+        }
+
     def load_latest(self) -> dict[str, Any]:
         """Reconcile local/cloud copies using their last shared version, never timestamp winner-takes-all."""
         local = self.load()
@@ -2466,11 +2493,22 @@ class StrategyStore:
 
         if configured and verify:
             try:
-                remote = self.cloud_backup.read_library()
+                # Health rendering only needs to prove the private destination is
+                # reachable and the library path exists. Do not download/parse the
+                # entire large library on every Streamlit rerun.
+                revision_reader = getattr(self.cloud_backup, "library_revision", None)
+                if callable(revision_reader):
+                    revision = revision_reader()
+                    library_exists = revision is not None
+                else:
+                    # Compatibility for tests/custom backup adapters that predate
+                    # the lightweight metadata API.
+                    remote = self.cloud_backup.read_library()
+                    library_exists = remote is not None
                 verified = True
-                library_exists = remote is not None
-                # A successful read proves reachability, not that the last write succeeded.
-                # Preserve write/conflict errors until an actual synchronization succeeds.
+                # A successful metadata probe proves reachability, not that the
+                # last write succeeded. Preserve write/conflict errors until an
+                # actual synchronization succeeds.
                 last_error = str(status.get("last_error") or "")
                 if any(old in last_error for old in (
                     "derektshaffer/youtube-trading-strategy-backups",

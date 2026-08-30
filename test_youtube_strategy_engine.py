@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import ast
+import hashlib
 import json
 from pathlib import Path
 import runpy
@@ -805,6 +806,17 @@ class StorageTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_local_library_revision_matches_git_blob_sha_without_json_parse(self):
+        self.store.save({"strategies": [simple_strategy()]})
+        raw = self.store.path.read_bytes()
+        expected = hashlib.sha1(
+            f"blob {len(raw)}\0".encode("utf-8") + raw
+        ).hexdigest()
+        revision = self.store.local_library_revision()
+        self.assertEqual(revision["sha"], expected)
+        self.assertEqual(revision["size"], len(raw))
+        self.assertGreater(revision["mtime_ns"], 0)
+
     def test_predictive_ml_run_history_is_normalized_and_preserved(self):
         blank = engine.StrategyStore.blank()
         self.assertEqual(blank["predictive_ml_runs"], [])
@@ -898,6 +910,32 @@ class DurableStorageTests(unittest.TestCase):
             restored = restarted.load_latest()
             self.assertEqual(restored["knowledge_sources"][0]["title"], "Saved Book")
             self.assertTrue(restarted.path.exists())
+
+    def test_verified_persistence_status_uses_metadata_not_full_library_download(self):
+        class FakeCloud:
+            repository = "owner/private-backups"
+            path = "trading-intelligence-lab/intelligence_library.json"
+
+            def __init__(self):
+                self.revision_calls = 0
+                self.read_calls = 0
+
+            def library_revision(self):
+                self.revision_calls += 1
+                return {"sha": "a" * 40, "size": 75_000_000}
+
+            def read_library(self):
+                self.read_calls += 1
+                raise AssertionError("health verification should not download the full library")
+
+        with tempfile.TemporaryDirectory() as directory:
+            cloud = FakeCloud()
+            store = engine.StrategyStore(directory, cloud_backup=cloud)
+            status = store.persistence_status(verify=True)
+            self.assertTrue(status["verified"])
+            self.assertTrue(status["library_exists"])
+            self.assertEqual(cloud.revision_calls, 1)
+            self.assertEqual(cloud.read_calls, 0)
 
     def test_persistence_status_reports_cloud_durability(self):
         class FakeCloud:
