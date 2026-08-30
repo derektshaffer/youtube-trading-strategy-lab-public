@@ -347,3 +347,154 @@ def test_similarity_subset_can_guarantee_ticker_specific_coverage():
     assert chosen[: len(ticker_symbols)] == ticker_symbols
     assert len(chosen) == 10
     assert all(symbol in chosen for symbol in ticker_symbols)
+
+
+
+def test_checkpoint_stages_require_exact_dataset_suite_and_code():
+    dataset = {
+        "records": [{"symbol": "AAA", "feature__x": 1.0}],
+        "row_count": 1,
+        "feature_columns": ["feature__x"],
+    }
+    fingerprint = backfill._dataset_fingerprint(dataset)
+    checkpoint = {
+        "checkpoint_version": backfill.ML_CHECKPOINT_VERSION,
+        "model_suite_version": backfill.MODEL_SUITE_VERSION,
+        "code_fingerprint": "abc123",
+        "dataset_fingerprint": fingerprint,
+        "stages": {"generalization": {"status": "EVALUATED"}},
+    }
+    matched = backfill._checkpoint_stages(
+        checkpoint,
+        dataset_fingerprint=fingerprint,
+        model_suite_version=backfill.MODEL_SUITE_VERSION,
+        code_fingerprint="abc123",
+    )
+    assert matched["generalization"]["status"] == "EVALUATED"
+    assert backfill._checkpoint_stages(
+        checkpoint,
+        dataset_fingerprint="different",
+        model_suite_version=backfill.MODEL_SUITE_VERSION,
+        code_fingerprint="abc123",
+    ) == {}
+    assert backfill._checkpoint_stages(
+        checkpoint,
+        dataset_fingerprint=fingerprint,
+        model_suite_version=backfill.MODEL_SUITE_VERSION + 1,
+        code_fingerprint="abc123",
+    ) == {}
+    assert backfill._checkpoint_stages(
+        checkpoint,
+        dataset_fingerprint=fingerprint,
+        model_suite_version=backfill.MODEL_SUITE_VERSION,
+        code_fingerprint="different",
+    ) == {}
+
+
+def test_run_backfill_reuses_exact_checkpointed_core_stages():
+    dataset = {
+        "records": [{"symbol": "AAA", "session": "2026-08-01", "feature__x": 1.0}],
+        "row_count": 5000,
+        "symbols_with_data": 5,
+        "feature_columns": ["feature__x"],
+        "label_columns": ["label__target_before_stop_15bar"],
+        "profit_target_pct": 1.0,
+        "stop_loss_pct": 0.75,
+        "session_mode": "regular",
+    }
+    horizon_report = {
+        "status": "EVALUATED",
+        "oos_rows": 900,
+        "roc_auc": 0.60,
+        "brier_skill_vs_naive": 0.04,
+    }
+    generalization = {
+        "status": "EVALUATED",
+        "oos_rows": 400,
+        "roc_auc": 0.57,
+        "brier_skill_vs_naive": 0.02,
+    }
+    model = {
+        "id": "logistic-1",
+        "model_type": "portable_numeric_logistic_regression",
+        "status": "READY_FOR_SHADOW_SCORING",
+        "shadow_scoring_enabled": True,
+    }
+    boosted_model = {
+        "id": "boosted-1",
+        "model_type": "portable_gradient_boosted_trees",
+        "status": "READY_FOR_SHADOW_SCORING",
+        "shadow_scoring_enabled": True,
+    }
+    checkpoint = {
+        "checkpoint_version": backfill.ML_CHECKPOINT_VERSION,
+        "model_suite_version": backfill.MODEL_SUITE_VERSION,
+        "code_fingerprint": "same-code",
+        "dataset_fingerprint": backfill._dataset_fingerprint(dataset),
+        "stages": {
+            "horizon_evaluations": {
+                str(h): dict(horizon_report)
+                for h in (5, 15, 30, 60)
+            },
+            "generalization": generalization,
+            "probability_model": model,
+            "boosted_probability_model": boosted_model,
+        },
+    }
+
+    with patch.object(
+        backfill,
+        "build_cross_stock_training_dataset",
+        return_value=dataset,
+    ), patch.object(
+        backfill,
+        "walk_forward_logistic_baseline",
+    ) as baseline, patch.object(
+        backfill,
+        "leave_one_symbol_out_walk_forward_logistic_baseline",
+    ) as held_out, patch.object(
+        backfill,
+        "build_portable_probability_model",
+    ) as portable, patch.object(
+        backfill,
+        "build_boosted_probability_model",
+    ) as boosted, patch.object(
+        backfill,
+        "ticker_specific_walk_forward_logistic_baseline",
+        return_value={"status": "EVALUATED", "predictions": []},
+    ), patch.object(
+        backfill,
+        "similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline",
+        return_value={"status": "EVALUATED", "predictions": []},
+    ), patch.object(
+        backfill,
+        "build_stock_learning_router",
+        return_value={"status": "EVALUATED"},
+    ), patch.object(
+        backfill,
+        "build_historical_model_head_to_head",
+        return_value={"status": "EVALUATED"},
+    ):
+        result = backfill.run_predictive_ml_backfill(
+            FakeMarket(),
+            {},
+            payload={
+                "symbols": ["AAA", "BBB", "CCC", "DDD", "EEE"],
+                "trading_days": 30,
+                "horizon": 15,
+                "code_fingerprint": "same-code",
+            },
+            now=datetime(2026, 8, 29, 22, 0, tzinfo=timezone.utc),
+            checkpoint=checkpoint,
+        )
+
+    assert baseline.call_count == 0
+    assert held_out.call_count == 0
+    assert portable.call_count == 0
+    assert boosted.call_count == 0
+    assert set(result["checkpoint_reused_stages"]) == {
+        "horizon_evaluations",
+        "generalization",
+        "probability_model",
+        "boosted_probability_model",
+    }
