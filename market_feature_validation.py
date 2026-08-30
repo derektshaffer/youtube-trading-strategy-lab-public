@@ -191,6 +191,7 @@ def _event_outcomes(
     direction: int,
     profit_target_pct: float | None = None,
     stop_loss_pct: float | None = None,
+    barrier_same_bar_policy: str = "stop_first_conservative",
 ) -> dict[str, Any]:
     """Measure future outcomes without allowing future data into the feature row.
 
@@ -217,6 +218,12 @@ def _event_outcomes(
     }
     if entry is None or entry <= 0:
         return outcomes
+
+    policy = str(barrier_same_bar_policy or "stop_first_conservative").strip().lower()
+    if policy not in {"stop_first_conservative", "ambiguous_exclude"}:
+        raise ValueError(
+            "barrier_same_bar_policy must be 'stop_first_conservative' or 'ambiguous_exclude'."
+        )
 
     target_pct = _number(profit_target_pct)
     stop_pct = _number(stop_loss_pct)
@@ -262,15 +269,23 @@ def _event_outcomes(
                 low = _low(future_bar)
                 hit_target = high is not None and high >= target_price
                 hit_stop = low is not None and low <= stop_price
+                if hit_target and hit_stop:
+                    if policy == "ambiguous_exclude":
+                        barrier_outcome = "ambiguous"
+                    else:
+                        barrier_outcome = "stop"
+                    break
                 if hit_stop:
-                    # Includes same-bar target+stop ambiguity: count downside first.
                     barrier_outcome = "stop"
                     break
                 if hit_target:
                     barrier_outcome = "target"
                     break
             outcomes["barrier_outcome_by_horizon"][key] = barrier_outcome
-            outcomes["target_before_stop_by_horizon"][key] = barrier_outcome == "target"
+            outcomes["target_before_stop_by_horizon"][key] = (
+                None if barrier_outcome == "ambiguous"
+                else barrier_outcome == "target"
+            )
         else:
             outcomes["barrier_outcome_by_horizon"][key] = None
             outcomes["target_before_stop_by_horizon"][key] = None
@@ -444,6 +459,7 @@ def build_supervised_feature_rows(
     profit_target_pct: float = 1.0,
     stop_loss_pct: float = 0.75,
     observation_stride_bars: int = 1,
+    barrier_same_bar_policy: str = "ambiguous_exclude",
 ) -> dict[str, Any]:
     """Build leakage-safe supervised-learning rows from historical candles.
 
@@ -486,6 +502,7 @@ def build_supervised_feature_rows(
                 direction=0,
                 profit_target_pct=float(clean_profit_target),
                 stop_loss_pct=float(clean_stop_loss),
+                barrier_same_bar_policy=barrier_same_bar_policy,
             )
             feature_row = feature_frame.iloc[index]
             record: dict[str, Any] = {
@@ -537,7 +554,7 @@ def build_supervised_feature_rows(
         "require_full_horizon": bool(require_full_horizon),
         "profit_target_pct": float(clean_profit_target),
         "stop_loss_pct": float(clean_stop_loss),
-        "barrier_same_bar_policy": "stop_first_conservative",
+        "barrier_same_bar_policy": str(barrier_same_bar_policy),
         "observation_stride_bars": observation_stride_bars,
         "row_count": len(records),
         "feature_columns": sorted(feature_names),
@@ -548,8 +565,9 @@ def build_supervised_feature_rows(
             "Every feature column is calculated without future bars. Columns prefixed "
             "label__ are calculated only from bars after the observation timestamp. "
             "Trade-quality labels ask whether the upside target was reached before the "
-            "downside limit; if both are touched in one candle, the downside limit wins "
-            "conservatively because intrabar ordering is unknown. "
+            "downside limit. For predictive-ML datasets, same-candle target/stop touches "
+            "are marked ambiguous and excluded from the binary target because intrabar "
+            "ordering is unknowable. "
             f"Supervised observations are sampled every {observation_stride_bars} bar(s), "
             "while causal features still use every underlying candle."
         ),
