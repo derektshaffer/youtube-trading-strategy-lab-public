@@ -430,6 +430,19 @@ def finder_evidence_verdict(
     }
 
 
+def validated_status_ready(
+    verdict: dict[str, Any],
+    paper_fidelity: dict[str, Any],
+    walk_forward: dict[str, Any] | None,
+) -> bool:
+    """One shared meaning of validated across Finder and manual Strategy Lab."""
+    return (
+        bool(walk_forward)
+        and str(verdict.get("code") or "") == "ready_for_paper"
+        and str(paper_fidelity.get("status") or "") == "ready"
+    )
+
+
 def regime_diagnostics(
     rows: list[dict[str, Any]],
     source_strategy: dict[str, Any],
@@ -1036,7 +1049,11 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
             f"{source_id}|{symbol}".encode("utf-8")
         ).hexdigest()[:18]
         verdict = report.get("verdict") or {}
-        ready_for_paper = str(verdict.get("code") or "") == "ready_for_paper"
+        ready_for_paper = validated_status_ready(
+            verdict,
+            report.get("paper_execution_fidelity") or {},
+            report.get("walk_forward") or {},
+        )
         child = {
             **source,
             "id": child_id,
