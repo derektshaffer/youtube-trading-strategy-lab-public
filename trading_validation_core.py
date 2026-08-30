@@ -145,6 +145,18 @@ def validation_strength(
     if stress_pnl <= 0:
         score_cap = min(score_cap, 49.0)
 
+    minimum_unseen_trades_for_high_confidence = 15
+    if (
+        validation_trades < minimum_unseen_trades_for_high_confidence
+        or holdout_trades < minimum_unseen_trades_for_high_confidence
+    ):
+        score_cap = min(score_cap, 50.0)
+        penalties.append(
+            "High robustness requires at least "
+            f"{minimum_unseen_trades_for_high_confidence} validation trades and "
+            f"{minimum_unseen_trades_for_high_confidence} untouched holdout trades."
+        )
+
     if validation_pnl > 0 and validation_pf < 1.05:
         score_cap = min(score_cap, 59.0)
         penalties.append("Validation profit factor is too close to breakeven for a high robustness rating.")
@@ -190,6 +202,7 @@ def validation_strength(
         "base_score": round(base_score, 1),
         "walk_forward_score": round(walk_score, 1) if walk_score is not None else None,
         "optimizer_status": optimizer_status or None,
+        "minimum_unseen_trades_for_high_confidence": minimum_unseen_trades_for_high_confidence,
         "label": label,
         "independently_positive": bool(independently_positive),
         "reasons": list(dict.fromkeys([*reasons, *penalties])),
