@@ -45,6 +45,21 @@ AUTONOMOUS_VALIDATION_METHOD_VERSION = 2
 AUTO_TIMEFRAME = "5Min"
 
 
+def autonomous_validation_boundaries(
+    historical_end: datetime,
+    *,
+    validation_days: int = AUTO_VALIDATION_WINDOW_DAYS,
+) -> dict[str, datetime]:
+    """Return the strict discovery/test boundary for autonomous validation."""
+    validation_end = historical_end
+    validation_start = validation_end - timedelta(days=max(30, int(validation_days)))
+    return {
+        "discovery_cutoff": validation_start,
+        "validation_start": validation_start,
+        "validation_end": validation_end,
+    }
+
+
 def _notify(callback: Callable[[str], None] | None, message: str) -> None:
     if callback:
         callback(message)
@@ -1056,9 +1071,10 @@ def run_autonomous_research(
     # Point-in-time sampling boundary: discovery may use only data that existed
     # before the untouched validation period begins. No final close/high/volume
     # from a validation day may influence symbol or window selection.
-    validation_end = historical_end
-    validation_start = validation_end - timedelta(days=AUTO_VALIDATION_WINDOW_DAYS)
-    discovery_end = validation_start
+    boundaries = autonomous_validation_boundaries(historical_end)
+    validation_end = boundaries["validation_end"]
+    validation_start = boundaries["validation_start"]
+    discovery_end = boundaries["discovery_cutoff"]
     universe["discovery_cutoff"] = discovery_end.isoformat()
     universe["validation_start"] = validation_start.isoformat()
     universe["validation_end"] = validation_end.isoformat()
