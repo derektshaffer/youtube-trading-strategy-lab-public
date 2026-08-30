@@ -207,6 +207,79 @@ class OptimizerResumeTests(unittest.TestCase):
         )
 
 
+class FinderEvidenceTierTests(unittest.TestCase):
+    @staticmethod
+    def optimization_with_pnls(training, validation, holdout, stress):
+        return {
+            "winner": {
+                "training_metrics": {"trade_count": 10, "net_pnl": training},
+                "validation_metrics": {"trade_count": 5, "net_pnl": validation},
+                "holdout_metrics": {"trade_count": 5, "net_pnl": holdout},
+                "stress_metrics": {"trade_count": 5, "net_pnl": stress},
+            }
+        }
+
+    def test_profitable_candidate_is_visible_without_being_called_validated(self):
+        verdict = finder.finder_evidence_verdict(
+            {"score": 42, "independently_positive": False},
+            {"positive_pct": 25},
+            {"summary": {"profitable_fold_pct": 25}},
+            self.optimization_with_pnls(120, -20, 35, -10),
+        )
+        self.assertEqual(verdict["code"], "historical_candidate")
+        self.assertEqual(verdict["research_tier"], "historical_candidate")
+        self.assertFalse(verdict["paper_ready"])
+
+    def test_promising_candidate_remains_below_validated_tier(self):
+        verdict = finder.finder_evidence_verdict(
+            {"score": 56, "independently_positive": False},
+            {"positive_pct": 45},
+            {"summary": {"profitable_fold_pct": 50}},
+            self.optimization_with_pnls(100, 20, 15, -5),
+        )
+        self.assertEqual(verdict["code"], "promising")
+        self.assertFalse(verdict["paper_ready"])
+
+    def test_ready_for_paper_keeps_strict_existing_gate(self):
+        verdict = finder.finder_evidence_verdict(
+            {"score": 70, "independently_positive": True},
+            {"positive_pct": 60},
+            {"summary": {"profitable_fold_pct": 50}},
+            self.optimization_with_pnls(100, 20, 15, 10),
+        )
+        self.assertEqual(verdict["code"], "ready_for_paper")
+        self.assertEqual(verdict["research_tier"], "validated")
+        self.assertTrue(verdict["paper_ready"])
+
+    def test_regime_diagnostics_are_descriptive_and_use_frozen_winner(self):
+        rows = []
+        for day in (18, 19, 20, 21, 22, 23):
+            for minute in range(8):
+                rows.append(bar(day, minute, 10.0 + day * 0.01 + minute * 0.03))
+        candidate = strategy(
+            "regime-test",
+            min_day_change_pct=-50.0,
+            max_hold_minutes=5,
+        )
+        report = {
+            "symbol": "TEST",
+            "timeframe": "1Min",
+            "backtest_settings": {},
+            "winner": {
+                "optimized_rules": candidate["machine_rules"],
+                "optimized_backtest_settings": {},
+            },
+        }
+        diagnostics = finder.regime_diagnostics(rows, candidate, report)
+        self.assertEqual(diagnostics["status"], "complete")
+        self.assertEqual(diagnostics["timeframe"], "1Min")
+        self.assertGreaterEqual(len(diagnostics["windows"]), 1)
+        self.assertIn("descriptive", diagnostics["note"])
+        self.assertTrue(
+            all("metrics" in item for item in diagnostics["windows"])
+        )
+
+
 class FinderPersistenceTests(unittest.TestCase):
     def test_merge_saves_loser_ledger_and_stock_specific_child(self):
         source = strategy("source-family", breakout_lookback_bars=20)
@@ -228,6 +301,19 @@ class FinderPersistenceTests(unittest.TestCase):
             "strategies_tested": 1,
             "robustness": {"score": 72, "label": "PROMISING"},
             "parameter_stability": {"positive_pct": 65},
+            "regime_diagnostics": {
+                "status": "complete",
+                "timeframe": "5Min",
+                "windows": [
+                    {
+                        "label": "Recent regime",
+                        "session_count": 20,
+                        "start_session": "2026-08-01",
+                        "end_session": "2026-08-28",
+                        "metrics": {"trade_count": 8, "net_pnl": 22},
+                    }
+                ],
+            },
             "paper_execution_fidelity": {
                 "status": "ready",
                 "label": "PAPER EXECUTION COMPATIBLE",
@@ -339,6 +425,10 @@ class FinderPersistenceTests(unittest.TestCase):
         self.assertEqual(restored["timeframe"], "5Min")
         self.assertEqual(restored["strategy_fidelity_engine_version"], 1)
         self.assertEqual(restored["paper_execution_fidelity"]["status"], "ready")
+        self.assertEqual(
+            restored["regime_diagnostics"]["windows"][0]["label"],
+            "Recent regime",
+        )
         self.assertEqual(restored["optimization"]["winner"]["holdout_metrics"]["net_pnl"], 40)
 
         completed_checkpoint = finder.latest_finder_checkpoint(merged, "SDOT", "Deep")
