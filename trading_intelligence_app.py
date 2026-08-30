@@ -2969,7 +2969,7 @@ if module == "Stock Strategy Finder":
             width="stretch",
             key="til_finder_open_discovery",
         ):
-            st.session_state["til_selected_strategy_id"] = candidate_strategy_id
+            st.session_state["til_market_discovery_strategy_id"] = candidate_strategy_id
             st.session_state["til_navigate_to"] = "Market Discovery"
             st.rerun()
         if actions[2].button(
@@ -8788,24 +8788,49 @@ elif module == "Catalyst Intelligence":
 
 elif module == "Market Discovery":
     st.caption(
-        "Scan a live stock universe against the entire usable strategy library automatically. "
-        "Current setup quality ranks first; validated strategies win ties and research-only matches are clearly labeled."
+        "Scan a live stock universe against the usable strategy library. "
+        "Validated status and current setup quality are shown separately so research candidates remain visible."
     )
 
     validated_strategies = [
         item for item in integrity_safe_strategies
         if str(item.get("validation_status") or "").lower() == "validated"
     ]
+    requested_strategy_id = str(
+        st.session_state.get("til_market_discovery_strategy_id") or ""
+    )
+    requested_strategy = next(
+        (
+            item
+            for item in integrity_safe_strategies
+            if str(item.get("id") or "") == requested_strategy_id
+        ),
+        None,
+    )
+
     include_research = st.checkbox(
         "Include research-only strategy families",
         value=True,
         key="til_market_discovery_include_research",
         help=(
-            "Recommended while the Lab is still building its validated library. "
-            "Validated status strengthens otherwise similar live matches."
+            "On by default so promising and historically profitable stock-specific candidates "
+            "remain visible. Turn it off for fully validated strategies only."
         ),
     )
     discovery_strategies = integrity_safe_strategies if include_research else validated_strategies
+
+    if requested_strategy is not None:
+        discovery_strategies = [requested_strategy]
+        st.info(
+            f"Scanning the exact Finder setup: **{requested_strategy.get('name') or 'stock-specific candidate'}**. "
+            "This may be research-only; its validation status will stay visible in the scan results."
+        )
+        if st.button(
+            "Clear setup filter and scan the full strategy library",
+            key="til_clear_market_discovery_strategy_filter",
+        ):
+            st.session_state.pop("til_market_discovery_strategy_id", None)
+            st.rerun()
 
     if integrity_blocked_count:
         st.warning(
@@ -8824,7 +8849,14 @@ elif module == "Market Discovery":
             f"**Automatic strategy coverage:** {len(discovery_strategies)} strategy "
             f"{'family' if len(discovery_strategies) == 1 else 'families'} will be checked against every stock."
         )
-        if include_research:
+        if requested_strategy is not None:
+            requested_status = str(
+                requested_strategy.get("validation_status") or "research_only"
+            ).replace("_", " ").title()
+            st.caption(
+                f"Setup status: {requested_status}. A research-only match is a lead, not a proven edge."
+            )
+        elif include_research:
             st.caption(
                 f"{len(validated_strategies)} validated · "
                 f"{max(0, len(discovery_strategies) - len(validated_strategies))} research-only. "
