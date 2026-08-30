@@ -8,9 +8,12 @@ probability display.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import hashlib
+import os
+from time import perf_counter
 from typing import Any, Callable
 
 from predictive_ml_pipeline import (
@@ -62,6 +65,8 @@ DEFAULT_OBSERVATION_STRIDE_BARS = 5
 DEFAULT_MAX_SYMBOLS = 24
 DEFAULT_SIMILARITY_SYMBOLS = 10
 DEFAULT_TICKER_SPECIFIC_SYMBOLS = 6
+DEFAULT_FEATURE_WORKERS = 4
+DEFAULT_VALIDATION_WORKERS = 4
 MAX_AUTOMATIC_ML_RUN_HISTORY = 12
 MODEL_SUITE_VERSION = 6
 
@@ -288,6 +293,20 @@ def build_backfill_configuration(
                 ),
             ),
         ),
+        "feature_workers": max(
+            1,
+            min(
+                int(payload.get("feature_workers") or DEFAULT_FEATURE_WORKERS),
+                max(1, int(os.cpu_count() or 1)),
+            ),
+        ),
+        "validation_workers": max(
+            1,
+            min(
+                int(payload.get("validation_workers") or DEFAULT_VALIDATION_WORKERS),
+                max(1, int(os.cpu_count() or 1)),
+            ),
+        ),
     }
 
 
@@ -332,10 +351,13 @@ def run_predictive_ml_backfill(
         if progress:
             progress(message)
 
+    run_started = perf_counter()
     notify(
         f"Backfilling {len(symbols)} stocks across {trading_days} trading days "
-        f"for a {int(config['horizon'])}-minute probability target."
+        f"for a {int(config['horizon'])}-minute probability target "
+        f"with {int(config['feature_workers'])} feature worker(s)."
     )
+    dataset_started = perf_counter()
     dataset = build_cross_stock_training_dataset(
         market,
         symbols,
@@ -351,25 +373,56 @@ def run_predictive_ml_backfill(
         stop_loss_pct=float(config["stop_loss_pct"]),
         session_mode=str(config["session_mode"]),
         observation_stride_bars=int(config["observation_stride_bars"]),
+        feature_workers=int(config["feature_workers"]),
         progress=progress,
     )
+    notify(
+        f"Historical dataset ready in {perf_counter() - dataset_started:.1f}s "
+        f"with {int(dataset.get('row_count') or 0):,} labeled rows."
+    )
+
+    def evaluate_horizon(horizon: int) -> tuple[str, dict[str, Any]]:
+        report = walk_forward_logistic_baseline(
+            dataset,
+            target_horizon=int(horizon),
+            target_mode="target_before_stop",
+            min_train_sessions=8,
+            test_sessions_per_fold=2,
+            embargo_sessions=1,
+            min_train_rows=250,
+        )
+        return str(int(horizon)), _compact(report)
 
     horizon_evaluations: dict[str, dict[str, Any]] = {}
-    for horizon in config["horizons"]:
-        notify(
-            f"Running chronological walk-forward probability validation for {int(horizon)} minutes."
-        )
-        horizon_evaluations[str(int(horizon))] = _compact(
-            walk_forward_logistic_baseline(
-                dataset,
-                target_horizon=int(horizon),
-                target_mode="target_before_stop",
-                min_train_sessions=8,
-                test_sessions_per_fold=2,
-                embargo_sessions=1,
-                min_train_rows=250,
-            )
-        )
+    validation_worker_count = max(
+        1, min(int(config["validation_workers"]), len(config["horizons"]))
+    )
+    horizons_started = perf_counter()
+    notify(
+        f"Running {len(config['horizons'])} chronological horizon validations "
+        f"with {validation_worker_count} independent worker(s)."
+    )
+    if validation_worker_count == 1:
+        for horizon in config["horizons"]:
+            key, report = evaluate_horizon(int(horizon))
+            horizon_evaluations[key] = report
+    else:
+        with ThreadPoolExecutor(max_workers=validation_worker_count) as executor:
+            futures = {
+                executor.submit(evaluate_horizon, int(horizon)): int(horizon)
+                for horizon in config["horizons"]
+            }
+            for future in as_completed(futures):
+                key, report = future.result()
+                horizon_evaluations[key] = report
+                notify(f"Completed {key}-minute chronological validation.")
+    horizon_evaluations = {
+        str(int(horizon)): horizon_evaluations[str(int(horizon))]
+        for horizon in config["horizons"]
+    }
+    notify(
+        f"All horizon validations finished in {perf_counter() - horizons_started:.1f}s."
+    )
     evaluation = deepcopy(
         horizon_evaluations.get(str(int(config["horizon"]))) or {}
     )
@@ -511,6 +564,9 @@ def run_predictive_ml_backfill(
         "stop_loss_pct": float(config["stop_loss_pct"]),
         "session_mode": str(config["session_mode"]),
         "observation_stride_bars": int(config["observation_stride_bars"]),
+        "feature_workers": int(config["feature_workers"]),
+        "validation_workers": int(config["validation_workers"]),
+        "runtime_seconds": round(perf_counter() - run_started, 3),
         "model_suite_version": int((payload or {}).get("model_suite_version") or MODEL_SUITE_VERSION),
         "dataset_summary": {
             key: deepcopy(value)
