@@ -14,6 +14,7 @@ on:
       - "predictive_boosted_probability_model.py"
       - "predictive_model_registry.py"
       - "predictive_model_head_to_head.py"
+      - "predictive_learning_router.py"
       - "trading_research_orchestrator.py"
       - ".github/workflows/continuous-trading-research.yml"
 

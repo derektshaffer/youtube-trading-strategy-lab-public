@@ -443,7 +443,8 @@ def execute_job(
                 f"{len(result.get('horizons') or [result.get('horizon')])} horizon(s); "
                 f"shadow model status {model.get('status') or 'unknown'}; "
                 f"ticker-specific validation {str((result.get('ticker_specific') or {}).get('status') or 'unknown')}; "
-                f"similarity validation {str((result.get('similarity_validation') or {}).get('status') or 'unknown')}."
+                f"similarity validation {str((result.get('similarity_validation') or {}).get('status') or 'unknown')}; "
+                f"learning router {str((result.get('stock_learning_router') or {}).get('status') or 'unknown')}."
             ),
         )
         store.save(latest)

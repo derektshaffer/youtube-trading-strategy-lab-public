@@ -7045,6 +7045,47 @@ elif module == "Pattern Validation":
                 )
                 + "."
             )
+        learning_router_status = str(
+            ml_backfill_status.get("learning_router_status") or ""
+        ).replace("_", " ").title()
+        if learning_router_status:
+            router_compared = int(
+                ml_backfill_status.get("learning_router_symbols_compared") or 0
+            )
+            router_clear = int(
+                ml_backfill_status.get("learning_router_clear_routes") or 0
+            )
+            route_counts = dict(
+                ml_backfill_status.get("learning_router_route_counts") or {}
+            )
+            route_bits = []
+            for route_key, route_label in (
+                ("same_ticker_history", "own-history"),
+                ("similarity_weighted_transfer", "similar-stock"),
+                ("broad_cross_stock_transfer", "broad-transfer"),
+            ):
+                count = int(route_counts.get(route_key) or 0)
+                if count:
+                    route_bits.append(f"{route_label} {count}")
+            st.caption(
+                f"🧭 Stock learning router: {learning_router_status}"
+                + (
+                    f" · {router_compared} stocks compared on identical unseen rows"
+                    if router_compared
+                    else ""
+                )
+                + (
+                    f" · {router_clear} clear provisional route(s)"
+                    if router_clear
+                    else ""
+                )
+                + (
+                    " · leaders: " + ", ".join(route_bits)
+                    if route_bits
+                    else ""
+                )
+                + "."
+            )
     elif ml_backfill_state == "failed":
         st.warning(
             "Automatic ML backfill hit an error and will use the durable retry path: "
