@@ -7,10 +7,12 @@ expects, then intraday backtests/validation decide whether the strategy had edge
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import fields
 from datetime import date, datetime, time, timedelta, timezone
 import math
 import re
+import time as time_module
 from statistics import median
 from typing import Any, Callable
 
@@ -63,6 +65,37 @@ def autonomous_validation_boundaries(
 def _notify(callback: Callable[[str], None] | None, message: str) -> None:
     if callback:
         callback(message)
+
+
+def _run_independent_finalist_tasks(
+    finalists: list[dict[str, Any]],
+    task: Callable[
+        [int, dict[str, Any]],
+        tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any]],
+    ],
+    *,
+    parallel_workers: int,
+) -> list[tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any]]]:
+    """Execute independent finalist validations without changing their inputs."""
+    workers = min(max(1, int(parallel_workers or 1)), max(1, len(finalists)))
+    if workers <= 1 or len(finalists) <= 1:
+        return [
+            task(number, finalist)
+            for number, finalist in enumerate(finalists, start=1)
+        ]
+
+    completed = []
+    with ThreadPoolExecutor(
+        max_workers=workers,
+        thread_name_prefix="autonomous-validation",
+    ) as executor:
+        futures = [
+            executor.submit(task, number, finalist)
+            for number, finalist in enumerate(finalists, start=1)
+        ]
+        for future in as_completed(futures):
+            completed.append(future.result())
+    return completed
 
 
 AUTONOMOUS_STOCK_SPECIFIC_FIELDS = {
@@ -1035,9 +1068,11 @@ def run_autonomous_research(
     universe_sample_size: int = AUTO_UNIVERSE_SAMPLE_SIZE,
     deep_strategy_limit: int = AUTO_MAX_DEEP_STRATEGIES,
     symbols_per_strategy: int = AUTO_SYMBOLS_PER_STRATEGY,
+    parallel_workers: int = 1,
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Run the full no-manual-ticker historical research funnel."""
+    run_started = time_module.monotonic()
     baselines = autonomous_research_baselines(strategies)
     collapsed_count = max(0, len([item for item in strategies if isinstance(item, dict)]) - len(baselines))
     if collapsed_count:
@@ -1231,8 +1266,16 @@ def run_autonomous_research(
 
     research_results: list[dict[str, Any]] = []
     failed_finalists: list[dict[str, Any]] = []
-    for finalist_number, finalist in enumerate(finalists, start=1):
+    deep_durations: list[dict[str, Any]] = []
+    requested_workers = max(1, int(parallel_workers or 1))
+    validation_workers = min(requested_workers, max(1, len(finalists)))
+
+    def validate_finalist(
+        finalist_number: int,
+        finalist: dict[str, Any],
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any]]:
         strategy = finalist["strategy"]
+        started = time_module.monotonic()
         try:
             opportunities = finalist["opportunities"]
             candidate_symbols = [
@@ -1241,25 +1284,28 @@ def run_autonomous_research(
                 if intraday_rows.get(str(item.get("symbol") or ""))
             ]
             if not candidate_symbols:
-                failed_finalists.append(
-                    {
-                        "strategy_id": strategy.get("id"),
-                        "strategy_name": strategy.get("name"),
-                        "finalist_number": finalist_number,
-                        "error": "No candidate stocks had usable intraday history for deep testing.",
-                    }
-                )
+                failure = {
+                    "strategy_id": strategy.get("id"),
+                    "strategy_name": strategy.get("name"),
+                    "finalist_number": finalist_number,
+                    "error": "No candidate stocks had usable intraday history for deep testing.",
+                }
                 _notify(
                     progress,
                     f"Deep research {finalist_number}/{len(finalists)} skipped "
                     f"{strategy.get('name') or 'strategy'} because no usable intraday candidate data remained…",
                 )
-                continue
+                return None, failure, {
+                    "finalist_number": finalist_number,
+                    "strategy_id": strategy.get("id"),
+                    "seconds": round(time_module.monotonic() - started, 3),
+                }
+
             anchor = candidate_symbols[0]
             rows = list(intraday_rows.get(anchor) or [])
             effective = effective_strategy_for_research(strategy)
-            # Defensive guarantee: no stock-specific deployment metadata reaches the optimizer,
-            # walk-forward engine, or cross-stock validation path.
+            # Defensive guarantee: no stock-specific deployment metadata reaches
+            # the optimizer, walk-forward engine, or cross-stock validation path.
             for field in AUTONOMOUS_STOCK_SPECIFIC_FIELDS:
                 effective.pop(field, None)
             settings = _automatic_backtest_settings(effective)
@@ -1267,9 +1313,10 @@ def run_autonomous_research(
 
             _notify(
                 progress,
-                f"Deep research {finalist_number}/{len(finalists)}: optimizing {strategy.get('name')} on {anchor}…",
+                f"Deep research {finalist_number}/{len(finalists)}: optimizing "
+                f"{strategy.get('name')} on {anchor}…",
             )
-            report = optimize_stock_strategies(
+            optimization_report = optimize_stock_strategies(
                 rows,
                 [effective],
                 anchor,
@@ -1277,13 +1324,20 @@ def run_autonomous_research(
                 optimizer,
                 finalize_holdout=True,
             )
-            winner = report.get("winner") or {}
+            winner = optimization_report.get("winner") or {}
             if not winner:
-                continue
+                return None, None, {
+                    "finalist_number": finalist_number,
+                    "strategy_id": strategy.get("id"),
+                    "seconds": round(time_module.monotonic() - started, 3),
+                }
 
             walk_report = None
             try:
-                _notify(progress, f"Running rolling walk-forward checks for {strategy.get('name')}…")
+                _notify(
+                    progress,
+                    f"Running rolling walk-forward checks for {strategy.get('name')}…",
+                )
                 walk_report = walk_forward_validate(
                     rows,
                     [effective],
@@ -1295,9 +1349,10 @@ def run_autonomous_research(
                     max_folds=2,
                 )
             except AppError:
+                # The global gate fails closed when walk-forward is unavailable.
                 walk_report = None
 
-            strength = validation_strength(report, walk_report)
+            strength = validation_strength(optimization_report, walk_report)
             frozen = {
                 **strategy,
                 "validation_status": "validated",
@@ -1314,7 +1369,11 @@ def run_autonomous_research(
                 for symbol in candidate_symbols
                 if symbol != anchor and intraday_rows.get(symbol)
             }
-            _notify(progress, f"Testing frozen {strategy.get('name')} rules across {len(cross_rows)} non-anchor stocks…")
+            _notify(
+                progress,
+                f"Testing frozen {strategy.get('name')} rules across "
+                f"{len(cross_rows)} non-anchor stocks…",
+            )
             generalization = cross_stock_generalization(
                 cross_rows,
                 frozen,
@@ -1322,7 +1381,7 @@ def run_autonomous_research(
             )
 
             validation_status, gate_reasons = _global_validation_gate(
-                anchor_report=report,
+                anchor_report=optimization_report,
                 strength=strength,
                 generalization=generalization,
                 walk_forward=walk_report,
@@ -1330,48 +1389,58 @@ def run_autonomous_research(
             )
             global_score = round(
                 (safe_float(strength.get("score"), 0.0) or 0.0) * 0.65
-                + (safe_float((generalization.get("summary") or {}).get("score"), 0.0) or 0.0) * 0.35,
+                + (
+                    safe_float(
+                        (generalization.get("summary") or {}).get("score"),
+                        0.0,
+                    )
+                    or 0.0
+                )
+                * 0.35,
                 1,
             )
-            research_results.append(
-                {
-                    "strategy_id": strategy.get("id"),
-                    "strategy_name": strategy.get("name"),
-                    "source_title": strategy.get("source_title"),
-                    "priority_score": finalist.get("priority_score"),
-                    "opportunities": opportunities,
-                    "anchor_symbol": anchor,
-                    "candidate_symbols": candidate_symbols,
-                    "research_windows": {
-                        symbol: research_windows.get(symbol)
-                        for symbol in candidate_symbols
-                        if symbol in research_windows
-                    },
-                    "symbol_lifecycles": {
-                        symbol: lifecycle_by_symbol.get(symbol)
-                        for symbol in candidate_symbols
-                        if symbol in lifecycle_by_symbol
-                    },
-                    "asset_status_by_symbol": {
-                        symbol: ((universe.get("asset_metadata") or {}).get(symbol) or {}).get("status")
-                        for symbol in candidate_symbols
-                    },
-                    "optimization_report": report,
-                    "walk_forward": walk_report,
-                    "strength": strength,
-                    "generalization": generalization,
-                    "global_score": global_score,
-                    "validation_status": validation_status,
-                    "gate_reasons": gate_reasons,
-                    "catalyst_summary_by_symbol": {
-                        symbol: catalyst_summary_by_symbol.get(symbol)
-                        for symbol in candidate_symbols
-                        if symbol in catalyst_summary_by_symbol
-                    },
-                }
-            )
-
-
+            result = {
+                "strategy_id": strategy.get("id"),
+                "strategy_name": strategy.get("name"),
+                "source_title": strategy.get("source_title"),
+                "priority_score": finalist.get("priority_score"),
+                "opportunities": opportunities,
+                "anchor_symbol": anchor,
+                "candidate_symbols": candidate_symbols,
+                "research_windows": {
+                    symbol: research_windows.get(symbol)
+                    for symbol in candidate_symbols
+                    if symbol in research_windows
+                },
+                "symbol_lifecycles": {
+                    symbol: lifecycle_by_symbol.get(symbol)
+                    for symbol in candidate_symbols
+                    if symbol in lifecycle_by_symbol
+                },
+                "asset_status_by_symbol": {
+                    symbol: (
+                        (universe.get("asset_metadata") or {}).get(symbol) or {}
+                    ).get("status")
+                    for symbol in candidate_symbols
+                },
+                "optimization_report": optimization_report,
+                "walk_forward": walk_report,
+                "strength": strength,
+                "generalization": generalization,
+                "global_score": global_score,
+                "validation_status": validation_status,
+                "gate_reasons": gate_reasons,
+                "catalyst_summary_by_symbol": {
+                    symbol: catalyst_summary_by_symbol.get(symbol)
+                    for symbol in candidate_symbols
+                    if symbol in catalyst_summary_by_symbol
+                },
+            }
+            return result, None, {
+                "finalist_number": finalist_number,
+                "strategy_id": strategy.get("id"),
+                "seconds": round(time_module.monotonic() - started, 3),
+            }
         except AppError as exc:
             failure = {
                 "strategy_id": strategy.get("id"),
@@ -1379,13 +1448,38 @@ def run_autonomous_research(
                 "finalist_number": finalist_number,
                 "error": str(exc),
             }
-            failed_finalists.append(failure)
             _notify(
                 progress,
                 f"Deep research {finalist_number}/{len(finalists)} skipped "
                 f"{strategy.get('name') or 'strategy'} after a research error; continuing…",
             )
-            continue
+            return None, failure, {
+                "finalist_number": finalist_number,
+                "strategy_id": strategy.get("id"),
+                "seconds": round(time_module.monotonic() - started, 3),
+            }
+
+    deep_started = time_module.monotonic()
+    if validation_workers > 1 and len(finalists) > 1:
+        _notify(
+            progress,
+            f"Running {len(finalists)} independent finalist validations with "
+            f"{validation_workers} parallel workers…",
+        )
+    for result, failure, timing in _run_independent_finalist_tasks(
+        finalists,
+        validate_finalist,
+        parallel_workers=validation_workers,
+    ):
+        if result is not None:
+            research_results.append(result)
+        if failure is not None:
+            failed_finalists.append(failure)
+        deep_durations.append(timing)
+
+    deep_validation_seconds = round(time_module.monotonic() - deep_started, 3)
+    failed_finalists.sort(key=lambda item: int(item.get("finalist_number") or 0))
+    deep_durations.sort(key=lambda item: int(item.get("finalist_number") or 0))
 
     research_results.sort(
         key=lambda item: (
@@ -1417,6 +1511,12 @@ def run_autonomous_research(
         "deep_strategies_failed": len(failed_finalists),
         "failed_finalists": failed_finalists,
         "run_status": "complete_with_skips" if failed_finalists else "complete",
+        "timing_profile": {
+            "total_seconds": round(time_module.monotonic() - run_started, 3),
+            "deep_validation_seconds": deep_validation_seconds,
+            "parallel_workers": validation_workers,
+            "finalists": deep_durations,
+        },
         "discovery": [
             {
                 "strategy_id": item["strategy"].get("id"),

@@ -1,11 +1,13 @@
 """Tests for autonomous historical opportunity research."""
 
+import threading
 import unittest
 from datetime import datetime, timezone
 
 from youtube_strategy_engine import AppError
 
 from trading_auto_research import (
+    _run_independent_finalist_tasks,
     invalidate_legacy_autonomous_validations,
     autonomous_validation_boundaries,
     AUTONOMOUS_VALIDATION_METHOD_VERSION,
@@ -461,6 +463,37 @@ class AutonomousResearchTests(unittest.TestCase):
         self.assertEqual(saved_run["failed_finalists"][0]["strategy_name"], "Skipped")
         self.assertEqual(saved_run["timing_profile"]["total_seconds"], 420.0)
         self.assertEqual(saved_run["timing_profile"]["samples"][-1]["fraction"], 1.0)
+
+
+class ParallelValidationRegressionTests(unittest.TestCase):
+    def test_independent_finalists_can_run_in_parallel_without_changing_results(self):
+        barrier = threading.Barrier(2, timeout=3)
+        thread_names = set()
+        lock = threading.Lock()
+        finalists = [{"id": "a"}, {"id": "b"}]
+
+        def task(number, finalist):
+            with lock:
+                thread_names.add(threading.current_thread().name)
+            barrier.wait()
+            return (
+                {"number": number, "id": finalist["id"]},
+                None,
+                {"finalist_number": number, "seconds": 0.01},
+            )
+
+        completed = _run_independent_finalist_tasks(
+            finalists,
+            task,
+            parallel_workers=2,
+        )
+        results = sorted(
+            (result["number"], result["id"])
+            for result, failure, timing in completed
+            if result is not None and failure is None
+        )
+        self.assertEqual(results, [(1, "a"), (2, "b")])
+        self.assertEqual(len(thread_names), 2)
 
 
 class ValidationIntegrityRegressionTests(unittest.TestCase):

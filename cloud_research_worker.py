@@ -34,6 +34,7 @@ from trading_catalyst_core import (
     enrich_bars_with_point_in_time_catalysts,
     historical_news,
 )
+from trading_intelligence_core import research_readiness
 from trading_research_orchestrator import (
     DEFAULT_GEMINI_BULK_FALLBACK_MODEL,
     DEFAULT_GEMINI_BULK_RESEARCH_MODEL,
@@ -159,6 +160,8 @@ def _pending_web_strategies(data: dict[str, Any], maximum: int = 3) -> list[dict
             continue
         if str(item.get("validation_status") or "") == "validated":
             continue
+        if research_readiness(item).get("label") != "ready_for_backtest":
+            continue
         last = item.get("last_autonomous_research")
         if isinstance(last, dict):
             last_status = str(last.get("validation_status") or "")
@@ -182,6 +185,43 @@ def _pending_web_strategies(data: dict[str, Any], maximum: int = 3) -> list[dict
         reverse=True,
     )
     return candidates[: max(1, int(maximum))]
+
+
+def close_empty_autonomous_validation_jobs(
+    data: dict[str, Any],
+) -> tuple[dict[str, Any], int]:
+    """Close queued/retry validation jobs when nothing testable remains."""
+    if _pending_web_strategies(data, maximum=1):
+        return data, 0
+
+    result = dict(data or {})
+    queue = []
+    closed = 0
+    now_text = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    for raw in result.get("research_queue") or []:
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        if (
+            str(item.get("type") or "") == "autonomous_validation"
+            and str(item.get("status") or "") in {"queued", "retry"}
+        ):
+            item["status"] = "complete"
+            item["updated_at"] = now_text
+            item["completed_at"] = now_text
+            item["next_attempt_at"] = None
+            item["last_error"] = None
+            item["failure_step"] = None
+            item["status_message"] = (
+                "Validation queue closed cleanly because no machine-testable "
+                "strategies remain."
+            )
+            item["result_ref"] = "no-pending-validation"
+            item["worker_id"] = None
+            closed += 1
+        queue.append(item)
+    result["research_queue"] = queue
+    return result, closed
 
 
 def execute_job(
@@ -577,6 +617,13 @@ def execute_job(
                 int(env("RESEARCH_VALIDATION_DEEP_LIMIT", "3") or 3),
             ),
             symbols_per_strategy=int(env("RESEARCH_VALIDATION_SYMBOLS_PER_STRATEGY", "6") or 6),
+            parallel_workers=max(
+                1,
+                min(
+                    3,
+                    int(env("RESEARCH_VALIDATION_PARALLEL_WORKERS", "2") or 2),
+                ),
+            ),
             progress=progress,
         )
         latest = store.load_latest()
@@ -713,6 +760,16 @@ def main() -> int:
             flush=True,
         )
         data = store.load_latest()
+
+    data, closed_empty_validation_jobs = close_empty_autonomous_validation_jobs(data)
+    if closed_empty_validation_jobs:
+        persist_store(store, data)
+        print(
+            f"Closed {closed_empty_validation_jobs} empty autonomous validation queue job(s).",
+            flush=True,
+        )
+        data = store.load_latest()
+
     print_predictive_ml_router_summary(data)
     data, seeded = seed_continuous_research_cycle(
         data,
