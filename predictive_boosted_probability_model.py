@@ -176,13 +176,14 @@ def _predict_frame(state: dict[str, Any], frame: pd.DataFrame) -> list[float]:
 
 def _chronological_oos(
     frame: pd.DataFrame,
-    feature_columns: list[str],
+    candidate_feature_columns: list[str],
     target: str,
     *,
     min_train_sessions: int,
     test_sessions_per_fold: int,
     embargo_sessions: int,
     min_train_rows: int,
+    minimum_feature_count: int = 1,
 ) -> dict[str, Any]:
     sessions = sorted(frame["_session_key"].unique().tolist())
     all_actual: list[int] = []
@@ -211,7 +212,16 @@ def _chronological_oos(
             test_start += max(1, int(test_sessions_per_fold))
             continue
 
-        state = _fit_state(train, feature_columns, target)
+        fold_feature_columns = _usable_numeric_features(
+            train.to_dict("records"),
+            candidate_feature_columns,
+            minimum_non_null=max(10, min(50, len(train) // 20)),
+        )
+        if len(fold_feature_columns) < max(1, int(minimum_feature_count)):
+            test_start += max(1, int(test_sessions_per_fold))
+            continue
+
+        state = _fit_state(train, fold_feature_columns, target)
         probability = _predict_frame(state, test)
         actual = test[target].astype(int).tolist()
         naive_probability = float(train[target].mean())
@@ -226,6 +236,8 @@ def _chronological_oos(
                 "train_rows": len(train),
                 "test_sessions": list(test_sessions),
                 "test_rows": len(test),
+                "feature_count": len(fold_feature_columns),
+                "feature_columns": list(fold_feature_columns),
                 "roc_auc": _safe_auc(actual, probability),
                 "brier_score": model_brier,
                 "naive_brier_score": naive_brier,
@@ -280,12 +292,13 @@ def _chronological_oos(
 
 def _held_out_stock_generalization(
     frame: pd.DataFrame,
-    feature_columns: list[str],
+    candidate_feature_columns: list[str],
     target: str,
     *,
     embargo_sessions: int = 1,
     min_train_rows: int = 250,
     test_sessions_per_symbol: int = 4,
+    minimum_feature_count: int = 1,
 ) -> dict[str, Any]:
     """Test the boosted model on stocks excluded entirely from their training fit."""
     if "symbol" not in frame.columns:
@@ -325,7 +338,15 @@ def _held_out_stock_generalization(
         ):
             continue
 
-        state = _fit_state(train, feature_columns, target)
+        fold_feature_columns = _usable_numeric_features(
+            train.to_dict("records"),
+            candidate_feature_columns,
+            minimum_non_null=max(10, min(50, len(train) // 20)),
+        )
+        if len(fold_feature_columns) < max(1, int(minimum_feature_count)):
+            continue
+
+        state = _fit_state(train, fold_feature_columns, target)
         probability = _predict_frame(state, test)
         actual = test[target].astype(int).tolist()
         naive_probability = float(train[target].mean())
@@ -338,6 +359,8 @@ def _held_out_stock_generalization(
                 "train_rows": len(train),
                 "test_rows": len(test),
                 "test_sessions": list(test_sessions),
+                "feature_count": len(fold_feature_columns),
+                "feature_columns": list(fold_feature_columns),
                 "roc_auc": _safe_auc(actual, probability),
                 "brier_score": model_brier,
                 "naive_brier_score": naive_brier,
@@ -443,17 +466,18 @@ def build_boosted_probability_model(
         na_position="last",
     ).reset_index(drop=True)
 
-    feature_columns = _usable_numeric_features(
-        records,
-        list(dataset.get("feature_columns") or []),
-        minimum_non_null=max(10, min(50, len(frame) // 20)),
+    candidate_feature_columns = sorted(
+        str(column)
+        for column in (dataset.get("feature_columns") or [])
+        if str(column).startswith("feature__")
+        and not str(column).startswith("feature__context_")
     )
-    if len(feature_columns) < max(1, int(minimum_feature_count)):
+    if len(candidate_feature_columns) < max(1, int(minimum_feature_count)):
         return {
             "status": "INSUFFICIENT_DATA",
-            "reason": "Not enough live-compatible numeric features for boosted training.",
+            "reason": "Not enough live-compatible feature columns for boosted training.",
             "model_type": "portable_gradient_boosted_trees",
-            "feature_count": len(feature_columns),
+            "feature_count": len(candidate_feature_columns),
             "research_only": True,
             "affects_live_ranking": False,
             "affects_execution": False,
@@ -462,19 +486,20 @@ def build_boosted_probability_model(
 
     oos = _chronological_oos(
         frame,
-        feature_columns,
+        candidate_feature_columns,
         target,
         min_train_sessions=min_train_sessions,
         test_sessions_per_fold=test_sessions_per_fold,
         embargo_sessions=embargo_sessions,
         min_train_rows=min_train_rows,
+        minimum_feature_count=minimum_feature_count,
     )
     if oos.get("status") != "EVALUATED":
         return {
             "status": "INSUFFICIENT_DATA",
             "reason": "No boosted chronological walk-forward fold met the training requirements.",
             "model_type": "portable_gradient_boosted_trees",
-            "feature_count": len(feature_columns),
+            "feature_count": len(candidate_feature_columns),
             "research_only": True,
             "affects_live_ranking": False,
             "affects_execution": False,
@@ -515,11 +540,11 @@ def build_boosted_probability_model(
             raw_brier = float(brier_score_loss(test_actual, test_probability))
             calibrated_brier = float(brier_score_loss(test_actual, calibrated_test))
             if calibrated_brier <= raw_brier + 0.002:
-                calibrator = _fit_platt_calibrator(actual, probability)
+                calibrator = trial
                 calibration_report = {
                     "method": "platt_logit",
                     "enabled": bool(calibrator),
-                    "fit_rows": len(actual),
+                    "fit_rows": len(train_actual),
                     "selection_holdout_rows": len(test_actual),
                     "raw_holdout_brier": raw_brier,
                     "calibrated_holdout_brier": calibrated_brier,
@@ -537,10 +562,11 @@ def build_boosted_probability_model(
 
     generalization = _held_out_stock_generalization(
         frame,
-        feature_columns,
+        candidate_feature_columns,
         target,
         embargo_sessions=embargo_sessions,
         min_train_rows=min_train_rows,
+        minimum_feature_count=minimum_feature_count,
     )
 
     gate_reasons: list[str] = []
@@ -573,6 +599,23 @@ def build_boosted_probability_model(
             gate_reasons.append(
                 "Boosted held-out-stock Brier skill must beat its naive benchmark."
             )
+
+    feature_columns = _usable_numeric_features(
+        frame.to_dict("records"),
+        candidate_feature_columns,
+        minimum_non_null=max(10, min(50, len(frame) // 20)),
+    )
+    if len(feature_columns) < max(1, int(minimum_feature_count)):
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "reason": "Not enough populated numeric features for the final boosted model.",
+            "model_type": "portable_gradient_boosted_trees",
+            "feature_count": len(feature_columns),
+            "research_only": True,
+            "affects_live_ranking": False,
+            "affects_execution": False,
+            "shadow_scoring_enabled": False,
+        }
 
     final_state = _fit_state(frame, feature_columns, target)
     sessions = sorted(frame["_session_key"].unique().tolist())
