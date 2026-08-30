@@ -96,6 +96,8 @@ def summarize(path: Path) -> dict[str, Any]:
     runs = [x for x in data.get("external_research_runs") or [] if isinstance(x, dict)]
     hyps = [x for x in data.get("research_hypotheses") or [] if isinstance(x, dict)]
     ml_runs = [x for x in data.get("predictive_ml_runs") or [] if isinstance(x, dict)]
+    validation_runs = [x for x in data.get("validation_runs") or [] if isinstance(x, dict)]
+    research_runs = [x for x in data.get("research_runs") or [] if isinstance(x, dict)]
     strategies = [x for x in data.get("strategies") or [] if isinstance(x, dict)]
     web_strats = [x for x in strategies if str(x.get("source_type") or "") == "autonomous_web_research"]
 
@@ -171,6 +173,62 @@ def summarize(path: Path) -> dict[str, Any]:
             "router": compact_router(router),
         }
 
+    autonomous_validations = [
+        item
+        for item in validation_runs
+        if bool(item.get("autonomous"))
+    ]
+    autonomous_validations.sort(
+        key=lambda item: str(item.get("generated_at") or ""),
+        reverse=True,
+    )
+    latest_autonomous_validations = []
+    for item in autonomous_validations[:12]:
+        latest_autonomous_validations.append(
+            {
+                "id": item.get("id"),
+                "strategy_id": item.get("strategy_id"),
+                "strategy_name": item.get("strategy_name"),
+                "symbol": item.get("symbol"),
+                "generated_at": item.get("generated_at"),
+                "validation_method_version": item.get("validation_method_version"),
+                "validation_status": item.get("validation_status"),
+                "optimizer_status": item.get("optimizer_status"),
+                "global_score": item.get("global_score"),
+                "robustness": item.get("robustness"),
+                "generalization_summary": item.get("generalization_summary"),
+                "walk_forward_summary": item.get("walk_forward_summary"),
+                "training_metrics": item.get("training_metrics"),
+                "validation_metrics": item.get("validation_metrics"),
+                "holdout_metrics": item.get("holdout_metrics"),
+                "stress_metrics": item.get("stress_metrics"),
+                "gate_reasons": item.get("gate_reasons") or [],
+            }
+        )
+
+    autonomous_research_runs = [
+        item
+        for item in research_runs
+        if str(item.get("kind") or "") == "autonomous_research"
+    ]
+    autonomous_research_runs.sort(
+        key=lambda item: str(item.get("generated_at") or ""),
+        reverse=True,
+    )
+    latest_autonomous_research_runs = [
+        {
+            "id": item.get("id"),
+            "generated_at": item.get("generated_at"),
+            "validation_method_version": item.get("validation_method_version"),
+            "run_status": item.get("run_status"),
+            "deep_strategies_attempted": item.get("deep_strategies_attempted"),
+            "deep_strategies_tested": item.get("deep_strategies_tested"),
+            "deep_strategies_failed": item.get("deep_strategies_failed"),
+            "failed_finalists": item.get("failed_finalists") or [],
+        }
+        for item in autonomous_research_runs[:6]
+    ]
+
     system = data.get("research_system") if isinstance(data.get("research_system"), dict) else {}
     return {
         "generated_at": now.isoformat().replace("+00:00", "Z"),
@@ -219,6 +277,11 @@ def summarize(path: Path) -> dict[str, Any]:
             "approved_counts": counter_dict(x.get("approved") for x in web_strats),
         },
         "predictive_ml": {"stored_runs": len(ml_runs), "latest": latest_ml},
+        "autonomous_validation": {
+            "stored_runs": len(autonomous_validations),
+            "latest": latest_autonomous_validations,
+            "latest_research_runs": latest_autonomous_research_runs,
+        },
         "interpretation_notes": [
             "Counts are records currently retained in the durable library; if collections are retention-capped they are not guaranteed all-time lifetime totals.",
             "Duplicate checks flag exact active dedupe keys, payloads, or normalized topics; semantically similar wording may still require review.",
