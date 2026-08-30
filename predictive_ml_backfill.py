@@ -23,6 +23,7 @@ from predictive_ml_pipeline import (
 from predictive_probability_model import build_portable_probability_model
 from predictive_boosted_probability_model import build_boosted_probability_model
 from predictive_model_head_to_head import build_historical_model_head_to_head
+from predictive_learning_router import build_stock_learning_router
 
 
 DEFAULT_BOOTSTRAP_SYMBOLS: tuple[str, ...] = (
@@ -62,7 +63,7 @@ DEFAULT_MAX_SYMBOLS = 24
 DEFAULT_SIMILARITY_SYMBOLS = 10
 DEFAULT_TICKER_SPECIFIC_SYMBOLS = 6
 MAX_AUTOMATIC_ML_RUN_HISTORY = 12
-MODEL_SUITE_VERSION = 4
+MODEL_SUITE_VERSION = 5
 
 
 def _clean_symbols(values: Any) -> list[str]:
@@ -437,17 +438,11 @@ def run_predictive_ml_backfill(
         embargo_sessions=1,
         min_train_rows=150,
     )
-    ticker_specific = _compact(ticker_specific)
-    ticker_specific["automatic_subset_symbols"] = ticker_specific_symbols
-    ticker_specific["automatic_subset_reason"] = (
-        "Priority tickers are tested first, then a deterministic spread across the "
-        "remaining universe keeps same-stock historical validation useful without "
-        "making every automatic cloud retrain substantially slower."
-    )
 
-    similarity_symbols = _spread_symbol_subset(
+    similarity_symbols = _priority_spread_symbol_subset(
         symbols,
         maximum=int((payload or {}).get("similarity_max_symbols") or DEFAULT_SIMILARITY_SYMBOLS),
+        priority=ticker_specific_symbols,
     )
     notify(
         "Running bounded continuous stock-similarity validation on "
@@ -464,11 +459,30 @@ def run_predictive_ml_backfill(
         min_train_rows=250,
         min_test_rows=20,
     )
+
+    notify(
+        "Comparing same-ticker, similarity-weighted, and broad cross-stock learning "
+        "on exactly aligned unseen rows."
+    )
+    stock_learning_router = build_stock_learning_router(
+        ticker_specific,
+        similarity_validation,
+    )
+
+    ticker_specific = _compact(ticker_specific)
+    ticker_specific["automatic_subset_symbols"] = ticker_specific_symbols
+    ticker_specific["automatic_subset_reason"] = (
+        "Priority tickers are tested first, then a deterministic spread across the "
+        "remaining universe keeps same-stock historical validation useful without "
+        "making every automatic cloud retrain substantially slower."
+    )
     similarity_validation = _compact(similarity_validation)
     similarity_validation["automatic_subset_symbols"] = similarity_symbols
     similarity_validation["automatic_subset_reason"] = (
-        "Bounded representative subset keeps automatic cloud retraining fast while still "
-        "testing continuous behavioral similarity with held-out stocks."
+        "The similarity subset always contains the bounded ticker-specific symbols, "
+        "then fills remaining slots with a deterministic spread across the universe. "
+        "That preserves broad similarity validation while enabling exact per-stock "
+        "learning-route comparisons without another market-data replay."
     )
 
     historical_head_to_head = build_historical_model_head_to_head(probability_models)
@@ -511,6 +525,7 @@ def run_predictive_ml_backfill(
         "boosted_probability_model": deepcopy(boosted_probability_model),
         "ticker_specific": deepcopy(ticker_specific),
         "similarity_validation": deepcopy(similarity_validation),
+        "stock_learning_router": deepcopy(stock_learning_router),
         "historical_head_to_head": deepcopy(historical_head_to_head),
         "completed_at": completed_at,
         "checkpoint_stage": "automatic_backfill_complete",
@@ -609,6 +624,20 @@ def merge_backfill_result_into_library(
         "ticker_specific_symbols": list(
             (record.get("ticker_specific") or {}).get("automatic_subset_symbols") or []
         ) if isinstance(record.get("ticker_specific"), dict) else [],
+        "learning_router_status": str(
+            (record.get("stock_learning_router") or {}).get("status")
+            if isinstance(record.get("stock_learning_router"), dict)
+            else ""
+        ),
+        "learning_router_symbols_compared": int(
+            (record.get("stock_learning_router") or {}).get("symbols_compared") or 0
+        ) if isinstance(record.get("stock_learning_router"), dict) else 0,
+        "learning_router_clear_routes": int(
+            (record.get("stock_learning_router") or {}).get("symbols_with_clear_route") or 0
+        ) if isinstance(record.get("stock_learning_router"), dict) else 0,
+        "learning_router_route_counts": dict(
+            (record.get("stock_learning_router") or {}).get("route_counts") or {}
+        ) if isinstance(record.get("stock_learning_router"), dict) else {},
         "historical_leader_model_id": (
             (record.get("historical_head_to_head") or {}).get("leader_model_id")
             if isinstance(record.get("historical_head_to_head"), dict)
