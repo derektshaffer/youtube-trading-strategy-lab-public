@@ -7086,6 +7086,132 @@ elif module == "Pattern Validation":
                 )
                 + "."
             )
+
+            backfill_run_id = str(ml_backfill_status.get("run_id") or "").strip()
+            predictive_runs = [
+                item
+                for item in library.get("predictive_ml_runs") or []
+                if isinstance(item, dict)
+            ]
+            active_backfill_run = next(
+                (
+                    item
+                    for item in predictive_runs
+                    if str(item.get("id") or "").strip() == backfill_run_id
+                ),
+                predictive_runs[0] if predictive_runs else {},
+            )
+            learning_router = (
+                dict(active_backfill_run.get("stock_learning_router") or {})
+                if isinstance(active_backfill_run, dict)
+                else {}
+            )
+            learning_route_rows = [
+                item
+                for item in learning_router.get("by_symbol") or []
+                if isinstance(item, dict)
+            ]
+            if learning_route_rows:
+                with st.expander(
+                    "Per-stock learning route comparison",
+                    expanded=False,
+                ):
+                    st.caption(
+                        "Fair comparison: each learning method is scored on the same stock, "
+                        "session, timestamp, and realized outcome. A winner is shown only when "
+                        "its out-of-sample edge clears the router's materiality threshold."
+                    )
+                    route_table = []
+                    for item in learning_route_rows:
+                        routes = (
+                            dict(item.get("routes") or {})
+                            if isinstance(item.get("routes"), dict)
+                            else {}
+                        )
+                        own_history = dict(routes.get("same_ticker_history") or {})
+                        similar_stock = dict(
+                            routes.get("similarity_weighted_transfer") or {}
+                        )
+                        broad_transfer = dict(
+                            routes.get("broad_cross_stock_transfer") or {}
+                        )
+                        recommended_route = str(
+                            item.get("recommended_route") or ""
+                        ).strip()
+                        best_label = (
+                            str(item.get("recommended_route_label") or "").strip()
+                            if recommended_route
+                            else str(
+                                item.get("provisional_lowest_brier_route_label")
+                                or "No clear route"
+                            ).strip()
+                        )
+                        evidence_label = (
+                            "Clear provisional leader"
+                            if recommended_route
+                            else (
+                                "No clear edge"
+                                if item.get("status") == "EVALUATED"
+                                else "More history needed"
+                            )
+                        )
+                        route_table.append(
+                            {
+                                "Stock": item.get("symbol"),
+                                "Evidence": evidence_label,
+                                "Best learning source": best_label,
+                                "Paired OOS rows": int(item.get("paired_oos_rows") or 0),
+                                "Own-history Brier": safe_float(
+                                    own_history.get("brier_score")
+                                ),
+                                "Similar-stock Brier": safe_float(
+                                    similar_stock.get("brier_score")
+                                ),
+                                "Broad-transfer Brier": safe_float(
+                                    broad_transfer.get("brier_score")
+                                ),
+                                "Own-history AUC": safe_float(
+                                    own_history.get("roc_auc")
+                                ),
+                                "Similar-stock AUC": safe_float(
+                                    similar_stock.get("roc_auc")
+                                ),
+                                "Broad-transfer AUC": safe_float(
+                                    broad_transfer.get("roc_auc")
+                                ),
+                                "Why": item.get("reason") or "",
+                            }
+                        )
+                    st.dataframe(
+                        pd.DataFrame(route_table),
+                        width="stretch",
+                        hide_index=True,
+                        column_config={
+                            "Own-history Brier": st.column_config.NumberColumn(
+                                format="%.4f"
+                            ),
+                            "Similar-stock Brier": st.column_config.NumberColumn(
+                                format="%.4f"
+                            ),
+                            "Broad-transfer Brier": st.column_config.NumberColumn(
+                                format="%.4f"
+                            ),
+                            "Own-history AUC": st.column_config.NumberColumn(
+                                format="%.3f"
+                            ),
+                            "Similar-stock AUC": st.column_config.NumberColumn(
+                                format="%.3f"
+                            ),
+                            "Broad-transfer AUC": st.column_config.NumberColumn(
+                                format="%.3f"
+                            ),
+                        },
+                    )
+                    st.caption(
+                        "Lower Brier is better probability accuracy; higher AUC is better "
+                        "ranking/discrimination. These results are still research-only and "
+                        "do not change live scanner ranking or execution."
+                    )
     elif ml_backfill_state == "failed":
         st.warning(
             "Automatic ML backfill hit an error and will use the durable retry path: "
