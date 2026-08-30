@@ -2734,7 +2734,14 @@ if module == "Stock Strategy Finder":
             data = merge_finder_report_into_library(data, finder_report)
             checkpoint_store.save(data)
 
-            ui_report = dict(finder_report)
+            ui_report = (
+                latest_completed_finder_report(
+                    data,
+                    finder_symbol,
+                    finder_profile.name,
+                )
+                or dict(finder_report)
+            )
             ui_report["configuration_history"] = []
             if isinstance(ui_report.get("optimization"), dict):
                 ui_report["optimization"] = dict(ui_report["optimization"])
@@ -2942,6 +2949,11 @@ if module == "Stock Strategy Finder":
             f"That ledger contains {int(finder_result.get('unique_configurations_tested') or 0):,} unique tested configurations."
         )
 
+        candidate_strategy_id = str(
+            finder_result.get("stock_specific_strategy_id")
+            or finder_result.get("winner_source_strategy_id")
+            or ""
+        )
         actions = st.columns(3)
         if actions[0].button(
             "↗ Open Paper & Live Trading",
@@ -2949,6 +2961,7 @@ if module == "Stock Strategy Finder":
             disabled=str(verdict.get("code") or "") != "ready_for_paper",
             key="til_finder_open_paper",
         ):
+            st.session_state["til_selected_strategy_id"] = candidate_strategy_id
             st.session_state["til_navigate_to"] = "Live / Paper"
             st.rerun()
         if actions[1].button(
@@ -2956,7 +2969,7 @@ if module == "Stock Strategy Finder":
             width="stretch",
             key="til_finder_open_discovery",
         ):
-            st.session_state["til_selected_strategy_id"] = str(finder_result.get("winner_source_strategy_id") or "")
+            st.session_state["til_selected_strategy_id"] = candidate_strategy_id
             st.session_state["til_navigate_to"] = "Market Discovery"
             st.rerun()
         if actions[2].button(
@@ -2964,7 +2977,7 @@ if module == "Stock Strategy Finder":
             width="stretch",
             key="til_finder_open_lab",
         ):
-            st.session_state["til_selected_strategy_id"] = str(finder_result.get("winner_source_strategy_id") or "")
+            st.session_state["til_selected_strategy_id"] = candidate_strategy_id
             st.session_state["til_navigate_to"] = "Strategy Lab"
             st.rerun()
 
@@ -9194,9 +9207,12 @@ elif module == "Stock Analyzer":
             max_chars=10,
         ).strip().upper()
         validated_only = analyzer_cols[1].checkbox(
-            "Validated only",
-            value=True,
-            help="Turn this off to compare research-only strategies too.",
+            "Only fully validated",
+            value=False,
+            help=(
+                "Off by default so stock-specific historical/promising candidates remain visible. "
+                "Turn it on when you want only strategies that cleared every strict validation gate."
+            ),
         )
         analyzer_cols[2].caption(
             "The analyzer ranks setup fit separately from historical robustness. "
@@ -9209,7 +9225,10 @@ elif module == "Stock Analyzer":
             or str(item.get("validation_status") or "").lower() == "validated"
         ]
         if validated_only and not analyzer_strategies:
-            st.info("No validated strategies are available yet. Turn off Validated only to explore research strategies.")
+            st.info(
+                "No fully validated strategies are available yet. Turn off Only fully validated "
+                "to inspect promising and historically profitable research candidates."
+            )
 
         analyzer_slot = st.empty()
         analyze_stock = analyzer_slot.button(
