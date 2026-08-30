@@ -2,7 +2,10 @@
 
 import unittest
 
-from cloud_research_worker import _pending_web_strategies
+from cloud_research_worker import (
+    _pending_web_strategies,
+    close_empty_autonomous_validation_jobs,
+)
 
 
 class PendingValidationTests(unittest.TestCase):
@@ -54,6 +57,30 @@ class PendingValidationTests(unittest.TestCase):
         candidate["machine_rules"] = {"previous_day_high_breakout": False}
         selected = _pending_web_strategies({"strategies": [candidate]})
         self.assertEqual(selected, [])
+
+    def test_existing_empty_validation_retry_is_closed_cleanly(self):
+        candidate = self._strategy("stale_methodology")
+        candidate["machine_rules"] = {"previous_day_high_breakout": False}
+        data = {
+            "strategies": [candidate],
+            "research_queue": [
+                {
+                    "id": "retry-validation",
+                    "type": "autonomous_validation",
+                    "status": "retry",
+                    "next_attempt_at": "2026-08-31T00:00:00Z",
+                    "last_error": "No extracted strategies are machine-testable enough.",
+                    "failure_step": "job_execution",
+                }
+            ],
+        }
+        updated, closed = close_empty_autonomous_validation_jobs(data)
+        self.assertEqual(closed, 1)
+        job = updated["research_queue"][0]
+        self.assertEqual(job["status"], "complete")
+        self.assertEqual(job["result_ref"], "no-pending-validation")
+        self.assertIsNone(job["next_attempt_at"])
+        self.assertIsNone(job["last_error"])
 
 
 if __name__ == "__main__":
