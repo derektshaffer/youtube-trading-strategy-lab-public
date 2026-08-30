@@ -265,3 +265,21 @@ def test_dataframe_feature_eligibility_matches_record_scan():
         minimum_non_null=10,
     )
     assert from_frame == from_records
+
+
+
+def test_dataframe_feature_eligibility_rejects_nonfinite_values_like_record_scan():
+    records = [
+        {"feature__finite": 1.0, "feature__bad": 1.0},
+        {"feature__finite": 2.0, "feature__bad": float("inf")},
+        {"feature__finite": 3.0, "feature__bad": 3.0},
+    ]
+    frame = probability_model.pd.DataFrame(records)
+    columns = ["feature__finite", "feature__bad"]
+    expected = probability_model._usable_numeric_features(
+        records, columns, minimum_non_null=3
+    )
+    actual = probability_model._usable_numeric_features(
+        frame, columns, minimum_non_null=3
+    )
+    assert actual == expected == ["feature__finite"]
