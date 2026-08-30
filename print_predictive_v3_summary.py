@@ -62,6 +62,40 @@ def model_summary(model):
     }
 
 
+def serialized_size_bytes(value):
+    try:
+        return len(json.dumps(value, default=str, separators=(",", ":")).encode("utf-8"))
+    except Exception:
+        return 0
+
+
+def size_breakdown(data):
+    top = []
+    for key, value in data.items():
+        size = serialized_size_bytes(value)
+        count = len(value) if isinstance(value, (list, dict)) else None
+        top.append({"key": str(key), "bytes": size, "mb": round(size / 1024 / 1024, 3), "count": count})
+    top.sort(key=lambda item: item["bytes"], reverse=True)
+
+    nested = {}
+    for parent in ("research_system", "predictive_ml_runs", "retrospective_learning_runs", "strategies", "research_queue", "external_research_runs", "research_hypotheses"):
+        value = data.get(parent)
+        if isinstance(value, dict):
+            rows = []
+            for key, child in value.items():
+                size = serialized_size_bytes(child)
+                count = len(child) if isinstance(child, (list, dict)) else None
+                rows.append({"key": str(key), "bytes": size, "mb": round(size / 1024 / 1024, 3), "count": count})
+            rows.sort(key=lambda item: item["bytes"], reverse=True)
+            nested[parent] = rows[:20]
+        elif isinstance(value, list):
+            rows = []
+            for idx, child in enumerate(value[:50]):
+                rows.append({"index": idx, "bytes": serialized_size_bytes(child), "mb": round(serialized_size_bytes(child) / 1024 / 1024, 3)})
+            rows.sort(key=lambda item: item["bytes"], reverse=True)
+            nested[parent] = rows[:20]
+    return {"total_mb": round(serialized_size_bytes(data) / 1024 / 1024, 3), "top_level": top[:30], "nested": nested}
+
 def main():
     data = build_store().load_latest()
     runs = [item for item in data.get("predictive_ml_runs") or [] if isinstance(item, dict)]
