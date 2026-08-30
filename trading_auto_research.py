@@ -37,7 +37,27 @@ AUTO_SYMBOLS_PER_STRATEGY = 6
 AUTO_DAILY_LOOKBACK_DAYS = 1825
 AUTO_EVENT_WINDOW_DAYS = 120
 AUTO_EVENT_WINDOW_BUFFER_DAYS = 30
+# Final autonomous validation must occur strictly after the information used to
+# choose symbols. This prevents end-of-day/event-window hindsight from deciding
+# which earlier intraday bars are allowed into the test sample.
+AUTO_VALIDATION_WINDOW_DAYS = 180
+AUTONOMOUS_VALIDATION_METHOD_VERSION = 2
 AUTO_TIMEFRAME = "5Min"
+
+
+def autonomous_validation_boundaries(
+    historical_end: datetime,
+    *,
+    validation_days: int = AUTO_VALIDATION_WINDOW_DAYS,
+) -> dict[str, datetime]:
+    """Return the strict discovery/test boundary for autonomous validation."""
+    validation_end = historical_end
+    validation_start = validation_end - timedelta(days=max(30, int(validation_days)))
+    return {
+        "discovery_cutoff": validation_start,
+        "validation_start": validation_start,
+        "validation_end": validation_end,
+    }
 
 
 def _notify(callback: Callable[[str], None] | None, message: str) -> None:
@@ -961,6 +981,7 @@ def _automatic_optimization_settings() -> OptimizationSettings:
         minimum_validation_trades=2,
         training_fraction=0.60,
         validation_fraction=0.20,
+        automatic_slippage=True,
         maximum_drawdown_pct=15.0,
         selection_mode="validated",
     )
@@ -995,7 +1016,9 @@ def _global_validation_gate(
     if not broad_universe:
         reasons.append("Only a current-screener fallback universe was available, so selection bias is too high.")
 
-    if walk_forward:
+    if not walk_forward:
+        reasons.append("Walk-forward validation is missing or failed; validation fails closed.")
+    else:
         wf = walk_forward.get("summary") or {}
         if (safe_float(wf.get("profitable_fold_pct"), 0.0) or 0.0) < 50.0:
             reasons.append("Fewer than half of rolling walk-forward folds were profitable.")
@@ -1046,17 +1069,28 @@ def run_autonomous_research(
     if market.historical_feed == "sip" and market.live_feed != "sip":
         historical_end -= timedelta(minutes=16)
 
+    # Point-in-time sampling boundary: discovery may use only data that existed
+    # before the untouched validation period begins. No final close/high/volume
+    # from a validation day may influence symbol or window selection.
+    boundaries = autonomous_validation_boundaries(historical_end)
+    validation_end = boundaries["validation_end"]
+    validation_start = boundaries["validation_start"]
+    discovery_end = boundaries["discovery_cutoff"]
+    universe["discovery_cutoff"] = discovery_end.isoformat()
+    universe["validation_start"] = validation_start.isoformat()
+    universe["validation_end"] = validation_end.isoformat()
+
     _notify(
         progress,
         f"Screening {len(symbols)} active + inactive stocks across about "
-        f"{AUTO_DAILY_LOOKBACK_DAYS // 365} years of daily history…",
+        f"{AUTO_DAILY_LOOKBACK_DAYS // 365} years of PRE-TEST daily history…",
     )
     skipped_historical_symbols: list[str] = []
     daily_rows = _batched_bars(
         market,
         symbols,
-        start=historical_end - timedelta(days=AUTO_DAILY_LOOKBACK_DAYS),
-        end=historical_end,
+        start=discovery_end - timedelta(days=AUTO_DAILY_LOOKBACK_DAYS),
+        end=discovery_end,
         timeframe="1Day",
         batch_size=100,
         max_pages=24,
@@ -1131,16 +1165,30 @@ def run_autonomous_research(
                     existing_dates.add(event_date)
             opportunities_by_symbol[symbol] = merged
 
+    validation_symbols = list(opportunities_by_symbol)
     _notify(
         progress,
-        f"Selecting historical event windows for {len(opportunities_by_symbol)} finalist stocks…",
+        f"Loading untouched post-cutoff validation history for {len(validation_symbols)} finalist stocks…",
     )
-    intraday_rows, research_windows = load_point_in_time_intraday(
+    intraday_rows = _batched_bars(
         market,
-        opportunities_by_symbol,
+        validation_symbols,
+        start=validation_start,
+        end=validation_end,
         timeframe=AUTO_TIMEFRAME,
+        batch_size=25,
+        max_pages=64,
         progress=progress,
     )
+    research_windows = {
+        symbol: {
+            "selection_mode": "fixed_post_cutoff",
+            "discovery_cutoff": discovery_end.isoformat(),
+            "start_date": validation_start.date().isoformat(),
+            "end_date": validation_end.date().isoformat(),
+        }
+        for symbol in intraday_rows
+    }
     intraday_symbols = list(intraday_rows)
 
     needs_catalysts = any(
@@ -1158,10 +1206,10 @@ def run_autonomous_research(
             window = research_windows.get(symbol) or {}
             if not window:
                 continue
-            start, end = _window_datetimes(window)
+            start, end = validation_start, validation_end
             _notify(
                 progress,
-                f"Historical catalyst window {index}/{len(intraday_symbols)}: {symbol}…",
+                f"Untouched validation catalyst window {index}/{len(intraday_symbols)}: {symbol}…",
             )
             try:
                 symbol_articles = historical_news(
@@ -1258,12 +1306,15 @@ def run_autonomous_research(
             cross_settings = _backtest_settings_from_dict(
                 winner.get("optimized_backtest_settings") or {}
             )
+            # Generalization evidence must be independent of the anchor stock
+            # used for optimization. Excluding the anchor prevents it from
+            # helping itself pass the portability gate.
             cross_rows = {
                 symbol: list(intraday_rows.get(symbol) or [])
                 for symbol in candidate_symbols
-                if intraday_rows.get(symbol)
+                if symbol != anchor and intraday_rows.get(symbol)
             }
-            _notify(progress, f"Testing frozen {strategy.get('name')} rules across {len(cross_rows)} stocks…")
+            _notify(progress, f"Testing frozen {strategy.get('name')} rules across {len(cross_rows)} non-anchor stocks…")
             generalization = cross_stock_generalization(
                 cross_rows,
                 frozen,
@@ -1346,10 +1397,17 @@ def run_autonomous_research(
 
     return {
         "generated_at": utc_now().isoformat(),
+        "validation_method_version": AUTONOMOUS_VALIDATION_METHOD_VERSION,
         "universe": universe,
         "daily_lookback_days": AUTO_DAILY_LOOKBACK_DAYS,
         "event_window_days": AUTO_EVENT_WINDOW_DAYS,
-        "intraday_lookback_days": AUTO_EVENT_WINDOW_DAYS,
+        "intraday_lookback_days": AUTO_VALIDATION_WINDOW_DAYS,
+        "sampling_boundary": {
+            "mode": "pretest_discovery_fixed_postcutoff_validation",
+            "discovery_cutoff": discovery_end.isoformat(),
+            "validation_start": validation_start.isoformat(),
+            "validation_end": validation_end.isoformat(),
+        },
         "point_in_time_horizon_years": round(AUTO_DAILY_LOOKBACK_DAYS / 365.0, 1),
         "timeframe": AUTO_TIMEFRAME,
         "eligible_strategies": len(eligible),
@@ -1371,12 +1429,79 @@ def run_autonomous_research(
         "results": research_results,
         "limitations": [
             str(universe.get("selection_bias_warning") or ""),
-            "Historical opportunity ranking uses only information available in each daily bar and prior-volume history; it does not use future trade P/L.",
+            "Historical opportunity ranking is frozen at a strict pre-test cutoff. Final close/high/volume from validation sessions cannot influence symbol selection.",
+            "The post-cutoff validation window retains every available session for the fixed finalist symbols, including fades and failed momentum days.",
             "Point-in-time membership is inferred from actual dated bar availability. Symbol renames, mergers, and corporate actions can create separate ticker identities across time.",
             "The scan samples the active + inactive Alpaca asset master rather than exhaustively downloading every listed security in one run; repeated runs can broaden coverage without requiring manual ticker selection.",
             "Autonomous validation is historical evidence, not a guarantee of future profitability.",
         ],
     }
+
+
+def invalidate_legacy_autonomous_validations(
+    library: dict[str, Any],
+) -> tuple[dict[str, Any], int]:
+    """Demote trusted results produced by the old hindsight-selected validator."""
+    data = dict(library or {})
+    strategies = [
+        dict(item) for item in data.get("strategies") or [] if isinstance(item, dict)
+    ]
+    invalidated_hypotheses: set[str] = set()
+    changed = 0
+    for item in strategies:
+        if str(item.get("source_type") or "") != "autonomous_web_research":
+            continue
+        if str(item.get("validation_status") or "") != "validated":
+            continue
+        last = item.get("last_autonomous_research")
+        version = (
+            int((last or {}).get("validation_method_version") or 0)
+            if isinstance(last, dict)
+            else 0
+        )
+        if version >= AUTONOMOUS_VALIDATION_METHOD_VERSION:
+            continue
+        item["validation_status"] = "research_only"
+        item["optimization_status"] = "revalidation_required"
+        item["last_autonomous_research"] = {
+            **(dict(last) if isinstance(last, dict) else {}),
+            "validation_status": "stale_methodology",
+            "stale_reason": (
+                "Previous autonomous validation used hindsight-selected event windows. "
+                "Revalidation under method v2 is required."
+            ),
+            "required_validation_method_version": AUTONOMOUS_VALIDATION_METHOD_VERSION,
+        }
+        item.pop("validated_rules", None)
+        item.pop("validated_backtest_settings", None)
+        item.pop("validated_at", None)
+        hypothesis_id = str(item.get("research_hypothesis_id") or "")
+        if hypothesis_id:
+            invalidated_hypotheses.add(hypothesis_id)
+        changed += 1
+
+    data["strategies"] = strategies
+    if invalidated_hypotheses:
+        refreshed = []
+        for raw in data.get("research_hypotheses") or []:
+            if not isinstance(raw, dict):
+                continue
+            item = dict(raw)
+            if str(item.get("id") or "") in invalidated_hypotheses:
+                item["status"] = "queued_for_validation"
+                summary = (
+                    dict(item.get("validation_summary") or {})
+                    if isinstance(item.get("validation_summary"), dict)
+                    else {}
+                )
+                item["validation_summary"] = {
+                    **summary,
+                    "validation_status": "stale_methodology",
+                    "required_validation_method_version": AUTONOMOUS_VALIDATION_METHOD_VERSION,
+                }
+            refreshed.append(item)
+        data["research_hypotheses"] = refreshed
+    return data, changed
 
 
 def merge_autonomous_research_into_library(
@@ -1387,6 +1512,41 @@ def merge_autonomous_research_into_library(
     data = dict(library or {})
     strategies = [dict(item) for item in data.get("strategies") or [] if isinstance(item, dict)]
     by_id = {str(item.get("id") or ""): item for item in strategies if item.get("id")}
+
+    # Terminalize candidates that could not be tested so they do not consume
+    # every future validation batch forever. A materially changed strategy gets
+    # a new strategy id and may be evaluated again.
+    for failure in report.get("failed_finalists") or []:
+        if not isinstance(failure, dict):
+            continue
+        strategy_id = str(failure.get("strategy_id") or "")
+        item = by_id.get(strategy_id)
+        if item is None:
+            continue
+        error_text = str(failure.get("error") or "Autonomous validation could not test this strategy.")
+        lowered = error_text.casefold()
+        status = (
+            "insufficient_data"
+            if any(token in lowered for token in ("no candidate", "no usable", "insufficient", "no cross-stock"))
+            else "validation_failed"
+        )
+        retryable = any(token in lowered for token in ("rate limit", "temporar", "timeout", "provider"))
+        item["validation_status"] = "research_only"
+        item["optimization_status"] = "not_run"
+        item["last_autonomous_research"] = {
+            "generated_at": report.get("generated_at"),
+            "validation_method_version": int(
+                report.get("validation_method_version") or AUTONOMOUS_VALIDATION_METHOD_VERSION
+            ),
+            "validation_status": status,
+            "gate_reasons": [error_text],
+            "retryable": retryable,
+            "retry_after": None,
+            "universe_source": (report.get("universe") or {}).get("source"),
+        }
+        item.pop("validated_rules", None)
+        item.pop("validated_backtest_settings", None)
+        item.pop("validated_at", None)
 
     validation_records: list[dict[str, Any]] = []
     for result in report.get("results") or []:
@@ -1405,6 +1565,9 @@ def merge_autonomous_research_into_library(
         item["optimization_status"] = str(winner.get("status") or "not_run").lower().replace(" ", "_")
         item["last_autonomous_research"] = {
             "generated_at": report.get("generated_at"),
+            "validation_method_version": int(
+                report.get("validation_method_version") or AUTONOMOUS_VALIDATION_METHOD_VERSION
+            ),
             "anchor_symbol": result.get("anchor_symbol"),
             "candidate_symbols": result.get("candidate_symbols") or [],
             "global_score": result.get("global_score"),
@@ -1446,6 +1609,9 @@ def merge_autonomous_research_into_library(
                 "optimized_rules": winner.get("optimized_rules") or {},
                 "optimized_backtest_settings": winner.get("optimized_backtest_settings") or {},
                 "autonomous": True,
+                "validation_method_version": int(
+                    report.get("validation_method_version") or AUTONOMOUS_VALIDATION_METHOD_VERSION
+                ),
                 "global_score": result.get("global_score"),
                 "generalization_summary": generalization.get("summary") or {},
                 "gate_reasons": result.get("gate_reasons") or [],
@@ -1464,6 +1630,9 @@ def merge_autonomous_research_into_library(
         "id": f"autonomous:{report.get('generated_at')}",
         "generated_at": report.get("generated_at"),
         "kind": "autonomous_research",
+        "validation_method_version": int(
+            report.get("validation_method_version") or AUTONOMOUS_VALIDATION_METHOD_VERSION
+        ),
         "universe": report.get("universe") or {},
         "daily_lookback_days": report.get("daily_lookback_days"),
         "event_window_days": report.get("event_window_days"),

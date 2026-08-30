@@ -1,10 +1,14 @@
 """Tests for autonomous historical opportunity research."""
 
 import unittest
+from datetime import datetime, timezone
 
 from youtube_strategy_engine import AppError
 
 from trading_auto_research import (
+    invalidate_legacy_autonomous_validations,
+    autonomous_validation_boundaries,
+    AUTONOMOUS_VALIDATION_METHOD_VERSION,
     _batched_bars,
     autonomous_research_baselines,
     _global_validation_gate,
@@ -457,6 +461,106 @@ class AutonomousResearchTests(unittest.TestCase):
         self.assertEqual(saved_run["failed_finalists"][0]["strategy_name"], "Skipped")
         self.assertEqual(saved_run["timing_profile"]["total_seconds"], 420.0)
         self.assertEqual(saved_run["timing_profile"]["samples"][-1]["fraction"], 1.0)
+
+
+class ValidationIntegrityRegressionTests(unittest.TestCase):
+    def test_missing_walk_forward_fails_closed(self):
+        status, reasons = _global_validation_gate(
+            anchor_report={"winner": {"status": "VALIDATED"}},
+            strength={"independently_positive": True, "score": 90},
+            generalization={
+                "summary": {
+                    "score": 90,
+                    "active_symbols": 4,
+                    "profitable_symbol_pct": 75,
+                    "total_trades": 40,
+                }
+            },
+            walk_forward=None,
+            broad_universe=True,
+        )
+        self.assertEqual(status, "research_only")
+        self.assertTrue(any("walk-forward" in reason.lower() for reason in reasons))
+
+    def test_discovery_cutoff_is_strictly_before_untouched_validation_period(self):
+        end = datetime(2026, 8, 30, 20, 0, tzinfo=timezone.utc)
+        boundaries = autonomous_validation_boundaries(end, validation_days=180)
+        self.assertEqual(boundaries["validation_end"], end)
+        self.assertEqual(
+            boundaries["discovery_cutoff"],
+            boundaries["validation_start"],
+        )
+        self.assertLess(boundaries["discovery_cutoff"], boundaries["validation_end"])
+        self.assertEqual(
+            (boundaries["validation_end"] - boundaries["validation_start"]).days,
+            180,
+        )
+
+    def test_failed_finalist_receives_terminal_validation_state(self):
+        library = {
+            "strategies": [
+                {
+                    "id": "s2",
+                    "source_type": "autonomous_web_research",
+                    "validation_status": "unvalidated",
+                }
+            ],
+            "validation_runs": [],
+            "research_runs": [],
+        }
+        report = {
+            "generated_at": "2026-08-30T20:00:00Z",
+            "validation_method_version": AUTONOMOUS_VALIDATION_METHOD_VERSION,
+            "universe": {"source": "point_in_time"},
+            "failed_finalists": [
+                {
+                    "strategy_id": "s2",
+                    "strategy_name": "Skipped",
+                    "error": "No candidate stocks had usable intraday history for deep testing.",
+                }
+            ],
+            "results": [],
+        }
+        merged = merge_autonomous_research_into_library(library, report)
+        strategy = merged["strategies"][0]
+        self.assertEqual(strategy["validation_status"], "research_only")
+        self.assertEqual(
+            strategy["last_autonomous_research"]["validation_status"],
+            "insufficient_data",
+        )
+        self.assertFalse(strategy["last_autonomous_research"]["retryable"])
+
+    def test_legacy_hindsight_validation_is_demoted_for_revalidation(self):
+        library = {
+            "strategies": [
+                {
+                    "id": "legacy",
+                    "source_type": "autonomous_web_research",
+                    "research_hypothesis_id": "h1",
+                    "validation_status": "validated",
+                    "validated_rules": {"min_relative_volume": 2.0},
+                    "validated_backtest_settings": {"starting_cash": 10000},
+                    "validated_at": "2026-08-29T00:00:00Z",
+                    "last_autonomous_research": {
+                        "validation_status": "validated",
+                    },
+                }
+            ],
+            "research_hypotheses": [{"id": "h1", "status": "validated"}],
+        }
+        updated, changed = invalidate_legacy_autonomous_validations(library)
+        self.assertEqual(changed, 1)
+        strategy = updated["strategies"][0]
+        self.assertEqual(strategy["validation_status"], "research_only")
+        self.assertEqual(
+            strategy["last_autonomous_research"]["validation_status"],
+            "stale_methodology",
+        )
+        self.assertNotIn("validated_rules", strategy)
+        self.assertEqual(
+            updated["research_hypotheses"][0]["status"],
+            "queued_for_validation",
+        )
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from trading_auto_research import (
+    invalidate_legacy_autonomous_validations,
     merge_autonomous_research_into_library,
     run_autonomous_research,
 )
@@ -39,6 +40,7 @@ from trading_research_orchestrator import (
     DEFAULT_GEMINI_SPECIALIST_FALLBACK_MODEL,
     DEFAULT_GEMINI_SPECIALIST_MODEL,
     SUPPORTED_RESEARCH_JOB_TYPES,
+    AUTONOMOUS_VALIDATION_PRIORITY,
     GeminiResearchRouter,
     apply_specialist_review,
     claim_next_research_job,
@@ -49,6 +51,7 @@ from trading_research_orchestrator import (
     merge_grounded_research,
     record_worker_run,
     ensure_predictive_ml_backfill_job,
+    enqueue_research_job,
     research_queue_status,
     seed_continuous_research_cycle,
     sync_hypothesis_validation_results,
@@ -70,6 +73,35 @@ CONTINUOUS_WORKER_JOB_TYPES = SUPPORTED_RESEARCH_JOB_TYPES - {"stock_finder"}
 
 def env(name: str, default: str = "") -> str:
     return str(os.environ.get(name, default) or "").strip()
+
+
+def persist_store(
+    store: StrategyStore,
+    data: dict[str, Any],
+    *,
+    cloud_retries: int = 3,
+) -> dict[str, Any]:
+    """Persist once locally, then retry cloud-only sync on transient failures.
+
+    A completed computation must not be executed again merely because the first
+    cloud write had a temporary network/provider failure.
+    """
+    try:
+        return store.save(data)
+    except AppError as exc:
+        if "Saved locally, but permanent cloud backup failed:" not in str(exc):
+            raise
+        last_error: Exception = exc
+
+    for attempt in range(max(1, int(cloud_retries))):
+        time.sleep(min(8.0, 2.0 ** attempt))
+        try:
+            return store.sync_cloud_backup()
+        except AppError as exc:
+            last_error = exc
+    raise AppError(
+        f"Research result is saved locally but cloud persistence still failed after retries: {last_error}"
+    ) from last_error
 
 
 def build_store() -> StrategyStore:
@@ -128,13 +160,19 @@ def _pending_web_strategies(data: dict[str, Any], maximum: int = 3) -> list[dict
         if str(item.get("validation_status") or "") == "validated":
             continue
         last = item.get("last_autonomous_research")
-        if isinstance(last, dict) and str(last.get("validation_status") or "") in {
-            "validated",
-            "research_only",
-        }:
-            # Avoid repeatedly burning compute on the same hypothesis until a
-            # later research cycle changes its rules/evidence.
-            continue
+        if isinstance(last, dict):
+            last_status = str(last.get("validation_status") or "")
+            terminal = {
+                "validated",
+                "research_only",
+                "validation_failed",
+                "insufficient_data",
+                "untestable",
+            }
+            if last_status in terminal and not bool(last.get("retryable")):
+                # Avoid repeatedly burning compute on the same hypothesis until
+                # materially changed rules/evidence produce a new strategy id.
+                continue
         candidates.append(dict(item))
     candidates.sort(
         key=lambda item: (
@@ -233,7 +271,7 @@ def execute_job(
             "last_error": None,
         }
         latest = merge_finder_checkpoint_into_library(latest, checkpoint_record)
-        store.save(latest)
+        persist_store(store, latest)
         checkpoint_counter = [0]
         checkpoint_last_save = [time.monotonic()]
 
@@ -245,7 +283,7 @@ def execute_job(
             checkpoint_record["updated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             current = store.load_latest()
             current = merge_finder_checkpoint_into_library(current, checkpoint_record)
-            store.save(current)
+            persist_store(store, current)
             checkpoint_last_save[0] = time.monotonic()
 
         def history_progress(page: int) -> None:
@@ -360,7 +398,7 @@ def execute_job(
                 f"{int(report.get('unique_configurations_tested') or 0):,} unique configurations."
             ),
         )
-        store.save(latest)
+        persist_store(store, latest)
         return result_ref
 
     if job_type == "predictive_ml_backfill":
@@ -379,7 +417,7 @@ def execute_job(
             "affects_execution": False,
         }
         latest["research_system"] = research_system
-        store.save(latest)
+        persist_store(store, latest)
 
         configured_symbols = env("PREDICTIVE_ML_BACKFILL_SYMBOLS")
         worker_payload = dict(payload)
@@ -447,7 +485,7 @@ def execute_job(
                 f"learning router {str((result.get('stock_learning_router') or {}).get('status') or 'unknown')}."
             ),
         )
-        store.save(latest)
+        persist_store(store, latest)
         return result_ref
 
     if job_type == "web_research":
@@ -472,7 +510,7 @@ def execute_job(
             status="complete",
             detail=f"Grounded research saved with {len(hypothesis_ids)} hypotheses.",
         )
-        store.save(latest)
+        persist_store(store, latest)
         return run_id
 
     if job_type == "specialist_review":
@@ -499,7 +537,7 @@ def execute_job(
             status="complete",
             detail=f"Specialist decision: {review.get('decision')}.",
         )
-        store.save(latest)
+        persist_store(store, latest)
         return result_ref
 
     if job_type == "autonomous_validation":
@@ -522,7 +560,7 @@ def execute_job(
                 status="complete",
                 detail="No new web-research strategies were awaiting deterministic validation.",
             )
-            store.save(latest)
+            persist_store(store, latest)
             return "no-pending-validation"
 
         market = build_market()
@@ -550,6 +588,17 @@ def execute_job(
             str(job.get("id") or ""),
             result_ref=result_ref,
         )
+        remaining = _pending_web_strategies(latest, maximum=1)
+        continuation_queued = False
+        if remaining:
+            latest, continuation = enqueue_research_job(
+                latest,
+                "autonomous_validation",
+                {"origin": "validation_batch_continuation"},
+                priority=AUTONOMOUS_VALIDATION_PRIORITY,
+                dedupe_key="autonomous_validation:pending_web_research",
+            )
+            continuation_queued = continuation is not None
         latest = record_worker_run(
             latest,
             worker_id=worker_id,
@@ -558,10 +607,11 @@ def execute_job(
             status="complete",
             detail=(
                 f"Validated {int(report.get('deep_strategies_tested') or 0)} hypothesis strategy "
-                f"candidate(s); {int(report.get('deep_strategies_failed') or 0)} skipped."
+                f"candidate(s); {int(report.get('deep_strategies_failed') or 0)} skipped; "
+                f"continuation_queued={continuation_queued}."
             ),
         )
-        store.save(latest)
+        persist_store(store, latest)
         return result_ref
 
     raise AppError(f"Unknown cloud research job type: {job_type}")
@@ -655,13 +705,21 @@ def main() -> int:
     # work automatically, so this is a bounded self-feeding queue rather than an
     # uncontrolled infinite API loop.
     data = store.load_latest()
+    data, invalidated = invalidate_legacy_autonomous_validations(data)
+    if invalidated:
+        persist_store(store, data)
+        print(
+            f"Marked {invalidated} legacy autonomous validation result(s) for method-v2 revalidation.",
+            flush=True,
+        )
+        data = store.load_latest()
     print_predictive_ml_router_summary(data)
     data, seeded = seed_continuous_research_cycle(
         data,
         maximum_topics=int(env("RESEARCH_TOPICS_PER_CYCLE", "10") or 10),
     )
     if seeded:
-        store.save(data)
+        persist_store(store, data)
         print(f"Seeded {seeded} autonomous research topics.", flush=True)
 
     # ML bootstrap/retraining has its own freshness clock so a deployment can
@@ -672,7 +730,7 @@ def main() -> int:
         freshness_hours=int(env("PREDICTIVE_ML_BACKFILL_FRESHNESS_HOURS", "20") or 20),
     )
     if ml_backfill_job:
-        store.save(data)
+        persist_store(store, data)
         print(
             f"Queued high-priority predictive ML backfill job {ml_backfill_job.get('id')}.",
             flush=True,
@@ -690,7 +748,7 @@ def main() -> int:
         if job is None:
             print("No research jobs are ready.", flush=True)
             break
-        store.save(data)
+        persist_store(store, data)
         job_id = str(job.get("id") or "")
         job_type = str(job.get("type") or "")
         print(f"Running {job_type} job {job_id}…", flush=True)
@@ -751,7 +809,7 @@ def main() -> int:
                 status="failed",
                 detail=str(exc),
             )
-            store.save(latest)
+            persist_store(store, latest)
             print(f"Failed {job_id}: {exc}", file=sys.stderr, flush=True)
 
     final = store.load_latest()

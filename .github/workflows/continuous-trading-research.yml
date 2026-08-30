@@ -22,7 +22,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: continuous-trading-research
+  # Both workflows mutate the same durable Trading Intelligence library.
+  # A shared group prevents cross-workflow lost-update/retry races.
+  group: trading-intelligence-library-writer
   cancel-in-progress: false
 
 jobs:

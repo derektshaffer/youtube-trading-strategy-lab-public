@@ -2114,6 +2114,9 @@ def research_readiness(strategy: dict[str, Any]) -> dict[str, Any]:
         for key, value in normalize_machine_rules(effective.get("machine_rules")).items()
         if value is not None
     }
+    # Readiness must count only rules the historical signal evaluator actually
+    # enforces. Market-spread limits require quote history and therefore fail
+    # closed instead of being treated as executable via a fixed-cost proxy.
     non_entry_fields = {
         "stop_loss_pct",
         "reward_risk",
@@ -2130,8 +2133,38 @@ def research_readiness(strategy: dict[str, Any]) -> dict[str, Any]:
         "exit_below_vwap",
         "exit_below_fast_ema",
         "exit_below_avwap",
+        "max_spread_pct",
+        "stop_below_avwap",
+        "stop_below_fast_ema",
+        "fast_ema_period",
+        "slow_ema_period",
+        "trend_ema_period",
+        "avwap_anchor_mode",
+        "avwap_pivot_confirm_bars",
+        "avwap_anchor_session_minute",
+        "avwap_pullback_tolerance_pct",
+        "pullback_touch_tolerance_pct",
+        "stop_avwap_buffer_pct",
+        "stop_ema_buffer_pct",
     }
-    entry_rules = [key for key in rules if key not in non_entry_fields]
+    false_is_meaningful = {
+        "above_vwap",
+        "require_price_above_avwap",
+        "require_avwap_rising",
+        "require_price_above_fast_ema",
+        "require_price_above_slow_ema",
+        "require_price_above_trend_ema",
+    }
+    entry_rules = [
+        key
+        for key, value in rules.items()
+        if key not in non_entry_fields
+        and not (isinstance(value, bool) and value is False and key not in false_is_meaningful)
+    ]
+    unsupported_rules = [
+        key for key in ("max_spread_pct",)
+        if rules.get(key) is not None
+    ]
     evidence_count = len(
         [item for item in strategy.get("evidence") or [] if isinstance(item, dict)]
     )
@@ -2168,6 +2201,12 @@ def research_readiness(strategy: dict[str, Any]) -> dict[str, Any]:
     elif evidence_count == 0 and str(strategy.get("source_type") or "").lower() == "book_or_document":
         label = "needs_evidence_review"
         note = "Machine rules exist, but no source evidence reference was retained for this document strategy."
+    elif unsupported_rules:
+        label = "partially_modeled"
+        note = (
+            "At least one defining rule is not enforceable with the historical data used by "
+            "the deterministic backtester: " + ", ".join(unsupported_rules) + "."
+        )
     elif semantic.get("critical_missing_count"):
         label = "partially_modeled"
         note = (
@@ -2183,7 +2222,7 @@ def research_readiness(strategy: dict[str, Any]) -> dict[str, Any]:
             "The backtester can enforce some rules, but too much of the setup's defining logic "
             "is still missing from the executable model."
         )
-    elif unresolved_count > max(6, len(entry_rules) * 3):
+    elif unresolved_count >= max(3, len(entry_rules) * 2):
         label = "partially_testable"
         note = "The strategy can be backtested, but many source requirements remain qualitative or unavailable."
     else:
