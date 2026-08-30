@@ -143,12 +143,9 @@ def compact_comparison_lines(report: dict[str, Any]) -> list[str]:
             metrics = metrics if isinstance(metrics, dict) else {}
             brier_delta = _number(metrics.get("brier_delta"))
             auc_delta = _number(metrics.get("auc_delta"))
-            pieces.append(
-                f"{route}:db={brier_delta:+.6f if brier_delta is not None else 'na'}"
-            )
-            pieces.append(
-                f"{route}:da={auc_delta:+.6f if auc_delta is not None else 'na'}"
-            )
+            brier_text = "na" if brier_delta is None else f"{brier_delta:+.6f}"
+            auc_text = "na" if auc_delta is None else f"{auc_delta:+.6f}"
+            pieces.append(f"{route}:db={brier_text}:da={auc_text}")
         lines.append(
             "[predictive-ml-compare-symbol] "
             f"symbol={row.get('symbol') or 'unknown'} "
@@ -156,6 +153,7 @@ def compact_comparison_lines(report: dict[str, Any]) -> list[str]:
             f"current={row.get('current_route') or 'none'} "
             f"status_before={row.get('previous_route_status') or 'none'} "
             f"status_after={row.get('current_route_status') or 'none'} "
-            f"paired_oos_delta={int(row.get('paired_oos_rows_delta') or 0)}"
+            f"paired_oos_delta={int(row.get('paired_oos_rows_delta') or 0)} "
+            + " ".join(pieces)
         )
     return lines
