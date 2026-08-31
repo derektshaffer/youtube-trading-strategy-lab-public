@@ -2952,13 +2952,21 @@ if module == "Stock Strategy Finder":
             )
 
         st.markdown("### Evidence by period")
-        evidence_rows = []
-        for period_name, metrics in (
+        execution_sensitivity = winner.get("execution_sensitivity") or {}
+        sensitivity_points = [
+            item
+            for item in execution_sensitivity.get("points") or []
+            if isinstance(item, dict)
+        ]
+        evidence_periods = [
             ("Training", winner.get("training_metrics") or {}),
             ("Validation", winner.get("validation_metrics") or {}),
             ("Untouched holdout", holdout),
-            ("Higher-cost stress", winner.get("stress_metrics") or {}),
-        ):
+        ]
+        if not sensitivity_points:
+            evidence_periods.append(("Higher-cost stress", winner.get("stress_metrics") or {}))
+        evidence_rows = []
+        for period_name, metrics in evidence_periods:
             evidence_rows.append(
                 {
                     "Period": period_name,
@@ -2971,6 +2979,51 @@ if module == "Stock Strategy Finder":
                 }
             )
         st.dataframe(pd.DataFrame(evidence_rows), width="stretch", hide_index=True)
+
+        if sensitivity_points:
+            st.markdown("### Execution-cost sensitivity")
+            sensitivity_cols = st.columns(4)
+            sensitivity_cols[0].metric(
+                "Cost-curve grade",
+                str(execution_sensitivity.get("label") or "—").title(),
+            )
+            sensitivity_cols[1].metric(
+                "Sensitivity score",
+                f"{safe_float(execution_sensitivity.get('score'), 0.0):.1f}/100",
+            )
+            sensitivity_cols[2].metric(
+                "Stress points profitable",
+                f"{safe_float(execution_sensitivity.get('profitable_multiplier_pct'), 0.0):.0f}%",
+            )
+            median_retention = execution_sensitivity.get("median_pnl_retention_pct")
+            sensitivity_cols[3].metric(
+                "Median P/L retained",
+                f"{safe_float(median_retention, 0.0):.0f}%" if median_retention is not None else "—",
+            )
+            sensitivity_rows = []
+            for point in sensitivity_points:
+                metrics = point.get("metrics") or {}
+                retention = point.get("pnl_retention_pct")
+                sensitivity_rows.append(
+                    {
+                        "Execution cost": f"{safe_float(point.get('multiplier'), 0.0):.2f}×",
+                        "Spread bps": round(safe_float(point.get("spread_bps"), 0.0) or 0.0, 2),
+                        "Slippage bps": round(safe_float(point.get("slippage_bps"), 0.0) or 0.0, 2),
+                        "Net P/L": safe_float(metrics.get("net_pnl"), 0.0) or 0.0,
+                        "P/L retained %": (
+                            safe_float(retention, 0.0) if retention is not None else None
+                        ),
+                        "Profit factor": metrics.get("profit_factor"),
+                        "Profitable": bool(point.get("profitable")),
+                    }
+                )
+            st.dataframe(pd.DataFrame(sensitivity_rows), width="stretch", hide_index=True)
+            first_break = execution_sensitivity.get("first_unprofitable_multiplier")
+            if first_break is not None:
+                st.caption(
+                    f"First tested cost level with non-positive P/L: {safe_float(first_break, 0.0):.2f}×."
+                )
+            st.caption(str(execution_sensitivity.get("note") or ""))
 
         regime_report = finder_result.get("regime_diagnostics") or {}
         regime_windows = [
@@ -6651,13 +6704,21 @@ elif module == "Strategy Lab":
                     "News published after a bar is not visible to that bar."
                 )
 
-            period_rows = []
-            for name, metrics in (
+            execution_sensitivity = winner.get("execution_sensitivity") or {}
+            sensitivity_points = [
+                item
+                for item in execution_sensitivity.get("points") or []
+                if isinstance(item, dict)
+            ]
+            period_inputs = [
                 ("Training", training),
                 ("Validation", validation),
                 ("Untouched holdout", holdout),
-                ("Higher-cost stress", stress),
-            ):
+            ]
+            if not sensitivity_points:
+                period_inputs.append(("Higher-cost stress", stress))
+            period_rows = []
+            for name, metrics in period_inputs:
                 period_rows.append(
                     {
                         "Period": name,
@@ -6670,6 +6731,51 @@ elif module == "Strategy Lab":
                     }
                 )
             st.dataframe(pd.DataFrame(period_rows), width="stretch", hide_index=True)
+
+            if sensitivity_points:
+                st.markdown("### Execution-cost sensitivity")
+                sensitivity_cols = st.columns(4)
+                sensitivity_cols[0].metric(
+                    "Cost-curve grade",
+                    str(execution_sensitivity.get("label") or "—").title(),
+                )
+                sensitivity_cols[1].metric(
+                    "Sensitivity score",
+                    f"{safe_float(execution_sensitivity.get('score'), 0.0):.1f}/100",
+                )
+                sensitivity_cols[2].metric(
+                    "Stress points profitable",
+                    f"{safe_float(execution_sensitivity.get('profitable_multiplier_pct'), 0.0):.0f}%",
+                )
+                median_retention = execution_sensitivity.get("median_pnl_retention_pct")
+                sensitivity_cols[3].metric(
+                    "Median P/L retained",
+                    f"{safe_float(median_retention, 0.0):.0f}%" if median_retention is not None else "—",
+                )
+                sensitivity_rows = []
+                for point in sensitivity_points:
+                    metrics = point.get("metrics") or {}
+                    retention = point.get("pnl_retention_pct")
+                    sensitivity_rows.append(
+                        {
+                            "Execution cost": f"{safe_float(point.get('multiplier'), 0.0):.2f}×",
+                            "Spread bps": round(safe_float(point.get("spread_bps"), 0.0) or 0.0, 2),
+                            "Slippage bps": round(safe_float(point.get("slippage_bps"), 0.0) or 0.0, 2),
+                            "Net P/L": safe_float(metrics.get("net_pnl"), 0.0) or 0.0,
+                            "P/L retained %": (
+                                safe_float(retention, 0.0) if retention is not None else None
+                            ),
+                            "Profit factor": metrics.get("profit_factor"),
+                            "Profitable": bool(point.get("profitable")),
+                        }
+                    )
+                st.dataframe(pd.DataFrame(sensitivity_rows), width="stretch", hide_index=True)
+                first_break = execution_sensitivity.get("first_unprofitable_multiplier")
+                if first_break is not None:
+                    st.caption(
+                        f"First tested cost level with non-positive P/L: {safe_float(first_break, 0.0):.2f}×."
+                    )
+                st.caption(str(execution_sensitivity.get("note") or ""))
 
             if strength.get("reasons"):
                 with st.expander("Why the robustness score was reduced", expanded=False):
@@ -6744,6 +6850,7 @@ elif module == "Strategy Lab":
                             "validation_metrics": validation,
                             "holdout_metrics": holdout,
                             "stress_metrics": stress,
+                            "execution_sensitivity": execution_sensitivity,
                             "walk_forward_summary": (walk_report or {}).get("summary"),
                             "parameter_stability": stability_report,
                             "evidence_verdict": evidence_verdict,
@@ -6767,6 +6874,7 @@ elif module == "Strategy Lab":
                     "validation_metrics": validation,
                     "holdout_metrics": holdout,
                     "stress_metrics": stress,
+                    "execution_sensitivity": execution_sensitivity,
                     "walk_forward_summary": (walk_report or {}).get("summary"),
                     "parameter_stability": stability_report,
                     "evidence_verdict": evidence_verdict,
