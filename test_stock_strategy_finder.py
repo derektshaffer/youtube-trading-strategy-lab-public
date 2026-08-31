@@ -556,6 +556,41 @@ class HoldoutReuseIntegrityTests(unittest.TestCase):
         self.assertEqual(report["verdict"]["code"], "ready_for_paper")
         self.assertEqual(report["optimization"]["winner"]["status"], "VALIDATED")
 
+    def test_any_prior_holdout_session_breaks_pristine_status(self):
+        report = self._report()
+        prior = {
+            "id": "one-session-exposure",
+            "symbol": "TEST",
+            "timeframe": "1Min",
+            "holdout_sessions": ["2026-08-25"],
+        }
+        guarded = finder.apply_holdout_reuse_guard(
+            {"holdout_exposure_ledger": [prior]},
+            report,
+        )
+        self.assertFalse(guarded["holdout_reuse_audit"]["pristine"])
+        self.assertEqual(
+            guarded["holdout_reuse_audit"]["prior_exposures"][0]["overlap_sessions"],
+            ["2026-08-25"],
+        )
+
+    def test_record_holdout_exposure_does_not_require_validation_save(self):
+        report = self._report()
+        stored = finder.record_holdout_exposure(
+            {},
+            report,
+            source="manual_strategy_lab",
+            generated_at="2026-08-30T20:00:00Z",
+        )
+        ledger = stored["holdout_exposure_ledger"]
+        self.assertEqual(len(ledger), 1)
+        self.assertEqual(ledger[0]["symbol"], "TEST")
+        self.assertEqual(ledger[0]["source"], "manual_strategy_lab")
+        self.assertEqual(
+            ledger[0]["holdout_sessions"],
+            ["2026-08-25", "2026-08-26", "2026-08-27", "2026-08-28"],
+        )
+
     def test_materially_reused_holdout_cannot_remain_validated(self):
         report = self._report()
         prior = {
