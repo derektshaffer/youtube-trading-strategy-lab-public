@@ -1,5 +1,5 @@
 import unittest
-from datetime import date
+from datetime import date, datetime
 from unittest.mock import patch
 
 import trading_market_discovery as discovery
@@ -95,6 +95,17 @@ class MarketDiscoveryTests(unittest.TestCase):
         self.assertEqual(result["timeframe"], "5Min")
         self.assertEqual(result["market_features"]["features"]["bar_count"], 1)
         self.assertEqual(result["comparisons"][0]["timeframe"], "5Min")
+
+    def test_completed_daily_history_window_is_stable_within_same_market_day(self):
+        morning = datetime(2026, 8, 31, 9, 45, tzinfo=discovery.ET)
+        afternoon = datetime(2026, 8, 31, 15, 45, tzinfo=discovery.ET)
+        morning_window = discovery._completed_daily_history_window(now=morning)
+        afternoon_window = discovery._completed_daily_history_window(now=afternoon)
+        self.assertEqual(morning_window, afternoon_window)
+        self.assertEqual(
+            morning_window[1].astimezone(discovery.ET),
+            datetime(2026, 8, 31, 0, 0, tzinfo=discovery.ET),
+        )
 
     def test_completed_daily_reference_supplies_prior_session_rules_without_today_leakage(self):
         rows = [
