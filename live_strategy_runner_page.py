@@ -358,6 +358,17 @@ def paper_entry(
         return {"submitted": False, "message": "No paper order: the market snapshot did not contain one valid ticker."}
     if not strategy.get("approved"):
         return {"submitted": False, "message": "Paper Auto is locked until this strategy is explicitly approved in the main Trading Lab."}
+    if (
+        str(strategy.get("validation_status") or "").strip().lower() != "validated"
+        or not isinstance(strategy.get("validated_rules"), dict)
+    ):
+        return {
+            "submitted": False,
+            "message": (
+                "Paper Auto is locked until this exact strategy has current historical "
+                "validation and frozen validated rules."
+            ),
+        }
     if signal.get("status") != "MATCH":
         return {"submitted": False, "message": f"No paper order: live signal is {signal.get('status', 'UNKNOWN')}."}
     if int(safe_float(signal.get("unknown"), 0) or 0) > 0:
@@ -519,7 +530,12 @@ def render() -> None:
             st.switch_page("youtube_strategy_app.py")
         return
 
-    approved_count = sum(bool(item.get("approved")) for item in strategies)
+    approved_count = sum(
+        bool(item.get("approved"))
+        and str(item.get("validation_status") or "").strip().lower() == "validated"
+        and isinstance(item.get("validated_rules"), dict)
+        for item in strategies
+    )
     summary_cols = st.columns(3)
     summary_cols[0].metric("Saved strategies", str(len(strategies)))
     summary_cols[1].metric("Approved for Paper Auto", str(approved_count))
@@ -536,6 +552,10 @@ def render() -> None:
     selected_label = st.selectbox("Strategy to run", list(options), key="runner_strategy_v2")
     strategy = options[selected_label]
     approved = bool(strategy.get("approved"))
+    historically_validated = (
+        str(strategy.get("validation_status") or "").strip().lower() == "validated"
+        and isinstance(strategy.get("validated_rules"), dict)
+    )
     execution_fidelity = paper_execution_fidelity(strategy)
     paper_execution_ready = str(execution_fidelity.get("status") or "") == "ready"
     optimized_symbol = str(strategy.get("optimized_for_symbol") or "").strip().upper()
@@ -550,8 +570,13 @@ def render() -> None:
         or "5Min"
     )
 
-    if approved and paper_execution_ready:
-        st.success("This strategy is approved and its paper execution matches the validated backtest lifecycle.")
+    if approved and historically_validated and paper_execution_ready:
+        st.success("This strategy is approved, historically validated, and its paper execution matches the validated backtest lifecycle.")
+    elif approved and not historically_validated:
+        st.warning(
+            "This strategy is approved for review, but Paper Auto is integrity-locked until "
+            "the current strategy has fresh historical validation and frozen validated rules."
+        )
     elif approved:
         unsupported = ", ".join(
             str(item) for item in execution_fidelity.get("unsupported_management") or []
@@ -592,6 +617,10 @@ def render() -> None:
 
     if mode == "Alpaca paper auto-entry" and not approved:
         st.warning("Paper Auto is locked for this strategy. Approve it in Strategy library first, or switch to Signal Only.")
+    if mode == "Alpaca paper auto-entry" and approved and not historically_validated:
+        st.warning(
+            "Paper Auto is also locked until this exact strategy passes the current historical validation protocol."
+        )
     if mode == "Alpaca paper auto-entry" and not paper_ready:
         st.error("Paper Auto needs Alpaca paper-account credentials.")
 
@@ -630,6 +659,7 @@ def render() -> None:
             value=False,
             disabled=(
                 not approved
+                or not historically_validated
                 or not paper_ready
                 or not paper_execution_ready
                 or not is_long_strategy(strategy)
