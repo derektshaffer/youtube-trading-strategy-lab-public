@@ -70,6 +70,24 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
         self.assertIn("Find the best opportunities now", source)
         self.assertNotIn('"Strategy to scan for"', source)
 
+    def test_market_discovery_rows_route_to_the_logical_next_step(self):
+        source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        for marker in (
+            '"Next step": next_step',
+            '"③ Validate this stock + strategy"',
+            '"⑤ Paper test this setup"',
+            '"④ Review current setup"',
+            '"Click any row to continue with that exact stock + strategy."',
+            'selection_mode="single-row"',
+            'key="til_market_discovery_opportunity_table"',
+            "queue_strategy_validation_from_analyzer(",
+            "queue_paper_test_from_analyzer(",
+            "queue_stock_analyzer_from_market_discovery(",
+            "til_analyzer_direct_strategy_id",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, source)
+
     def test_home_and_sidebar_use_goal_based_simple_navigation(self):
         source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
         for marker in (
