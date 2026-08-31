@@ -45,7 +45,7 @@ class FakeMarket:
         )
         return {symbol: list(self.rows_by_symbol.get(symbol) or []) for symbol in symbols}
 
-    def split_actions(self, symbols, **kwargs):
+    def research_reset_actions(self, symbols, **kwargs):
         allowed = set(symbols)
         return [
             dict(item)
