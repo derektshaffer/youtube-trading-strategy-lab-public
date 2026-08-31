@@ -8,6 +8,7 @@ writes only a compact JSON report for CI/artifact inspection.
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import json
 import os
 from pathlib import Path
@@ -24,6 +25,83 @@ from youtube_strategy_engine import AlpacaMarketData, AppError, normalize_machin
 
 def _env(name: str, default: str = "") -> str:
     return str(os.environ.get(name, default) or "").strip()
+
+
+def _without_float_language(values: Any) -> Any:
+    """Remove float-specific source clauses only for an explicitly derived hypothesis."""
+    if isinstance(values, list):
+        return [
+            value
+            for value in values
+            if "float" not in str(value or "").casefold()
+        ]
+    if isinstance(values, str) and "float" in values.casefold():
+        return ""
+    return values
+
+
+def build_float_agnostic_derivative(strategy: dict[str, Any]) -> dict[str, Any]:
+    """Create a separately named research hypothesis; never mutate or relabel the source strategy."""
+    item = deepcopy(strategy)
+    parent_id = str(strategy.get("id") or "")
+    item["id"] = f"{parent_id}-float-agnostic-v1"
+    item["name"] = (
+        str(strategy.get("name") or "Strategy")
+        + " — Float-Agnostic Research Variant"
+    )
+    item["source_type"] = "derived_research_hypothesis"
+    item["derived_from_strategy_id"] = parent_id
+    item.pop("parent_strategy_id", None)
+    item["validation_status"] = "unvalidated"
+    item["optimization_status"] = "not_run"
+    item.pop("validated_rules", None)
+    item.pop("validated_backtest_settings", None)
+    item.pop("validated_at", None)
+
+    for field in (
+        "summary",
+        "stock_selection",
+        "entry_conditions",
+        "avoid_conditions",
+        "market_context",
+        "unresolved_rules",
+    ):
+        if field in item:
+            item[field] = _without_float_language(item.get(field))
+
+    overrides = dict(item.get("research_rule_overrides") or {})
+    # These values are explicit research assumptions, not claims about the author.
+    # 0.5% matches the historical engine's former implicit EMA-touch default.
+    # 0.25% creates a genuinely-below-EMA stop seed that the optimizer may vary.
+    overrides.setdefault("pullback_touch_tolerance_pct", 0.5)
+    overrides.setdefault("stop_ema_buffer_pct", 0.25)
+    item["research_rule_overrides"] = overrides
+
+    options = dict(item.get("ai_candidate_rule_options") or {})
+    options["pullback_touch_tolerance_pct"] = [0.1, 0.25, 0.5, 0.75]
+    options["stop_ema_buffer_pct"] = [0.05, 0.1, 0.25, 0.5]
+    item["ai_candidate_rule_options"] = options
+    item["derived_hypothesis_changes"] = [
+        {
+            "requirement": "Historical float filter",
+            "change": "excluded",
+            "reason": (
+                "Test whether the EMA pullback structure has edge independent of "
+                "the source's low-float universe requirement."
+            ),
+        },
+        {
+            "requirement": "EMA pullback tolerance",
+            "change": "research_assumption",
+            "seed": 0.5,
+        },
+        {
+            "requirement": "EMA structural-stop buffer",
+            "change": "research_assumption",
+            "seed": 0.25,
+        },
+    ]
+    return item
 
 
 def _compact_result(
@@ -151,6 +229,27 @@ def main() -> int:
         raise AppError(f"Target strategy {args.strategy_id} was not found in the durable library.")
 
     readiness = research_readiness(requested)
+    use_derivative = _env(
+        "PROFIT_FIRST_FLOAT_AGNOSTIC_DERIVATIVE",
+        "0",
+    ).casefold() in {"1", "true", "yes"}
+    tested_strategy = requested
+    derivative_diagnostic = None
+    if readiness.get("label") != "ready_for_backtest" and use_derivative:
+        candidate = build_float_agnostic_derivative(requested)
+        candidate_readiness = research_readiness(candidate)
+        derivative_diagnostic = {
+            "id": candidate.get("id"),
+            "name": candidate.get("name"),
+            "derived_from_strategy_id": candidate.get("derived_from_strategy_id"),
+            "readiness": candidate_readiness,
+            "changes": candidate.get("derived_hypothesis_changes") or [],
+            "research_rule_overrides": candidate.get("research_rule_overrides") or {},
+        }
+        if candidate_readiness.get("label") == "ready_for_backtest":
+            tested_strategy = candidate
+            readiness = candidate_readiness
+
     if readiness.get("label") != "ready_for_backtest":
         diagnostic = {
             "read_only": True,
@@ -161,7 +260,8 @@ def main() -> int:
             "status": "blocked_before_revalidation",
             "blocker": "strategy_integrity",
             "readiness": readiness,
-            "integrity": strategy_integrity_report(requested),
+            "integrity": strategy_integrity_report(tested_strategy),
+            "derivative_attempt": derivative_diagnostic,
             "machine_rules": {
                 key: value
                 for key, value in normalize_machine_rules(
@@ -203,14 +303,25 @@ def main() -> int:
 
     report = run_autonomous_research(
         market,
-        [dict(requested)],
+        [dict(tested_strategy)],
         universe_sample_size=max(50, int(args.universe_size)),
         deep_strategy_limit=1,
         symbols_per_strategy=max(3, int(args.symbols_per_strategy)),
         parallel_workers=1,
         progress=progress,
     )
-    compact = _compact_result(library, requested, report)
+    compact = _compact_result(library, tested_strategy, report)
+    compact["source_strategy_id"] = requested.get("id")
+    compact["source_strategy_name"] = requested.get("name")
+    compact["derived_hypothesis"] = bool(
+        str(tested_strategy.get("id") or "") != str(requested.get("id") or "")
+    )
+    compact["derived_hypothesis_changes"] = (
+        tested_strategy.get("derived_hypothesis_changes") or []
+    )
+    compact["research_rule_overrides"] = (
+        tested_strategy.get("research_rule_overrides") or {}
+    )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
