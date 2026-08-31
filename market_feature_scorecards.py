@@ -66,7 +66,7 @@ def run_detector_scorecards(
             "Detector scorecards require split metadata so raw historical "
             "price structure cannot cross an unhandled split boundary."
         )
-    split_actions = market.split_actions(
+    split_actions = market.research_reset_actions(
         clean,
         start=start,
         end=end,
