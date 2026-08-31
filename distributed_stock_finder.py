@@ -63,6 +63,7 @@ from youtube_strategy_engine import (
     normalize_machine_rules,
     optimize_stock_strategies_parallel,
     resample_intraday_bars,
+    split_safe_raw_research_rows,
     isoformat_utc,
     utc_now,
 )
@@ -808,12 +809,33 @@ def command_prepare(preferred_job_id: str = "") -> int:
             start=start,
             end=end,
             timeframe="1Min",
+            adjustment="raw",
             max_pages=400,
             progress=history_progress,
         )
         rows = list(rows_by_symbol.get(symbol) or [])
         if not rows:
             raise AppError(f"No historical bars were returned for {symbol}.")
+
+        split_actions = market.split_actions(
+            [symbol],
+            start=start,
+            end=end,
+        )
+        rows, split_guard = split_safe_raw_research_rows(
+            rows,
+            split_actions,
+            symbol,
+        )
+        if not rows:
+            raise AppError(f"No split-safe raw-price history remained for {symbol}.")
+        if split_guard.get("split_detected"):
+            print(
+                "[prepare] corporate-action guard: raw prices preserved; "
+                f"research restarted at {split_guard.get('latest_split_date')} after "
+                f"discarding {int(split_guard.get('discarded_pre_split_rows') or 0):,} pre-split bars.",
+                flush=True,
+            )
 
         needs_catalyst_history = any(
             bool(
@@ -874,6 +896,7 @@ def command_prepare(preferred_job_id: str = "") -> int:
             "selected_strategies": selected,
             "technical_skips": skipped,
             "one_minute_rows": rows,
+            "market_data_integrity": split_guard,
             "backtest_settings": asdict(BacktestSettings()),
             "optimization_settings": asdict(
                 stock_finder_optimizer_settings(profile)
