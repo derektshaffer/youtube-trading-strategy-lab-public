@@ -1,4 +1,5 @@
 from predictive_model_registry import (
+    REQUIRED_TRAINING_DATA_INTEGRITY_CONTRACT,
     build_model_registry,
     ready_shadow_models,
 )
@@ -13,6 +14,17 @@ def model(model_id, *, target="label__target_before_stop_15bar", created="2026-0
         "profit_target_pct": 1.0,
         "stop_loss_pct": 0.75,
         "created_at": created,
+    }
+
+
+def run(model_record, *, completed_at="2026-08-29T13:00:00Z", models=None):
+    return {
+        "completed_at": completed_at,
+        "dataset_summary": {
+            "market_data_integrity_contract": REQUIRED_TRAINING_DATA_INTEGRITY_CONTRACT,
+        },
+        "probability_model": model_record,
+        **({"probability_models": models} if models is not None else {}),
     }
 
 
@@ -41,16 +53,25 @@ def live(
 
 def test_ready_shadow_models_are_newest_unique_and_bounded():
     runs = [
-        {"completed_at": "2026-08-29T13:00:00Z", "probability_model": model("m2")},
-        {"completed_at": "2026-08-29T12:00:00Z", "probability_model": model("m1")},
-        {"completed_at": "2026-08-29T11:00:00Z", "probability_model": model("m2")},
-        {
-            "completed_at": "2026-08-29T10:00:00Z",
-            "probability_model": {**model("blocked"), "shadow_scoring_enabled": False},
-        },
+        run(model("m2"), completed_at="2026-08-29T13:00:00Z"),
+        run(model("m1"), completed_at="2026-08-29T12:00:00Z"),
+        run(model("m2"), completed_at="2026-08-29T11:00:00Z"),
+        run(
+            {**model("blocked"), "shadow_scoring_enabled": False},
+            completed_at="2026-08-29T10:00:00Z",
+        ),
     ]
     chosen = ready_shadow_models(runs, maximum=2)
     assert [item["id"] for item in chosen] == ["m2", "m1"]
+
+
+def test_legacy_model_without_split_safe_data_contract_is_not_shadow_ready():
+    old = {
+        "completed_at": "2026-08-29T15:00:00Z",
+        "probability_model": model("legacy"),
+        "dataset_summary": {},
+    }
+    assert ready_shadow_models([old]) == []
 
 
 def test_initial_champion_is_provisional_newest_ready_model():
@@ -139,11 +160,11 @@ def test_ready_shadow_models_collects_multiple_model_families_from_one_run():
     logistic = {**model("logistic"), "model_type": "portable_numeric_logistic_regression"}
     boosted = {**model("boosted"), "model_type": "portable_gradient_boosted_trees"}
     runs = [
-        {
-            "completed_at": "2026-08-29T14:00:00Z",
-            "probability_model": logistic,
-            "probability_models": [logistic, boosted],
-        }
+        run(
+            logistic,
+            completed_at="2026-08-29T14:00:00Z",
+            models=[logistic, boosted],
+        )
     ]
     chosen = ready_shadow_models(runs, maximum=6)
     assert {item["id"] for item in chosen} == {"logistic", "boosted"}
