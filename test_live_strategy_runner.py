@@ -98,6 +98,8 @@ class MarketDataFreshnessTests(unittest.TestCase):
     def test_stale_data_never_constructs_a_broker_client_or_submits(self):
         stale = valid_metrics(trade_timestamp="2020-01-01T00:00:00+00:00")
         with patch.object(runner, "utc_now", return_value=NOW), patch.object(
+            runner, "paper_execution_fidelity", return_value={"status": "ready", "unsupported_management": []}
+        ), patch.object(
             runner, "paper_client", side_effect=AssertionError("broker client must not be constructed")
         ):
             result = runner.paper_entry(
@@ -118,6 +120,8 @@ class MarketDataFreshnessTests(unittest.TestCase):
     def test_recent_data_can_reach_the_existing_order_safeguards(self):
         trader = FakePaperTrader()
         with patch.object(runner, "utc_now", return_value=NOW), patch.object(
+            runner, "paper_execution_fidelity", return_value={"status": "ready", "unsupported_management": []}
+        ), patch.object(
             runner, "paper_client", return_value=trader
         ):
             result = runner.paper_entry(
@@ -135,6 +139,28 @@ class MarketDataFreshnessTests(unittest.TestCase):
         self.assertTrue(result["submitted"])
         self.assertEqual(len(trader.submissions), 1)
         self.assertEqual(trader.submissions[0]["symbol"], "TEST")
+
+    def test_simple_strategy_is_blocked_when_session_flattening_is_unmanaged(self):
+        with patch.object(
+            runner,
+            "paper_client",
+            side_effect=AssertionError("lifecycle mismatch must block before broker construction"),
+        ):
+            result = runner.paper_entry(
+                strategy=valid_strategy(),
+                metrics=valid_metrics(),
+                signal=valid_signal(),
+                risk_per_trade_pct=0.5,
+                max_position_pct=20.0,
+                max_position_dollars=0.0,
+                max_daily_loss=200.0,
+                max_entries_per_day=5,
+                max_open_positions=3,
+                one_entry_per_symbol_day=True,
+            )
+        self.assertFalse(result["submitted"])
+        self.assertIn("cannot yet reproduce", result["message"])
+        self.assertIn("end-of-session", result["message"])
 
     def test_dynamic_exit_strategy_is_blocked_before_broker_client(self):
         strategy = valid_strategy()
@@ -168,6 +194,8 @@ class MarketDataFreshnessTests(unittest.TestCase):
         trader = FakePaperTrader()
         later = NOW + timedelta(seconds=100)
         with patch.object(runner, "utc_now", side_effect=[NOW, NOW, later]), patch.object(
+            runner, "paper_execution_fidelity", return_value={"status": "ready", "unsupported_management": []}
+        ), patch.object(
             runner, "paper_client", return_value=trader
         ):
             result = runner.paper_entry(
