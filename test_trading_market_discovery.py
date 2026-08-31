@@ -184,8 +184,8 @@ class MarketDiscoveryTests(unittest.TestCase):
     def test_strategy_chart_checks_overrides_missing_prior_day_fields_from_daily_history(self):
         strategy = {"machine_rules": {"previous_day_high_breakout": True}}
         rows = [
-            {"t": "2026-08-31T14:00:00Z", "c": 12.40},
-            {"t": "2026-08-31T14:01:00Z", "c": 12.60},
+            {"t": "2026-08-31T14:00:00Z", "o": 12.35, "h": 12.45, "l": 12.30, "c": 12.40, "v": 1000},
+            {"t": "2026-08-31T14:01:00Z", "o": 12.40, "h": 12.65, "l": 12.38, "c": 12.60, "v": 1200},
         ]
         reference = {
             "previous_day_high": 12.50,
