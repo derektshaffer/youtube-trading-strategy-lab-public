@@ -11,9 +11,11 @@ import socket
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+import hashlib
 from typing import Any
 
 from trading_auto_research import (
+    AUTONOMOUS_VALIDATION_METHOD_VERSION,
     invalidate_legacy_autonomous_validations,
     merge_autonomous_research_into_library,
     run_autonomous_research,
@@ -390,6 +392,56 @@ def _pending_web_strategies(data: dict[str, Any], maximum: int = 3) -> list[dict
     return candidates[: max(1, int(maximum))]
 
 
+def _targeted_validation_strategies(
+    data: dict[str, Any],
+    strategy_ids: list[str],
+) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    """Resolve explicitly requested strategies without restricting their source type."""
+    requested = list(
+        dict.fromkeys(
+            str(strategy_id or "").strip()
+            for strategy_id in strategy_ids
+            if str(strategy_id or "").strip()
+        )
+    )
+    by_id = {
+        str(item.get("id") or ""): item
+        for item in data.get("strategies") or []
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    }
+    candidates: list[dict[str, Any]] = []
+    missing: list[str] = []
+    blocked: list[str] = []
+    for strategy_id in requested:
+        item = by_id.get(strategy_id)
+        if item is None:
+            missing.append(strategy_id)
+            continue
+        readiness = research_readiness(item)
+        if readiness.get("label") != "ready_for_backtest":
+            blocked.append(
+                f"{strategy_id}: {readiness.get('label') or 'not ready for backtest'}"
+            )
+            continue
+        candidates.append(dict(item))
+    return candidates, missing, blocked
+
+
+def _target_strategy_ids(payload: dict[str, Any]) -> list[str]:
+    raw = payload.get("strategy_ids")
+    if isinstance(raw, str):
+        raw = [part.strip() for part in raw.split(",")]
+    if not isinstance(raw, list):
+        return []
+    return list(
+        dict.fromkeys(
+            str(value or "").strip()
+            for value in raw
+            if str(value or "").strip()
+        )
+    )
+
+
 def close_empty_autonomous_validation_jobs(
     data: dict[str, Any],
 ) -> tuple[dict[str, Any], int]:
@@ -405,9 +457,12 @@ def close_empty_autonomous_validation_jobs(
         if not isinstance(raw, dict):
             continue
         item = dict(raw)
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        targeted = bool(_target_strategy_ids(payload))
         if (
             str(item.get("type") or "") == "autonomous_validation"
             and str(item.get("status") or "") in {"queued", "retry"}
+            and not targeted
         ):
             item["status"] = "complete"
             item["updated_at"] = now_text
@@ -842,10 +897,26 @@ def execute_job(
 
     if job_type == "autonomous_validation":
         latest = store.load_latest()
-        candidates = _pending_web_strategies(
-            latest,
-            maximum=int(env("RESEARCH_VALIDATION_BATCH_SIZE", "3") or 3),
-        )
+        target_strategy_ids = _target_strategy_ids(payload)
+        targeted = bool(target_strategy_ids)
+        if targeted:
+            candidates, missing_targets, blocked_targets = _targeted_validation_strategies(
+                latest,
+                target_strategy_ids,
+            )
+            problems = [
+                *(f"missing strategy {strategy_id}" for strategy_id in missing_targets),
+                *(f"blocked strategy {reason}" for reason in blocked_targets),
+            ]
+            if problems:
+                raise AppError(
+                    "Targeted autonomous validation could not start: " + "; ".join(problems)
+                )
+        else:
+            candidates = _pending_web_strategies(
+                latest,
+                maximum=int(env("RESEARCH_VALIDATION_BATCH_SIZE", "3") or 3),
+            )
         if not candidates:
             latest = finish_research_job(
                 latest,
@@ -858,7 +929,11 @@ def execute_job(
                 job_id=str(job.get("id") or ""),
                 job_type=job_type,
                 status="complete",
-                detail="No new web-research strategies were awaiting deterministic validation.",
+                detail=(
+                    "No targeted strategies were eligible for deterministic validation."
+                    if targeted
+                    else "No new web-research strategies were awaiting deterministic validation."
+                ),
             )
             persist_store(store, latest)
             return "no-pending-validation"
@@ -872,9 +947,13 @@ def execute_job(
             market,
             candidates,
             universe_sample_size=int(env("RESEARCH_VALIDATION_UNIVERSE_SIZE", "250") or 250),
-            deep_strategy_limit=min(
-                len(candidates),
-                int(env("RESEARCH_VALIDATION_DEEP_LIMIT", "3") or 3),
+            deep_strategy_limit=(
+                len(candidates)
+                if targeted
+                else min(
+                    len(candidates),
+                    int(env("RESEARCH_VALIDATION_DEEP_LIMIT", "3") or 3),
+                )
             ),
             symbols_per_strategy=int(env("RESEARCH_VALIDATION_SYMBOLS_PER_STRATEGY", "6") or 6),
             parallel_workers=max(
@@ -895,17 +974,18 @@ def execute_job(
             str(job.get("id") or ""),
             result_ref=result_ref,
         )
-        remaining = _pending_web_strategies(latest, maximum=1)
         continuation_queued = False
-        if remaining:
-            latest, continuation = enqueue_research_job(
-                latest,
-                "autonomous_validation",
-                {"origin": "validation_batch_continuation"},
-                priority=AUTONOMOUS_VALIDATION_PRIORITY,
-                dedupe_key="autonomous_validation:pending_web_research",
-            )
-            continuation_queued = continuation is not None
+        if not targeted:
+            remaining = _pending_web_strategies(latest, maximum=1)
+            if remaining:
+                latest, continuation = enqueue_research_job(
+                    latest,
+                    "autonomous_validation",
+                    {"origin": "validation_batch_continuation"},
+                    priority=AUTONOMOUS_VALIDATION_PRIORITY,
+                    dedupe_key="autonomous_validation:pending_web_research",
+                )
+                continuation_queued = continuation is not None
         latest = record_worker_run(
             latest,
             worker_id=worker_id,
@@ -913,9 +993,16 @@ def execute_job(
             job_type=job_type,
             status="complete",
             detail=(
-                f"Validated {int(report.get('deep_strategies_tested') or 0)} hypothesis strategy "
-                f"candidate(s); {int(report.get('deep_strategies_failed') or 0)} skipped; "
-                f"continuation_queued={continuation_queued}."
+                (
+                    f"Targeted revalidation tested {int(report.get('deep_strategies_tested') or 0)} "
+                    f"strategy candidate(s); {int(report.get('deep_strategies_failed') or 0)} skipped."
+                )
+                if targeted
+                else (
+                    f"Validated {int(report.get('deep_strategies_tested') or 0)} hypothesis strategy "
+                    f"candidate(s); {int(report.get('deep_strategies_failed') or 0)} skipped; "
+                    f"continuation_queued={continuation_queued}."
+                )
             ),
         )
         persist_store(store, latest)
@@ -1049,6 +1136,52 @@ def main() -> int:
     if seeded:
         persist_store(store, data)
         print(f"Seeded {seeded} autonomous research topics.", flush=True)
+
+    target_ids = [
+        part.strip()
+        for part in env("RESEARCH_TARGET_REVALIDATION_STRATEGY_IDS").split(",")
+        if part.strip()
+    ]
+    if target_ids:
+        data = store.load_latest()
+        _, missing_targets, blocked_targets = _targeted_validation_strategies(
+            data,
+            target_ids,
+        )
+        if missing_targets or blocked_targets:
+            print(
+                "Targeted profit-first revalidation was not queued: "
+                + "; ".join(
+                    [
+                        *(f"missing strategy {strategy_id}" for strategy_id in missing_targets),
+                        *(f"blocked strategy {reason}" for reason in blocked_targets),
+                    ]
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            dedupe_suffix = hashlib.sha256(
+                "|".join(target_ids).encode("utf-8")
+            ).hexdigest()[:16]
+            data, targeted_job = enqueue_research_job(
+                data,
+                "autonomous_validation",
+                {
+                    "origin": "profit_first_revalidation",
+                    "strategy_ids": target_ids,
+                    "validation_method_version": AUTONOMOUS_VALIDATION_METHOD_VERSION,
+                },
+                priority=120,
+                dedupe_key=f"autonomous_validation:targeted:{dedupe_suffix}",
+            )
+            if targeted_job:
+                persist_store(store, data)
+                print(
+                    "Queued targeted profit-first revalidation job "
+                    f"{targeted_job.get('id')} for {', '.join(target_ids)}.",
+                    flush=True,
+                )
 
     # ML bootstrap/retraining has its own freshness clock so a deployment can
     # start it immediately even if today's web-research cycle was already seeded.
