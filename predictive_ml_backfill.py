@@ -68,7 +68,7 @@ DEFAULT_TICKER_SPECIFIC_SYMBOLS = 6
 DEFAULT_FEATURE_WORKERS = 4
 DEFAULT_VALIDATION_WORKERS = 4
 MAX_AUTOMATIC_ML_RUN_HISTORY = 12
-MODEL_SUITE_VERSION = 6
+MODEL_SUITE_VERSION = 7
 
 
 def _clean_symbols(values: Any) -> list[str]:
@@ -569,7 +569,10 @@ def run_predictive_ml_backfill(
         "feature_workers": int(config["feature_workers"]),
         "validation_workers": int(config["validation_workers"]),
         "runtime_seconds": round(perf_counter() - run_started, 3),
-        "model_suite_version": int((payload or {}).get("model_suite_version") or MODEL_SUITE_VERSION),
+        "model_suite_version": max(
+            MODEL_SUITE_VERSION,
+            int((payload or {}).get("model_suite_version") or MODEL_SUITE_VERSION),
+        ),
         "dataset_summary": {
             key: deepcopy(value)
             for key, value in dataset.items()
