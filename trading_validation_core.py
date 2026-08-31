@@ -46,6 +46,10 @@ def validation_strength(
     validation = winner.get("validation_metrics") or {}
     holdout = winner.get("holdout_metrics") or {}
     stress = winner.get("stress_metrics") or {}
+    sensitivity = winner.get("execution_sensitivity") or {}
+    sensitivity_score = safe_float(sensitivity.get("score"))
+    sensitivity_label = str(sensitivity.get("label") or "").strip().upper()
+    sensitivity_pass = bool(sensitivity.get("passes_validation_gate"))
     settings = optimization_report.get("optimization_settings") or {}
     minimum_validation = max(1, int(safe_float(settings.get("minimum_validation_trades"), 2) or 2))
     maximum_drawdown = max(0.5, safe_float(settings.get("maximum_drawdown_pct"), 15.0) or 15.0)
@@ -77,7 +81,13 @@ def validation_strength(
     else:
         reasons.append("Final untouched holdout P/L is not positive.")
 
-    if stress_pnl > 0:
+    if sensitivity_score is not None and sensitivity_label not in {"", "NOT APPLICABLE"}:
+        score += max(0.0, min(10.0, sensitivity_score / 10.0))
+        if sensitivity_label == "FRAGILE":
+            reasons.append("The edge degrades quickly across the execution-cost sensitivity curve.")
+        elif sensitivity_label == "MIXED":
+            reasons.append("Execution-cost robustness is mixed across the tested multiplier range.")
+    elif stress_pnl > 0:
         score += 10
     else:
         reasons.append("The setup is sensitive to higher assumed trading costs.")
@@ -142,7 +152,18 @@ def validation_strength(
         score_cap = min(score_cap, 39.0)
     if holdout_pnl <= 0:
         score_cap = min(score_cap, 39.0)
-    if stress_pnl <= 0:
+    if sensitivity_score is not None and sensitivity_label not in {"", "NOT APPLICABLE"}:
+        if sensitivity_label == "FRAGILE" or not sensitivity_pass:
+            score_cap = min(score_cap, 49.0)
+            penalties.append(
+                "Execution-cost sensitivity is fragile across the full multiplier curve."
+            )
+        elif sensitivity_label == "MIXED":
+            score_cap = min(score_cap, 69.0)
+            penalties.append(
+                "Execution-cost sensitivity is mixed, so robustness cannot receive the highest rating."
+            )
+    elif stress_pnl <= 0:
         score_cap = min(score_cap, 49.0)
 
     minimum_unseen_trades_for_high_confidence = 15
@@ -160,7 +181,7 @@ def validation_strength(
     if validation_pnl > 0 and validation_pf < 1.05:
         score_cap = min(score_cap, 59.0)
         penalties.append("Validation profit factor is too close to breakeven for a high robustness rating.")
-    if stress_pnl > 0 and stress_pf < 1.05:
+    if sensitivity_score is None and stress_pnl > 0 and stress_pf < 1.05:
         score_cap = min(score_cap, 59.0)
         penalties.append("Stress-test profit factor is too close to breakeven for a high robustness rating.")
 
@@ -185,12 +206,17 @@ def validation_strength(
     else:
         label = "WEAK"
 
+    execution_robust_enough = (
+        sensitivity_pass
+        if sensitivity_score is not None and sensitivity_label not in {"", "NOT APPLICABLE"}
+        else stress_pnl > 0
+    )
     independently_positive = (
         optimizer_status == "VALIDATED"
         and training_pnl > 0
         and validation_pnl > 0
         and holdout_pnl > 0
-        and stress_pnl > 0
+        and execution_robust_enough
     )
     if walk_forward_report:
         independently_positive = independently_positive and (wf_profitable_pct or 0.0) >= 50.0
@@ -201,13 +227,18 @@ def validation_strength(
         "score_cap": round(score_cap, 1),
         "base_score": round(base_score, 1),
         "walk_forward_score": round(walk_score, 1) if walk_score is not None else None,
+        "execution_sensitivity_score": (
+            round(sensitivity_score, 1) if sensitivity_score is not None else None
+        ),
+        "execution_sensitivity_label": sensitivity_label or None,
         "optimizer_status": optimizer_status or None,
         "minimum_unseen_trades_for_high_confidence": minimum_unseen_trades_for_high_confidence,
         "label": label,
         "independently_positive": bool(independently_positive),
         "reasons": list(dict.fromkeys([*reasons, *penalties])),
         "note": (
-            "Robustness summarizes anchor-stock historical validation. Stability caps prevent "
+            "Robustness summarizes anchor-stock historical validation, including the full "
+            "execution-cost degradation curve when available. Stability caps prevent "
             "negative/unstable or near-breakeven evidence from receiving a misleading high rating; "
             "it is not a probability of profit."
         ),
