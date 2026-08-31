@@ -21,6 +21,7 @@ from finder_report_persistence import (
     latest_completed_finder_report,
 )
 from trading_intelligence_core import paper_execution_fidelity, strategy_integrity_report
+from trading_strategy_dna import is_family_source_strategy
 from trading_validation_core import validation_strength, walk_forward_validate
 from youtube_strategy_engine import (
     AppError,
@@ -112,6 +113,22 @@ SEARCH_PROFILES: dict[str, StockSearchProfile] = {
         description="Maximum built-in search depth. Intended for long research runs, not quick iteration.",
     ),
 }
+
+
+def stock_finder_strategy_families(
+    strategies: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return only root research families, never prior stock-specific children."""
+    records = [dict(item) for item in strategies if isinstance(item, dict)]
+    canonical = [
+        item
+        for item in records
+        if str(item.get("source_type") or "").strip().casefold()
+        == "canonical_family"
+    ]
+    if canonical:
+        return canonical
+    return [item for item in records if is_family_source_strategy(item)]
 
 
 def search_profile(name: str) -> StockSearchProfile:
@@ -1105,6 +1122,9 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
             "validated_at": generated_at if ready_for_paper else None,
             "validation_status": "validated" if ready_for_paper else "research_only",
             "paper_validation_status": "ready" if ready_for_paper else "not_ready",
+            # Approval belongs to the exact optimized child. Never inherit the
+            # parent family's approval after its rules have changed.
+            "approved": False,
             "stock_strategy_finder_verdict": verdict,
             "stock_strategy_finder_run_id": run_id,
             "last_validation": {
