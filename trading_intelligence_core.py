@@ -1224,10 +1224,18 @@ def upgrade_native_strategy_rules(strategy: dict[str, Any]) -> dict[str, Any]:
         manual_or_finder_current = (
             str(market_integrity.get("mode") or "")
             in {"raw_prices", "raw_prices_post_latest_split", "raw_prices_post_corporate_action"}
-            and bool(reuse_audit)
+            and reuse_audit.get("pristine") is True
+        )
+        autonomous_reuse_audit = (
+            last_autonomous.get("holdout_reuse_audit")
+            if isinstance(last_autonomous.get("holdout_reuse_audit"), dict)
+            else {}
         )
         autonomous_current = (
             int(last_autonomous.get("validation_method_version") or 0) >= 4
+            and str(last_autonomous.get("market_data_integrity_contract") or "")
+            == "split_safe_raw_v1"
+            and autonomous_reuse_audit.get("pristine") is True
         )
         if not (manual_or_finder_current or autonomous_current):
             item["previous_validation_invalidated_by_methodology_upgrade"] = {
