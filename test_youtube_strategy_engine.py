@@ -1865,8 +1865,15 @@ class ProviderTests(unittest.TestCase):
             {"bars": {"NVDA": [bar(18, 0, 10, 11, 9, 10)]}, "next_page_token": "page-two"},
             {"bars": {"AAPL": [bar(18, 0, 20, 21, 19, 20)]}, "next_page_token": None},
         ]
+        # Keep this pagination-only test entirely in completed history so the
+        # live-history cache boundary does not add a separate current-day fetch.
+        end = engine.utc_now() - timedelta(days=1)
         with patch.object(market, "_get", side_effect=responses):
-            result = market.bars(["NVDA", "AAPL"], start=engine.utc_now() - timedelta(days=5), end=engine.utc_now())
+            result = market.bars(
+                ["NVDA", "AAPL"],
+                start=end - timedelta(days=5),
+                end=end,
+            )
         self.assertEqual(len(result["NVDA"]), 1)
         self.assertEqual(len(result["AAPL"]), 1)
 
