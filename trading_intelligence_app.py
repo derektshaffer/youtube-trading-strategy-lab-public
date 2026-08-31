@@ -13,10 +13,30 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
 import streamlit as st
 
 from app_access import require_app_access
+
+st.set_page_config(
+    page_title="Trading Intelligence Lab",
+    page_icon="🧠",
+    layout="wide",
+    initial_sidebar_state="locked",
+)
+require_app_access(st)
+
+_boot_message = str(
+    st.session_state.get("_trading_app_boot_message") or ""
+).strip()
+_boot_status = None
+if _boot_message:
+    _boot_status = st.status(_boot_message, expanded=False)
+
+# Heavy research/ML imports intentionally happen only after access is granted.
+# This keeps the password screen fast and lets navigation show a loading state
+# before the rest of the application stack is initialized on a rerun.
+import pandas as pd
+
 from finder_report_persistence import (
     latest_completed_finder_report,
     newest_matching_finder_report,
@@ -244,13 +264,13 @@ from youtube_strategy_engine import (
     utc_now,
 )
 
-st.set_page_config(
-    page_title="Trading Intelligence Lab",
-    page_icon="🧠",
-    layout="wide",
-    initial_sidebar_state="locked",
-)
-require_app_access(st)
+if _boot_status is not None:
+    _boot_status.update(
+        label="Trading Intelligence Lab loaded",
+        state="complete",
+        expanded=False,
+    )
+    st.session_state.pop("_trading_app_boot_message", None)
 
 st.markdown(
     """
