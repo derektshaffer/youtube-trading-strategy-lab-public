@@ -251,6 +251,18 @@ class FinderEvidenceTierTests(unittest.TestCase):
         self.assertEqual(verdict["research_tier"], "validated")
         self.assertTrue(verdict["paper_ready"])
 
+    def test_paper_execution_gap_downgrades_ready_verdict_consistently(self):
+        verdict = finder.apply_paper_fidelity_to_verdict(
+            {
+                "code": "ready_for_paper",
+                "research_tier": "validated",
+                "paper_ready": True,
+            },
+            {"status": "gap"},
+        )
+        self.assertEqual(verdict["code"], "historically_robust_execution_gap")
+        self.assertFalse(verdict["paper_ready"])
+
     def test_validated_status_gate_requires_walk_forward_and_paper_fidelity(self):
         verdict = {
             "code": "ready_for_paper",
