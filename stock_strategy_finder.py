@@ -1026,6 +1026,54 @@ def merge_finder_checkpoint_into_library(
     return result
 
 
+def apply_historical_spread_integrity_guard(
+    report: dict[str, Any],
+    audit: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach real-quote execution evidence and fail closed when stress was too mild."""
+    guarded = deepcopy(report or {})
+    guarded["historical_spread_audit"] = deepcopy(audit or {})
+    if str((audit or {}).get("status") or "").upper() != "UNDERMODELED":
+        return guarded
+
+    optimization = dict(guarded.get("optimization") or {})
+    winner = dict(optimization.get("winner") or {})
+    if str(winner.get("status") or "").strip().upper() == "VALIDATED":
+        winner["pre_spread_audit_status"] = winner.get("status")
+        winner["status"] = "HOLDOUT SPREAD UNDERMODELED"
+    optimization["winner"] = winner
+    guarded["optimization"] = optimization
+
+    robustness = dict(guarded.get("robustness") or {})
+    robustness["independently_positive"] = False
+    reasons = list(robustness.get("reasons") or [])
+    reasons.append(
+        "Real holdout entry quotes exceeded the maximum spread assumed by the execution-cost sensitivity curve."
+    )
+    robustness["reasons"] = list(dict.fromkeys(reasons))
+    score = safe_float(robustness.get("score"))
+    if score is not None:
+        robustness["score"] = min(float(score), 49.0)
+        robustness["label"] = "WEAK"
+    guarded["robustness"] = robustness
+
+    verdict = dict(guarded.get("verdict") or {})
+    if str(verdict.get("code") or "") == "ready_for_paper":
+        guarded["verdict"] = {
+            "code": "historical_spread_under_modeled",
+            "label": "PROMISING — REAL SPREADS EXCEEDED STRESS RANGE",
+            "tone": "warning",
+            "research_tier": "execution_model_gap",
+            "paper_ready": False,
+            "reason": (
+                "The frozen winner survived modeled execution stress, but real bid/ask spreads "
+                "at untouched-holdout entry moments exceeded the largest spread assumption tested. "
+                "Increase the execution-cost envelope and revalidate before treating it as robust."
+            ),
+        }
+    return guarded
+
+
 def holdout_reuse_audit(
     data: dict[str, Any],
     report: dict[str, Any],
@@ -1194,6 +1242,7 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
         "parameter_stability": report.get("parameter_stability") or {},
         "regime_diagnostics": report.get("regime_diagnostics") or {},
         "paper_execution_fidelity": report.get("paper_execution_fidelity") or {},
+        "historical_spread_audit": report.get("historical_spread_audit") or {},
         "market_data_integrity": report.get("market_data_integrity") or {},
         "holdout_reuse_audit": report.get("holdout_reuse_audit") or {},
         "holdout_sessions": list(optimization.get("holdout_sessions") or []),
@@ -1303,6 +1352,7 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
                 "holdout_execution_sensitivity": winner.get("holdout_execution_sensitivity") or {},
                 "walk_forward_summary": (report.get("walk_forward") or {}).get("summary") or {},
                 "parameter_stability": report.get("parameter_stability") or {},
+                "historical_spread_audit": report.get("historical_spread_audit") or {},
                 "market_data_integrity": report.get("market_data_integrity") or {},
                 "holdout_reuse_audit": report.get("holdout_reuse_audit") or {},
             },
