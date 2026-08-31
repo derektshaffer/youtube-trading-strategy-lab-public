@@ -113,6 +113,8 @@ def completed_daily_profile(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not cleaned:
         return {
             "bar_count": 0,
+            "latest_close": None,
+            "latest_day_change_pct": None,
             "largest_single_day_gain_pct": None,
             "runner_days_20pct": 0,
             "runner_days_30pct": 0,
@@ -171,8 +173,11 @@ def completed_daily_profile(rows: list[dict[str, Any]]) -> dict[str, Any]:
         [float(item["close"]) * float(item["volume"]) for item in dollar_rows]
     )
 
+    latest_day_change = returns[-1] if returns else None
     return {
         "bar_count": len(cleaned),
+        "latest_close": last_close,
+        "latest_day_change_pct": latest_day_change,
         "largest_single_day_gain_pct": max(returns[-60:]) if returns else None,
         "runner_days_20pct": sum(value >= 20.0 for value in returns[-60:]),
         "runner_days_30pct": sum(value >= 30.0 for value in returns[-60:]),
@@ -182,6 +187,151 @@ def completed_daily_profile(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "distance_from_60d_high_pct": distance_from_high,
         "average_dollar_volume_20d": average_dollar_volume,
     }
+
+
+def score_latent_daily_candidate(
+    symbol: str,
+    daily_profile: dict[str, Any],
+    *,
+    min_price: float = 0.20,
+    max_price: float = 30.0,
+    min_average_dollar_volume: float = 100_000.0,
+) -> dict[str, Any] | None:
+    """Cheap whole-market pre-screen using completed daily information only.
+
+    This is deliberately a latent-candidate score, not a live explosion score and
+    not a probability. It is designed to reduce thousands of active equities to a
+    manageable shortlist before intraday/news/SEC work is performed.
+    """
+    bar_count = int(safe_float(daily_profile.get("bar_count"), 0) or 0)
+    price = safe_float(daily_profile.get("latest_close"))
+    average_dollar_volume = safe_float(
+        daily_profile.get("average_dollar_volume_20d"),
+        0.0,
+    ) or 0.0
+    if (
+        bar_count < 25
+        or price is None
+        or price < float(min_price)
+        or price > float(max_price)
+        or average_dollar_volume < float(min_average_dollar_volume)
+    ):
+        return None
+
+    score = 0.0
+    reasons: list[str] = []
+
+    compression = safe_float(daily_profile.get("compression_ratio_5v20"))
+    if compression is not None:
+        if compression <= 0.55:
+            score += 25
+            reasons.append("Recent daily ranges are extremely compressed versus the prior baseline.")
+        elif compression <= 0.75:
+            score += 18
+            reasons.append("Recent daily ranges are meaningfully compressed.")
+        elif compression <= 0.95:
+            score += 8
+
+    volume_ratio = safe_float(daily_profile.get("previous_day_volume_ratio"))
+    if volume_ratio is not None:
+        if volume_ratio >= 3:
+            score += 20
+            reasons.append(f"Previous-session volume woke up sharply ({volume_ratio:.1f}× baseline).")
+        elif volume_ratio >= 1.75:
+            score += 14
+            reasons.append(f"Previous-session volume increased ({volume_ratio:.1f}× baseline).")
+        elif volume_ratio >= 1.20:
+            score += 6
+
+    largest = safe_float(daily_profile.get("largest_single_day_gain_pct"))
+    runner20 = int(safe_float(daily_profile.get("runner_days_20pct"), 0) or 0)
+    runner30 = int(safe_float(daily_profile.get("runner_days_30pct"), 0) or 0)
+    if largest is not None and largest >= 50:
+        score += 14
+        reasons.append("The ticker has demonstrated 50%+ single-day explosiveness in recent history.")
+    elif largest is not None and largest >= 30:
+        score += 10
+        reasons.append("The ticker has demonstrated 30%+ single-day explosiveness in recent history.")
+    elif largest is not None and largest >= 20:
+        score += 5
+    score += min(8.0, runner20 * 1.5 + runner30 * 2.0)
+
+    distance_high = safe_float(daily_profile.get("distance_from_60d_high_pct"))
+    if distance_high is not None:
+        if distance_high <= 12:
+            score += 10
+            reasons.append("Price is within 12% of its recent 60-day high.")
+        elif distance_high <= 30:
+            score += 5
+
+    recent_range = safe_float(daily_profile.get("recent_10d_range_pct"))
+    if recent_range is not None:
+        if 5 <= recent_range <= 30:
+            score += 8
+        elif recent_range < 5:
+            score += 4
+
+    if average_dollar_volume >= 5_000_000:
+        score += 10
+    elif average_dollar_volume >= 1_000_000:
+        score += 7
+    elif average_dollar_volume >= 250_000:
+        score += 4
+
+    latest_day_change = safe_float(daily_profile.get("latest_day_change_pct"))
+    already_extended = False
+    if latest_day_change is not None:
+        if latest_day_change >= 35:
+            score -= 18
+            already_extended = True
+            reasons.append("Latest completed session was already extremely extended; latent priority reduced.")
+        elif latest_day_change >= 20:
+            score -= 8
+            already_extended = True
+        elif -5 <= latest_day_change <= 12:
+            score += 5
+
+    return {
+        "symbol": str(symbol or "").strip().upper(),
+        "latent_score": round(_clamp(score), 1),
+        "daily_profile": dict(daily_profile),
+        "already_extended": already_extended,
+        "score_is_probability": False,
+        "validation_status": "experimental_unvalidated",
+        "reasons": reasons[:8],
+    }
+
+
+def rank_latent_daily_candidates(
+    daily_by_symbol: dict[str, list[dict[str, Any]]],
+    *,
+    top_n: int = 250,
+    min_price: float = 0.20,
+    max_price: float = 30.0,
+    min_average_dollar_volume: float = 100_000.0,
+) -> list[dict[str, Any]]:
+    """Rank a broad completed-daily universe without using future/live evidence."""
+    ranked: list[dict[str, Any]] = []
+    for symbol, rows in (daily_by_symbol or {}).items():
+        profile = completed_daily_profile(rows or [])
+        candidate = score_latent_daily_candidate(
+            symbol,
+            profile,
+            min_price=min_price,
+            max_price=max_price,
+            min_average_dollar_volume=min_average_dollar_volume,
+        )
+        if candidate is not None:
+            ranked.append(candidate)
+    ranked.sort(
+        key=lambda item: (
+            safe_float(item.get("latent_score"), 0.0) or 0.0,
+            safe_float((item.get("daily_profile") or {}).get("previous_day_volume_ratio"), 0.0) or 0.0,
+            safe_float((item.get("daily_profile") or {}).get("average_dollar_volume_20d"), 0.0) or 0.0,
+        ),
+        reverse=True,
+    )
+    return ranked[: max(1, int(top_n))]
 
 
 def catalyst_profile(
