@@ -5291,8 +5291,21 @@ elif module == "Strategy Library":
 elif module == "Strategy Integrity":
     st.caption(
         "This audit asks a different question from validation: **is the backtester actually testing the strategy the source described?** "
-        "A profitable backtest is not meaningful if important entry, universe, execution, risk, or exit logic was silently dropped."
+        "A profitable backtest is not meaningful if important entry, stock-selection, execution, risk, or exit logic was silently dropped."
     )
+
+    def integrity_area_label(value: str) -> str:
+        labels = {
+            "universe": "Stock selection",
+            "entry": "Entry",
+            "structure": "Price / setup structure",
+            "execution": "Execution",
+            "risk": "Risk",
+            "exit": "Exit / trade management",
+            "other": "Other",
+        }
+        key = str(value or "other").strip().casefold()
+        return labels.get(key, key.replace("_", " ").title())
 
     integrity_reports: dict[str, dict[str, Any]] = {}
     integrity_rows: list[dict[str, Any]] = []
@@ -5304,31 +5317,31 @@ elif module == "Strategy Integrity":
         integrity_rows.append(
             {
                 "Strategy family": strategy.get("name") or "Unnamed strategy",
-                "Fidelity": report.get("label"),
-                "Coverage %": safe_float(report.get("coverage_pct"), 0.0) or 0.0,
-                "Modeled requirements": int(report.get("modeled_count") or 0),
-                "Requirements found": int(report.get("requirement_count") or 0),
-                "Critical gaps": int(report.get("critical_missing_count") or 0),
-                "Exit gaps": int((dimensions.get("exit") or {}).get("missing") or 0),
-                "Universe gaps": int((dimensions.get("universe") or {}).get("missing") or 0),
-                "Execution gaps": int((dimensions.get("execution") or {}).get("missing") or 0),
-                "Validation": strategy.get("validation_status") or "unvalidated",
+                "Backtester match": report.get("label"),
+                "Rules represented %": safe_float(report.get("coverage_pct"), 0.0) or 0.0,
+                "Rules represented": int(report.get("modeled_count") or 0),
+                "Rules detected": int(report.get("requirement_count") or 0),
+                "Important rules missing": int(report.get("critical_missing_count") or 0),
+                "Missing exit rules": int((dimensions.get("exit") or {}).get("missing") or 0),
+                "Missing stock-selection rules": int((dimensions.get("universe") or {}).get("missing") or 0),
+                "Missing execution rules": int((dimensions.get("execution") or {}).get("missing") or 0),
+                "Validation status": strategy.get("validation_status") or "unvalidated",
             }
         )
 
     if not integrity_rows:
         st.info("No strategy families are available to audit yet.")
     else:
-        faithful = sum(1 for row in integrity_rows if row["Fidelity"] == "FULLY MODELED FOR CURRENT REQUIREMENTS")
-        partial = sum(1 for row in integrity_rows if row["Fidelity"] == "PARTIALLY MODELED")
-        blocked = sum(1 for row in integrity_rows if row["Fidelity"] == "IMPORTANT LOGIC NOT MODELED")
-        average_coverage = sum(float(row["Coverage %"]) for row in integrity_rows) / max(1, len(integrity_rows))
+        faithful = sum(1 for row in integrity_rows if row["Backtester match"] == "FULLY MODELED FOR CURRENT REQUIREMENTS")
+        partial = sum(1 for row in integrity_rows if row["Backtester match"] == "PARTIALLY MODELED")
+        blocked = sum(1 for row in integrity_rows if row["Backtester match"] == "IMPORTANT LOGIC NOT MODELED")
+        average_coverage = sum(float(row["Rules represented %"]) for row in integrity_rows) / max(1, len(integrity_rows))
 
         audit_cols = st.columns(4)
-        audit_cols[0].metric("Fully modeled", faithful)
-        audit_cols[1].metric("Partially modeled", partial)
-        audit_cols[2].metric("Important gaps", blocked)
-        audit_cols[3].metric("Average fidelity", f"{average_coverage:.1f}%")
+        audit_cols[0].metric("Strategies fully represented", faithful)
+        audit_cols[1].metric("Strategies partly represented", partial)
+        audit_cols[2].metric("Strategies blocked by missing logic", blocked)
+        audit_cols[3].metric("Average rules represented", f"{average_coverage:.1f}%")
 
         if blocked:
             st.error(
@@ -5345,7 +5358,7 @@ elif module == "Strategy Integrity":
             st.success("The currently detected defining requirements are represented by the backtester.")
 
         audit_frame = pd.DataFrame(integrity_rows).sort_values(
-            by=["Critical gaps", "Coverage %"],
+            by=["Important rules missing", "Rules represented %"],
             ascending=[False, True],
         )
         st.dataframe(audit_frame, width="stretch", hide_index=True)
@@ -5376,7 +5389,7 @@ elif module == "Strategy Integrity":
                     label,
                     {
                         "Missing capability": label,
-                        "Area": str(gap.get("dimension") or "other").replace("_", " ").title(),
+                        "Area": integrity_area_label(str(gap.get("dimension") or "other")),
                         "Source strategies affected": 0,
                         "Sources affected": set(),
                         "Examples": [],
@@ -5426,11 +5439,11 @@ elif module == "Strategy Integrity":
             )
 
         strategy_options = {
-            f"{row['Strategy family']} · {row['Fidelity']} · {row['Coverage %']:.0f}%": row
+            f"{row['Strategy family']} · {row['Backtester match']} · {row['Rules represented %']:.0f}% represented": row
             for row in integrity_rows
         }
         selected_label = st.selectbox(
-            "Inspect strategy fidelity",
+            "Inspect how well a strategy is represented",
             list(strategy_options),
             key="til_integrity_strategy",
         )
@@ -5448,10 +5461,10 @@ elif module == "Strategy Integrity":
 
         st.markdown(f"### {selected_strategy.get('name') or 'Unnamed strategy'}")
         fidelity_cols = st.columns(4)
-        fidelity_cols[0].metric("Fidelity", report.get("label"))
-        fidelity_cols[1].metric("Coverage", f"{safe_float(report.get('coverage_pct'), 0.0):.1f}%")
-        fidelity_cols[2].metric("Requirements modeled", f"{int(report.get('modeled_count') or 0)}/{int(report.get('requirement_count') or 0)}")
-        fidelity_cols[3].metric("Critical gaps", int(report.get("critical_missing_count") or 0))
+        fidelity_cols[0].metric("Backtester match", report.get("label"))
+        fidelity_cols[1].metric("Rules represented", f"{safe_float(report.get('coverage_pct'), 0.0):.1f}%")
+        fidelity_cols[2].metric("Rules modeled", f"{int(report.get('modeled_count') or 0)}/{int(report.get('requirement_count') or 0)}")
+        fidelity_cols[3].metric("Important rules missing", int(report.get("critical_missing_count") or 0))
 
         source_ids = {
             str(value)
@@ -5501,16 +5514,17 @@ elif module == "Strategy Integrity":
 
         requirements = list(report.get("requirements") or [])
         if requirements:
-            st.markdown("#### Requirement-by-requirement mapping")
+            st.markdown("#### Rule-by-rule backtester check")
+            st.caption("This shows which parts of the strategy description the backtester can reproduce and which parts are still missing.")
             requirement_rows = []
             for item in requirements:
                 requirement_rows.append(
                     {
-                        "Area": str(item.get("dimension") or "entry").replace("_", " ").title(),
-                        "Source requirement": item.get("label"),
-                        "Modeled?": "YES" if item.get("modeled") else "NO",
-                        "Machine rule(s)": ", ".join(str(value) for value in item.get("rule_keys") or []) or "No supported rule",
-                        "Why missing / limitation": item.get("limitation") or "",
+                        "Area": integrity_area_label(str(item.get("dimension") or "entry")),
+                        "Strategy rule": item.get("label"),
+                        "Backtester can reproduce it?": "YES" if item.get("modeled") else "NO",
+                        "Backtester rule(s)": ", ".join(str(value) for value in item.get("rule_keys") or []) or "No supported rule",
+                        "Why it cannot be reproduced": item.get("limitation") or "",
                     }
                 )
             st.dataframe(pd.DataFrame(requirement_rows), width="stretch", hide_index=True)
