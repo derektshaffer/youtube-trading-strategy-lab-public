@@ -7919,6 +7919,7 @@ elif module == "Strategy Lab":
                         new_item["last_validation"] = {
                             "symbol": report.get("symbol"),
                             "generated_at": report.get("generated_at"),
+                            "timeframe": lab_result.get("timeframe"),
                             "robustness_score": strength.get("score"),
                             "robustness_label": strength.get("label"),
                             "optimizer_status": winner.get("status"),
