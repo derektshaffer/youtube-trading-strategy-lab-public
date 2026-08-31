@@ -52,7 +52,8 @@ class ProfitFirstWorkflowTests(unittest.TestCase):
             "Review fidelity gaps",
             "Open Rule Builder",
             "point-in-time float must remain a hard blocker",
-            "derivative hypothesis must be tracked separately",
+            "A deliberately modified derivative hypothesis must be ",
+            "tracked separately.",
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, self.source)
