@@ -1571,6 +1571,25 @@ def _nav_key(section: str, *, active: bool = False) -> str:
     ).strip("_")
 
 
+def _route_loading_label(section: str) -> str:
+    meta = WORKSPACE_PAGE_META.get(section) or {}
+    title = str(meta.get("title") or section or "workspace").strip()
+    return f"Loading {title}…"
+
+
+def navigate_to_workspace(
+    section: str,
+    *,
+    pending: bool = False,
+) -> None:
+    if pending:
+        st.session_state["til_navigate_to"] = section
+    else:
+        st.session_state["til_workspace_section"] = section
+    st.session_state["_trading_app_boot_message"] = _route_loading_label(section)
+    st.rerun()
+
+
 def render_workspace_page_header(section: str) -> None:
     meta = WORKSPACE_PAGE_META.get(section) or {
         "step": "—",
@@ -1655,13 +1674,34 @@ except (AttributeError, KeyError, RuntimeError, TypeError):
 
 library: dict[str, Any] = {}
 library_load_error: AppError | None = None
+_library_cold_start = not isinstance(
+    st.session_state.get(_LIBRARY_RENDER_CACHE_KEY),
+    dict,
+)
+_library_load_status = (
+    st.status("Loading research library…", expanded=False)
+    if _library_cold_start
+    else None
+)
 try:
     # Refresh durable storage before deriving health state so a stale local
     # cloud_backup_status.json error cannot keep cloud research disabled after
     # a newer worker/save has already repaired the private GitHub library.
     library = load_library()
+    if _library_load_status is not None:
+        _library_load_status.update(
+            label="Research library loaded",
+            state="complete",
+            expanded=False,
+        )
 except AppError as exc:
     library_load_error = exc
+    if _library_load_status is not None:
+        _library_load_status.update(
+            label="Research library could not load",
+            state="error",
+            expanded=True,
+        )
 
 system_config_checks = configuration_checks(
     setting,
@@ -1742,8 +1782,7 @@ with st.sidebar:
             key="til_simple_nav_" + _nav_key(section, active=is_active),
         )
         if clicked and not is_active:
-            st.session_state["til_workspace_section"] = section
-            st.rerun()
+            navigate_to_workspace(section)
 
     advanced_sections = [
         "Strategy Library",
@@ -1773,8 +1812,7 @@ with st.sidebar:
                 key="til_advanced_nav_" + _nav_key(section, active=is_active),
             )
             if clicked and not is_active:
-                st.session_state["til_workspace_section"] = section
-                st.rerun()
+                navigate_to_workspace(section)
 
     system_status_color = "#47dda0" if system_status_word == "READY" else "#f3bd58"
     st.markdown(
@@ -1812,10 +1850,6 @@ canonical_strategies = [
     if str(item.get("source_type") or "").lower() == "canonical_family"
 ]
 managed_strategies = canonical_strategies or source_strategies
-managed_integrity_reports = {
-    str(item.get("id") or item.get("name") or ""): strategy_integrity_report(item)
-    for item in managed_strategies
-}
 stock_specific_strategies = [
     item
     for item in strategies
@@ -1823,12 +1857,37 @@ stock_specific_strategies = [
     == "stock_specific_finder"
 ]
 downstream_strategies = [*stock_specific_strategies, *managed_strategies]
-downstream_integrity_reports = {
-    **managed_integrity_reports,
-    **{
+
+_integrity_signature = (
+    str(library.get("updated_at") or ""),
+    tuple(
+        str(item.get("id") or item.get("name") or "")
+        for item in downstream_strategies
+    ),
+)
+_integrity_cache = st.session_state.get("_til_strategy_integrity_cache")
+if (
+    isinstance(_integrity_cache, dict)
+    and _integrity_cache.get("signature") == _integrity_signature
+    and isinstance(_integrity_cache.get("reports"), dict)
+):
+    downstream_integrity_reports = _integrity_cache["reports"]
+else:
+    downstream_integrity_reports = {
         str(item.get("id") or item.get("name") or ""): strategy_integrity_report(item)
-        for item in stock_specific_strategies
-    },
+        for item in downstream_strategies
+    }
+    st.session_state["_til_strategy_integrity_cache"] = {
+        "signature": _integrity_signature,
+        "reports": downstream_integrity_reports,
+    }
+
+managed_integrity_reports = {
+    str(item.get("id") or item.get("name") or ""): downstream_integrity_reports.get(
+        str(item.get("id") or item.get("name") or ""),
+        {},
+    )
+    for item in managed_strategies
 }
 integrity_safe_strategies = [
     item
@@ -1912,9 +1971,8 @@ if workspace_search_query:
                     key=f"til_search_page_{_nav_key(section)}",
                     width="stretch",
                 ):
-                    st.session_state["til_workspace_section"] = section
                     st.session_state["til_workspace_search"] = ""
-                    st.rerun()
+                    navigate_to_workspace(section)
         if source_matches:
             st.caption("SOURCES")
             for item in source_matches:
@@ -1924,9 +1982,8 @@ if workspace_search_query:
                     key=f"til_search_source_{str(item.get('id') or item.get('ingest_id') or '')}",
                     width="stretch",
                 ):
-                    st.session_state["til_workspace_section"] = "Knowledge Sources"
                     st.session_state["til_workspace_search"] = ""
-                    st.rerun()
+                    navigate_to_workspace("Knowledge Sources")
         if strategy_matches:
             st.caption("STRATEGY FAMILIES")
             for item in strategy_matches:
@@ -1935,10 +1992,9 @@ if workspace_search_query:
                     key=f"til_search_strategy_{str(item.get('id') or '')}",
                     width="stretch",
                 ):
-                    st.session_state["til_workspace_section"] = "Strategy Library"
                     st.session_state["til_selected_strategy_id"] = str(item.get("id") or "")
                     st.session_state["til_workspace_search"] = ""
-                    st.rerun()
+                    navigate_to_workspace("Strategy Library")
         if not match_count:
             st.caption("No workspace pages, sources, or strategy families match that search.")
 
@@ -2014,6 +2070,9 @@ if module == "Stock Strategy Finder":
                     st.session_state["til_pending_finder_symbol"] = completed_symbol
                     if completed_profile in SEARCH_PROFILES:
                         st.session_state["til_pending_finder_profile"] = completed_profile
+                    st.session_state["_trading_app_boot_message"] = (
+                        f"Loading {completed_symbol} {completed_profile} Finder result…"
+                    )
                     st.rerun()
 
 
@@ -2022,7 +2081,7 @@ if module == "Stock Strategy Finder":
     def render_global_cloud_finder_activity() -> None:
         """Auto-refresh cloud Finder status only while a job is active."""
         try:
-            fresh_library = load_cloud_status_library()
+            fresh_library = load_library()
         except AppError as exc:
             st.error(f"Cloud research status could not refresh: {exc}")
             return
@@ -2305,6 +2364,7 @@ if module == "Stock Strategy Finder":
         finder_family_strategies,
         finder_symbol or "UNKNOWN",
         finder_profile,
+        integrity_reports=managed_integrity_reports,
     )
     finder_work = estimate_search_work(finder_profile, len(finder_candidates))
 
@@ -2522,7 +2582,8 @@ if module == "Stock Strategy Finder":
 
     cloud_col, local_col = st.columns([1.0, 1.35])
     with cloud_col:
-        queue_cloud_finder = st.button(
+        cloud_finder_slot = st.empty()
+        queue_cloud_finder = cloud_finder_slot.button(
             f"☁ Run {finder_symbol or 'Stock'} — {finder_profile_display} in cloud",
             width="stretch",
             disabled=(
@@ -2554,6 +2615,16 @@ if module == "Stock Strategy Finder":
         )
 
     if queue_cloud_finder and finder_symbol:
+        cloud_finder_slot.button(
+            f"☁ Queuing {finder_symbol} — {finder_profile_display}…",
+            width="stretch",
+            disabled=True,
+            key="til_queue_stock_strategy_finder_cloud_busy",
+        )
+        cloud_queue_status = st.status(
+            f"Saving {finder_symbol} cloud research job and starting worker…",
+            expanded=True,
+        )
         queue_payload = {
             "symbol": finder_symbol,
             "profile": finder_profile.name,
@@ -2594,6 +2665,11 @@ if module == "Stock Strategy Finder":
             queue_error = str(exc)
 
         if queue_error:
+            cloud_queue_status.update(
+                label="Cloud Finder queue failed",
+                state="error",
+                expanded=True,
+            )
             st.error(
                 "Cloud Finder could not confirm a durable queue update. "
                 f"No automatic retry was started: {queue_error}"
@@ -2613,12 +2689,22 @@ if module == "Stock Strategy Finder":
                 inputs={"job_id": str(queued_job.get("id") or "")},
             )
             if launch_ok:
+                cloud_queue_status.update(
+                    label=f"{finder_symbol} cloud research launched",
+                    state="complete",
+                    expanded=False,
+                )
                 st.success(
                     f"{finder_symbol} {finder_profile_display} was queued **and the cloud worker was launched immediately**. "
                     "You can close your Mac or browser; the shards will run independently and the final result "
                     "will be saved back into the Finder when complete."
                 )
             else:
+                cloud_queue_status.update(
+                    label=f"{finder_symbol} cloud job saved · worker launch needs attention",
+                    state="error",
+                    expanded=True,
+                )
                 st.warning(
                     f"{finder_symbol} {finder_profile_display} is safely queued, but instant launch was not available. "
                     f"{launch_detail} The scheduled worker is only a fallback; do not assume compute started "
@@ -2626,6 +2712,11 @@ if module == "Stock Strategy Finder":
                 )
             st.rerun()
         else:
+            cloud_queue_status.update(
+                label="Cloud Finder job already queued or running",
+                state="complete",
+                expanded=False,
+            )
             st.info("That cloud Finder job is already queued or running.")
 
     finder_slot = st.empty()
@@ -3299,24 +3390,21 @@ if module == "Stock Strategy Finder":
             key="til_finder_open_paper",
         ):
             st.session_state["til_selected_strategy_id"] = candidate_strategy_id
-            st.session_state["til_navigate_to"] = "Live / Paper"
-            st.rerun()
+            navigate_to_workspace("Live / Paper", pending=True)
         if actions[1].button(
             "⌖ Scan market for this setup",
             width="stretch",
             key="til_finder_open_discovery",
         ):
             st.session_state["til_market_discovery_strategy_id"] = candidate_strategy_id
-            st.session_state["til_navigate_to"] = "Market Discovery"
-            st.rerun()
+            navigate_to_workspace("Market Discovery", pending=True)
         if actions[2].button(
             "⌬ Open advanced Strategy Lab",
             width="stretch",
             key="til_finder_open_lab",
         ):
             st.session_state["til_selected_strategy_id"] = candidate_strategy_id
-            st.session_state["til_navigate_to"] = "Strategy Lab"
-            st.rerun()
+            navigate_to_workspace("Strategy Lab", pending=True)
 
 
 elif module == "Overview":
@@ -3386,8 +3474,7 @@ elif module == "Overview":
                 unsafe_allow_html=True,
             )
             if st.button(button_label, key=key, width="stretch", type="primary"):
-                st.session_state["til_workspace_section"] = target
-                st.rerun()
+                navigate_to_workspace(target)
 
     st.markdown("### AI research at a glance")
     status_cols = st.columns(5)
@@ -3446,8 +3533,7 @@ elif module == "Overview":
             key="til_home_integrity_audit",
             width="stretch",
         ):
-            st.session_state["til_workspace_section"] = "Strategy Integrity"
-            st.rerun()
+            navigate_to_workspace("Strategy Integrity")
 
     with st.expander("How the Lab works behind the scenes", expanded=False):
         st.write(
@@ -4716,8 +4802,7 @@ elif module == "Strategy Library":
             width="stretch",
             key="til_library_run_ai_manager",
         ):
-            st.session_state["til_navigate_to"] = "AI Research Autopilot"
-            st.rerun()
+            navigate_to_workspace("AI Research Autopilot", pending=True)
         if action_cols[1].button(
             "🔎 Find stocks matching validated families",
             width="stretch",
@@ -4725,8 +4810,7 @@ elif module == "Strategy Library":
             key="til_library_find_validated",
         ):
             st.session_state["til_market_discovery_include_research"] = False
-            st.session_state["til_navigate_to"] = "Market Discovery"
-            st.rerun()
+            navigate_to_workspace("Market Discovery", pending=True)
 
         st.caption(
             "The AI research manager favors rule sets that stay useful across unseen periods, multiple stocks, "
@@ -4896,16 +4980,14 @@ elif module == "Strategy Library":
                     key="til_family_manual_lab",
                 ):
                     st.session_state["til_selected_strategy_id"] = str(family.get("id") or "")
-                    st.session_state["til_navigate_to"] = "Strategy Lab"
-                    st.rerun()
+                    navigate_to_workspace("Strategy Lab", pending=True)
                 if advanced[1].button(
                     "Inspect / improve testable rules",
                     width="stretch",
                     key="til_family_manual_compiler",
                 ):
                     st.session_state["til_selected_strategy_id"] = str(family.get("id") or "")
-                    st.session_state["til_navigate_to"] = "Make Strategy Testable"
-                    st.rerun()
+                    navigate_to_workspace("Make Strategy Testable", pending=True)
 
 
 elif module == "Strategy Integrity":
