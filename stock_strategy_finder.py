@@ -518,12 +518,19 @@ def validated_status_ready(
     paper_fidelity: dict[str, Any],
     walk_forward: dict[str, Any] | None,
 ) -> bool:
-    """One shared meaning of validated across Finder and manual Strategy Lab."""
-    return (
-        bool(walk_forward)
-        and str(verdict.get("code") or "") == "ready_for_paper"
-        and str(paper_fidelity.get("status") or "") == "ready"
-    )
+    """Return whether the research evidence itself qualifies as historically validated.
+
+    Historical validation and Paper Auto execution fidelity are separate claims.
+    A strategy may pass the full holdout/walk-forward/stability protocol while the
+    current paper runner remains unable to reproduce its lifecycle. Paper readiness
+    is checked independently wherever execution is enabled.
+    """
+    code = str(verdict.get("code") or "")
+    historically_robust = code in {
+        "ready_for_paper",
+        "historically_robust_execution_gap",
+    }
+    return bool(walk_forward) and historically_robust
 
 
 def regime_diagnostics(
@@ -1320,10 +1327,16 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
             f"{source_id}|{symbol}".encode("utf-8")
         ).hexdigest()[:18]
         verdict = report.get("verdict") or {}
-        ready_for_paper = validated_status_ready(
+        historically_validated = validated_status_ready(
             verdict,
             report.get("paper_execution_fidelity") or {},
             report.get("walk_forward") or {},
+        )
+        paper_ready = (
+            historically_validated
+            and str(verdict.get("code") or "") == "ready_for_paper"
+            and str((report.get("paper_execution_fidelity") or {}).get("status") or "")
+            == "ready"
         )
         child = {
             **source,
@@ -1338,17 +1351,17 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
             "optimized_backtest_settings": winner.get("optimized_backtest_settings") or {},
             "validated_rules": (
                 winner.get("optimized_rules") or source.get("machine_rules") or {}
-                if ready_for_paper
+                if historically_validated
                 else None
             ),
             "validated_backtest_settings": (
                 winner.get("optimized_backtest_settings") or {}
-                if ready_for_paper
+                if historically_validated
                 else None
             ),
-            "validated_at": generated_at if ready_for_paper else None,
-            "validation_status": "validated" if ready_for_paper else "research_only",
-            "paper_validation_status": "ready" if ready_for_paper else "not_ready",
+            "validated_at": generated_at if historically_validated else None,
+            "validation_status": "validated" if historically_validated else "research_only",
+            "paper_validation_status": "ready" if paper_ready else "not_ready",
             # Approval belongs to the exact optimized child. Never inherit the
             # parent family's approval after its rules have changed.
             "approved": False,
@@ -1373,7 +1386,7 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
                 "holdout_reuse_audit": report.get("holdout_reuse_audit") or {},
             },
         }
-        if not ready_for_paper:
+        if not historically_validated:
             child.pop("validated_rules", None)
             child.pop("validated_backtest_settings", None)
             child.pop("validated_at", None)
