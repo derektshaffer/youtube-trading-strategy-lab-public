@@ -91,13 +91,36 @@ def compact_router(router: dict[str, Any]) -> dict[str, Any]:
 def profit_first_validation_summary(
     validation_runs: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Build a compact profit-first view from saved strict-validation evidence."""
+    """Build a compact profit-first view using the current validation protocol."""
+
+    def number(value: Any, default: float = 0.0) -> float:
+        try:
+            result = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+        return result if result == result else default
 
     def metrics_positive(metrics: dict[str, Any]) -> bool:
         return (
-            int(float(metrics.get("trade_count") or 0)) > 0
-            and float(metrics.get("net_pnl") or 0.0) > 0.0
+            int(number(metrics.get("trade_count"))) > 0
+            and number(metrics.get("net_pnl")) > 0.0
         )
+
+    status_caps = {
+        "LIMITED DATA": 39.0,
+        "DRAWDOWN TOO HIGH": 39.0,
+        "NO VALIDATED EDGE": 39.0,
+        "UNSTABLE": 49.0,
+        "COST SENSITIVE": 59.0,
+        "HOLDOUT LIMITED": 39.0,
+        "HOLDOUT FAILED": 39.0,
+        "HOLDOUT COST SENSITIVE": 49.0,
+        "HOLDOUT REUSED": 39.0,
+    }
+    robust_verdict_codes = {
+        "ready_for_paper",
+        "historically_robust_execution_gap",
+    }
 
     latest_by_strategy: dict[str, dict[str, Any]] = {}
     ordered = sorted(
@@ -119,15 +142,6 @@ def profit_first_validation_summary(
         stress = run.get("stress_metrics") if isinstance(run.get("stress_metrics"), dict) else {}
         robustness = run.get("robustness") if isinstance(run.get("robustness"), dict) else {}
         walk = run.get("walk_forward_summary") if isinstance(run.get("walk_forward_summary"), dict) else {}
-        validation_positive = metrics_positive(validation)
-        holdout_positive = metrics_positive(holdout)
-        stress_positive = metrics_positive(stress)
-        strict = bool(
-            str(run.get("validation_status") or "").lower() == "validated"
-            and validation_positive
-            and holdout_positive
-            and stress_positive
-        )
         stability = (
             run.get("parameter_stability")
             if isinstance(run.get("parameter_stability"), dict)
@@ -153,6 +167,55 @@ def profit_first_validation_summary(
             if isinstance(run.get("holdout_reuse_audit"), dict)
             else {}
         )
+
+        validation_positive = metrics_positive(validation)
+        holdout_positive = metrics_positive(holdout)
+        stress_positive = metrics_positive(stress)
+        validation_status = str(run.get("validation_status") or "").lower()
+        optimizer_status = str(run.get("optimizer_status") or "").strip().upper()
+        stored_robustness_score = number(robustness.get("score"))
+        robustness_cap = status_caps.get(optimizer_status, 100.0)
+        effective_robustness_score = min(stored_robustness_score, robustness_cap)
+
+        verdict_code = str(verdict.get("code") or "").strip().lower()
+        autonomous = bool(run.get("autonomous"))
+        validation_method_version = int(number(run.get("validation_method_version")))
+        current_protocol = bool(
+            (autonomous and validation_method_version >= 4)
+            or (not autonomous and bool(verdict_code))
+        )
+        historical_gate_pass = bool(
+            (
+                autonomous
+                and validation_method_version >= 4
+                and validation_status == "validated"
+            )
+            or verdict_code in robust_verdict_codes
+        )
+        requires_revalidation = not current_protocol
+        strict = bool(
+            validation_status == "validated"
+            and current_protocol
+            and historical_gate_pass
+            and validation_positive
+            and holdout_positive
+            and stress_positive
+        )
+
+        if requires_revalidation:
+            blocker = (
+                "Legacy/incomplete validation record; re-run strict validation under "
+                "the current protocol."
+            )
+        elif verdict.get("reason"):
+            blocker = str(verdict.get("reason"))
+        elif run.get("gate_reasons"):
+            blocker = " ".join(str(item) for item in (run.get("gate_reasons") or [])[:2])
+        elif optimizer_status and optimizer_status != "VALIDATED":
+            blocker = f"Optimizer status is {optimizer_status.replace('_', ' ').title()}."
+        else:
+            blocker = "The current strict validation gate was not fully satisfied."
+
         latest_by_strategy[strategy_key] = {
             "strategy_id": run.get("strategy_id"),
             "strategy_name": run.get("strategy_name"),
@@ -161,7 +224,9 @@ def profit_first_validation_summary(
             "validation_status": run.get("validation_status"),
             "strict_profit_edge": strict,
             "optimizer_status": run.get("optimizer_status"),
-            "robustness_score": robustness.get("score"),
+            "stored_robustness_score": stored_robustness_score,
+            "robustness_score": effective_robustness_score,
+            "robustness_cap": robustness_cap,
             "robustness_label": robustness.get("label"),
             "validation_metrics": validation,
             "holdout_metrics": holdout,
@@ -175,6 +240,11 @@ def profit_first_validation_summary(
             "paper_execution_status": paper_fidelity.get("status"),
             "historical_spread_status": spread_audit.get("status"),
             "holdout_reuse_status": holdout_reuse.get("status"),
+            "autonomous": autonomous,
+            "validation_method_version": validation_method_version,
+            "current_protocol": current_protocol,
+            "requires_revalidation": requires_revalidation,
+            "blocker": blocker,
             "positive_evidence_periods": sum(
                 (validation_positive, holdout_positive, stress_positive)
             ),
@@ -184,8 +254,8 @@ def profit_first_validation_summary(
     strict_edges = [item for item in latest if item["strict_profit_edge"]]
     strict_edges.sort(
         key=lambda item: (
-            float(item.get("robustness_score") or 0.0),
-            float((item.get("holdout_metrics") or {}).get("net_pnl") or 0.0),
+            number(item.get("robustness_score")),
+            number((item.get("holdout_metrics") or {}).get("net_pnl")),
         ),
         reverse=True,
     )
@@ -193,8 +263,9 @@ def profit_first_validation_summary(
     near_misses.sort(
         key=lambda item: (
             int(item.get("positive_evidence_periods") or 0),
-            float(item.get("robustness_score") or 0.0),
-            float((item.get("holdout_metrics") or {}).get("net_pnl") or 0.0),
+            not bool(item.get("requires_revalidation")),
+            number(item.get("robustness_score")),
+            number((item.get("holdout_metrics") or {}).get("net_pnl")),
         ),
         reverse=True,
     )
@@ -210,8 +281,9 @@ def profit_first_validation_summary(
         "strict_profit_edges": strict_edges[:20],
         "closest_research_candidates": near_misses[:20],
         "criteria": (
-            "Latest saved run for a strategy must be labeled validated and have positive trade count "
-            "and net P/L in validation, untouched holdout, and higher-cost stress periods."
+            "Latest saved run for a strategy must come from the current validation "
+            "protocol, be labeled validated, and have positive trade count and net "
+            "P/L in validation, untouched holdout, and higher-cost stress periods."
         ),
     }
 
