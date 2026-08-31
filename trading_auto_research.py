@@ -1710,6 +1710,7 @@ def merge_autonomous_research_into_library(
             "validation_method_version": int(
                 report.get("validation_method_version") or AUTONOMOUS_VALIDATION_METHOD_VERSION
             ),
+            "market_data_integrity_contract": "split_safe_raw_v1",
             "anchor_symbol": result.get("anchor_symbol"),
             "candidate_symbols": result.get("candidate_symbols") or [],
             "global_score": result.get("global_score"),
