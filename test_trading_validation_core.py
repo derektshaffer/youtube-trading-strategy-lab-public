@@ -93,6 +93,40 @@ class ValidationStrengthTests(unittest.TestCase):
         self.assertLessEqual(result["score"], 49.0)
         self.assertFalse(result["independently_positive"])
 
+    def test_full_curve_prevents_one_stress_point_from_becoming_magic_cutoff(self):
+        report = self._report(True)
+        report["winner"]["stress_metrics"]["net_pnl"] = -5.0
+        report["winner"]["stress_metrics"]["profit_factor"] = 0.8
+        report["winner"]["execution_sensitivity"] = {
+            "score": 82.0,
+            "label": "ROBUST",
+            "passes_validation_gate": True,
+            "profitable_multiplier_pct": 75.0,
+            "median_pnl_retention_pct": 62.0,
+        }
+        result = validation_strength(report)
+        self.assertEqual(result["execution_sensitivity_label"], "ROBUST")
+        self.assertTrue(result["independently_positive"])
+        self.assertGreater(result["score"], 49.0)
+
+    def test_fragile_full_curve_caps_robustness_even_if_legacy_stress_is_positive(self):
+        report = self._report(True)
+        report["winner"]["execution_sensitivity"] = {
+            "score": 34.0,
+            "label": "FRAGILE",
+            "passes_validation_gate": False,
+            "profitable_multiplier_pct": 50.0,
+            "median_pnl_retention_pct": 10.0,
+        }
+        report["winner"]["status"] = "COST SENSITIVE"
+        result = validation_strength(
+            report,
+            {"summary": {"score": 95.0, "profitable_fold_pct": 100.0}},
+        )
+        self.assertLessEqual(result["score"], 49.0)
+        self.assertFalse(result["independently_positive"])
+        self.assertTrue(any("curve" in reason.lower() for reason in result["reasons"]))
+
     def test_small_unseen_samples_cannot_receive_high_robustness(self):
         report = self._report(True)
         report["winner"]["validation_metrics"]["trade_count"] = 4
