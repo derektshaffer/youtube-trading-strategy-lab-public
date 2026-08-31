@@ -3028,6 +3028,39 @@ if module == "Stock Strategy Finder":
                 "are omitted between each fold's optimization history and external test block."
             )
 
+        finder_spread_audit = finder_result.get("historical_spread_audit") or {}
+        finder_reuse_audit = finder_result.get("holdout_reuse_audit") or {}
+        finder_market_integrity = finder_result.get("market_data_integrity") or {}
+        integrity_cols = st.columns(3)
+        integrity_cols[0].metric(
+            "Holdout freshness",
+            "Pristine" if finder_reuse_audit.get("pristine", True) else "Reused",
+        )
+        integrity_cols[1].metric(
+            "Real spread audit",
+            str(finder_spread_audit.get("status") or "Not sampled").replace("_", " ").title(),
+        )
+        integrity_cols[2].metric(
+            "Price-history contract",
+            (
+                "Raw · post-split"
+                if finder_market_integrity.get("split_detected")
+                else "Raw"
+            ),
+        )
+        if not finder_reuse_audit.get("pristine", True):
+            st.warning(str(finder_reuse_audit.get("note") or "Final holdout has been reused."))
+        if str(finder_spread_audit.get("status") or "") == "UNDERMODELED":
+            st.error(
+                "Observed bid/ask spreads at sampled untouched-holdout entries exceeded "
+                "the largest spread assumption in the tested cost curve."
+            )
+        elif str(finder_spread_audit.get("status") or "") == "LIMITED":
+            st.warning(
+                "Historical quote coverage at holdout entries was limited, so real-spread "
+                "confirmation remains incomplete."
+            )
+
         distributed_details = dict(finder_result.get("distributed") or {})
         if distributed_details.get("enabled"):
             st.caption(
@@ -6910,6 +6943,35 @@ elif module == "Strategy Lab":
             headline[4].metric("Optimizer status", winner.get("status") or "—")
             headline[5].metric("Variants tested", f"{int(report.get('variants_tested') or 0):,}")
             st.caption(strength.get("note") or "")
+            lab_spread_display = lab_result.get("historical_spread_audit") or {}
+            lab_reuse_display = lab_result.get("holdout_reuse_audit") or {}
+            lab_market_display = lab_result.get("market_data_integrity") or {}
+            integrity_cols = st.columns(3)
+            integrity_cols[0].metric(
+                "Holdout freshness",
+                "Pristine" if lab_reuse_display.get("pristine", True) else "Reused",
+            )
+            integrity_cols[1].metric(
+                "Real spread audit",
+                str(lab_spread_display.get("status") or "Not sampled").replace("_", " ").title(),
+            )
+            integrity_cols[2].metric(
+                "Price-history contract",
+                "Raw · post-split" if lab_market_display.get("split_detected") else "Raw",
+            )
+            if not lab_reuse_display.get("pristine", True):
+                st.warning(str(lab_reuse_display.get("note") or "Final holdout has been reused."))
+            if str(lab_spread_display.get("status") or "") == "UNDERMODELED":
+                st.error(
+                    "Observed bid/ask spreads at sampled untouched-holdout entries exceeded "
+                    "the largest spread assumption in the tested cost curve."
+                )
+            elif str(lab_spread_display.get("status") or "") == "LIMITED":
+                st.warning(
+                    "Historical quote coverage at holdout entries was limited, so real-spread "
+                    "confirmation remains incomplete."
+                )
+
             if not walk_report:
                 st.info(
                     "This manual result is exploratory. Walk-forward was not run, so it cannot be saved as validated even if the selected historical period is profitable."
@@ -7413,6 +7475,9 @@ elif module == "Validation":
             robustness = run.get("robustness") or {}
             holdout = run.get("holdout_metrics") or {}
             walk = run.get("walk_forward_summary") or {}
+            reuse = run.get("holdout_reuse_audit") or {}
+            spread_audit = run.get("historical_spread_audit") or {}
+            market_integrity = run.get("market_data_integrity") or {}
             rows.append(
                 {
                     "Date": run.get("generated_at"),
@@ -7424,6 +7489,15 @@ elif module == "Validation":
                     "Holdout trades": int(safe_float(holdout.get("trade_count"), 0) or 0),
                     "Holdout P/L": safe_float(holdout.get("net_pnl"), 0.0) or 0.0,
                     "Walk-forward profitable folds %": walk.get("profitable_fold_pct"),
+                    "Holdout freshness": (
+                        "Pristine" if reuse.get("pristine", True) else "Reused"
+                    ),
+                    "Real spread audit": spread_audit.get("status") or "—",
+                    "Price history": (
+                        "Raw · post-split"
+                        if market_integrity.get("split_detected")
+                        else ("Raw" if market_integrity else "Legacy/unknown")
+                    ),
                 }
             )
         st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
