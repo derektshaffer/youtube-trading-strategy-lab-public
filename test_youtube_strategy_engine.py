@@ -1919,9 +1919,66 @@ class ProviderTests(unittest.TestCase):
         self.assertIsNotNone(quote)
         self.assertEqual(quote["bid"], 9.99)
         self.assertEqual(quote["ask"], 10.01)
+        self.assertEqual(quote["feed"], market.historical_feed)
         self.assertAlmostEqual(quote["spread_bps"], 20.0, places=4)
         self.assertEqual(mocked.call_args.args[0], "/v2/stocks/quotes")
         self.assertEqual(mocked.call_args.args[1]["sort"], "desc")
+
+    def test_non_sip_holdout_quotes_remain_limited_even_when_spreads_are_small(self):
+        class FakeQuoteMarket:
+            def historical_quote_at_or_before(self, symbol, timestamp, **kwargs):
+                return {
+                    "timestamp": engine.isoformat_utc(timestamp),
+                    "feed": "iex",
+                    "bid": 9.995,
+                    "ask": 10.005,
+                    "spread_bps": 10.0,
+                }
+
+        audit = engine.historical_entry_spread_audit(
+            FakeQuoteMarket(),
+            "TEST",
+            [
+                {
+                    "entry_time": "2026-08-20T14:30:00Z",
+                    "entry_price": 10.0,
+                }
+            ],
+            {"2026-08-20"},
+            modeled_spread_bps=12.0,
+            maximum_stress_multiplier=2.0,
+        )
+        self.assertEqual(audit["status"], "LIMITED_FEED")
+        self.assertEqual(audit["quote_feeds"], ["iex"])
+        self.assertFalse(audit["consolidated_sip_quotes"])
+
+    def test_sip_holdout_quotes_can_confirm_spread_coverage(self):
+        class FakeQuoteMarket:
+            def historical_quote_at_or_before(self, symbol, timestamp, **kwargs):
+                return {
+                    "timestamp": engine.isoformat_utc(timestamp),
+                    "feed": "sip",
+                    "bid": 9.995,
+                    "ask": 10.005,
+                    "spread_bps": 10.0,
+                }
+
+        audit = engine.historical_entry_spread_audit(
+            FakeQuoteMarket(),
+            "TEST",
+            [
+                {
+                    "entry_time": "2026-08-20T14:30:00Z",
+                    "entry_price": 10.0,
+                }
+            ],
+            {"2026-08-20"},
+            modeled_spread_bps=12.0,
+            maximum_stress_multiplier=2.0,
+        )
+        self.assertEqual(audit["status"], "COVERED")
+        self.assertEqual(audit["quote_feeds"], ["sip"])
+        self.assertTrue(audit["consolidated_sip_quotes"])
 
     def test_holdout_spread_audit_does_not_count_stale_quote_as_coverage(self):
         class FakeQuoteMarket:
