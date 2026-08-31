@@ -1843,6 +1843,38 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(mocked.call_args.args[0], "/v2/stocks/quotes")
         self.assertEqual(mocked.call_args.args[1]["sort"], "desc")
 
+    def test_holdout_spread_audit_does_not_count_stale_quote_as_coverage(self):
+        class FakeQuoteMarket:
+            def historical_quote_at_or_before(self, symbol, timestamp, **kwargs):
+                stale = timestamp - timedelta(seconds=10)
+                return {
+                    "timestamp": engine.isoformat_utc(stale),
+                    "bid": 9.99,
+                    "ask": 10.01,
+                    "spread_bps": 20.0,
+                }
+
+        audit = engine.historical_entry_spread_audit(
+            FakeQuoteMarket(),
+            "TEST",
+            [
+                {
+                    "entry_time": "2026-08-20T14:30:00Z",
+                    "entry_price": 10.0,
+                }
+            ],
+            {"2026-08-20"},
+            modeled_spread_bps=12.0,
+            maximum_stress_multiplier=2.0,
+            maximum_quote_age_seconds=5.0,
+        )
+
+        self.assertEqual(audit["status"], "LIMITED")
+        self.assertEqual(audit["quote_count"], 0)
+        self.assertEqual(audit["coverage_pct"], 0.0)
+        self.assertFalse(audit["observations"][0]["quote_fresh"])
+        self.assertEqual(audit["observations"][0]["quote_age_seconds"], 10.0)
+
     def test_holdout_spread_audit_detects_under_modeled_execution_range(self):
         class FakeQuoteMarket:
             def __init__(self):
