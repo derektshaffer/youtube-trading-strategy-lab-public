@@ -637,7 +637,8 @@ def intelligence_store() -> StrategyStore:
 
 
 LIBRARY_CLOUD_REFRESH_SECONDS = 60.0
-_LIBRARY_RENDER_CACHE_KEY = "_til_library_render_cache"\nANALYZER_RESULT_MAX_AGE_SECONDS = 180
+_LIBRARY_RENDER_CACHE_KEY = "_til_library_render_cache"
+ANALYZER_RESULT_MAX_AGE_SECONDS = 180
 _LIBRARY_LAST_CLOUD_REFRESH_KEY = "_til_library_last_cloud_refresh_monotonic"
 _LIBRARY_REMOTE_SHA_KEY = "_til_library_remote_sha"
 
