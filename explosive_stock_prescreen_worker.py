@@ -135,20 +135,47 @@ def run_prescreen() -> dict[str, Any]:
     history_start = reference - timedelta(days=history_days)
     daily_by_symbol: dict[str, list[dict[str, Any]]] = {}
     history_failures = 0
+    history_fallback_batches = 0
+    history_error_samples: list[str] = []
     for batch in _batches(eligible, batch_size):
+        chosen_feed = market.historical_feed
         try:
             raw = market.bars(
                 batch,
                 start=history_start,
                 end=reference,
                 timeframe="1Day",
-                feed=market.historical_feed,
+                feed=chosen_feed,
                 adjustment="raw",
                 max_pages=20,
             )
-        except AppError:
-            history_failures += 1
-            continue
+        except AppError as exc:
+            primary_error = str(exc)
+            if chosen_feed != "iex":
+                try:
+                    raw = market.bars(
+                        batch,
+                        start=history_start,
+                        end=reference,
+                        timeframe="1Day",
+                        feed="iex",
+                        adjustment="raw",
+                        max_pages=20,
+                    )
+                    history_fallback_batches += 1
+                except AppError as fallback_exc:
+                    history_failures += 1
+                    if len(history_error_samples) < 5:
+                        history_error_samples.append(
+                            f"{batch[0]}… primary({chosen_feed}): {primary_error} | "
+                            f"fallback(iex): {fallback_exc}"
+                        )
+                    continue
+            else:
+                history_failures += 1
+                if len(history_error_samples) < 5:
+                    history_error_samples.append(f"{batch[0]}… iex: {primary_error}")
+                continue
         for symbol in batch:
             completed = _filter_completed_daily_rows(raw.get(symbol, []), reference)
             if completed:
@@ -191,6 +218,8 @@ def run_prescreen() -> dict[str, Any]:
         "candidate_count": len(ranked),
         "snapshot_failed_batches": snapshot_failures,
         "history_failed_batches": history_failures,
+        "history_fallback_batches": history_fallback_batches,
+        "history_error_samples": history_error_samples,
         "history_days": history_days,
         "min_price": min_price,
         "max_price": max_price,
@@ -219,8 +248,12 @@ def main() -> int:
         f"{prescreen['universe_count']} active -> "
         f"{prescreen['price_eligible_count']} price-eligible -> "
         f"{prescreen['history_covered_count']} with history -> "
-        f"{prescreen['candidate_count']} latent candidates."
+        f"{prescreen['candidate_count']} latent candidates. "
+        f"IEX fallback batches: {prescreen.get('history_fallback_batches', 0)}; "
+        f"failed history batches: {prescreen.get('history_failed_batches', 0)}."
     )
+    for error in prescreen.get("history_error_samples") or []:
+        print("Historical prescreen warning:", error)
     return 0
 
 
