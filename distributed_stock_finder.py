@@ -296,6 +296,7 @@ def _plan_has_current_integrity(plan: dict[str, Any]) -> bool:
         and str(integrity.get("mode") or "") in {
             "raw_prices",
             "raw_prices_post_latest_split",
+            "raw_prices_post_corporate_action",
         }
     )
 
