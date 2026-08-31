@@ -29,6 +29,7 @@ from stock_strategy_finder import (
     run_stock_strategy_finder,
     search_profile,
     selected_strategies_for_profile,
+    stock_finder_strategy_families,
 )
 from trading_catalyst_core import (
     enrich_bars_with_point_in_time_catalysts,
@@ -243,11 +244,9 @@ def execute_job(
         profile = search_profile(profile_name)
 
         latest = store.load_latest()
-        strategies = [
-            dict(item)
-            for item in latest.get("strategies") or []
-            if isinstance(item, dict)
-        ]
+        strategies = stock_finder_strategy_families(
+            list(latest.get("strategies") or [])
+        )
         selected, skipped = selected_strategies_for_profile(
             strategies,
             symbol,
