@@ -23,6 +23,7 @@ from predictive_ml_backfill import (
     run_predictive_ml_backfill,
 )
 from stock_strategy_finder import (
+    apply_historical_spread_integrity_guard,
     latest_finder_checkpoint,
     merge_finder_checkpoint_into_library,
     merge_finder_report_into_library,
@@ -64,13 +65,17 @@ from youtube_strategy_engine import (
     DEFAULT_GITHUB_BACKUP_PATH,
     GitHubCloudBackup,
     StrategyStore,
+    historical_entry_spread_audit,
     normalize_machine_rules,
+    safe_float,
+    split_safe_raw_research_rows,
 )
 
 
 # stock_finder is executable here for direct/dedicated deployments, while the
 # continuous worker deliberately leaves it for the distributed Finder workflow.
 CONTINUOUS_WORKER_JOB_TYPES = SUPPORTED_RESEARCH_JOB_TYPES - {"stock_finder"}
+CLOUD_FINDER_INTEGRITY_VERSION = 2
 
 
 def env(name: str, default: str = "") -> str:
@@ -264,8 +269,19 @@ def execute_job(
             profile.name,
         )
         previous_engine_state = dict((previous_checkpoint or {}).get("engine_state") or {})
+        previous_integrity = (
+            (previous_checkpoint or {}).get("market_data_integrity")
+            if isinstance((previous_checkpoint or {}).get("market_data_integrity"), dict)
+            else {}
+        )
         resumable = bool(
-            previous_engine_state.get("timeframes")
+            int((previous_checkpoint or {}).get("integrity_version") or 0)
+            == CLOUD_FINDER_INTEGRITY_VERSION
+            and str(previous_integrity.get("mode") or "") in {
+                "raw_prices",
+                "raw_prices_post_latest_split",
+            }
+            and previous_engine_state.get("timeframes")
             and str((previous_checkpoint or {}).get("status") or "").lower()
             in {"running", "failed", "interrupted"}
         )
@@ -307,6 +323,10 @@ def execute_job(
             "research_start": start.isoformat(),
             "research_end": end.isoformat(),
             "engine_state": previous_engine_state if resumable else {},
+            "integrity_version": CLOUD_FINDER_INTEGRITY_VERSION,
+            "market_data_integrity": (
+                previous_integrity if resumable else {}
+            ),
             "last_error": None,
         }
         latest = merge_finder_checkpoint_into_library(latest, checkpoint_record)
@@ -337,12 +357,27 @@ def execute_job(
             start=start,
             end=end,
             timeframe="1Min",
+            adjustment="raw",
             max_pages=300,
             progress=history_progress,
         )
         rows = list(rows_by_symbol.get(symbol) or [])
         if not rows:
             raise AppError(f"No historical bars were returned for {symbol}.")
+        split_actions = market.split_actions(
+            [symbol],
+            start=start,
+            end=end,
+        )
+        rows, split_guard = split_safe_raw_research_rows(
+            rows,
+            split_actions,
+            symbol,
+        )
+        if not rows:
+            raise AppError(f"No split-safe raw-price history remained for {symbol}.")
+        checkpoint_record["market_data_integrity"] = split_guard
+        persist_checkpoint(force=True)
 
         needs_catalyst_history = any(
             bool(normalize_machine_rules(item.get("machine_rules")).get("catalyst_required"))
@@ -406,6 +441,35 @@ def execute_job(
             checkpoint=finder_checkpoint,
             parallel_workers=workers_for_run,
         )
+        report["market_data_integrity"] = split_guard
+
+        optimization_for_spread = report.get("optimization") or {}
+        winner_for_spread = optimization_for_spread.get("winner") or {}
+        winning_backtest = optimization_for_spread.get("winning_backtest") or {}
+        optimized_settings = winner_for_spread.get("optimized_backtest_settings") or {}
+        optimizer_settings = optimization_for_spread.get("optimization_settings") or {}
+        multipliers = [
+            safe_float(value)
+            for value in (
+                optimizer_settings.get("execution_sensitivity_multipliers")
+                or (1.25, 1.5, 1.75, 2.0)
+            )
+        ]
+        spread_audit = historical_entry_spread_audit(
+            market,
+            symbol,
+            list(winning_backtest.get("trades") or []),
+            list(optimization_for_spread.get("holdout_sessions") or []),
+            modeled_spread_bps=(
+                safe_float(optimized_settings.get("spread_bps"), 12.0)
+                or 12.0
+            ),
+            maximum_stress_multiplier=max(
+                [value for value in multipliers if value is not None] or [2.0]
+            ),
+        )
+        report = apply_historical_spread_integrity_guard(report, spread_audit)
+
         checkpoint_record["status"] = "complete"
         checkpoint_record["progress"] = 1.0
         checkpoint_record["message"] = f"{symbol} {profile.name} cloud research complete"
