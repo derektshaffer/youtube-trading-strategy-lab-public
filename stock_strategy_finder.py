@@ -8,6 +8,7 @@ evidence decides what survives.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 import hashlib
@@ -1020,9 +1021,141 @@ def merge_finder_checkpoint_into_library(
     return result
 
 
+def holdout_reuse_audit(
+    data: dict[str, Any],
+    report: dict[str, Any],
+    *,
+    material_overlap_pct: float = 50.0,
+) -> dict[str, Any]:
+    """Detect whether a supposed final holdout has already been inspected.
+
+    A holdout is only independent the first time its outcomes are revealed. Reusing
+    substantially the same dates in later research can still be useful, but it must
+    not retain the same validation meaning after developers have seen those outcomes.
+    """
+    optimization = report.get("optimization") or {}
+    current_sessions = sorted(
+        {
+            str(value)
+            for value in optimization.get("holdout_sessions") or []
+            if str(value).strip()
+        }
+    )
+    symbol = str(report.get("symbol") or "").strip().upper()
+    timeframe = str(report.get("timeframe") or "").strip()
+    fingerprint = hashlib.sha256(
+        "|".join([symbol, timeframe, *current_sessions]).encode("utf-8")
+    ).hexdigest()[:24] if current_sessions else ""
+
+    exposures: list[dict[str, Any]] = []
+    current_set = set(current_sessions)
+    threshold = max(1.0, min(100.0, float(material_overlap_pct)))
+    for prior in data.get("stock_strategy_finder_runs") or []:
+        if not isinstance(prior, dict):
+            continue
+        if str(prior.get("symbol") or "").strip().upper() != symbol:
+            continue
+        prior_sessions = {
+            str(value)
+            for value in prior.get("holdout_sessions") or []
+            if str(value).strip()
+        }
+        if not prior_sessions or not current_set:
+            continue
+        overlap = sorted(current_set & prior_sessions)
+        if not overlap:
+            continue
+        current_overlap_pct = len(overlap) / len(current_set) * 100.0
+        prior_overlap_pct = len(overlap) / len(prior_sessions) * 100.0
+        if current_overlap_pct < threshold:
+            continue
+        exposures.append(
+            {
+                "run_id": prior.get("id"),
+                "generated_at": prior.get("generated_at"),
+                "profile": prior.get("profile"),
+                "timeframe": prior.get("timeframe"),
+                "overlap_sessions": overlap,
+                "current_overlap_pct": round(current_overlap_pct, 1),
+                "prior_overlap_pct": round(prior_overlap_pct, 1),
+                "exact_fingerprint_match": bool(
+                    fingerprint
+                    and str(prior.get("holdout_fingerprint") or "") == fingerprint
+                ),
+            }
+        )
+
+    return {
+        "status": "PRISTINE" if not exposures else "REUSED",
+        "pristine": not exposures,
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "holdout_sessions": current_sessions,
+        "holdout_fingerprint": fingerprint or None,
+        "prior_material_exposure_count": len(exposures),
+        "material_overlap_threshold_pct": threshold,
+        "prior_exposures": exposures[:20],
+        "note": (
+            "This holdout has not appeared materially in a prior saved Finder run."
+            if not exposures
+            else (
+                "This holdout materially overlaps previously inspected outcomes. "
+                "It remains useful diagnostic evidence, but it is no longer treated "
+                "as pristine independent confirmation."
+            )
+        ),
+    }
+
+
+def apply_holdout_reuse_guard(
+    data: dict[str, Any],
+    report: dict[str, Any],
+) -> dict[str, Any]:
+    """Downgrade paper-validation claims when the final holdout was already seen."""
+    guarded = deepcopy(report or {})
+    audit = holdout_reuse_audit(data, guarded)
+    guarded["holdout_reuse_audit"] = audit
+    if audit.get("pristine"):
+        return guarded
+
+    verdict = dict(guarded.get("verdict") or {})
+    if str(verdict.get("code") or "") == "ready_for_paper":
+        guarded["verdict"] = {
+            "code": "holdout_reused",
+            "label": "PROMISING — HOLDOUT NO LONGER PRISTINE",
+            "tone": "warning",
+            "research_tier": "holdout_reused",
+            "paper_ready": False,
+            "reason": (
+                "The strategy passed the current calculations, but at least half of this "
+                "final holdout was already exposed in prior saved research. Use a genuinely "
+                "new later holdout before restoring validated/paper-ready status."
+            ),
+        }
+
+    robustness = dict(guarded.get("robustness") or {})
+    robustness["independently_positive"] = False
+    reasons = list(robustness.get("reasons") or [])
+    reasons.append(
+        "Final holdout materially overlaps previously inspected outcomes, so it is no longer independent evidence."
+    )
+    robustness["reasons"] = list(dict.fromkeys(reasons))
+    guarded["robustness"] = robustness
+
+    optimization = dict(guarded.get("optimization") or {})
+    winner = dict(optimization.get("winner") or {})
+    if str(winner.get("status") or "").strip().upper() == "VALIDATED":
+        winner["pre_holdout_reuse_status"] = winner.get("status")
+        winner["status"] = "HOLDOUT REUSED"
+    optimization["winner"] = winner
+    guarded["optimization"] = optimization
+    return guarded
+
+
 def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
     """Persist search summary + exact compact configuration ledger."""
     result = dict(data or {})
+    report = apply_holdout_reuse_guard(result, report)
     symbol = str(report.get("symbol") or "").upper()
     generated_at = str(report.get("generated_at") or "")
     run_id = hashlib.sha256(
@@ -1056,6 +1189,9 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
         "parameter_stability": report.get("parameter_stability") or {},
         "regime_diagnostics": report.get("regime_diagnostics") or {},
         "paper_execution_fidelity": report.get("paper_execution_fidelity") or {},
+        "holdout_reuse_audit": report.get("holdout_reuse_audit") or {},
+        "holdout_sessions": list(optimization.get("holdout_sessions") or []),
+        "holdout_fingerprint": (report.get("holdout_reuse_audit") or {}).get("holdout_fingerprint"),
         "walk_forward_summary": (report.get("walk_forward") or {}).get("summary") or {},
         "training_metrics": winner.get("training_metrics") or {},
         "validation_metrics": winner.get("validation_metrics") or {},
@@ -1157,6 +1293,7 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
                 "stress_metrics": winner.get("stress_metrics") or {},
                 "walk_forward_summary": (report.get("walk_forward") or {}).get("summary") or {},
                 "parameter_stability": report.get("parameter_stability") or {},
+                "holdout_reuse_audit": report.get("holdout_reuse_audit") or {},
             },
         }
         if not ready_for_paper:
