@@ -470,7 +470,7 @@ if run:
                 adjustment="raw",
                 max_pages=30,
             ).get(ticker, [])
-            split_actions = market.split_actions(
+            split_actions = market.research_reset_actions(
                 [ticker],
                 start=historical_start,
                 end=historical_end,
@@ -480,11 +480,11 @@ if run:
                 split_actions,
                 ticker,
             )
-            if market_data_integrity.get("split_detected"):
+            if market_data_integrity.get("corporate_action_reset_detected"):
                 st.write(
                     "Corporate-action integrity guard: raw historical prices retained; "
-                    f"ML training restarted at {market_data_integrity.get('latest_split_date')} "
-                    "to avoid learning a stock split as a price/volume pattern."
+                    f"ML training restarted at {market_data_integrity.get('latest_price_reset_date')} "
+                    "to avoid learning a corporate-action price reset as a price/volume pattern."
                 )
             if len(bars) < 300:
                 raise AppError(
