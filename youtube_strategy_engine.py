@@ -3403,12 +3403,39 @@ class AlpacaMarketData:
         start: datetime,
         end: datetime,
         max_pages: int = 20,
+        process_date_padding_days: int = 366,
     ) -> list[dict[str, Any]]:
-        """Corporate actions that mechanically reset comparable raw-price history."""
-        return self.corporate_actions(
+        """Return price-reset actions whose *ex-date* falls inside the research window.
+
+        Alpaca filters the corporate-actions endpoint by process_date, not ex_date.
+        A split may therefore be processed before the requested bar window but take
+        effect inside it. Query a padded process-date interval, then retain only
+        actions whose ex-date actually intersects the historical price window.
+        """
+        window_start = start
+        window_end = end
+        if window_start.tzinfo is None or window_start.utcoffset() is None:
+            window_start = window_start.replace(tzinfo=timezone.utc)
+        if window_end.tzinfo is None or window_end.utcoffset() is None:
+            window_end = window_end.replace(tzinfo=timezone.utc)
+        window_start = window_start.astimezone(timezone.utc)
+        window_end = window_end.astimezone(timezone.utc)
+        if window_end < window_start:
+            raise AppError("Corporate-action research window end must not precede start.")
+
+        padding = timedelta(days=max(0, int(process_date_padding_days)))
+        process_start = window_start - padding
+        # Historical records may be processed after the effective date. Search
+        # forward as well, but never beyond now because future process dates do
+        # not exist yet.
+        process_end = min(
+            datetime.now(timezone.utc),
+            window_end + padding,
+        )
+        actions = self.corporate_actions(
             symbols,
-            start=start,
-            end=end,
+            start=process_start,
+            end=process_end,
             types=(
                 "forward_split",
                 "reverse_split",
@@ -3418,6 +3445,20 @@ class AlpacaMarketData:
             ),
             max_pages=max_pages,
         )
+        start_date = window_start.date()
+        end_date = window_end.date()
+        relevant: list[dict[str, Any]] = []
+        for action in actions:
+            raw_ex_date = action.get("ex_date")
+            try:
+                ex_date = date.fromisoformat(str(raw_ex_date))
+            except (TypeError, ValueError):
+                # data_quality=complete is expected to supply ex-date for these
+                # actions; fail closed rather than guessing from process_date.
+                continue
+            if start_date <= ex_date <= end_date:
+                relevant.append(action)
+        return relevant
 
     def historical_quote_at_or_before(
         self,
