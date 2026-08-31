@@ -2310,7 +2310,15 @@ class GitHubCloudBackup:
                     "Your local change was kept, but the cloud copy was not overwritten. "
                     "Restore the latest cloud backup before retrying so newer records are preserved."
                 )
-        serialized = json.dumps(data, indent=2, default=str, allow_nan=False).encode("utf-8")
+        # This is a machine-owned library, not a hand-edited document. Compact
+        # JSON materially reduces large-library transfer, disk I/O, and cold-start
+        # parse pressure without changing any stored values.
+        serialized = json.dumps(
+            data,
+            separators=(",", ":"),
+            default=str,
+            allow_nan=False,
+        ).encode("utf-8")
         if len(serialized) > GITHUB_CONTENTS_API_SAFE_BYTES:
             sha = self._save_large_library(
                 serialized,
@@ -2394,9 +2402,13 @@ class StrategyStore:
             remote = self.cloud_backup.read_library()
             if remote is None:
                 return self.blank()
-            self._write_local(remote["library"], make_backup=False)
-            self._record_cloud_success(remote["library"])
+            remote_library = self.normalize_library(remote["library"])
+            self._write_local(remote_library, make_backup=False)
+            self._record_cloud_success(remote_library)
             self.restored_on_startup = True
+            # The cloud response has already been parsed and validated. Do not
+            # immediately read and parse the same large JSON file a second time.
+            return remote_library
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -2653,7 +2665,13 @@ class StrategyStore:
         descriptor, temporary_name = tempfile.mkstemp(prefix="strategy_", suffix=".json", dir=self.directory)
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as temporary:
-                json.dump(value, temporary, indent=2, default=str, allow_nan=False)
+                json.dump(
+                    value,
+                    temporary,
+                    separators=(",", ":"),
+                    default=str,
+                    allow_nan=False,
+                )
                 temporary.flush()
                 os.fsync(temporary.fileno())
             if make_backup:
