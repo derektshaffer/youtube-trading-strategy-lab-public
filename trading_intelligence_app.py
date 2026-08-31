@@ -7205,10 +7205,10 @@ elif module == "Strategy Lab":
 
         risk_cols = st.columns(4)
         starting_cash = float(
-            risk_cols[0].number_input("Starting simulation cash ($)", 1000.0, 1000000.0, 10000.0, 1000.0)
+            risk_cols[0].number_input("Starting simulation cash ($)", 1000.0, 1000000.0, 2000.0, 1000.0)
         )
-        risk_per_trade = float(risk_cols[1].number_input("Risk budget per trade (%)", 0.1, 10.0, 0.5, 0.1))
-        max_position = float(risk_cols[2].number_input("Maximum total position (%)", 1.0, 100.0, 20.0, 1.0))
+        risk_per_trade = float(risk_cols[1].number_input("Risk budget per trade (%)", 0.1, 10.0, 10.0, 0.1))
+        max_position = float(risk_cols[2].number_input("Maximum total position (%)", 1.0, 100.0, 100.0, 1.0))
         max_drawdown = float(
             risk_cols[3].number_input(
                 "Validation drawdown ceiling (%)",
@@ -7258,6 +7258,14 @@ elif module == "Strategy Lab":
         )
 
         if run_lab:
+            # A new run must never silently fall back to a blank Strategy Lab page.
+            # Clear stale output, then retain an explicit status through the run.
+            st.session_state.pop("til_strategy_lab_result", None)
+            st.session_state["til_strategy_lab_last_run"] = {
+                "status": "running",
+                "ticker": ticker,
+                "message": "Optimization is running.",
+            }
             strategy_lab_slot.button(
                 "🧪 Optimizing…",
                 type="primary",
@@ -7575,14 +7583,46 @@ elif module == "Strategy Lab":
                     "compared_all": compare_all,
                     "catalyst_summary": catalyst_summary,
                 }
+                st.session_state["til_strategy_lab_last_run"] = {
+                    "status": "complete",
+                    "ticker": ticker,
+                    "message": "Optimization + validation complete.",
+                }
                 complete_task_bar(task_bar, lab_monitor, "Optimization + validation complete")
-                st.rerun()
+                # Do not force a rerun here. Rendering the freshly computed result in
+                # this same pass avoids losing output if Streamlit reconnects after a
+                # long synchronous optimization.
+                strategy_lab_slot.success("Optimization + validation complete — results below.")
             except AppError as exc:
-                st.error(str(exc))
+                message = str(exc)
+                st.session_state["til_strategy_lab_last_run"] = {
+                    "status": "failed",
+                    "ticker": ticker,
+                    "message": message,
+                }
+                st.error(message)
             except Exception as exc:
-                st.error(f"Strategy Lab run failed: {exc}")
+                message = f"Strategy Lab run failed: {exc}"
+                st.session_state["til_strategy_lab_last_run"] = {
+                    "status": "failed",
+                    "ticker": ticker,
+                    "message": message,
+                }
+                st.error(message)
 
         lab_result = st.session_state.get("til_strategy_lab_result") or {}
+        last_lab_run = st.session_state.get("til_strategy_lab_last_run") or {}
+        if not run_lab and not lab_result and last_lab_run:
+            last_status = str(last_lab_run.get("status") or "")
+            last_message = str(last_lab_run.get("message") or "")
+            if last_status == "failed":
+                st.error(f"Last Strategy Lab run failed: {last_message}")
+            elif last_status == "complete":
+                st.error(
+                    "The last Strategy Lab run completed but its result was not retained. "
+                    "This should not happen; rerun the test and the app will now render the "
+                    "result before any refresh."
+                )
         if lab_result:
             report = lab_result.get("report") or {}
             winner = report.get("winner") or {}
