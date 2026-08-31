@@ -574,6 +574,7 @@ inject_research_glass_theme()
 
 
 DEFAULT_PRIVATE_BACKUP_REPOSITORY = "derektshaffer/derektshaffer-youtube-trading-strategy-lab"
+DEFAULT_LIVE_LEARNING_OUTBOX_PATH = "trading-intelligence-lab/live_learning_outbox.json"
 OBSOLETE_PRIVATE_BACKUP_REPOSITORIES = {
     "derektshaffer/youtube-trading-strategy-backups",
 }
@@ -612,6 +613,28 @@ def build_intelligence_store() -> StrategyStore:
             ),
         )
     directory = Path(os.environ.get("TRADING_INTELLIGENCE_DATA_DIR") or ".trading_intelligence_data")
+    return StrategyStore(directory=directory, cloud_backup=cloud)
+
+
+def build_live_learning_outbox_store() -> StrategyStore:
+    """Small durable queue so interactive scans never rewrite the full research library."""
+    repository = resolved_backup_repository()
+    token = backup_token()
+    cloud = None
+    if repository and token:
+        cloud = GitHubCloudBackup(
+            repository,
+            token,
+            branch=setting("GITHUB_BACKUP_BRANCH"),
+            path=setting(
+                "TRADING_INTELLIGENCE_LIVE_LEARNING_OUTBOX_PATH",
+                DEFAULT_LIVE_LEARNING_OUTBOX_PATH,
+            ),
+        )
+    directory = Path(
+        os.environ.get("TRADING_INTELLIGENCE_LIVE_LEARNING_OUTBOX_DIR")
+        or ".trading_intelligence_live_learning_outbox"
+    )
     return StrategyStore(directory=directory, cloud_backup=cloud)
 
 
@@ -781,6 +804,65 @@ def shadow_probability_model_lookup(library: dict[str, Any]) -> dict[str, dict[s
 LIVE_LEARNING_STATUS_KEY = "live_learning_status"
 LIVE_LEARNING_MAX_NEW_PER_SCAN = 50
 LIVE_LEARNING_MAX_MATURATION_SYMBOLS = 25
+
+
+def queue_live_learning_cycle(
+    results: list[dict[str, Any]],
+    *,
+    source: str,
+    max_new: int = LIVE_LEARNING_MAX_NEW_PER_SCAN,
+) -> dict[str, Any]:
+    """Durably queue live observations without blocking on main-library research work."""
+    observed_at = utc_now()
+    incoming = build_scan_shadow_observations(
+        results,
+        source=source,
+        observed_at=observed_at,
+        max_items=max_new,
+    )
+    if not incoming:
+        return {
+            "logged": 0,
+            "queued": 0,
+            "matured": 0,
+            "total": 0,
+            "research_only": True,
+            "deferred": True,
+        }
+
+    store = build_live_learning_outbox_store()
+    data = store.load_latest()
+    research_system = data.setdefault("research_system", {})
+    existing = [
+        dict(item)
+        for item in research_system.get(LIVE_LEARNING_STORAGE_KEY) or []
+        if isinstance(item, dict)
+    ]
+    combined = merge_shadow_observations(
+        existing,
+        incoming,
+        max_records=DEFAULT_MAX_OBSERVATIONS,
+    )
+    research_system[LIVE_LEARNING_STORAGE_KEY] = combined
+    research_system["live_learning_outbox_status"] = {
+        "last_queued_at": observed_at.isoformat(),
+        "last_source": source,
+        "last_queued": len(incoming),
+        "total": len(combined),
+        "research_only": True,
+        "affects_live_ranking": False,
+        "affects_execution": False,
+    }
+    data["research_system"] = research_system
+    store.save(data)
+    return {
+        "logged": len(incoming),
+        "queued": len(incoming),
+        "matured": 0,
+        "total": len(combined),
+        "research_only": True,
+        "deferred": True,
+    }
 
 
 def persist_live_learning_cycle(
@@ -10673,8 +10755,7 @@ elif module == "Market Discovery":
                 )
                 try:
                     st.session_state["til_live_learning_market_discovery_status"] = (
-                        persist_live_learning_cycle(
-                            market,
+                        queue_live_learning_cycle(
                             results,
                             source="market_discovery",
                         )
@@ -10726,6 +10807,13 @@ elif module == "Market Discovery":
                     "Live learning is research-only and did not affect this scan. "
                     "Its durable save/outcome update was unavailable: "
                     + str(live_learning_status.get("error"))
+                )
+            elif live_learning_status.get("deferred"):
+                st.caption(
+                    "🧠 Live learning (research only) · "
+                    f"queued {int(live_learning_status.get('queued') or 0)} shadow observations "
+                    "for the cloud research worker. Expensive outcome maturation is isolated from "
+                    "this scan and does not affect live rankings."
                 )
             elif live_learning_status.get("logged"):
                 st.caption(
@@ -11474,8 +11562,7 @@ elif module == "Stock Analyzer":
                 analysis["sec_enabled"] = bool(analyzer_sec_user_agent)
                 try:
                     st.session_state["til_live_learning_stock_analyzer_status"] = (
-                        persist_live_learning_cycle(
-                            analyzer_market,
+                        queue_live_learning_cycle(
                             [analysis],
                             source="stock_analyzer",
                             max_new=1,
@@ -11538,6 +11625,13 @@ elif module == "Stock Analyzer":
                     "Live learning is research-only and did not affect this analysis. "
                     "Its durable save/outcome update was unavailable: "
                     + str(analyzer_learning_status.get("error"))
+                )
+            elif analyzer_learning_status.get("deferred"):
+                st.caption(
+                    "🧠 Live learning (research only) · "
+                    f"queued {int(analyzer_learning_status.get('queued') or 0)} observation "
+                    "for the cloud research worker. Outcome maturation is isolated from the "
+                    "Analyzer and does not affect strategy ranking."
                 )
             elif analyzer_learning_status.get("logged"):
                 st.caption(
