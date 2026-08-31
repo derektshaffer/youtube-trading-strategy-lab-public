@@ -117,7 +117,7 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
         self.assertIn("Rule-by-rule backtester check", source)
         self.assertIn("Strategies fully represented", source)
         self.assertIn("Strategies partly represented", source)
-        self.assertIn("Strategies blocked by missing logic", source)
+        self.assertIn("Strategies with critical gaps", source)
         self.assertIn("Average rules represented", source)
         self.assertIn("Missing stock-selection rules", source)
         self.assertNotIn('"Universe gaps"', source)
