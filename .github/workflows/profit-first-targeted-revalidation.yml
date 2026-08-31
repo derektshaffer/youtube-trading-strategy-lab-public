@@ -32,6 +32,7 @@ jobs:
       PROFIT_FIRST_TARGET_STRATEGY_ID: ${{ github.event.inputs.strategy_id || 'til-e375e878fadbe87a841b' }}
       PROFIT_FIRST_TARGET_UNIVERSE_SIZE: ${{ vars.RESEARCH_VALIDATION_UNIVERSE_SIZE || '250' }}
       PROFIT_FIRST_TARGET_SYMBOLS_PER_STRATEGY: ${{ vars.RESEARCH_VALIDATION_SYMBOLS_PER_STRATEGY || '6' }}
+      PROFIT_FIRST_FLOAT_AGNOSTIC_DERIVATIVE: "1"
 
     steps:
       - uses: actions/checkout@v4
