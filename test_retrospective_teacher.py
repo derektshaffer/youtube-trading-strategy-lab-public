@@ -77,7 +77,7 @@ class RetrospectiveTeacherTests(unittest.TestCase):
             breakout_success_move_pct=0.2,
         )
         self.assertEqual(run["symbol"], "SDOT")
-        self.assertEqual(run["version"], "retrospective-teacher-v2")
+        self.assertEqual(run["version"], "retrospective-teacher-v3")
         self.assertIn("volume_profile", run["feature_layers"])
         self.assertIn("multi_anchor_avwap", run["feature_layers"])
         self.assertTrue(run["indicator_cross_validation"]["passed"])
