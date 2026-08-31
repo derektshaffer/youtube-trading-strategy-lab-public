@@ -27,11 +27,21 @@ def run(
         "symbol": "TEST",
         "generated_at": generated_at,
         "validation_status": status,
-        "robustness": {"score": robustness},
+        "optimizer_status": "PROMISING",
+        "robustness": {"score": robustness, "label": "STRONG"},
         "validation_metrics": metrics(validation_pnl),
         "holdout_metrics": metrics(holdout_pnl),
         "stress_metrics": metrics(stress_pnl),
         "walk_forward_summary": {"profitable_fold_pct": 66.7},
+        "parameter_stability": {"label": "MIXED", "positive_pct": 50.0},
+        "evidence_verdict": {
+            "code": "promising",
+            "label": "PROMISING STOCK-SPECIFIC SETUP",
+            "reason": "A stability gate still failed.",
+        },
+        "paper_execution_fidelity": {"status": "ready"},
+        "historical_spread_audit": {"status": "OK"},
+        "holdout_reuse_audit": {"status": "CLEAN"},
     }
 
 
@@ -66,6 +76,14 @@ class ResearchLibraryProfitFirstAuditTests(unittest.TestCase):
         )
         self.assertEqual(report["strict_profit_edge_count"], 1)
         self.assertEqual(report["strict_profit_edges"][0]["strategy_id"], "strict")
+        strict = report["strict_profit_edges"][0]
+        self.assertEqual(strict["optimizer_status"], "PROMISING")
+        self.assertEqual(strict["parameter_stability_positive_pct"], 50.0)
+        self.assertEqual(strict["evidence_verdict_code"], "promising")
+        self.assertEqual(strict["evidence_verdict_reason"], "A stability gate still failed.")
+        self.assertEqual(strict["paper_execution_status"], "ready")
+        self.assertEqual(strict["historical_spread_status"], "OK")
+        self.assertEqual(strict["holdout_reuse_status"], "CLEAN")
 
     def test_latest_run_controls_each_strategy_status(self):
         report = profit_first_validation_summary(
