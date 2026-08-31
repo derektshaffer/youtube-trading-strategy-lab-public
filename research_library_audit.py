@@ -128,6 +128,31 @@ def profit_first_validation_summary(
             and holdout_positive
             and stress_positive
         )
+        stability = (
+            run.get("parameter_stability")
+            if isinstance(run.get("parameter_stability"), dict)
+            else {}
+        )
+        verdict = (
+            run.get("evidence_verdict")
+            if isinstance(run.get("evidence_verdict"), dict)
+            else {}
+        )
+        paper_fidelity = (
+            run.get("paper_execution_fidelity")
+            if isinstance(run.get("paper_execution_fidelity"), dict)
+            else {}
+        )
+        spread_audit = (
+            run.get("historical_spread_audit")
+            if isinstance(run.get("historical_spread_audit"), dict)
+            else {}
+        )
+        holdout_reuse = (
+            run.get("holdout_reuse_audit")
+            if isinstance(run.get("holdout_reuse_audit"), dict)
+            else {}
+        )
         latest_by_strategy[strategy_key] = {
             "strategy_id": run.get("strategy_id"),
             "strategy_name": run.get("strategy_name"),
@@ -135,11 +160,21 @@ def profit_first_validation_summary(
             "generated_at": run.get("generated_at"),
             "validation_status": run.get("validation_status"),
             "strict_profit_edge": strict,
+            "optimizer_status": run.get("optimizer_status"),
             "robustness_score": robustness.get("score"),
+            "robustness_label": robustness.get("label"),
             "validation_metrics": validation,
             "holdout_metrics": holdout,
             "stress_metrics": stress,
             "walk_forward_profitable_pct": walk.get("profitable_fold_pct"),
+            "parameter_stability_label": stability.get("label"),
+            "parameter_stability_positive_pct": stability.get("positive_pct"),
+            "evidence_verdict_code": verdict.get("code"),
+            "evidence_verdict_label": verdict.get("label"),
+            "evidence_verdict_reason": verdict.get("reason"),
+            "paper_execution_status": paper_fidelity.get("status"),
+            "historical_spread_status": spread_audit.get("status"),
+            "holdout_reuse_status": holdout_reuse.get("status"),
             "positive_evidence_periods": sum(
                 (validation_positive, holdout_positive, stress_positive)
             ),
