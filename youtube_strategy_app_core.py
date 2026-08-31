@@ -47,6 +47,7 @@ from youtube_strategy_engine import (
     run_backtest,
     safe_float,
     snapshot_metrics,
+    split_safe_raw_research_rows,
     timestamped_youtube_url,
     utc_now,
     video_source_strategies,
@@ -2263,7 +2264,25 @@ with backtest_tab:
                         text=backtest_monitor.text(0.18, "Downloading Alpaca historical candles"),
                     )
                     with st.spinner("Downloading Alpaca historical candles and running conservative simulations…"):
-                        all_bars = market.bars(tickers, start=start, end=end, timeframe=timeframe)
+                        all_bars = market.bars(
+                            tickers,
+                            start=start,
+                            end=end,
+                            timeframe=timeframe,
+                            adjustment="raw",
+                        )
+                        split_actions = market.split_actions(
+                            tickers,
+                            start=start,
+                            end=end,
+                        )
+                        for symbol in tickers:
+                            safe_rows, _ = split_safe_raw_research_rows(
+                                list(all_bars.get(symbol) or []),
+                                split_actions,
+                                symbol,
+                            )
+                            all_bars[symbol] = safe_rows
                         backtest_bar.progress(
                             0.55,
                             text=backtest_monitor.text(0.55, "Historical candles downloaded · running simulations"),
@@ -2891,7 +2910,29 @@ with optimizer_tab:
                         )
                         automatic_intervals = optimizer_timeframe.startswith("Automatically compare")
                         selected_interval = "1Min" if automatic_intervals else optimizer_timeframe.split(" ", 1)[0]
-                        candles = market.bars([ticker], start=start, end=end, timeframe=selected_interval).get(ticker, [])
+                        candles = market.bars(
+                            [ticker],
+                            start=start,
+                            end=end,
+                            timeframe=selected_interval,
+                            adjustment="raw",
+                        ).get(ticker, [])
+                        split_actions = market.split_actions(
+                            [ticker],
+                            start=start,
+                            end=end,
+                        )
+                        candles, optimizer_market_data_integrity = split_safe_raw_research_rows(
+                            list(candles or []),
+                            split_actions,
+                            ticker,
+                        )
+                        if optimizer_market_data_integrity.get("split_detected"):
+                            st.info(
+                                "Historical integrity guard: raw prices retained and optimizer history "
+                                f"restarted at {optimizer_market_data_integrity.get('latest_split_date')} "
+                                "after the latest split."
+                            )
                         progress_bar.progress(
                             0.20,
                             text=optimizer_monitor.text(
