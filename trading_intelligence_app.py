@@ -102,6 +102,7 @@ _required_finder_attributes = (
     "finder_evidence_verdict",
     "apply_paper_fidelity_to_verdict",
     "apply_historical_spread_integrity_guard",
+    "apply_holdout_reuse_guard",
     "stock_finder_strategy_families",
     "validated_status_ready",
 )
@@ -129,6 +130,7 @@ merge_finder_report_into_library = _finder_module.merge_finder_report_into_libra
 finder_evidence_verdict = _finder_module.finder_evidence_verdict
 apply_paper_fidelity_to_verdict = _finder_module.apply_paper_fidelity_to_verdict
 apply_historical_spread_integrity_guard = _finder_module.apply_historical_spread_integrity_guard
+apply_holdout_reuse_guard = _finder_module.apply_holdout_reuse_guard
 parameter_stability_test = _finder_module.parameter_stability_test
 validated_status_ready = _finder_module.validated_status_ready
 run_stock_strategy_finder = _finder_module.run_stock_strategy_finder
@@ -6570,6 +6572,7 @@ elif module == "Strategy Lab":
                     start=start_time,
                     end=end_time,
                     timeframe=timeframe,
+                    adjustment="raw",
                     max_pages=30,
                     progress=lambda page: update_task_bar(
                         task_bar,
@@ -6582,6 +6585,59 @@ elif module == "Strategy Lab":
                 update_task_bar(task_bar, lab_monitor, 0.25, f"Downloaded {len(rows):,} candles")
                 if not rows:
                     raise AppError(f"No historical {timeframe} candles were returned for {ticker}.")
+
+                split_actions = market.split_actions(
+                    [ticker],
+                    start=start_time,
+                    end=end_time,
+                )
+                rows, lab_market_data_integrity = split_safe_raw_research_rows(
+                    rows,
+                    split_actions,
+                    ticker,
+                )
+                if not rows:
+                    raise AppError(
+                        f"No split-safe raw-price history remained for {ticker}."
+                    )
+                if lab_market_data_integrity.get("split_detected"):
+                    update_task_bar(
+                        task_bar,
+                        lab_monitor,
+                        0.26,
+                        "Corporate-action integrity guard · raw-price research restarted at "
+                        f"{lab_market_data_integrity.get('latest_split_date')}",
+                    )
+
+                blocked_spread_candidates = [
+                    item
+                    for item in candidates
+                    if normalize_machine_rules(item.get("machine_rules")).get("max_spread_pct")
+                    is not None
+                ]
+                if blocked_spread_candidates:
+                    if compare_all:
+                        blocked_ids = {
+                            str(item.get("id") or "")
+                            for item in blocked_spread_candidates
+                        }
+                        candidates = [
+                            item
+                            for item in candidates
+                            if str(item.get("id") or "") not in blocked_ids
+                        ]
+                        if not candidates:
+                            raise AppError(
+                                "Every selected strategy requires a historical max-spread rule, "
+                                "which remains fail-closed until quote history is fully integrated "
+                                "as an entry filter."
+                            )
+                    else:
+                        raise AppError(
+                            "This strategy requires max_spread_pct. Strategy Lab will not validate "
+                            "that rule using a fixed spread/slippage proxy; use it only after "
+                            "point-in-time quote filtering is implemented."
+                        )
 
                 catalyst_summary = None
                 needs_historical_catalysts = any(
@@ -6708,6 +6764,53 @@ elif module == "Strategy Lab":
                         maximum=min(24, max(12, int(search_depth) // 4)),
                     )
 
+                winner = report.get("winner") or {}
+                optimized_settings_for_spread = (
+                    winner.get("optimized_backtest_settings") or {}
+                )
+                sensitivity_multipliers = [
+                    safe_float(value)
+                    for value in (
+                        (report.get("optimization_settings") or {}).get(
+                            "execution_sensitivity_multipliers"
+                        )
+                        or (1.25, 1.5, 1.75, 2.0)
+                    )
+                ]
+                lab_spread_audit = historical_entry_spread_audit(
+                    market,
+                    ticker,
+                    list((report.get("winning_backtest") or {}).get("trades") or []),
+                    list(report.get("holdout_sessions") or []),
+                    modeled_spread_bps=(
+                        safe_float(optimized_settings_for_spread.get("spread_bps"), 12.0)
+                        or 12.0
+                    ),
+                    maximum_stress_multiplier=max(
+                        [value for value in sensitivity_multipliers if value is not None]
+                        or [2.0]
+                    ),
+                )
+                integrity_wrapper = apply_historical_spread_integrity_guard(
+                    {
+                        "symbol": ticker,
+                        "timeframe": timeframe,
+                        "optimization": report,
+                        "robustness": strength,
+                    },
+                    lab_spread_audit,
+                )
+                integrity_wrapper = apply_holdout_reuse_guard(
+                    library,
+                    integrity_wrapper,
+                )
+                report = integrity_wrapper.get("optimization") or report
+                strength = integrity_wrapper.get("robustness") or strength
+                winner = report.get("winner") or winner
+                lab_holdout_reuse_audit = (
+                    integrity_wrapper.get("holdout_reuse_audit") or {}
+                )
+
                 evidence_verdict = finder_evidence_verdict(
                     strength,
                     stability_report,
@@ -6743,6 +6846,9 @@ elif module == "Strategy Lab":
                     "parameter_stability": stability_report,
                     "evidence_verdict": evidence_verdict,
                     "paper_execution_fidelity": paper_fidelity,
+                    "historical_spread_audit": lab_spread_audit,
+                    "holdout_reuse_audit": lab_holdout_reuse_audit,
+                    "market_data_integrity": lab_market_data_integrity,
                     "compared_all": compare_all,
                     "catalyst_summary": catalyst_summary,
                 }
@@ -6975,6 +7081,10 @@ elif module == "Strategy Lab":
                             "parameter_stability": stability_report,
                             "evidence_verdict": evidence_verdict,
                             "paper_execution_fidelity": paper_fidelity,
+                            "historical_spread_audit": lab_result.get("historical_spread_audit") or {},
+                            "holdout_reuse_audit": lab_result.get("holdout_reuse_audit") or {},
+                            "market_data_integrity": lab_result.get("market_data_integrity") or {},
+                            "holdout_sessions": list(report.get("holdout_sessions") or []),
                         }
                         break
 
@@ -7000,6 +7110,13 @@ elif module == "Strategy Lab":
                     "parameter_stability": stability_report,
                     "evidence_verdict": evidence_verdict,
                     "paper_execution_fidelity": paper_fidelity,
+                    "historical_spread_audit": lab_result.get("historical_spread_audit") or {},
+                    "holdout_reuse_audit": lab_result.get("holdout_reuse_audit") or {},
+                    "market_data_integrity": lab_result.get("market_data_integrity") or {},
+                    "holdout_sessions": list(report.get("holdout_sessions") or []),
+                    "holdout_fingerprint": (
+                        (lab_result.get("holdout_reuse_audit") or {}).get("holdout_fingerprint")
+                    ),
                     "optimized_rules": winner.get("optimized_rules") or {},
                     "optimized_backtest_settings": winner.get("optimized_backtest_settings") or {},
                 }
