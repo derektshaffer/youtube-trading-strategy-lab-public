@@ -1710,14 +1710,22 @@ def prime_action_feedback(message: str) -> None:
 
 def queue_workspace_navigation(section: str) -> None:
     """Route from a button callback so loading feedback appears immediately."""
+    if section == "Stock Analyzer":
+        # A normal sidebar visit means "analyze freely", not "continue the exact Finder winner".
+        st.session_state.pop("til_guided_strategy_id", None)
     st.session_state["til_navigate_to"] = section
     prime_action_feedback(_route_loading_label(section))
 
 
-def queue_stock_analyzer_from_finder(symbol: str) -> None:
+def queue_stock_analyzer_from_finder(symbol: str, strategy_id: str = "") -> None:
     ticker = str(symbol or "").strip().upper()
+    guided_strategy_id = str(strategy_id or "").strip()
     if ticker:
         st.session_state["til_analyzer_ticker"] = ticker
+    if guided_strategy_id:
+        st.session_state["til_guided_strategy_id"] = guided_strategy_id
+    else:
+        st.session_state.pop("til_guided_strategy_id", None)
     st.session_state["til_navigate_to"] = "Stock Analyzer"
     prime_action_feedback(f"Checking {ticker or 'stock'} current signal…")
 
@@ -3361,13 +3369,18 @@ if module == "Stock Strategy Finder":
         st.caption(
             "Historical testing tells us what worked. This next check asks whether the winning setup is actually present right now."
         )
+        guided_strategy_id = str(
+            finder_result.get("stock_specific_strategy_id")
+            or finder_result.get("winner_source_strategy_id")
+            or ""
+        )
         st.button(
             f"② Check {finder_symbol} current signal →",
             type="primary",
             width="stretch",
             key="til_finder_continue_current_signal",
             on_click=queue_stock_analyzer_from_finder,
-            args=(finder_symbol,),
+            args=(finder_symbol, guided_strategy_id),
         )
         st.markdown("### Historical validation details")
         st.caption("These details explain how hard the winning strategy was tested. You can ignore them until you want the deeper evidence.")
@@ -10293,11 +10306,27 @@ elif module == "Stock Analyzer":
             "A 100% rule match is not the same thing as a 100% chance of profit."
         )
 
+        guided_strategy_id = str(st.session_state.get("til_guided_strategy_id") or "").strip()
+        guided_strategy = next(
+            (
+                item
+                for item in integrity_safe_strategies
+                if str(item.get("id") or "") == guided_strategy_id
+            ),
+            None,
+        )
+        analyzer_pool = [guided_strategy] if guided_strategy is not None else integrity_safe_strategies
         analyzer_strategies = [
-            item for item in integrity_safe_strategies
+            item for item in analyzer_pool
             if not validated_only
             or str(item.get("validation_status") or "").lower() == "validated"
         ]
+        if guided_strategy is not None:
+            st.info(
+                "Continuing the Finder result: **"
+                + str(guided_strategy.get("name") or "selected strategy")
+                + "**. Steps 2–5 will evaluate this exact strategy, not silently switch to another one."
+            )
         if validated_only and not analyzer_strategies:
             st.info(
                 "No fully validated strategies are available yet. Turn off Only fully validated "
