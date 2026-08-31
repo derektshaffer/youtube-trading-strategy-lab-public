@@ -1085,7 +1085,7 @@ def holdout_reuse_audit(
     data: dict[str, Any],
     report: dict[str, Any],
     *,
-    material_overlap_pct: float = 50.0,
+    material_overlap_pct: float = 0.0,
 ) -> dict[str, Any]:
     """Detect whether a supposed final holdout has already been inspected.
 
@@ -1113,10 +1113,11 @@ def holdout_reuse_audit(
 
     exposures: list[dict[str, Any]] = []
     current_set = set(current_sessions)
-    threshold = max(1.0, min(100.0, float(material_overlap_pct)))
+    threshold = max(0.0, min(100.0, float(material_overlap_pct)))
     prior_runs = [
         *list(data.get("stock_strategy_finder_runs") or []),
         *list(data.get("validation_runs") or []),
+        *list(data.get("holdout_exposure_ledger") or []),
     ]
     for prior in prior_runs:
         if not isinstance(prior, dict):
@@ -1135,7 +1136,7 @@ def holdout_reuse_audit(
             continue
         current_overlap_pct = len(overlap) / len(current_set) * 100.0
         prior_overlap_pct = len(overlap) / len(prior_sessions) * 100.0
-        if current_overlap_pct < threshold:
+        if current_overlap_pct <= threshold:
             continue
         exposures.append(
             {
@@ -1167,12 +1168,72 @@ def holdout_reuse_audit(
             "This holdout has not appeared materially in a prior saved Finder run."
             if not exposures
             else (
-                "This holdout materially overlaps previously inspected outcomes. "
-                "It remains useful diagnostic evidence, but it is no longer treated "
-                "as pristine independent confirmation."
+                "This holdout overlaps previously inspected outcomes. Even one reused "
+                "session means the final evidence is no longer pristine independent confirmation."
             )
         ),
     }
+
+
+def record_holdout_exposure(
+    data: dict[str, Any],
+    report: dict[str, Any],
+    *,
+    source: str,
+    generated_at: str | None = None,
+    maximum_records: int = 5000,
+) -> dict[str, Any]:
+    """Durably record that holdout outcomes have been revealed, even if not saved as validated."""
+    result = dict(data or {})
+    optimization = (
+        report.get("optimization")
+        if isinstance(report.get("optimization"), dict)
+        else report
+    )
+    sessions = sorted(
+        {
+            str(value)
+            for value in (optimization or {}).get("holdout_sessions") or []
+            if str(value).strip()
+        }
+    )
+    symbol = str(report.get("symbol") or "").strip().upper()
+    timeframe = str(report.get("timeframe") or optimization.get("timeframe") or "").strip()
+    if not symbol or not sessions:
+        return result
+
+    fingerprint = hashlib.sha256(
+        "|".join([symbol, timeframe, *sessions]).encode("utf-8")
+    ).hexdigest()[:24]
+    record = {
+        "id": "holdout-exposure-" + hashlib.sha256(
+            "|".join(
+                [
+                    str(source or "unknown"),
+                    symbol,
+                    timeframe,
+                    fingerprint,
+                    str(generated_at or report.get("generated_at") or ""),
+                ]
+            ).encode("utf-8")
+        ).hexdigest()[:24],
+        "source": str(source or "unknown"),
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "generated_at": str(generated_at or report.get("generated_at") or ""),
+        "holdout_sessions": sessions,
+        "holdout_fingerprint": fingerprint,
+    }
+    existing = [
+        dict(item)
+        for item in result.get("holdout_exposure_ledger") or []
+        if isinstance(item, dict)
+        and str(item.get("id") or "") != record["id"]
+    ]
+    result["holdout_exposure_ledger"] = [record, *existing][
+        : max(1, int(maximum_records))
+    ]
+    return result
 
 
 def apply_holdout_reuse_guard(
@@ -1398,6 +1459,13 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
         result["strategies"] = [child, *existing_strategies]
         summary["stock_specific_strategy_id"] = child_id
         summary["paper_validation_status"] = child["paper_validation_status"]
+
+    result = record_holdout_exposure(
+        result,
+        report,
+        source="stock_strategy_finder",
+        generated_at=str(report.get("generated_at") or ""),
+    )
 
     checkpoint = latest_finder_checkpoint(
         result,
