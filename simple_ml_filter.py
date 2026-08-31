@@ -299,7 +299,7 @@ def score_setup(
             "Historical ML scoring requires split metadata so price/liquidity "
             "features cannot cross an unhandled split boundary."
         )
-    split_actions = market.split_actions(
+    split_actions = market.research_reset_actions(
         [ticker],
         start=historical_start,
         end=historical_end,
