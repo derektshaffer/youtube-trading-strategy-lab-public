@@ -988,6 +988,7 @@ class StrategyIntegrityTests(unittest.TestCase):
                     "status": "PRISTINE",
                     "pristine": True,
                 },
+                "holdout_sessions": ["2026-08-25", "2026-08-26"],
             },
         }
         upgraded = upgrade_native_strategy_rules(strategy)
@@ -1014,6 +1015,7 @@ class StrategyIntegrityTests(unittest.TestCase):
                     "status": "PRISTINE",
                     "pristine": True,
                 },
+                "holdout_sessions": ["2026-08-25", "2026-08-26"],
             },
         }
         upgraded = upgrade_native_strategy_rules(strategy)
