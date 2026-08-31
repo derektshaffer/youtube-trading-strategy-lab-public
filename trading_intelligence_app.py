@@ -4212,18 +4212,104 @@ elif module == "Profit First":
                 ),
                 None,
             )
-            if strongest_strategy is not None:
-                st.button(
-                    "↻ Re-run strict validation on strongest candidate →",
+            active_target_revalidation = next(
+                (
+                    item
+                    for item in (library.get("research_queue") or [])
+                    if isinstance(item, dict)
+                    and str(item.get("type") or "") == "autonomous_validation"
+                    and str(item.get("status") or "") in {"queued", "running", "retry"}
+                    and strongest_strategy_id
+                    in {
+                        str(value or "").strip()
+                        for value in (
+                            (item.get("payload") or {}).get("strategy_ids")
+                            if isinstance((item.get("payload") or {}).get("strategy_ids"), list)
+                            else []
+                        )
+                    }
+                ),
+                None,
+            )
+            if active_target_revalidation is not None:
+                target_state = str(
+                    active_target_revalidation.get("status") or "queued"
+                ).replace("_", " ").upper()
+                st.info(
+                    f"**Current-protocol revalidation · {target_state}** — "
+                    f"{strongest_near.get('strategy_name') or 'Strategy'} is already in the durable "
+                    "cloud validation queue. It will use the same strict validation, untouched "
+                    "holdout, stress, cross-stock, and walk-forward gates as autonomous research."
+                )
+            elif strongest_strategy is not None:
+                revalidate_slot = st.empty()
+                revalidate_clicked = revalidate_slot.button(
+                    "☁ Revalidate strongest candidate under current protocol →",
                     type="primary",
                     width="stretch",
                     key="til_profit_first_revalidate_strongest",
-                    on_click=queue_strategy_validation_from_analyzer,
-                    args=(
-                        str(strongest_near.get("symbol") or ""),
-                        dict(strongest_strategy),
+                    help=(
+                        "Queues this exact strategy into the durable cloud validator. "
+                        "It does not loosen any validation gate."
                     ),
                 )
+                if revalidate_clicked:
+                    revalidate_slot.button(
+                        "☁ Queuing current-protocol revalidation…",
+                        type="primary",
+                        width="stretch",
+                        disabled=True,
+                        key="til_profit_first_revalidate_strongest_busy",
+                    )
+                    try:
+                        target_dedupe = (
+                            "autonomous_validation:targeted:"
+                            + hashlib.sha256(
+                                strongest_strategy_id.encode("utf-8")
+                            ).hexdigest()[:16]
+                        )
+                        queued_library, queued_job = enqueue_research_job(
+                            load_library(
+                                force_cloud_refresh=True,
+                                mutable=True,
+                            ),
+                            "autonomous_validation",
+                            {
+                                "origin": "profit_first_revalidation",
+                                "strategy_ids": [strongest_strategy_id],
+                                "requested_from": "profit_first",
+                            },
+                            priority=100,
+                            dedupe_key=target_dedupe,
+                            max_attempts=3,
+                        )
+                        if queued_job:
+                            intelligence_store().save(queued_library)
+                            launch_ok, launch_detail = dispatch_github_workflow(
+                                actions_repository_setting,
+                                actions_token_setting,
+                                workflow="continuous-trading-research.yml",
+                                ref=actions_ref_setting,
+                            )
+                            if launch_ok:
+                                st.success(
+                                    "Strict cloud revalidation was durably queued and the research "
+                                    "worker launch was requested. Refresh Profit First to see its "
+                                    "queued/running state."
+                                )
+                            else:
+                                st.warning(
+                                    "Strict revalidation is safely stored in the durable queue, but "
+                                    "the immediate worker launch was unavailable. "
+                                    + str(launch_detail)
+                                )
+                        else:
+                            st.info(
+                                "This strategy already has an active current-protocol "
+                                "revalidation job in the durable queue."
+                            )
+                    except AppError as exc:
+                        st.error("Could not queue strict revalidation: " + str(exc))
         else:
             st.info("No saved validation evidence exists yet.")
 
