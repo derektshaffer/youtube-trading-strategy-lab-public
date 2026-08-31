@@ -336,6 +336,13 @@ def summarize(path: Path) -> dict[str, Any]:
             "hypothesis_id": payload.get("hypothesis_id"),
             "research_run_id": payload.get("research_run_id"),
             "cycle_date": payload.get("cycle_date"),
+            "origin": payload.get("origin"),
+            "strategy_ids": (
+                [str(value) for value in payload.get("strategy_ids") or []]
+                if isinstance(payload.get("strategy_ids"), list)
+                else []
+            ),
+            "profit_first_phase": payload.get("profit_first_phase"),
             "last_error": str(job.get("last_error") or "")[:350] or None,
         }
         active_detail.append(row)
