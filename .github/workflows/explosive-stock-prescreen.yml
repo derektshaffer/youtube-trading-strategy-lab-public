@@ -1,0 +1,74 @@
+name: Explosive Stock Prescreen
+
+on:
+  schedule:
+    # After the U.S. regular session has fully closed in both EDT and EST.
+    - cron: "30 22 * * 1-5"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "explosive_stock_core.py"
+      - "explosive_stock_storage.py"
+      - "explosive_stock_prescreen_worker.py"
+      - ".github/workflows/explosive-stock-prescreen.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  # Deliberately separate from Trading Intelligence Lab's library-writer group.
+  group: explosive-stock-prescreen-writer
+  cancel-in-progress: false
+
+jobs:
+  whole-market-prescreen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+      ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+      ALPACA_LIVE_FEED: ${{ vars.ALPACA_LIVE_FEED || 'iex' }}
+      ALPACA_HISTORICAL_FEED: ${{ vars.ALPACA_HISTORICAL_FEED || 'sip' }}
+
+      # Reuse credentials if desired, but write to an independent Explosive Lab file.
+      GITHUB_BACKUP_REPOSITORY: ${{ secrets.TRADING_LAB_BACKUP_REPOSITORY }}
+      GITHUB_BACKUP_TOKEN: ${{ secrets.TRADING_LAB_BACKUP_TOKEN }}
+      GITHUB_BACKUP_BRANCH: ${{ vars.GITHUB_BACKUP_BRANCH }}
+      EXPLOSIVE_STOCK_BACKUP_PATH: ${{ vars.EXPLOSIVE_STOCK_BACKUP_PATH || 'explosive-stock-lab/prescreen_library.json' }}
+
+      EXPLOSIVE_PRESCREEN_BATCH_SIZE: ${{ vars.EXPLOSIVE_PRESCREEN_BATCH_SIZE || '80' }}
+      EXPLOSIVE_PRESCREEN_TOP_N: ${{ vars.EXPLOSIVE_PRESCREEN_TOP_N || '250' }}
+      EXPLOSIVE_PRESCREEN_HISTORY_DAYS: ${{ vars.EXPLOSIVE_PRESCREEN_HISTORY_DAYS || '100' }}
+      EXPLOSIVE_PRESCREEN_MAX_UNIVERSE: ${{ vars.EXPLOSIVE_PRESCREEN_MAX_UNIVERSE || '12000' }}
+      EXPLOSIVE_PRESCREEN_MIN_PRICE: ${{ vars.EXPLOSIVE_PRESCREEN_MIN_PRICE || '0.20' }}
+      EXPLOSIVE_PRESCREEN_MAX_PRICE: ${{ vars.EXPLOSIVE_PRESCREEN_MAX_PRICE || '30.0' }}
+      EXPLOSIVE_PRESCREEN_MIN_AVG_DOLLAR_VOLUME: ${{ vars.EXPLOSIVE_PRESCREEN_MIN_AVG_DOLLAR_VOLUME || '100000' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          missing=0
+          for name in ALPACA_API_KEY ALPACA_SECRET_KEY GITHUB_BACKUP_REPOSITORY GITHUB_BACKUP_TOKEN; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing required Actions secret: $name"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Run isolated whole-market explosive prescreen
+        run: python explosive_stock_prescreen_worker.py
