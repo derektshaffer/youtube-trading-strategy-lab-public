@@ -536,6 +536,8 @@ def render() -> None:
     selected_label = st.selectbox("Strategy to run", list(options), key="runner_strategy_v2")
     strategy = options[selected_label]
     approved = bool(strategy.get("approved"))
+    execution_fidelity = paper_execution_fidelity(strategy)
+    paper_execution_ready = str(execution_fidelity.get("status") or "") == "ready"
     optimized_symbol = str(strategy.get("optimized_for_symbol") or "").strip().upper()
     profile = (
         strategy.get("optimized_backtest_settings")
@@ -548,8 +550,17 @@ def render() -> None:
         or "5Min"
     )
 
-    if approved:
-        st.success("This strategy is approved for Paper Auto if all live rules and risk checks pass.")
+    if approved and paper_execution_ready:
+        st.success("This strategy is approved and its paper execution matches the validated backtest lifecycle.")
+    elif approved:
+        unsupported = ", ".join(
+            str(item) for item in execution_fidelity.get("unsupported_management") or []
+        )
+        st.warning(
+            "This strategy is approved for review, but Paper Auto is integrity-locked because the "
+            "current runner cannot fully reproduce the backtest trade lifecycle."
+            + (f" Missing: {unsupported}." if unsupported else "")
+        )
     else:
         st.info("This strategy is not approved yet. You can still use Signal Only. Paper Auto remains locked.")
 
@@ -617,8 +628,18 @@ def render() -> None:
         armed = st.checkbox(
             "ARM PAPER AUTO-ENTRY",
             value=False,
-            disabled=not approved or not paper_ready or not is_long_strategy(strategy) or not cross_ticker_confirmed,
-            help="When armed, Refresh can submit a simulated Alpaca bracket order after every safeguard passes.",
+            disabled=(
+                not approved
+                or not paper_ready
+                or not paper_execution_ready
+                or not is_long_strategy(strategy)
+                or not cross_ticker_confirmed
+            ),
+            help=(
+                "When execution fidelity is available, arming allows Refresh to submit a simulated "
+                "Alpaca order after every safeguard passes. It stays disabled while the paper runner "
+                "cannot reproduce the validated backtest lifecycle."
+            ),
         )
         if armed:
             st.warning("PAPER AUTO-ENTRY IS ARMED. A full MATCH on Refresh can submit a simulated order.")
