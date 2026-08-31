@@ -364,7 +364,7 @@ def execute_job(
         rows = list(rows_by_symbol.get(symbol) or [])
         if not rows:
             raise AppError(f"No historical bars were returned for {symbol}.")
-        split_actions = market.split_actions(
+        split_actions = market.research_reset_actions(
             [symbol],
             start=start,
             end=end,
