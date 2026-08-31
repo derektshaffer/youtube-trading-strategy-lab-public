@@ -10321,18 +10321,88 @@ elif module == "Stock Analyzer":
             ),
             None,
         )
-        analyzer_pool = [guided_strategy] if guided_strategy is not None else integrity_safe_strategies
-        analyzer_strategies = [
-            item for item in analyzer_pool
+
+        available_analyzer_strategies = [
+            item
+            for item in integrity_safe_strategies
             if not validated_only
             or str(item.get("validation_status") or "").lower() == "validated"
         ]
+        strategy_by_id = {
+            str(item.get("id") or ""): item
+            for item in available_analyzer_strategies
+            if str(item.get("id") or "").strip()
+        }
+        strategy_option_ids = list(strategy_by_id)
+
+        # Keep the Step-1 winner selected by default, but let the user compare
+        # another eligible strategy without navigating back through the Finder.
+        current_strategy_id = str(
+            st.session_state.get("til_analyzer_strategy_id") or ""
+        ).strip()
+        preferred_strategy_id = (
+            guided_strategy_id
+            if guided_strategy_id in strategy_by_id
+            else current_strategy_id
+            if current_strategy_id in strategy_by_id
+            else strategy_option_ids[0]
+            if strategy_option_ids
+            else ""
+        )
+        if (
+            "til_analyzer_strategy_id" not in st.session_state
+            or current_strategy_id not in strategy_by_id
+        ):
+            st.session_state["til_analyzer_strategy_id"] = preferred_strategy_id
+
         if guided_strategy is not None:
             st.info(
-                "Continuing the Finder result: **"
-                + str(guided_strategy.get("name") or "selected strategy")
-                + "**. Steps 2–5 will evaluate this exact strategy, not silently switch to another one."
+                "Step 1 selected **"
+                + str(guided_strategy.get("name") or "a strategy")
+                + "**. It is selected below by default, but you can choose another strategy "
+                "and test it against the same stock without returning to Step 1."
             )
+
+        if strategy_option_ids:
+            selected_strategy_id = st.selectbox(
+                "Strategy to check",
+                strategy_option_ids,
+                key="til_analyzer_strategy_id",
+                format_func=lambda strategy_id: (
+                    str((strategy_by_id.get(strategy_id) or {}).get("name") or "Unnamed strategy")
+                    + " · "
+                    + (
+                        "Validated"
+                        if str(
+                            (strategy_by_id.get(strategy_id) or {}).get("validation_status")
+                            or ""
+                        ).lower()
+                        == "validated"
+                        else "Research-only"
+                    )
+                ),
+                help=(
+                    "The Step-1 winner is selected automatically. Choose another strategy here "
+                    "to compare its current signal on this same ticker. This does not grant the "
+                    "new strategy Step-1 validation; Step 4 shows its actual evidence status."
+                ),
+            )
+            selected_strategy = strategy_by_id.get(str(selected_strategy_id))
+            analyzer_strategies = [selected_strategy] if selected_strategy is not None else []
+            selected_validation = str(
+                (selected_strategy or {}).get("validation_status") or "unvalidated"
+            ).replace("_", " ").title()
+            selected_meta_cols = st.columns([2.2, 1.0])
+            selected_meta_cols[0].caption(
+                "Selected strategy: "
+                + str((selected_strategy or {}).get("name") or "—")
+            )
+            selected_meta_cols[1].caption("Validation: " + selected_validation)
+        else:
+            selected_strategy_id = ""
+            selected_strategy = None
+            analyzer_strategies = []
+
         if validated_only and not analyzer_strategies:
             st.info(
                 "No fully validated strategies are available yet. Turn off Only fully validated "
@@ -10389,6 +10459,7 @@ elif module == "Stock Analyzer":
                     shadow_probability_models(library),
                     champion_model_id=active_shadow_champion_id(library),
                 )[0]
+                analysis["_selected_strategy_id"] = str(selected_strategy_id or "")
 
                 analyzer_as_of = utc_now()
                 analyzer_news = [
@@ -10455,7 +10526,12 @@ elif module == "Stock Analyzer":
                 st.error(f"Stock analysis failed: {exc}")
 
         stock_result = st.session_state.get("til_stock_analysis") or {}
-        if stock_result and stock_result.get("symbol") == analyzer_ticker:
+        if (
+            stock_result
+            and stock_result.get("symbol") == analyzer_ticker
+            and str(stock_result.get("_selected_strategy_id") or "")
+            == str(selected_strategy_id or "")
+        ):
             metrics = stock_result.get("metrics") or {}
             comparisons = list(stock_result.get("comparisons") or [])
             st.divider()
