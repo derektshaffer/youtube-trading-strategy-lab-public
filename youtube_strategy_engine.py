@@ -3425,13 +3425,11 @@ class AlpacaMarketData:
 
         padding = timedelta(days=max(0, int(process_date_padding_days)))
         process_start = window_start - padding
-        # Historical records may be processed after the effective date. Search
-        # forward as well, but never beyond now because future process dates do
-        # not exist yet.
-        process_end = min(
-            datetime.now(timezone.utc),
-            window_end + padding,
-        )
+        # Historical records may be processed well after the effective date.
+        # This metadata is used only to repair historical price continuity, not
+        # as a point-in-time trading feature, so search processed records through
+        # today and then filter strictly by historical ex-date below.
+        process_end = datetime.now(timezone.utc)
         actions = self.corporate_actions(
             symbols,
             start=process_start,
