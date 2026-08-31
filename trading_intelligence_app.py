@@ -1528,10 +1528,99 @@ def upsert_strategy_record(
     return result
 
 
+def profit_first_run_snapshot(run: dict[str, Any]) -> dict[str, Any]:
+    """Summarize whether one saved validation run is a profit-first edge candidate."""
+    validation = run.get("validation_metrics") or {}
+    holdout = run.get("holdout_metrics") or {}
+    stress = run.get("stress_metrics") or {}
+    robustness = run.get("robustness") or {}
+    walk = run.get("walk_forward_summary") or {}
+
+    def positive_period(metrics: dict[str, Any]) -> bool:
+        return (
+            int(safe_float(metrics.get("trade_count"), 0) or 0) > 0
+            and (safe_float(metrics.get("net_pnl"), 0.0) or 0.0) > 0
+        )
+
+    validation_positive = positive_period(validation)
+    holdout_positive = positive_period(holdout)
+    stress_positive = positive_period(stress)
+    validation_status = str(run.get("validation_status") or "").strip().lower()
+    robustness_score = safe_float(robustness.get("score"), 0.0) or 0.0
+    walk_pct = safe_float(walk.get("profitable_fold_pct"), 0.0) or 0.0
+    strict_profit_edge = bool(
+        validation_status == "validated"
+        and validation_positive
+        and holdout_positive
+        and stress_positive
+    )
+    positive_period_count = sum(
+        (validation_positive, holdout_positive, stress_positive)
+    )
+    research_score = (
+        positive_period_count * 30.0
+        + min(25.0, robustness_score * 0.25)
+        + min(15.0, walk_pct * 0.15)
+    )
+    return {
+        "strict_profit_edge": strict_profit_edge,
+        "validation_positive": validation_positive,
+        "holdout_positive": holdout_positive,
+        "stress_positive": stress_positive,
+        "positive_period_count": positive_period_count,
+        "robustness_score": robustness_score,
+        "walk_forward_profitable_pct": walk_pct,
+        "research_score": round(research_score, 2),
+    }
+
+
+def profit_first_ranked_runs(
+    runs: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return latest distinct strict edges and near-miss research candidates."""
+    newest_by_strategy: dict[str, dict[str, Any]] = {}
+    ordered = sorted(
+        [item for item in runs if isinstance(item, dict)],
+        key=lambda item: str(item.get("generated_at") or ""),
+        reverse=True,
+    )
+    for run in ordered:
+        strategy_key = str(
+            run.get("strategy_id")
+            or run.get("strategy_name")
+            or run.get("id")
+            or ""
+        )
+        if not strategy_key or strategy_key in newest_by_strategy:
+            continue
+        snapshot = profit_first_run_snapshot(run)
+        newest_by_strategy[strategy_key] = {**run, "_profit_first": snapshot}
+
+    distinct = list(newest_by_strategy.values())
+    strict = sorted(
+        [item for item in distinct if bool((item.get("_profit_first") or {}).get("strict_profit_edge"))],
+        key=lambda item: (
+            safe_float((item.get("_profit_first") or {}).get("robustness_score"), 0.0) or 0.0,
+            safe_float((item.get("holdout_metrics") or {}).get("net_pnl"), 0.0) or 0.0,
+        ),
+        reverse=True,
+    )
+    near_misses = sorted(
+        [item for item in distinct if not bool((item.get("_profit_first") or {}).get("strict_profit_edge"))],
+        key=lambda item: (
+            safe_float((item.get("_profit_first") or {}).get("research_score"), 0.0) or 0.0,
+            safe_float((item.get("_profit_first") or {}).get("robustness_score"), 0.0) or 0.0,
+        ),
+        reverse=True,
+    )
+    return strict, near_misses
+
+
 # Internal page IDs stay unchanged so existing buttons, deep links, saved
 # session state, and page logic continue to work. Only the visible navigation
 # order/names are changed.
 WORKSPACE_SECTIONS = [
+    "Profit First",
     "Stock Strategy Finder",
     "Overview",
     "Knowledge Sources",
@@ -1553,7 +1642,8 @@ WORKSPACE_SECTIONS = [
 ]
 
 WORKSPACE_DISPLAY_LABELS = {
-    "Stock Strategy Finder": "0. Find Strategy",
+    "Profit First": "0. Profit-First Edge",
+    "Stock Strategy Finder": "0A. Stock-Specific Research",
     "Overview": "1. Overview",
     "Knowledge Sources": "2. Knowledge Sources",
     "AI Research Autopilot": "3. AI Research Autopilot",
@@ -1577,6 +1667,12 @@ WORKSPACE_DISPLAY_TO_INTERNAL = {
 }
 
 WORKSPACE_PAGE_META = {
+    "Profit First": {
+        "step": "0",
+        "group": "Start Here",
+        "title": "Profit-First Edge Finder",
+        "subtitle": "Start with strategies that survived strict validation and stayed profitable on unseen, untouched, and stressed data. Only then look for stocks that match them.",
+    },
     "Stock Strategy Finder": {
         "step": "1",
         "group": "Guided Strategy Workflow",
@@ -1688,7 +1784,8 @@ WORKSPACE_PAGE_META = {
 }
 
 WORKSPACE_NAV_GROUPS = [
-    ("START HERE", ["Stock Strategy Finder"]),
+    ("START HERE", ["Profit First"]),
+    ("STOCK-SPECIFIC RESEARCH", ["Stock Strategy Finder"]),
     ("RESEARCH", ["Overview", "Knowledge Sources", "AI Research Autopilot"]),
     (
         "STRATEGY DEVELOPMENT",
@@ -1703,6 +1800,7 @@ WORKSPACE_NAV_GROUPS = [
 ]
 
 WORKSPACE_NAV_ICONS = {
+    "Profit First": "★",
     "Stock Strategy Finder": "◆",
     "Overview": "⌁",
     "Knowledge Sources": "◇",
@@ -3801,6 +3899,172 @@ if module == "Stock Strategy Finder":
             navigate_to_workspace("Strategy Lab", pending=True)
 
 
+elif module == "Profit First":
+    saved_validation_runs = [
+        item
+        for item in (library.get("validation_runs") or [])
+        if isinstance(item, dict)
+    ]
+    profit_edges, profit_near_misses = profit_first_ranked_runs(saved_validation_runs)
+
+    st.markdown("### Start with evidence, not a ticker")
+    st.caption(
+        "A strategy appears in the green list only when its saved run is labeled validated and "
+        "it made money in the separate validation period, untouched holdout, and higher-cost stress test. "
+        "A current stock match by itself never qualifies a strategy here."
+    )
+
+    profit_cols = st.columns(4)
+    profit_cols[0].metric("Strict profit-first edges", len(profit_edges))
+    profit_cols[1].metric(
+        "Validated saved runs",
+        sum(
+            1
+            for item in saved_validation_runs
+            if str(item.get("validation_status") or "").lower() == "validated"
+        ),
+    )
+    profit_cols[2].metric("Saved validation runs", len(saved_validation_runs))
+    profit_cols[3].metric(
+        "Research candidates",
+        len(profit_near_misses),
+        "not trade-ready",
+        delta_color="off",
+    )
+
+    if profit_edges:
+        st.success(
+            f"The Lab currently has {len(profit_edges)} strict profit-first "
+            f"{'edge' if len(profit_edges) == 1 else 'edges'}. "
+            "Choose one below, then scan the market for stocks that match its frozen rules."
+        )
+        edge_options: dict[str, dict[str, Any]] = {}
+        for run in profit_edges:
+            snapshot = run.get("_profit_first") or {}
+            holdout = run.get("holdout_metrics") or {}
+            label = (
+                f"{run.get('strategy_name') or 'Strategy'} · "
+                f"{run.get('symbol') or 'anchor'} · "
+                f"robustness {safe_float(snapshot.get('robustness_score'), 0.0):.0f}/100 · "
+                f"holdout USD {safe_float(holdout.get('net_pnl'), 0.0):,.2f}"
+            )
+            if label in edge_options:
+                label += f" · {str(run.get('strategy_id') or run.get('id') or '')[:7]}"
+            edge_options[label] = run
+
+        selected_edge_label = st.selectbox(
+            "Validated profitable edge",
+            list(edge_options),
+            key="til_profit_first_edge",
+        )
+        selected_edge = edge_options[selected_edge_label]
+        edge_snapshot = selected_edge.get("_profit_first") or {}
+        edge_validation = selected_edge.get("validation_metrics") or {}
+        edge_holdout = selected_edge.get("holdout_metrics") or {}
+        edge_stress = selected_edge.get("stress_metrics") or {}
+        edge_walk = selected_edge.get("walk_forward_summary") or {}
+        evidence_cols = st.columns(5)
+        evidence_cols[0].metric(
+            "Validation P/L",
+            "$" + f"{safe_float(edge_validation.get('net_pnl'), 0.0):,.2f}",
+        )
+        evidence_cols[1].metric(
+            "Untouched holdout P/L",
+            "$" + f"{safe_float(edge_holdout.get('net_pnl'), 0.0):,.2f}",
+        )
+        evidence_cols[2].metric(
+            "Higher-cost stress P/L",
+            "$" + f"{safe_float(edge_stress.get('net_pnl'), 0.0):,.2f}",
+        )
+        evidence_cols[3].metric(
+            "Robustness",
+            f"{safe_float(edge_snapshot.get('robustness_score'), 0.0):.0f}/100",
+        )
+        evidence_cols[4].metric(
+            "Walk-forward profitable",
+            f"{safe_float(edge_walk.get('profitable_fold_pct'), 0.0):.0f}%",
+        )
+
+        selected_strategy_id = str(selected_edge.get("strategy_id") or "")
+        if st.button(
+            "① Find stocks matching this validated edge →",
+            type="primary",
+            width="stretch",
+            disabled=not bool(selected_strategy_id),
+            key="til_profit_first_scan_market",
+        ):
+            st.session_state["til_market_discovery_strategy_id"] = selected_strategy_id
+            navigate_to_workspace("Market Discovery", pending=True)
+        st.caption(
+            "After a stock matches, review the current setup and paper-test it. "
+            "Historical validation is evidence of an edge, not a guarantee that the next trade will win."
+        )
+    else:
+        st.error(
+            "No strategy currently clears the strict profit-first bar. "
+            "That is a useful result: the Lab should not make you hunt for a stock to fit an edge it has not proven yet."
+        )
+        st.markdown("### Closest research candidates — still not validated profitable edges")
+        if profit_near_misses:
+            near_rows = []
+            for run in profit_near_misses[:10]:
+                snapshot = run.get("_profit_first") or {}
+                validation = run.get("validation_metrics") or {}
+                holdout = run.get("holdout_metrics") or {}
+                stress = run.get("stress_metrics") or {}
+                near_rows.append(
+                    {
+                        "Strategy": run.get("strategy_name") or "Strategy",
+                        "Anchor stock": run.get("symbol") or "—",
+                        "Status": str(run.get("validation_status") or "research_only").replace("_", " ").title(),
+                        "Robustness": round(safe_float(snapshot.get("robustness_score"), 0.0) or 0.0, 1),
+                        "Validation P/L": round(safe_float(validation.get("net_pnl"), 0.0) or 0.0, 2),
+                        "Holdout P/L": round(safe_float(holdout.get("net_pnl"), 0.0) or 0.0, 2),
+                        "Stress P/L": round(safe_float(stress.get("net_pnl"), 0.0) or 0.0, 2),
+                        "Walk-forward profitable %": round(
+                            safe_float(snapshot.get("walk_forward_profitable_pct"), 0.0) or 0.0,
+                            1,
+                        ),
+                    }
+                )
+            st.dataframe(pd.DataFrame(near_rows), width="stretch", hide_index=True)
+        else:
+            st.info("No saved validation evidence exists yet.")
+
+        next_cols = st.columns(3)
+        if next_cols[0].button(
+            "✦ Continue AI strategy research",
+            type="primary",
+            width="stretch",
+            key="til_profit_first_research",
+        ):
+            navigate_to_workspace("AI Research Autopilot", pending=True)
+        if next_cols[1].button(
+            "⬡ Test a candidate in Strategy Lab",
+            width="stretch",
+            key="til_profit_first_lab",
+        ):
+            navigate_to_workspace("Strategy Lab", pending=True)
+        if next_cols[2].button(
+            "✓ Review all validation evidence",
+            width="stretch",
+            key="til_profit_first_validation",
+        ):
+            navigate_to_workspace("Validation", pending=True)
+
+        with st.expander("Stock-specific research is still available", expanded=False):
+            st.write(
+                "If you want to investigate a particular ticker anyway, the Stock-Specific Research page "
+                "can search for candidates. Its results remain research-only until they survive strict validation."
+            )
+            if st.button(
+                "Open stock-specific research",
+                width="stretch",
+                key="til_profit_first_stock_specific",
+            ):
+                navigate_to_workspace("Stock Strategy Finder", pending=True)
+
+
 elif module == "Overview":
     overview_validated = sum(
         1
@@ -3821,11 +4085,11 @@ elif module == "Overview":
     home_actions = [
         (
             action_row_one[0],
-            "◆ Find the best strategy for a stock",
-            "Enter a ticker and let the Lab search historical strategy/rule combinations for that specific stock.",
-            "Stock Strategy Finder",
-            "Find strategy",
-            "til_home_find_strategy",
+            "★ Find a validated profitable edge",
+            "Start with strategies that survived strict validation and stayed profitable on unseen, holdout, and higher-cost stress data.",
+            "Profit First",
+            "Find profitable edge",
+            "til_home_profit_first",
         ),
         (
             action_row_one[1],
