@@ -108,6 +108,8 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
             "queue_strategy_validation_from_analyzer",
             "queue_paper_test_from_analyzer",
             "til_strategy_lab_candidate_payload",
+            "til_guided_validation_mode",
+            "Walk-forward testing is required and already turned on.",
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, source)
