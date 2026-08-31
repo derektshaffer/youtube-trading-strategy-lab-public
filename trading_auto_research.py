@@ -1747,6 +1747,7 @@ def merge_autonomous_research_into_library(
             "validation_status": status,
             "gate_reasons": gate_reasons,
             "holdout_reuse_audit": holdout_audit,
+            "holdout_sessions": list(optimization.get("holdout_sessions") or []),
             "universe_source": (report.get("universe") or {}).get("source"),
         }
         if status == "validated":
