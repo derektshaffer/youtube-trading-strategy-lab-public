@@ -48,6 +48,13 @@ class AnalyzerSpeedIntegrityTests(unittest.TestCase):
             1,
         )
 
+    def test_stock_analyzer_hides_stale_current_setup_results(self):
+        self.assertIn('analysis["_analyzed_at"] = analyzer_as_of.isoformat()', self.analyzer_source)
+        self.assertIn("ANALYZER_RESULT_MAX_AGE_SECONDS", self.app_source)
+        self.assertIn("stock_result_is_fresh", self.analyzer_source)
+        self.assertIn("saved current-setup check is stale", self.analyzer_source)
+        self.assertIn("if stock_result_matches and stock_result_is_fresh:", self.analyzer_source)
+
     def test_live_runner_remains_explicit_refresh_only(self):
         self.assertIn('"Refresh live signal"', self.live_runner_source)
         self.assertIn("if refresh:", self.live_runner_source)
