@@ -162,6 +162,26 @@ class ValidationStrengthTests(unittest.TestCase):
         self.assertFalse(result["independently_positive"])
         self.assertTrue(any("curve" in reason.lower() for reason in result["reasons"]))
 
+    def test_untouched_holdout_cost_curve_overrides_development_curve(self):
+        report = self._report(True)
+        report["winner"]["execution_sensitivity"] = {
+            "score": 90.0,
+            "label": "ROBUST",
+            "passes_validation_gate": True,
+        }
+        report["winner"]["holdout_execution_sensitivity"] = {
+            "score": 32.0,
+            "label": "FRAGILE",
+            "passes_validation_gate": False,
+        }
+
+        result = validation_strength(report)
+
+        self.assertEqual(result["execution_sensitivity_scope"], "untouched_holdout")
+        self.assertEqual(result["execution_sensitivity_label"], "FRAGILE")
+        self.assertLessEqual(result["score"], 49.0)
+        self.assertFalse(result["independently_positive"])
+
     def test_small_unseen_samples_cannot_receive_high_robustness(self):
         report = self._report(True)
         report["winner"]["validation_metrics"]["trade_count"] = 4
