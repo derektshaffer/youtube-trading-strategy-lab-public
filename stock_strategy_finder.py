@@ -26,6 +26,7 @@ from trading_validation_core import validation_strength, walk_forward_validate
 from youtube_strategy_engine import (
     AppError,
     BacktestSettings,
+    _period_metrics,
     OptimizationSettings,
     bars_to_frame,
     generate_local_strategy_refinements,
@@ -316,7 +317,8 @@ def parameter_stability_test(
     )
     chosen_timeframe = str(optimization_report.get("timeframe") or "5Min")
     timeframe_rows = resample_intraday_bars(rows, chosen_timeframe, include_extended_hours=True)
-    holdout_rows = _rows_for_sessions(timeframe_rows, list(optimization_report.get("holdout_sessions") or []))
+    holdout_sessions = list(optimization_report.get("holdout_sessions") or [])
+    holdout_rows = _rows_for_sessions(timeframe_rows, holdout_sessions)
     if not holdout_rows:
         return {
             "status": "insufficient_holdout",
@@ -342,7 +344,22 @@ def parameter_stability_test(
             continue
         seen.add(signature)
         candidate = {**source_strategy, "machine_rules": rules}
-        metrics = (run_backtest(holdout_rows, candidate, str(optimization_report.get("symbol") or ""), settings).get("metrics") or {})
+        # Preserve all pre-holdout warmup/context (EMA state, prior-session features,
+        # VWAP-derived structure, etc.) and score only trades whose entries belong
+        # to the frozen holdout sessions. Running the isolated holdout rows would
+        # reset those causal features at the boundary and make nearby variants
+        # incomparable with the selected winner.
+        full_result = run_backtest(
+            timeframe_rows,
+            candidate,
+            str(optimization_report.get("symbol") or ""),
+            settings,
+        )
+        metrics = _period_metrics(
+            full_result,
+            set(holdout_sessions),
+            settings.starting_cash,
+        )
         results.append(
             {
                 "signature": signature,
@@ -377,8 +394,9 @@ def parameter_stability_test(
         "best_net_pnl": round(max(pnls), 2) if pnls else 0.0,
         "results": results,
         "note": (
-            "Nearby rule perturbations are evaluated only as a post-selection holdout diagnostic; "
-            "they do not get to re-optimize the winner."
+            "Nearby rule perturbations are evaluated only as a post-selection holdout diagnostic. "
+            "Each variant retains the full pre-holdout causal warmup/context and only its holdout trades "
+            "are scored; variants do not get to re-optimize the winner."
         ),
     }
 
