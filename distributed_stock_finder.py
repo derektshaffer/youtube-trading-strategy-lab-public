@@ -33,6 +33,7 @@ import time
 from typing import Any
 
 from stock_strategy_finder import (
+    apply_historical_spread_integrity_guard,
     complete_stock_strategy_finder_from_optimization,
     merge_finder_report_into_library,
     search_profile,
@@ -60,9 +61,11 @@ from youtube_strategy_engine import (
     StrategyStore,
     combine_stock_timeframe_reports,
     combine_strategy_family_reports,
+    historical_entry_spread_audit,
     normalize_machine_rules,
     optimize_stock_strategies_parallel,
     resample_intraday_bars,
+    safe_float,
     split_safe_raw_research_rows,
     isoformat_utc,
     utc_now,
@@ -1262,6 +1265,40 @@ def command_aggregate(run_id: str) -> int:
             strategies_considered_count=strategies_considered_count,
         )
         report["market_data_integrity"] = plan.get("market_data_integrity") or {}
+
+        optimization_for_spread = report.get("optimization") or {}
+        winner_for_spread = optimization_for_spread.get("winner") or {}
+        winning_backtest_for_spread = optimization_for_spread.get("winning_backtest") or {}
+        optimized_settings_for_spread = (
+            winner_for_spread.get("optimized_backtest_settings") or {}
+        )
+        optimizer_settings_for_spread = (
+            optimization_for_spread.get("optimization_settings") or {}
+        )
+        sensitivity_multipliers = [
+            safe_float(value)
+            for value in (
+                optimizer_settings_for_spread.get("execution_sensitivity_multipliers")
+                or (1.25, 1.5, 1.75, 2.0)
+            )
+        ]
+        maximum_stress_multiplier = max(
+            [value for value in sensitivity_multipliers if value is not None]
+            or [2.0]
+        )
+        spread_audit = historical_entry_spread_audit(
+            build_market(),
+            symbol,
+            list(winning_backtest_for_spread.get("trades") or []),
+            list(optimization_for_spread.get("holdout_sessions") or []),
+            modeled_spread_bps=(
+                safe_float(optimized_settings_for_spread.get("spread_bps"), 12.0)
+                or 12.0
+            ),
+            maximum_stress_multiplier=maximum_stress_multiplier,
+        )
+        report = apply_historical_spread_integrity_guard(report, spread_audit)
+
         report["distributed"] = {
             "enabled": True,
             "run_id": run_id,
