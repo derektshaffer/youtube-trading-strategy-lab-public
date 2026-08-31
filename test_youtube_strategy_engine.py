@@ -1550,7 +1550,12 @@ class CloudBackupFirstWriteTests(unittest.TestCase):
                     previous_updated_at=old_data["updated_at"],
                 )
 
-            expected = json.dumps(new_data, indent=2, default=str, allow_nan=False)
+            expected = json.dumps(
+                new_data,
+                separators=(",", ":"),
+                default=str,
+                allow_nan=False,
+            )
             self.assertEqual(git("show", f"main:{path}", cwd=remote), expected)
             self.assertEqual(saved["sha"], git("rev-parse", f"main:{path}", cwd=remote).strip())
 
@@ -1602,7 +1607,15 @@ class CloudBackupFirstWriteTests(unittest.TestCase):
             )
 
         self.assertEqual(saved["sha"], blob_sha)
-        self.assertEqual(observed["saved"], json.dumps(data, indent=2, default=str, allow_nan=False).encode("utf-8"))
+        self.assertEqual(
+            observed["saved"],
+            json.dumps(
+                data,
+                separators=(",", ":"),
+                default=str,
+                allow_nan=False,
+            ).encode("utf-8"),
+        )
         push = next(command for command in observed["commands"] if command[1] == "push")
         self.assertEqual(push, ["git", "push", "origin", "HEAD:refs/heads/main"])
 
