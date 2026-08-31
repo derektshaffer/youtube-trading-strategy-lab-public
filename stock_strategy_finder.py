@@ -81,6 +81,23 @@ SEARCH_PROFILES: dict[str, StockSearchProfile] = {
         stability_variants=24,
         description="Default stock-specific research. Tests every technically eligible family across three timeframes.",
     ),
+    "Current Regime": StockSearchProfile(
+        name="Current Regime",
+        history_days=35,
+        timeframes=("1Min", "5Min", "15Min"),
+        max_variants_per_strategy=120,
+        finalists_per_strategy=6,
+        execution_variants_per_finalist=6,
+        walk_forward_folds=3,
+        walk_forward_family_limit=4,
+        quick_family_limit=None,
+        stability_variants=18,
+        description=(
+            "Recent-behavior search for stocks whose character changes quickly. "
+            "Tests every technically eligible family on roughly the latest month, "
+            "then still applies holdout, walk-forward, cost, and parameter-stability checks."
+        ),
+    ),
     "Very Deep": StockSearchProfile(
         name="Very Deep",
         history_days=260,
@@ -100,7 +117,7 @@ SEARCH_PROFILES: dict[str, StockSearchProfile] = {
 def search_profile(name: str) -> StockSearchProfile:
     profile = SEARCH_PROFILES.get(str(name or "").strip())
     if profile is None:
-        raise AppError("Choose Quick, Deep, or Very Deep stock-strategy research.")
+        raise AppError("Choose Quick, Deep, Current Regime, or Very Deep stock-strategy research.")
     return profile
 
 
