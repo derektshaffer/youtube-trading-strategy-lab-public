@@ -108,6 +108,30 @@ class ProfitFirstQueueTests(unittest.TestCase):
         self.assertEqual(report["current_protocol_skipped_count"], 1)
 
     @patch.object(queue, "research_readiness")
+    def test_current_protocol_completion_advances_to_never_validated(self, readiness):
+        readiness.side_effect = self.ready
+        library = {
+            "strategies": [strategy("legacy"), strategy("fresh")],
+            "validation_runs": [
+                run(
+                    "legacy",
+                    generated_at="2026-08-31T23:17:32Z",
+                    version=4,
+                    validation_pnl=-1,
+                    holdout_pnl=-1,
+                    stress_pnl=-1,
+                )
+            ],
+        }
+        report = queue.profit_first_validation_candidates(library)
+        self.assertEqual(report["phase"], "never_validated")
+        self.assertEqual(
+            [item["strategy_id"] for item in report["candidates"]],
+            ["fresh"],
+        )
+        self.assertEqual(report["current_protocol_skipped_count"], 1)
+
+    @patch.object(queue, "research_readiness")
     def test_fidelity_blocked_strategy_is_excluded(self, readiness):
         readiness.return_value = {
             "label": "partially_modeled",
