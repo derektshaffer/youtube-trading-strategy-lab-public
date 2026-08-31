@@ -478,6 +478,7 @@ class AutonomousResearchTests(unittest.TestCase):
                     "generalization": {"summary": {"score": 85, "label": "BROAD"}},
                     "walk_forward": {"summary": {"profitable_fold_pct": 100}},
                     "optimization_report": {
+                        "holdout_sessions": ["2026-08-25", "2026-08-26"],
                         "winner": {
                             "status": "VALIDATED",
                             "optimized_rules": {"min_relative_volume": 2.5},
@@ -496,6 +497,13 @@ class AutonomousResearchTests(unittest.TestCase):
         self.assertEqual(strategy["validation_status"], "validated")
         self.assertEqual(strategy["validated_rules"]["min_relative_volume"], 2.5)
         self.assertTrue(merged["validation_runs"][0]["autonomous"])
+        self.assertTrue(
+            strategy["last_autonomous_research"]["holdout_reuse_audit"]["pristine"]
+        )
+        self.assertEqual(
+            merged["holdout_exposure_ledger"][0]["holdout_sessions"],
+            ["2026-08-25", "2026-08-26"],
+        )
         saved_run = merged["research_runs"][0]
         self.assertEqual(saved_run["kind"], "autonomous_research")
         self.assertEqual(saved_run["run_status"], "complete_with_skips")
@@ -505,6 +513,82 @@ class AutonomousResearchTests(unittest.TestCase):
         self.assertEqual(saved_run["failed_finalists"][0]["strategy_name"], "Skipped")
         self.assertEqual(saved_run["timing_profile"]["total_seconds"], 420.0)
         self.assertEqual(saved_run["timing_profile"]["samples"][-1]["fraction"], 1.0)
+
+
+    def test_prior_autonomous_holdout_exposure_revokes_fresh_validation(self):
+        library = {
+            "strategies": [
+                {
+                    "id": "s1",
+                    "name": "Test",
+                    "validation_status": "unvalidated",
+                }
+            ],
+            "validation_runs": [],
+            "research_runs": [],
+            "holdout_exposure_ledger": [
+                {
+                    "id": "old-exposure",
+                    "source": "autonomous_research",
+                    "symbol": "AAA",
+                    "timeframe": "5Min",
+                    "generated_at": "2026-08-29T20:00:00Z",
+                    "holdout_sessions": ["2026-08-25"],
+                }
+            ],
+        }
+        report = {
+            "generated_at": "2026-08-30T20:00:00Z",
+            "validation_method_version": AUTONOMOUS_VALIDATION_METHOD_VERSION,
+            "timeframe": "5Min",
+            "intraday_lookback_days": 180,
+            "universe": {"source": "point_in_time"},
+            "results": [
+                {
+                    "strategy_id": "s1",
+                    "strategy_name": "Test",
+                    "anchor_symbol": "AAA",
+                    "candidate_symbols": ["AAA", "BBB", "CCC"],
+                    "global_score": 84,
+                    "validation_status": "validated",
+                    "gate_reasons": [],
+                    "strength": {"score": 82, "label": "STRONG"},
+                    "generalization": {"summary": {"score": 86, "label": "BROAD"}},
+                    "walk_forward": {"summary": {"profitable_fold_pct": 75}},
+                    "optimization_report": {
+                        "holdout_sessions": ["2026-08-25", "2026-08-26"],
+                        "winner": {
+                            "status": "VALIDATED",
+                            "optimized_rules": {"min_relative_volume": 2.5},
+                            "optimized_backtest_settings": {"starting_cash": 10000},
+                            "training_metrics": {},
+                            "validation_metrics": {},
+                            "holdout_metrics": {},
+                            "stress_metrics": {},
+                        },
+                    },
+                }
+            ],
+        }
+
+        merged = merge_autonomous_research_into_library(library, report)
+        strategy = merged["strategies"][0]
+        self.assertEqual(strategy["validation_status"], "research_only")
+        self.assertNotIn("validated_rules", strategy)
+        audit = strategy["last_autonomous_research"]["holdout_reuse_audit"]
+        self.assertFalse(audit["pristine"])
+        self.assertEqual(audit["prior_material_exposure_count"], 1)
+        reasons = strategy["last_autonomous_research"]["gate_reasons"]
+        self.assertTrue(any("earlier research cycle" in reason for reason in reasons))
+        self.assertEqual(
+            merged["validation_runs"][0]["validation_status"],
+            "research_only",
+        )
+        self.assertFalse(
+            merged["validation_runs"][0]["holdout_reuse_audit"]["pristine"]
+        )
+        # The current run is still recorded as an exposure for future cycles.
+        self.assertGreaterEqual(len(merged["holdout_exposure_ledger"]), 2)
 
 
 class ParallelValidationRegressionTests(unittest.TestCase):
