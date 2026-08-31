@@ -636,7 +636,7 @@ def build_cross_stock_training_dataset(
         adjustment="raw",
         max_pages=max_pages,
     )
-    if not hasattr(market, "split_actions"):
+    if not hasattr(market, "research_reset_actions"):
         raise ValueError(
             "Predictive ML requires point-in-time split metadata so raw historical "
             "price context cannot cross an unhandled split boundary."
