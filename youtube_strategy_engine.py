@@ -2012,6 +2012,47 @@ class GitHubCloudBackup:
             raise AppError("GitHub returned an unexpected cloud-backup response.")
         return decoded
 
+    def _request_bytes(
+        self,
+        url: str,
+        *,
+        accept: str = "application/vnd.github.raw+json",
+        missing_ok: bool = False,
+    ) -> bytes | None:
+        request = Request(
+            url,
+            method="GET",
+            headers={
+                "Authorization": f"Bearer {self.token}",
+                "Accept": accept,
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        try:
+            with urlopen(request, timeout=90) as response:
+                return response.read()
+        except HTTPError as exc:
+            if exc.code == 404 and missing_ok:
+                return None
+            try:
+                details = json.loads(exc.read().decode("utf-8", errors="replace"))
+                message = str(details.get("message") or "").strip()
+            except (OSError, ValueError, AttributeError):
+                message = ""
+            if exc.code in {401, 403}:
+                raise AppError(
+                    "GitHub cloud backup was denied while reading the private library. "
+                    "Check the backup token and repository access."
+                ) from exc
+            raise AppError(
+                f"GitHub cloud backup raw download failed ({exc.code}). "
+                + (message or "Check the backup repository and token permissions.")
+            ) from exc
+        except (URLError, TimeoutError, OSError) as exc:
+            raise AppError(
+                "GitHub cloud backup could not be reached while downloading the private library."
+            ) from exc
+
     def _verify_private_repository(self) -> None:
         if self._repository_checked:
             return
@@ -2187,13 +2228,18 @@ class GitHubCloudBackup:
         if record.get("type") not in {None, "file"}:
             raise AppError("The GitHub cloud-backup path must point to a normal JSON file.")
         try:
-            if record.get("encoding") == "base64":
+            record_size = int(safe_float(record.get("size"), 0) or 0)
+            if record_size > 1_000_000:
+                # For large private libraries, request the file body directly.
+                # This avoids inflating a ~75 MB JSON file into ~100 MB of base64
+                # inside a second GitHub JSON response before decoding it again.
+                raw = self._request_bytes(self._contents_url())
+                if raw is None:
+                    return None
+            elif record.get("encoding") == "base64":
                 content = "".join(str(record.get("content") or "").split())
+                raw = base64.b64decode(content, validate=True)
             else:
-                # GitHub's Contents API stops embedding file content once a file
-                # grows beyond roughly 1 MB. The path is still a valid file; fetch
-                # the same Git blob by SHA so large strategy libraries continue to
-                # restore/save normally instead of being mistaken for a bad path.
                 record_sha = str(record.get("sha") or "")
                 if not re.fullmatch(r"[a-fA-F0-9]{40,64}", record_sha):
                     raise AppError("GitHub did not return a readable version of the cloud backup.")
@@ -2203,7 +2249,7 @@ class GitHubCloudBackup:
                 if blob.get("encoding") != "base64":
                     raise AppError("GitHub returned the cloud backup in an unsupported encoding.")
                 content = "".join(str(blob.get("content") or "").split())
-            raw = base64.b64decode(content, validate=True)
+                raw = base64.b64decode(content, validate=True)
             library = json.loads(raw.decode("utf-8"))
         except (binascii.Error, UnicodeDecodeError, ValueError) as exc:
             raise AppError("The GitHub cloud backup is damaged or is not a valid JSON strategy library.") from exc
