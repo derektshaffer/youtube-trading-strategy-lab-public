@@ -46,7 +46,19 @@ def validation_strength(
     validation = winner.get("validation_metrics") or {}
     holdout = winner.get("holdout_metrics") or {}
     stress = winner.get("stress_metrics") or {}
-    sensitivity = winner.get("execution_sensitivity") or {}
+    development_sensitivity = winner.get("execution_sensitivity") or {}
+    holdout_sensitivity = winner.get("holdout_execution_sensitivity") or {}
+    uses_holdout_sensitivity = bool(holdout_sensitivity)
+    sensitivity = (
+        holdout_sensitivity
+        if uses_holdout_sensitivity
+        else development_sensitivity
+    )
+    sensitivity_scope = (
+        "untouched_holdout"
+        if uses_holdout_sensitivity
+        else ("validation" if sensitivity else None)
+    )
     sensitivity_score = safe_float(sensitivity.get("score"))
     sensitivity_label = str(sensitivity.get("label") or "").strip().upper()
     sensitivity_pass = bool(sensitivity.get("passes_validation_gate"))
@@ -81,12 +93,20 @@ def validation_strength(
     else:
         reasons.append("Final untouched holdout P/L is not positive.")
 
-    if sensitivity_score is not None and sensitivity_label not in {"", "NOT APPLICABLE"}:
+    sensitivity_applicable = (
+        sensitivity_score is not None
+        and sensitivity_label not in {"", "NOT APPLICABLE"}
+    )
+    if sensitivity_applicable:
         score += max(0.0, min(10.0, sensitivity_score / 10.0))
         if sensitivity_label == "FRAGILE":
             reasons.append("The edge degrades quickly across the execution-cost sensitivity curve.")
         elif sensitivity_label == "MIXED":
             reasons.append("Execution-cost robustness is mixed across the tested multiplier range.")
+    elif uses_holdout_sensitivity:
+        reasons.append(
+            "Untouched-holdout execution-cost robustness could not be established."
+        )
     elif stress_pnl > 0:
         score += 10
     else:
@@ -137,6 +157,9 @@ def validation_strength(
         "NO VALIDATED EDGE": 39.0,
         "UNSTABLE": 49.0,
         "COST SENSITIVE": 59.0,
+        "HOLDOUT LIMITED": 39.0,
+        "HOLDOUT FAILED": 39.0,
+        "HOLDOUT COST SENSITIVE": 49.0,
     }
     if optimizer_status in status_caps:
         score_cap = min(score_cap, status_caps[optimizer_status])
@@ -152,7 +175,7 @@ def validation_strength(
         score_cap = min(score_cap, 39.0)
     if holdout_pnl <= 0:
         score_cap = min(score_cap, 39.0)
-    if sensitivity_score is not None and sensitivity_label not in {"", "NOT APPLICABLE"}:
+    if sensitivity_applicable:
         if sensitivity_label == "FRAGILE" or not sensitivity_pass:
             score_cap = min(score_cap, 49.0)
             penalties.append(
@@ -163,6 +186,12 @@ def validation_strength(
             penalties.append(
                 "Execution-cost sensitivity is mixed, so robustness cannot receive the highest rating."
             )
+    elif uses_holdout_sensitivity:
+        score_cap = min(score_cap, 49.0)
+        penalties.append(
+            "Untouched-holdout execution-cost robustness is unavailable, so execution "
+            "robustness fails closed."
+        )
     elif stress_pnl <= 0:
         score_cap = min(score_cap, 49.0)
 
@@ -181,7 +210,12 @@ def validation_strength(
     if validation_pnl > 0 and validation_pf < 1.05:
         score_cap = min(score_cap, 59.0)
         penalties.append("Validation profit factor is too close to breakeven for a high robustness rating.")
-    if sensitivity_score is None and stress_pnl > 0 and stress_pf < 1.05:
+    if (
+        not uses_holdout_sensitivity
+        and not sensitivity_applicable
+        and stress_pnl > 0
+        and stress_pf < 1.05
+    ):
         score_cap = min(score_cap, 59.0)
         penalties.append("Stress-test profit factor is too close to breakeven for a high robustness rating.")
 
@@ -208,7 +242,7 @@ def validation_strength(
 
     execution_robust_enough = (
         sensitivity_pass
-        if sensitivity_score is not None and sensitivity_label not in {"", "NOT APPLICABLE"}
+        if uses_holdout_sensitivity or sensitivity_applicable
         else stress_pnl > 0
     )
     independently_positive = (
@@ -231,16 +265,18 @@ def validation_strength(
             round(sensitivity_score, 1) if sensitivity_score is not None else None
         ),
         "execution_sensitivity_label": sensitivity_label or None,
+        "execution_sensitivity_scope": sensitivity_scope,
         "optimizer_status": optimizer_status or None,
         "minimum_unseen_trades_for_high_confidence": minimum_unseen_trades_for_high_confidence,
         "label": label,
         "independently_positive": bool(independently_positive),
         "reasons": list(dict.fromkeys([*reasons, *penalties])),
         "note": (
-            "Robustness summarizes anchor-stock historical validation, including the full "
-            "execution-cost degradation curve when available. Stability caps prevent "
-            "negative/unstable or near-breakeven evidence from receiving a misleading high rating; "
-            "it is not a probability of profit."
+            "Robustness summarizes anchor-stock historical validation. When available, "
+            "execution-cost robustness is taken from the frozen winner's untouched holdout "
+            "curve rather than the development validation curve. Stability caps prevent "
+            "negative/unstable, undersized, or near-breakeven evidence from receiving a "
+            "misleading high rating; it is not a probability of profit."
         ),
     }
 
