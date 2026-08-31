@@ -613,8 +613,19 @@ def load_point_in_time_intraday(
                 start=start,
                 end=end,
                 timeframe=timeframe,
+                adjustment="raw",
                 max_pages=24,
             ).get(symbol, [])
+            actions = market.split_actions(
+                [symbol],
+                start=start,
+                end=end,
+            )
+            bars, _ = split_safe_raw_research_rows(
+                list(bars or []),
+                actions,
+                symbol,
+            )
         except AppError:
             continue
         if bars:
@@ -1598,8 +1609,8 @@ def invalidate_legacy_autonomous_validations(
             **(dict(last) if isinstance(last, dict) else {}),
             "validation_status": "stale_methodology",
             "stale_reason": (
-                "Previous autonomous validation used hindsight-selected event windows. "
-                "Revalidation under method v2 is required."
+                "Previous autonomous validation used an older research methodology. "
+                f"Revalidation under method v{AUTONOMOUS_VALIDATION_METHOD_VERSION} is required."
             ),
             "required_validation_method_version": AUTONOMOUS_VALIDATION_METHOD_VERSION,
         }
