@@ -72,7 +72,7 @@ class DistributedStockFinderReliabilityTests(unittest.TestCase):
     @staticmethod
     def _saved_sdot_plan():
         return {
-            "version": 1,
+            "version": distributed_stock_finder.DISTRIBUTED_PLAN_VERSION,
             "run_id": "dist-sdot",
             "parent_job_id": "rq-sdot",
             "symbol": "SDOT",
@@ -82,6 +82,10 @@ class DistributedStockFinderReliabilityTests(unittest.TestCase):
             "selected_strategies": [],
             "technical_skips": [],
             "one_minute_rows": [],
+            "market_data_integrity": {
+                "mode": "raw_prices",
+                "split_detected": False,
+            },
             "backtest_settings": {},
             "optimization_settings": {},
             "shards": [
@@ -140,6 +144,42 @@ class DistributedStockFinderReliabilityTests(unittest.TestCase):
         self.assertEqual(metadata["pending_shard_count"], 0)
         restore.assert_called_once()
         self.assertEqual(restore.call_args.args[2], set(range(12)))
+
+    def test_legacy_pre_integrity_plan_is_not_resumed(self):
+        job = self._saved_sdot_job()
+        plan = self._saved_sdot_plan()
+        plan["version"] = 1
+        plan.pop("market_data_integrity", None)
+
+        class SavedArtifacts:
+            def read_json_gz(self, path):
+                return deepcopy(plan)
+
+            def exists(self, path):
+                return True
+
+        recovered = distributed_stock_finder._resumable_plan_for_job(
+            SavedArtifacts(),
+            job,
+        )
+        self.assertIsNone(recovered)
+
+    def test_direct_aggregate_rejects_legacy_pre_integrity_plan(self):
+        plan = self._saved_sdot_plan()
+        plan["version"] = 1
+        plan.pop("market_data_integrity", None)
+
+        class SavedArtifacts:
+            def read_json_gz(self, path):
+                return deepcopy(plan)
+
+        with patch.object(
+            distributed_stock_finder,
+            "PrivateRunArtifactStore",
+            return_value=SavedArtifacts(),
+        ):
+            with self.assertRaisesRegex(Exception, "predates the current market-data integrity"):
+                distributed_stock_finder.command_aggregate("dist-sdot")
 
     def test_missing_saved_plan_refuses_to_discard_completed_shards(self):
         job = self._saved_sdot_job()
@@ -208,6 +248,7 @@ class DistributedStockFinderReliabilityTests(unittest.TestCase):
                 for index in range(12):
                     if path == distributed_stock_finder.shard_path("dist-sdot", index):
                         return {
+                            "version": distributed_stock_finder.DISTRIBUTED_SHARD_VERSION,
                             "run_id": "dist-sdot",
                             "index": index,
                             "timeframe": "1Min",
