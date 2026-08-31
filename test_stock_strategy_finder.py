@@ -556,6 +556,18 @@ class HoldoutReuseIntegrityTests(unittest.TestCase):
         self.assertEqual(report["verdict"]["code"], "ready_for_paper")
         self.assertEqual(report["optimization"]["winner"]["status"], "VALIDATED")
 
+    def test_exact_same_saved_run_does_not_contaminate_itself_on_remerge(self):
+        report = self._report()
+        first = finder.record_holdout_exposure(
+            {},
+            report,
+            source="stock_strategy_finder",
+            generated_at=str(report.get("generated_at") or ""),
+        )
+        audit = finder.holdout_reuse_audit(first, report)
+        self.assertTrue(audit["pristine"])
+        self.assertEqual(audit["prior_material_exposure_count"], 0)
+
     def test_any_prior_holdout_session_breaks_pristine_status(self):
         report = self._report()
         prior = {
