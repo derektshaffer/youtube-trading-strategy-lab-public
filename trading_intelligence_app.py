@@ -2081,7 +2081,27 @@ if module == "Stock Strategy Finder":
     def render_global_cloud_finder_activity() -> None:
         """Auto-refresh cloud Finder status only while a job is active."""
         try:
-            fresh_library = load_library()
+            last_refresh = float(
+                st.session_state.get(_LIBRARY_LAST_CLOUD_REFRESH_KEY) or 0.0
+            )
+            prepared_cache = st.session_state.get(_LIBRARY_RENDER_CACHE_KEY)
+            prepared_data = (
+                prepared_cache.get("data")
+                if isinstance(prepared_cache, dict)
+                else None
+            )
+            if (
+                isinstance(prepared_data, dict)
+                and time.monotonic() - last_refresh < 10.0
+            ):
+                # The parent page just loaded the durable library. Reuse it for
+                # the first Finder paint instead of immediately downloading the
+                # same large library a second time.
+                fresh_library = prepared_data
+            else:
+                # Later fragment-only refreshes want raw queue/result state and
+                # intentionally avoid rebuilding strategy families.
+                fresh_library = load_cloud_status_library()
         except AppError as exc:
             st.error(f"Cloud research status could not refresh: {exc}")
             return
@@ -2118,25 +2138,9 @@ if module == "Stock Strategy Finder":
             auto_attempt_key = f"til_auto_cloud_launch_attempted_{job_id}"
             auto_result_key = f"til_auto_cloud_launch_result_{job_id}"
 
-            if (
-                is_waiting_for_worker
-                and job_id
-                and actions_configured
-                and not st.session_state.get(auto_attempt_key)
-            ):
-                st.session_state[auto_attempt_key] = True
-                auto_ok, auto_detail = dispatch_github_workflow(
-                    actions_repository_setting,
-                    actions_token_setting,
-                    workflow="distributed-stock-finder.yml",
-                    ref=actions_ref_setting,
-                    inputs={"job_id": job_id},
-                )
-                st.session_state[auto_result_key] = {
-                    "ok": bool(auto_ok),
-                    "detail": str(auto_detail),
-                }
-
+            # Rendering this page is intentionally side-effect free. New cloud
+            # jobs are launched by the queue action itself; recovery launches
+            # happen only when the user explicitly presses Retry.
             auto_result = st.session_state.get(auto_result_key) or {}
             operational = cloud_job_display_state(
                 job,
@@ -2254,7 +2258,8 @@ if module == "Stock Strategy Finder":
 
             if is_waiting_for_worker:
                 launch_key = f"til_launch_cloud_now_{job_id}"
-                if st.button(
+                retry_launch_slot = st.empty()
+                retry_launch = retry_launch_slot.button(
                     "☁ Retry cloud launch now",
                     key=launch_key,
                     width="stretch",
@@ -2263,7 +2268,14 @@ if module == "Stock Strategy Finder":
                         "Retries the immediate GitHub Actions launch for this exact queued job. "
                         "System Health must show the Actions launcher as configured."
                     ),
-                ):
+                )
+                if retry_launch:
+                    retry_launch_slot.button(
+                        "☁ Starting cloud worker…",
+                        key=f"{launch_key}_busy",
+                        width="stretch",
+                        disabled=True,
+                    )
                     launch_ok, launch_detail = dispatch_github_workflow(
                         actions_repository_setting,
                         actions_token_setting,
@@ -3638,12 +3650,21 @@ elif module == "Retrospective Learning":
         "anchor can only become available to trading logic from its known_at timestamp forward."
     )
 
-    if st.button(
+    teacher_button_slot = st.empty()
+    build_teacher = teacher_button_slot.button(
         "↺ Build retrospective teaching examples",
         type="primary",
         width="stretch",
         key="til_build_retrospective_teacher",
-    ):
+    )
+    if build_teacher:
+        teacher_button_slot.button(
+            "↺ Building teaching examples…",
+            type="primary",
+            width="stretch",
+            disabled=True,
+            key="til_build_retrospective_teacher_busy",
+        )
         if not teacher_symbol:
             st.error("Enter a ticker first.")
         else:
@@ -4017,7 +4038,8 @@ elif module == "System Health":
         "read **and write** the private backup, authenticate to Alpaca, and authenticate to Gemini. "
         "It does not place a trade or run a strategy search."
     )
-    smoke_clicked = st.button(
+    smoke_button_slot = st.empty()
+    smoke_clicked = smoke_button_slot.button(
         "☁ Run end-to-end cloud smoke test",
         type="primary",
         width="stretch",
@@ -4025,6 +4047,13 @@ elif module == "System Health":
         key="til_run_cloud_smoke_test",
     )
     if smoke_clicked:
+        smoke_button_slot.button(
+            "☁ Starting smoke test…",
+            type="primary",
+            width="stretch",
+            disabled=True,
+            key="til_run_cloud_smoke_test_busy",
+        )
         smoke_ok, smoke_detail = dispatch_github_workflow(
             actions_repository_setting,
             actions_token_setting,
@@ -5515,7 +5544,8 @@ elif module == "Strategy DNA":
                         )
 
                 action_cols = st.columns(2)
-                save_candidate = action_cols[0].button(
+                save_candidate_slot = action_cols[0].empty()
+                save_candidate = save_candidate_slot.button(
                     "💾 Save / refresh research candidate",
                     width="stretch",
                     key=f"save_synth_{candidate.get('id')}",
@@ -5540,6 +5570,12 @@ elif module == "Strategy DNA":
                     )
 
                 if save_candidate:
+                    save_candidate_slot.button(
+                        "💾 Saving research candidate…",
+                        width="stretch",
+                        disabled=True,
+                        key=f"save_synth_busy_{candidate.get('id')}",
+                    )
                     data = load_library(mutable=True)
                     executable["research_readiness"] = readiness
                     data = upsert_strategy_record(data, executable)
@@ -6063,12 +6099,21 @@ elif module == "AI Research Autopilot":
 
     queue_cycle_col, queue_refresh_col = st.columns([1.4, 1.0])
     with queue_cycle_col:
-        if st.button(
+        cycle_button_slot = st.empty()
+        seed_cycle = cycle_button_slot.button(
             "Run today's research cycle now",
             type="primary",
             width="stretch",
             key="til_seed_continuous_research",
-        ):
+        )
+        if seed_cycle:
+            cycle_button_slot.button(
+                "Queuing today's research…",
+                type="primary",
+                width="stretch",
+                disabled=True,
+                key="til_seed_continuous_research_busy",
+            )
             queued_library, added_jobs = seed_continuous_research_cycle(load_library(force_cloud_refresh=True, mutable=True))
             if added_jobs:
                 intelligence_store().save(queued_library)
@@ -7248,11 +7293,19 @@ elif module == "Strategy Lab":
                 paper_fidelity,
                 walk_report,
             )
-            save_validation = st.button(
+            save_validation_slot = st.empty()
+            save_validation = save_validation_slot.button(
                 "💾 Save this validation result to the strategy library",
                 width="stretch",
+                key="til_save_strategy_validation",
             )
             if save_validation:
+                save_validation_slot.button(
+                    "💾 Saving validation result…",
+                    width="stretch",
+                    disabled=True,
+                    key="til_save_strategy_validation_busy",
+                )
                 data = load_library(mutable=True)
                 validation_status = "validated" if can_mark_validated else "research_only"
                 for item in data.get("strategies") or []:
@@ -10241,5 +10294,17 @@ elif module == "Live / Paper":
         "Research and validation remain separate from execution. Existing safety checks and Alpaca "
         "paper-trading controls stay in place."
     )
-    if st.button("Open existing Live Strategy Runner", width="stretch"):
+    live_runner_slot = st.empty()
+    open_live_runner = live_runner_slot.button(
+        "Open existing Live Strategy Runner",
+        width="stretch",
+        key="til_open_live_strategy_runner",
+    )
+    if open_live_runner:
+        live_runner_slot.button(
+            "Loading Live Strategy Runner…",
+            width="stretch",
+            disabled=True,
+            key="til_open_live_strategy_runner_busy",
+        )
         st.switch_page("pages/Live_Strategy_Runner.py")
