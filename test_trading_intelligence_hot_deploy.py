@@ -30,6 +30,37 @@ class FinderHotDeployImportTests(unittest.TestCase):
             source,
         )
 
+    def test_finder_recent_behavior_screen_uses_plain_language(self):
+        source = APP_PATH.read_text(encoding="utf-8")
+        self.assertIn(
+            '"Recent Behavior"\n        if str(finder_profile.name) == "Current Regime"',
+            source,
+        )
+        self.assertIn(
+            "No {finder_profile_display} result exists yet for {finder_symbol}.",
+            source,
+        )
+        self.assertIn(
+            "Other cloud research is running in the background:",
+            source,
+        )
+        self.assertNotIn(
+            "CURRENT CONTROLS ARE A SEPARATE RESEARCH REQUEST",
+            source,
+        )
+        self.assertIn(
+            'finder_action = "Resume" if checkpoint_resumable else "Run"',
+            source,
+        )
+        self.assertIn(
+            "{finder_symbol or 'Stock'} — {finder_profile_display} here",
+            source,
+        )
+        self.assertIn(
+            "Run {finder_symbol or 'Stock'} — {finder_profile_display} in cloud",
+            source,
+        )
+
     def test_app_falls_back_to_current_finder_source_when_cached_module_is_stale(self):
         source = APP_PATH.read_text(encoding="utf-8")
         self.assertIn(
