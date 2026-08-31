@@ -1217,6 +1217,7 @@ def command_aggregate(run_id: str) -> int:
             parallel_workers=len(shard_payloads),
             strategies_considered_count=strategies_considered_count,
         )
+        report["market_data_integrity"] = plan.get("market_data_integrity") or {}
         report["distributed"] = {
             "enabled": True,
             "run_id": run_id,
