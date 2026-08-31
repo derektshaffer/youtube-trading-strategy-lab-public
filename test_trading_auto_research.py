@@ -67,7 +67,7 @@ class InvalidHistoricalSymbolTests(unittest.TestCase):
                     for symbol in symbols
                 }
 
-            def split_actions(self, symbols, **kwargs):
+            def research_reset_actions(self, symbols, **kwargs):
                 return []
 
         market = FakeMarket()
@@ -103,7 +103,7 @@ class InvalidHistoricalSymbolTests(unittest.TestCase):
                     ]
                 }
 
-            def split_actions(self, symbols, **kwargs):
+            def research_reset_actions(self, symbols, **kwargs):
                 return [
                     {
                         "symbol": "TEST",
