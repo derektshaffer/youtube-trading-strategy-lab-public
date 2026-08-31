@@ -31,6 +31,20 @@ class ProfitFirstWorkflowTests(unittest.TestCase):
         self.assertIn('"strict_profit_edge": strict_profit_edge', self.source)
         self.assertIn("A current stock match by itself never qualifies a strategy here.", self.source)
 
+    def test_profit_first_fails_closed_on_legacy_inconsistent_evidence(self):
+        for marker in (
+            '"UNSTABLE": 49.0',
+            '"requires_revalidation": requires_revalidation',
+            '"stored_robustness_score": stored_robustness_score',
+            '"current_protocol": current_protocol',
+            "Legacy/incomplete validation record.",
+            "Top historical candidate needs revalidation",
+            "Re-run strict validation on strongest candidate",
+            '"validation_protocol": "strict_manual_v1"',
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, self.source)
+
     def test_profit_first_does_not_hide_failure_to_find_an_edge(self):
         self.assertIn("No strategy currently clears the strict profit-first bar.", self.source)
         self.assertIn("Closest research candidates — still not validated profitable edges", self.source)
