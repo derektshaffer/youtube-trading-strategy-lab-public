@@ -3396,6 +3396,72 @@ class AlpacaMarketData:
             max_pages=max_pages,
         )
 
+    def historical_quote_at_or_before(
+        self,
+        symbol: str,
+        timestamp: datetime,
+        *,
+        feed: str | None = None,
+        lookback_seconds: int = 60,
+        limit: int = 100,
+    ) -> dict[str, Any] | None:
+        """Return the newest valid bid/ask quote at or before one historical instant."""
+        parsed = parse_symbols([symbol])
+        if len(parsed) != 1:
+            raise AppError("Historical quote lookup requires exactly one valid ticker.")
+        ticker = parsed[0]
+        moment = timestamp
+        if moment.tzinfo is None or moment.utcoffset() is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        moment = moment.astimezone(timezone.utc)
+        chosen_feed = feed or self.historical_feed
+        response = self._get(
+            "/v2/stocks/quotes",
+            {
+                "symbols": ticker,
+                "start": isoformat_utc(moment - timedelta(seconds=max(1, int(lookback_seconds)))),
+                "end": isoformat_utc(moment),
+                "limit": max(1, min(10000, int(limit))),
+                "feed": chosen_feed,
+                "sort": "desc",
+                "asof": moment.date().isoformat(),
+            },
+        )
+        payload = response.get("quotes") if isinstance(response, dict) else None
+        rows = payload.get(ticker) if isinstance(payload, dict) else None
+        for raw in rows or []:
+            if not isinstance(raw, dict):
+                continue
+            bid = safe_float(raw.get("bp"))
+            ask = safe_float(raw.get("ap"))
+            raw_timestamp = raw.get("t")
+            try:
+                quote_time = pd.to_datetime(raw_timestamp, utc=True, errors="raise").to_pydatetime()
+            except Exception:
+                continue
+            if (
+                bid is None
+                or ask is None
+                or bid <= 0
+                or ask <= 0
+                or ask < bid
+                or quote_time > moment
+            ):
+                continue
+            midpoint = (bid + ask) / 2.0
+            if midpoint <= 0:
+                continue
+            spread_bps = (ask - bid) / midpoint * 10_000.0
+            return {
+                "symbol": ticker,
+                "timestamp": isoformat_utc(quote_time),
+                "bid": bid,
+                "ask": ask,
+                "midpoint": midpoint,
+                "spread_bps": spread_bps,
+            }
+        return None
+
     def news(self, symbols: list[str], hours: int = 24) -> dict[str, list[dict[str, Any]]]:
         clean = parse_symbols(symbols)
         if not clean:
@@ -3420,6 +3486,163 @@ class AlpacaMarketData:
                 if normalized in output:
                     output[normalized].append(item)
         return output
+
+
+def historical_entry_spread_audit(
+    market: Any,
+    symbol: str,
+    trades: list[dict[str, Any]],
+    holdout_sessions: list[str] | set[str] | tuple[str, ...],
+    *,
+    modeled_spread_bps: float,
+    maximum_stress_multiplier: float = 2.0,
+    max_samples: int = 24,
+    quote_lookback_seconds: int = 60,
+) -> dict[str, Any]:
+    """Compare modeled spread assumptions with real quotes at frozen holdout entries.
+
+    This is intentionally a post-selection audit. It does not retroactively choose
+    trades or optimize max_spread_pct; it asks whether the execution-cost envelope
+    used by validation actually covered the spreads observable at the winner's
+    untouched-holdout entry moments.
+    """
+    ticker = str(symbol or "").strip().upper()
+    sessions = {str(value) for value in holdout_sessions or [] if str(value).strip()}
+    eligible: list[tuple[datetime, dict[str, Any]]] = []
+    for trade in trades or []:
+        if not isinstance(trade, dict):
+            continue
+        raw_time = trade.get("entry_time")
+        try:
+            stamp = pd.to_datetime(raw_time, utc=True, errors="raise").to_pydatetime()
+        except Exception:
+            continue
+        session = stamp.astimezone(ET).date().isoformat()
+        if sessions and session not in sessions:
+            continue
+        eligible.append((stamp, trade))
+    eligible.sort(key=lambda item: item[0])
+
+    sample_limit = max(1, int(max_samples))
+    if len(eligible) > sample_limit:
+        if sample_limit == 1:
+            eligible = [eligible[len(eligible) // 2]]
+        else:
+            indexes = sorted(
+                {
+                    round(i * (len(eligible) - 1) / (sample_limit - 1))
+                    for i in range(sample_limit)
+                }
+            )
+            eligible = [eligible[index] for index in indexes]
+
+    modeled = max(0.0, float(modeled_spread_bps or 0.0))
+    maximum_multiplier = max(1.0, float(maximum_stress_multiplier or 1.0))
+    tested_ceiling = modeled * maximum_multiplier
+    observations: list[dict[str, Any]] = []
+    provider_error: str | None = None
+    for stamp, trade in eligible:
+        try:
+            quote = market.historical_quote_at_or_before(
+                ticker,
+                stamp,
+                lookback_seconds=quote_lookback_seconds,
+            )
+        except Exception as exc:
+            provider_error = str(exc)
+            break
+        if not quote:
+            observations.append(
+                {
+                    "entry_time": isoformat_utc(stamp),
+                    "quote_found": False,
+                }
+            )
+            continue
+        observations.append(
+            {
+                "entry_time": isoformat_utc(stamp),
+                "quote_found": True,
+                "quote_timestamp": quote.get("timestamp"),
+                "bid": safe_float(quote.get("bid")),
+                "ask": safe_float(quote.get("ask")),
+                "spread_bps": round(safe_float(quote.get("spread_bps"), 0.0) or 0.0, 3),
+                "simulated_entry_price": safe_float(trade.get("entry_price")),
+            }
+        )
+
+    spreads = sorted(
+        float(item["spread_bps"])
+        for item in observations
+        if item.get("quote_found") and safe_float(item.get("spread_bps")) is not None
+    )
+    quote_count = len(spreads)
+    attempted = len(eligible)
+    coverage_pct = quote_count / attempted * 100.0 if attempted else 0.0
+
+    def percentile(values: list[float], fraction: float) -> float | None:
+        if not values:
+            return None
+        if len(values) == 1:
+            return values[0]
+        position = (len(values) - 1) * fraction
+        lower = int(position)
+        upper = min(len(values) - 1, lower + 1)
+        weight = position - lower
+        return values[lower] * (1.0 - weight) + values[upper] * weight
+
+    median_spread = percentile(spreads, 0.50)
+    p90_spread = percentile(spreads, 0.90)
+    if provider_error:
+        status = "UNAVAILABLE"
+        label = "QUOTE AUDIT UNAVAILABLE"
+    elif attempted == 0:
+        status = "NO_TRADES"
+        label = "NO HOLDOUT ENTRIES TO AUDIT"
+    elif coverage_pct < 60.0:
+        status = "LIMITED"
+        label = "LIMITED QUOTE COVERAGE"
+    elif p90_spread is not None and p90_spread > tested_ceiling:
+        status = "UNDERMODELED"
+        label = "SPREAD STRESS RANGE TOO LOW"
+    elif p90_spread is not None and p90_spread <= modeled:
+        status = "COVERED"
+        label = "MODELED SPREAD CONSERVATIVE"
+    else:
+        status = "COVERED"
+        label = "MODELED SPREAD WITHIN STRESS RANGE"
+
+    return {
+        "status": status,
+        "label": label,
+        "symbol": ticker,
+        "holdout_trade_count": sum(
+            1
+            for trade in trades or []
+            if isinstance(trade, dict)
+        ),
+        "sampled_entry_count": attempted,
+        "quote_count": quote_count,
+        "coverage_pct": round(coverage_pct, 1),
+        "modeled_spread_bps": round(modeled, 3),
+        "maximum_stress_multiplier": round(maximum_multiplier, 3),
+        "tested_spread_ceiling_bps": round(tested_ceiling, 3),
+        "median_observed_spread_bps": (
+            round(median_spread, 3) if median_spread is not None else None
+        ),
+        "p90_observed_spread_bps": (
+            round(p90_spread, 3) if p90_spread is not None else None
+        ),
+        "max_observed_spread_bps": round(max(spreads), 3) if spreads else None,
+        "provider_error": provider_error,
+        "observations": observations,
+        "post_selection_diagnostic": True,
+        "note": (
+            "Real historical quotes are sampled only at the frozen winner's untouched-holdout "
+            "entry moments. This checks whether the modeled spread stress range covered observed "
+            "execution conditions; it does not make max_spread_pct an optimized historical rule."
+        ),
+    }
 
 
 def split_safe_raw_research_rows(
