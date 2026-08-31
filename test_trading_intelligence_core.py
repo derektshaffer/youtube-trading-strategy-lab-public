@@ -941,6 +941,81 @@ class StrategyIntegrityTests(unittest.TestCase):
         audit = upgraded.get("previous_validation_invalidated_by_integrity_audit") or {}
         self.assertIn("Level-2 / tape-reading confirmation", audit.get("missing_requirements") or [])
 
+    def test_legacy_validated_strategy_is_demoted_when_methodology_is_unknown(self):
+        strategy = {
+            "id": "legacy-method",
+            "name": "Legacy validated breakout",
+            "direction": "long",
+            "validation_status": "validated",
+            "optimization_status": "complete",
+            "machine_rules": {
+                "breakout_lookback_bars": 20,
+                "stop_loss_pct": 3,
+                "reward_risk": 2,
+            },
+            "validated_rules": {"breakout_lookback_bars": 20},
+            "validated_backtest_settings": {"risk_per_trade_pct": 0.5},
+            "validated_at": "2026-08-20T00:00:00Z",
+        }
+        upgraded = upgrade_native_strategy_rules(strategy)
+        self.assertEqual(upgraded["validation_status"], "unvalidated")
+        self.assertEqual(upgraded["optimization_status"], "revalidation_required")
+        self.assertNotIn("validated_rules", upgraded)
+        audit = upgraded.get(
+            "previous_validation_invalidated_by_methodology_upgrade"
+        ) or {}
+        self.assertIn("split-safe raw-price", audit.get("reason") or "")
+
+    def test_current_finder_validation_survives_methodology_migration(self):
+        strategy = {
+            "id": "current-finder",
+            "name": "Current validated breakout",
+            "direction": "long",
+            "validation_status": "validated",
+            "optimization_status": "complete",
+            "machine_rules": {
+                "breakout_lookback_bars": 20,
+                "stop_loss_pct": 3,
+                "reward_risk": 2,
+            },
+            "validated_rules": {"breakout_lookback_bars": 20},
+            "last_validation": {
+                "market_data_integrity": {
+                    "mode": "raw_prices",
+                    "split_detected": False,
+                },
+                "holdout_reuse_audit": {
+                    "status": "PRISTINE",
+                    "pristine": True,
+                },
+            },
+        }
+        upgraded = upgrade_native_strategy_rules(strategy)
+        self.assertEqual(upgraded["validation_status"], "validated")
+        self.assertIn("validated_rules", upgraded)
+
+    def test_current_autonomous_validation_survives_methodology_migration(self):
+        strategy = {
+            "id": "current-auto",
+            "name": "Current autonomous breakout",
+            "direction": "long",
+            "validation_status": "validated",
+            "optimization_status": "complete",
+            "machine_rules": {
+                "breakout_lookback_bars": 20,
+                "stop_loss_pct": 3,
+                "reward_risk": 2,
+            },
+            "validated_rules": {"breakout_lookback_bars": 20},
+            "last_autonomous_research": {
+                "validation_method_version": 3,
+                "market_data_integrity_contract": "split_safe_raw_v1",
+            },
+        }
+        upgraded = upgrade_native_strategy_rules(strategy)
+        self.assertEqual(upgraded["validation_status"], "validated")
+        self.assertIn("validated_rules", upgraded)
+
     def test_scale_out_strategy_is_blocked_until_partial_exits_are_modeled(self):
         strategy = {
             "id": "scaleout",
