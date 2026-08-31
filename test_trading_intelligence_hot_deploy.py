@@ -49,7 +49,11 @@ class FinderHotDeployImportTests(unittest.TestCase):
             source,
         )
         self.assertIn(
-            "Run {finder_symbol or 'Stock'} — {finder_profile_display} here",
+            'finder_action = "Resume" if checkpoint_resumable else "Run"',
+            source,
+        )
+        self.assertIn(
+            "{finder_symbol or 'Stock'} — {finder_profile_display} here",
             source,
         )
         self.assertIn(
