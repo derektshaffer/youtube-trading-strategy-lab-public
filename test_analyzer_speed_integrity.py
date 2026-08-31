@@ -98,6 +98,52 @@ class AnalyzerSpeedIntegrityTests(unittest.TestCase):
             )
         self.assertEqual(mocked.call_count, 2)
 
+    def test_completed_deep_history_is_shared_across_market_clients(self):
+        """The cache must survive new Alpaca client objects created by Streamlit reruns."""
+        engine._ALPACA_BAR_HISTORY_CACHE.clear()
+        first_market = engine.AlpacaMarketData("key", "secret", live_feed="iex", historical_feed="sip")
+        second_market = engine.AlpacaMarketData("key", "secret", live_feed="iex", historical_feed="sip")
+        cutoff = first_market._history_cache_cutoff_utc()
+        start = cutoff - timedelta(days=5)
+        end = cutoff - timedelta(minutes=1)
+        response = {
+            "bars": {"TEST": [{"t": "2026-08-28T14:30:00Z", "c": 10.0}]},
+            "next_page_token": None,
+        }
+        with patch.object(engine.AlpacaMarketData, "_get", return_value=response) as mocked:
+            first_market.bars(
+                ["TEST"],
+                start=start,
+                end=end,
+                timeframe="1Min",
+                feed=first_market.historical_feed,
+                max_pages=2,
+            )
+            second_market.bars(
+                ["TEST"],
+                start=start,
+                end=end,
+                timeframe="1Min",
+                feed=second_market.historical_feed,
+                max_pages=2,
+            )
+        self.assertEqual(mocked.call_count, 1)
+
+    def test_oversized_history_response_is_not_cached(self):
+        """Deep research responses cannot turn the latency cache into a memory store."""
+        engine._ALPACA_BAR_HISTORY_CACHE.clear()
+        market = engine.AlpacaMarketData("key", "secret")
+        key = ("oversized",)
+        payload = {
+            "TEST": [
+                {"t": "2026-08-28T14:30:00Z", "c": 10.0},
+                {"t": "2026-08-28T14:31:00Z", "c": 10.1},
+            ]
+        }
+        with patch.object(engine, "ALPACA_BAR_HISTORY_CACHE_MAX_ROWS_PER_ENTRY", 1):
+            market._history_cache_put(key, payload)
+        self.assertIsNone(market._history_cache_get(key))
+
     def test_completed_deep_history_is_reused(self):
         """Identical requests ending before today should share one Alpaca fetch."""
         engine._ALPACA_BAR_HISTORY_CACHE.clear()
