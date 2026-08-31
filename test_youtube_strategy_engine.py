@@ -1822,6 +1822,63 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(audit["latest_split_date"], "2026-08-20")
         self.assertEqual(audit["discarded_pre_split_rows"], 2)
 
+    def test_historical_quote_lookup_uses_latest_valid_quote_before_entry(self):
+        market = engine.AlpacaMarketData("key", "secret")
+        moment = datetime(2026, 8, 20, 14, 30, tzinfo=timezone.utc)
+        response = {
+            "quotes": {
+                "TEST": [
+                    {"t": "2026-08-20T14:30:00Z", "bp": 9.99, "ap": 10.01},
+                    {"t": "2026-08-20T14:29:59Z", "bp": 9.98, "ap": 10.02},
+                ]
+            }
+        }
+        with patch.object(market, "_get", return_value=response) as mocked:
+            quote = market.historical_quote_at_or_before("TEST", moment)
+
+        self.assertIsNotNone(quote)
+        self.assertEqual(quote["bid"], 9.99)
+        self.assertEqual(quote["ask"], 10.01)
+        self.assertAlmostEqual(quote["spread_bps"], 20.0, places=4)
+        self.assertEqual(mocked.call_args.args[0], "/v2/stocks/quotes")
+        self.assertEqual(mocked.call_args.args[1]["sort"], "desc")
+
+    def test_holdout_spread_audit_detects_under_modeled_execution_range(self):
+        class FakeQuoteMarket:
+            def __init__(self):
+                self.spreads = iter([8.0, 15.0, 30.0])
+
+            def historical_quote_at_or_before(self, symbol, timestamp, **kwargs):
+                spread = next(self.spreads)
+                midpoint = 10.0
+                half = midpoint * spread / 20_000.0
+                return {
+                    "timestamp": engine.isoformat_utc(timestamp),
+                    "bid": midpoint - half,
+                    "ask": midpoint + half,
+                    "spread_bps": spread,
+                }
+
+        trades = [
+            {
+                "entry_time": f"2026-08-2{day}T14:30:00Z",
+                "entry_price": 10.0,
+            }
+            for day in (0, 1, 2)
+        ]
+        audit = engine.historical_entry_spread_audit(
+            FakeQuoteMarket(),
+            "TEST",
+            trades,
+            {"2026-08-20", "2026-08-21", "2026-08-22"},
+            modeled_spread_bps=10.0,
+            maximum_stress_multiplier=2.0,
+        )
+        self.assertEqual(audit["status"], "UNDERMODELED")
+        self.assertEqual(audit["quote_count"], 3)
+        self.assertEqual(audit["tested_spread_ceiling_bps"], 20.0)
+        self.assertGreater(audit["p90_observed_spread_bps"], 20.0)
+
     def test_snapshot_handles_zero_vwap_without_claiming_above(self):
         metrics = engine.snapshot_metrics("NVDA", {"latestTrade": {"p": 100}, "dailyBar": {"v": 1000}, "prevDailyBar": {"c": 95}})
         self.assertFalse(metrics["above_vwap"])
