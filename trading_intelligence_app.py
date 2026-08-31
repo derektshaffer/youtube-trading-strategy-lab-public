@@ -1530,8 +1530,8 @@ WORKSPACE_DISPLAY_TO_INTERNAL = {
 
 WORKSPACE_PAGE_META = {
     "Stock Strategy Finder": {
-        "step": "00",
-        "group": "Stock-Specific Edge",
+        "step": "1",
+        "group": "Guided Strategy Workflow",
         "title": "Find & Test a Strategy",
         "subtitle": "Enter a ticker. The Lab finds the strongest strategy candidate, tests it on unseen data, then guides you through the current signal, validation, and confidence.",
     },
@@ -1620,9 +1620,9 @@ WORKSPACE_PAGE_META = {
         "subtitle": "Add point-in-time news and catalyst context so momentum setups are evaluated with the reason behind the move.",
     },
     "Stock Analyzer": {
-        "step": "12",
-        "group": "Market Research",
-        "title": "Analyze a Stock Right Now",
+        "step": "2–5",
+        "group": "Guided Strategy Workflow",
+        "title": "Current Signal → Confidence",
         "subtitle": "Deep-dive one ticker with strategy matches, market structure, catalysts, and current setup quality.",
     },
     "Live / Paper": {
@@ -2201,8 +2201,8 @@ if module == "Stock Strategy Finder":
         unsafe_allow_html=True,
     )
     render_guided_strategy_flow(active_step=1)
-    st.markdown("### Step 1 — Pick a stock")
-    st.caption("Start with the ticker. Deep is the normal thorough search; Recent Behavior is faster and focuses on roughly the latest month.")
+    st.markdown("### Step 1 — Find & test a strategy")
+    st.caption("Choose the ticker and search depth. Deep is the normal thorough search; Recent Behavior is faster and focuses on roughly the latest month.")
 
     def render_recent_completed_cloud_runs(fresh_library: dict[str, Any]) -> None:
         recent_cloud_runs = [
@@ -2784,7 +2784,7 @@ if module == "Stock Strategy Finder":
             + " Open **14. System Health** to verify the complete worker path."
         )
 
-    st.markdown("### Step 2 — Find & test the best strategy")
+    st.markdown("### Run the strategy search")
     st.caption(
         "You do not need to run a separate validation page. The Finder automatically tests the winner on "
         "untouched holdout data, walk-forward periods, higher execution costs, and nearby parameter settings."
