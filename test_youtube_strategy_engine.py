@@ -1750,6 +1750,78 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(len(result["NVDA"]), 1)
         self.assertEqual(len(result["AAPL"]), 1)
 
+    def test_alpaca_bars_can_request_raw_unadjusted_prices(self):
+        market = engine.AlpacaMarketData("key", "secret")
+        with patch.object(
+            market,
+            "_get",
+            return_value={"bars": {"NVDA": []}, "next_page_token": None},
+        ) as mocked:
+            market.bars(
+                ["NVDA"],
+                start=engine.utc_now() - timedelta(days=5),
+                end=engine.utc_now(),
+                adjustment="raw",
+            )
+        self.assertEqual(mocked.call_args.args[1]["adjustment"], "raw")
+
+    def test_corporate_actions_extract_split_collections(self):
+        market = engine.AlpacaMarketData("key", "secret")
+        response = {
+            "corporate_actions": {
+                "forward_splits": [
+                    {
+                        "symbol": "NVDA",
+                        "ex_date": "2026-08-20",
+                        "old_rate": "1",
+                        "new_rate": "10",
+                    }
+                ],
+                "reverse_splits": [
+                    {
+                        "symbol": "TEST",
+                        "ex_date": "2026-08-21",
+                        "old_rate": "10",
+                        "new_rate": "1",
+                    }
+                ],
+            },
+            "next_page_token": None,
+        }
+        with patch.object(market, "_get", return_value=response):
+            actions = market.split_actions(
+                ["NVDA", "TEST"],
+                start=engine.utc_now() - timedelta(days=30),
+                end=engine.utc_now(),
+            )
+        self.assertEqual(len(actions), 2)
+        self.assertEqual(actions[0]["action_type"], "forward_split")
+        self.assertEqual(actions[1]["action_type"], "reverse_split")
+
+    def test_split_safe_raw_rows_restart_at_latest_split(self):
+        rows = [
+            bar(18, 0, 10, 10.1, 9.9, 10),
+            bar(19, 0, 10, 10.1, 9.9, 10),
+            bar(20, 0, 1, 1.1, 0.9, 1),
+            bar(21, 0, 1.1, 1.2, 1.0, 1.1),
+        ]
+        kept, audit = engine.split_safe_raw_research_rows(
+            rows,
+            [
+                {
+                    "symbol": "TEST",
+                    "ex_date": "2026-08-20",
+                    "action_type": "forward_split",
+                }
+            ],
+            "TEST",
+        )
+        self.assertEqual(len(kept), 2)
+        self.assertEqual(kept[0]["t"], rows[2]["t"])
+        self.assertTrue(audit["split_detected"])
+        self.assertEqual(audit["latest_split_date"], "2026-08-20")
+        self.assertEqual(audit["discarded_pre_split_rows"], 2)
+
     def test_snapshot_handles_zero_vwap_without_claiming_above(self):
         metrics = engine.snapshot_metrics("NVDA", {"latestTrade": {"p": 100}, "dailyBar": {"v": 1000}, "prevDailyBar": {"c": 95}})
         self.assertFalse(metrics["above_vwap"])
