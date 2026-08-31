@@ -1,11 +1,75 @@
 """Focused regression tests for cloud research worker queue semantics."""
 
 import unittest
+from copy import deepcopy
+from unittest.mock import patch
 
+import cloud_research_worker as worker
 from cloud_research_worker import (
     _pending_web_strategies,
     close_empty_autonomous_validation_jobs,
 )
+
+
+class FakeStore:
+    def __init__(self, data):
+        self.data = deepcopy(data)
+
+    def load_latest(self):
+        return deepcopy(self.data)
+
+    def save(self, data):
+        self.data = deepcopy(data)
+        return deepcopy(data)
+
+
+class LiveLearningOutboxTests(unittest.TestCase):
+    def test_worker_merges_outbox_into_main_library_then_clears_processed_rows(self):
+        observation = {
+            "id": "obs-1",
+            "symbol": "AAA",
+            "observed_at": "2026-08-31T20:00:00+00:00",
+            "outcome_status": "PENDING",
+            "outcomes": {},
+            "research_only": True,
+        }
+        main_store = FakeStore(
+            {
+                "strategies": [],
+                "predictive_ml_runs": [],
+                "research_system": {"live_learning_observations": []},
+            }
+        )
+        outbox_store = FakeStore(
+            {
+                "strategies": [],
+                "research_system": {"live_learning_observations": [observation]},
+            }
+        )
+
+        with (
+            patch.object(worker, "pending_symbols", return_value=[]),
+            patch.object(worker, "build_shadow_model_monitor", return_value={"status": "COLLECTING"}),
+            patch.object(
+                worker,
+                "build_model_registry",
+                return_value={"status": "COLLECTING", "champion_model_id": None},
+            ),
+        ):
+            summary = worker.drain_live_learning_outbox(main_store, outbox_store)
+
+        main_rows = (
+            main_store.data.get("research_system", {})
+            .get("live_learning_observations", [])
+        )
+        outbox_rows = (
+            outbox_store.data.get("research_system", {})
+            .get("live_learning_observations", [])
+        )
+        self.assertEqual([item["id"] for item in main_rows], ["obs-1"])
+        self.assertEqual(outbox_rows, [])
+        self.assertEqual(summary["merged"], 1)
+        self.assertEqual(summary["remaining"], 0)
 
 
 class PendingValidationTests(unittest.TestCase):
