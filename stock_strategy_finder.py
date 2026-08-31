@@ -431,6 +431,30 @@ def finder_evidence_verdict(
     }
 
 
+def apply_paper_fidelity_to_verdict(
+    verdict: dict[str, Any],
+    paper_fidelity: dict[str, Any],
+) -> dict[str, Any]:
+    """Downgrade paper readiness when live/paper execution cannot reproduce it."""
+    if (
+        str(verdict.get("code") or "") == "ready_for_paper"
+        and str(paper_fidelity.get("status") or "") != "ready"
+    ):
+        return {
+            "code": "historically_robust_execution_gap",
+            "label": "ROBUST HISTORICALLY — PAPER ENGINE NOT YET FAITHFUL",
+            "tone": "warning",
+            "research_tier": "historically_robust_execution_gap",
+            "paper_ready": False,
+            "reason": (
+                "The strategy survived the historical robustness gates, but Paper Auto cannot yet "
+                "reproduce the same trade-management rules. Keep it in research/paper-manual mode "
+                "until live execution fidelity is implemented."
+            ),
+        }
+    return dict(verdict or {})
+
+
 def validated_status_ready(
     verdict: dict[str, Any],
     paper_fidelity: dict[str, Any],
@@ -663,22 +687,7 @@ def complete_stock_strategy_finder_from_optimization(
         "validated_rules": None,
         "machine_rules": winner.get("optimized_rules") or winner_source.get("machine_rules") or {},
     })
-    if (
-        str(verdict.get("code") or "") == "ready_for_paper"
-        and str(paper_fidelity.get("status") or "") != "ready"
-    ):
-        verdict = {
-            "code": "historically_robust_execution_gap",
-            "label": "ROBUST HISTORICALLY — PAPER ENGINE NOT YET FAITHFUL",
-            "tone": "warning",
-            "research_tier": "historically_robust_execution_gap",
-            "paper_ready": False,
-            "reason": (
-                "The strategy survived the historical robustness gates, but Paper Auto cannot yet "
-                "reproduce the same trade-management rules. Keep it in research/paper-manual mode "
-                "until live execution fidelity is implemented."
-            ),
-        }
+    verdict = apply_paper_fidelity_to_verdict(verdict, paper_fidelity)
     if total_started is not None:
         stage_timings["total"] = round(
             perf_counter() - total_started,
