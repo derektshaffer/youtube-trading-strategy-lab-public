@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import unittest
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from finder_report_persistence import newest_matching_finder_report
@@ -365,6 +366,63 @@ class FinderEvidenceTierTests(unittest.TestCase):
         self.assertTrue(
             all("metrics" in item for item in diagnostics["windows"])
         )
+
+
+class ParameterStabilityIntegrityTests(unittest.TestCase):
+    def test_stability_keeps_pre_holdout_history_for_indicator_warmup(self):
+        rows = []
+        for day in (18, 19, 20, 21):
+            for minute in range(4):
+                rows.append(bar(day, minute, 10.0 + day * 0.01 + minute * 0.02))
+        candidate = strategy("warmup-test", fast_ema_period=9)
+        report = {
+            "symbol": "TEST",
+            "timeframe": "1Min",
+            "holdout_sessions": ["2026-08-21"],
+            "backtest_settings": {},
+            "winner": {
+                "optimized_rules": candidate["machine_rules"],
+                "optimized_backtest_settings": {},
+            },
+        }
+        fake_full_result = {"trades": [], "metrics": {}}
+        holdout_metrics = {
+            "trade_count": 2,
+            "net_pnl": 10.0,
+            "profit_factor": 1.5,
+            "max_drawdown_pct": 1.0,
+        }
+
+        with patch.object(
+            finder,
+            "generate_local_strategy_refinements",
+            return_value=[],
+        ), patch.object(
+            finder,
+            "run_backtest",
+            return_value=fake_full_result,
+        ) as mocked_backtest, patch.object(
+            finder,
+            "_period_metrics",
+            return_value=holdout_metrics,
+        ) as mocked_period:
+            result = finder.parameter_stability_test(
+                rows,
+                candidate,
+                report,
+                maximum=1,
+            )
+
+        backtest_rows = mocked_backtest.call_args.args[0]
+        self.assertEqual(len(backtest_rows), len(rows))
+        self.assertGreater(
+            len(backtest_rows),
+            len(finder._rows_for_sessions(rows, ["2026-08-21"])),
+        )
+        mocked_period.assert_called_once()
+        self.assertEqual(mocked_period.call_args.args[1], {"2026-08-21"})
+        self.assertEqual(result["positive_pct"], 100.0)
+        self.assertIn("full pre-holdout causal warmup", result["note"])
 
 
 class FinderPersistenceTests(unittest.TestCase):
