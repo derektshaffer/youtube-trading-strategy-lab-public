@@ -327,29 +327,41 @@ class FinderEvidenceTierTests(unittest.TestCase):
         self.assertEqual(verdict["code"], "historically_robust_execution_gap")
         self.assertFalse(verdict["paper_ready"])
 
-    def test_validated_status_gate_requires_walk_forward_and_paper_fidelity(self):
-        verdict = {
+    def test_validated_status_separates_historical_evidence_from_paper_fidelity(self):
+        ready = {
             "code": "ready_for_paper",
             "research_tier": "validated",
             "paper_ready": True,
         }
+        execution_gap = {
+            "code": "historically_robust_execution_gap",
+            "research_tier": "historically_robust_execution_gap",
+            "paper_ready": False,
+        }
         self.assertFalse(
             finder.validated_status_ready(
-                verdict,
+                ready,
                 {"status": "ready"},
                 None,
             )
         )
-        self.assertFalse(
+        self.assertTrue(
             finder.validated_status_ready(
-                verdict,
-                {"status": "gap"},
+                ready,
+                {"status": "ready"},
                 {"summary": {"profitable_fold_pct": 75}},
             )
         )
         self.assertTrue(
             finder.validated_status_ready(
-                verdict,
+                execution_gap,
+                {"status": "blocked"},
+                {"summary": {"profitable_fold_pct": 75}},
+            )
+        )
+        self.assertFalse(
+            finder.validated_status_ready(
+                {"code": "promising", "paper_ready": False},
                 {"status": "ready"},
                 {"summary": {"profitable_fold_pct": 75}},
             )
