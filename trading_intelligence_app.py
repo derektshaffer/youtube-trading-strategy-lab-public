@@ -1678,11 +1678,15 @@ _library_cold_start = not isinstance(
     st.session_state.get(_LIBRARY_RENDER_CACHE_KEY),
     dict,
 )
+_library_status_factory = getattr(st, "status", None)
 _library_load_status = (
-    st.status("Loading research library…", expanded=False)
-    if _library_cold_start
+    _library_status_factory("Loading research library…", expanded=False)
+    if _library_cold_start and callable(_library_status_factory)
     else None
 )
+if _library_cold_start and _library_load_status is None:
+    # Lightweight/test Streamlit shims may not implement st.status.
+    st.info("Loading research library…")
 try:
     # Refresh durable storage before deriving health state so a stale local
     # cloud_backup_status.json error cannot keep cloud research disabled after
