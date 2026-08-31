@@ -9,13 +9,16 @@ import unittest
 
 ROOT = Path(__file__).resolve().parent
 APP_PATH = ROOT / "trading_intelligence_app.py"
+WORKER_PATH = ROOT / "cloud_research_worker.py"
 
 
 class ProfitFirstWorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.source = APP_PATH.read_text(encoding="utf-8")
+        cls.worker_source = WORKER_PATH.read_text(encoding="utf-8")
         ast.parse(cls.source)
+        ast.parse(cls.worker_source)
 
     def test_profit_first_is_the_start_here_workspace(self):
         self.assertIn('"Profit First": "0. Profit-First Edge"', self.source)
@@ -55,6 +58,24 @@ class ProfitFirstWorkflowTests(unittest.TestCase):
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, self.source)
+
+    def test_profit_first_rechecks_before_every_worker_slot(self):
+        loop_source = self.worker_source.split(
+            "for _ in range(jobs_per_run):",
+            1,
+        )[1]
+        before_claim = loop_source.split(
+            "data, job = claim_next_research_job(",
+            1,
+        )[0]
+        self.assertIn(
+            "refresh_automatic_profit_first_validation_job(",
+            before_claim,
+        )
+        self.assertIn(
+            "Re-evaluate Profit First before every worker slot",
+            before_claim,
+        )
 
     def test_profit_first_blocks_revalidation_until_strategy_is_faithfully_modeled(self):
         for marker in (
