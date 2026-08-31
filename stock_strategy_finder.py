@@ -1345,6 +1345,38 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
 
     optimization = report.get("optimization") or {}
     winner = optimization.get("winner") or {}
+
+    # Persist one compact best candidate per strategy family from this exact
+    # stock-specific run. The optimizer rankings are already ordered by the
+    # Finder's selection logic. Keeping the first occurrence per source family
+    # preserves that order across tested timeframes without storing the full
+    # configuration search payload.
+    tested_strategy_rankings: list[dict[str, Any]] = []
+    seen_tested_strategy_ids: set[str] = set()
+    for candidate in optimization.get("rankings") or []:
+        if not isinstance(candidate, dict):
+            continue
+        source_strategy_id = str(candidate.get("source_strategy_id") or "").strip()
+        if not source_strategy_id or source_strategy_id in seen_tested_strategy_ids:
+            continue
+        seen_tested_strategy_ids.add(source_strategy_id)
+        validation_metrics = dict(candidate.get("validation_metrics") or {})
+        tested_strategy_rankings.append(
+            {
+                "rank": len(tested_strategy_rankings) + 1,
+                "source_strategy_id": source_strategy_id,
+                "strategy_name": candidate.get("strategy_name"),
+                "timeframe": candidate.get("timeframe"),
+                "status": candidate.get("status"),
+                "score": candidate.get("score"),
+                "adequate_sample": bool(candidate.get("adequate_sample")),
+                "validation_metrics": validation_metrics,
+                "stress_metrics": candidate.get("stress_metrics") or {},
+                "optimized_rules": candidate.get("optimized_rules") or {},
+                "optimized_backtest_settings": candidate.get("optimized_backtest_settings") or {},
+            }
+        )
+
     summary = {
         "id": run_id,
         "generated_at": generated_at,
@@ -1360,6 +1392,7 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
         "unique_configurations_tested": report.get("unique_configurations_tested"),
         "strategies_considered": report.get("strategies_considered"),
         "strategies_tested": report.get("strategies_tested"),
+        "tested_strategy_rankings": tested_strategy_rankings,
         "technical_skips": report.get("technical_skips") or [],
         "estimated_work": report.get("estimated_work") or {},
         "stage_timings_seconds": report.get("stage_timings_seconds") or {},
