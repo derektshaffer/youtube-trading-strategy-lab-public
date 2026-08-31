@@ -36,6 +36,15 @@ from trading_catalyst_core import (
     enrich_bars_with_point_in_time_catalysts,
     historical_news,
 )
+from live_learning import (
+    DEFAULT_MAX_OBSERVATIONS,
+    earliest_pending_observed_at,
+    mature_shadow_observations,
+    merge_shadow_observations,
+    pending_symbols,
+)
+from predictive_model_monitor import build_shadow_model_monitor
+from predictive_model_registry import build_model_registry, ready_shadow_models
 from trading_intelligence_core import research_readiness
 from trading_research_orchestrator import (
     DEFAULT_GEMINI_BULK_FALLBACK_MODEL,
@@ -76,6 +85,10 @@ from youtube_strategy_engine import (
 # continuous worker deliberately leaves it for the distributed Finder workflow.
 CONTINUOUS_WORKER_JOB_TYPES = SUPPORTED_RESEARCH_JOB_TYPES - {"stock_finder"}
 CLOUD_FINDER_INTEGRITY_VERSION = 2
+DEFAULT_LIVE_LEARNING_OUTBOX_PATH = "trading-intelligence-lab/live_learning_outbox.json"
+LIVE_LEARNING_STORAGE_KEY = "live_learning_observations"
+LIVE_LEARNING_STATUS_KEY = "live_learning_status"
+LIVE_LEARNING_MAX_MATURATION_SYMBOLS = 25
 
 
 def env(name: str, default: str = "") -> str:
@@ -126,6 +139,190 @@ def build_store() -> StrategyStore:
         path=env("GITHUB_BACKUP_PATH", DEFAULT_GITHUB_BACKUP_PATH),
     )
     return StrategyStore(cloud_backup=cloud)
+
+
+def build_live_learning_outbox_store() -> StrategyStore:
+    repository = env("GITHUB_BACKUP_REPOSITORY")
+    token = env("GITHUB_BACKUP_TOKEN")
+    if not repository or not token:
+        raise AppError(
+            "Live-learning outbox needs GITHUB_BACKUP_REPOSITORY and GITHUB_BACKUP_TOKEN."
+        )
+    cloud = GitHubCloudBackup(
+        repository,
+        token,
+        branch=env("GITHUB_BACKUP_BRANCH"),
+        path=env(
+            "TRADING_INTELLIGENCE_LIVE_LEARNING_OUTBOX_PATH",
+            DEFAULT_LIVE_LEARNING_OUTBOX_PATH,
+        ),
+    )
+    return StrategyStore(
+        directory=".cloud_live_learning_outbox",
+        cloud_backup=cloud,
+    )
+
+
+def drain_live_learning_outbox(
+    store: StrategyStore,
+    outbox_store: StrategyStore,
+) -> dict[str, Any]:
+    """Merge queued live observations into the main library and mature them off-page."""
+    outbox = outbox_store.load_latest()
+    outbox_system = (
+        dict(outbox.get("research_system") or {})
+        if isinstance(outbox.get("research_system"), dict)
+        else {}
+    )
+    incoming = [
+        dict(item)
+        for item in outbox_system.get(LIVE_LEARNING_STORAGE_KEY) or []
+        if isinstance(item, dict)
+    ]
+    if not incoming:
+        return {"queued": 0, "merged": 0, "matured": 0}
+
+    now = datetime.now(timezone.utc)
+    data = store.load_latest()
+    research_system = (
+        dict(data.get("research_system") or {})
+        if isinstance(data.get("research_system"), dict)
+        else {}
+    )
+    existing = [
+        dict(item)
+        for item in research_system.get(LIVE_LEARNING_STORAGE_KEY) or []
+        if isinstance(item, dict)
+    ]
+    combined = merge_shadow_observations(
+        existing,
+        incoming,
+        max_records=DEFAULT_MAX_OBSERVATIONS,
+    )
+
+    maturation_summary = {
+        "updated": 0,
+        "completed": 0,
+        "partial": 0,
+        "pending": 0,
+    }
+    scoped_pending = pending_symbols(combined)[:LIVE_LEARNING_MAX_MATURATION_SYMBOLS]
+    if scoped_pending:
+        earliest = earliest_pending_observed_at(
+            combined,
+            only_symbols=scoped_pending,
+        )
+        if earliest is not None:
+            history_start = max(
+                earliest - timedelta(minutes=2),
+                now - timedelta(days=7),
+            )
+            try:
+                market = build_market()
+                future_bars = market.bars(
+                    scoped_pending,
+                    start=history_start,
+                    end=now,
+                    timeframe="1Min",
+                    feed=market.live_feed,
+                    adjustment="raw",
+                    max_pages=60,
+                )
+                combined, maturation_summary = mature_shadow_observations(
+                    combined,
+                    future_bars,
+                    now=now,
+                    only_symbols=scoped_pending,
+                )
+            except AppError as exc:
+                print(
+                    f"Live-learning maturation deferred: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
+    models = ready_shadow_models(data.get("predictive_ml_runs") or [])
+    model_lookup = {
+        str(model.get("id") or ""): model
+        for model in models
+        if str(model.get("id") or "").strip()
+    }
+    model_monitor = build_shadow_model_monitor(
+        combined,
+        model_lookup=model_lookup,
+    )
+    previous_registry = (
+        research_system.get("predictive_model_registry")
+        if isinstance(research_system.get("predictive_model_registry"), dict)
+        else {}
+    )
+    model_registry = build_model_registry(
+        models,
+        model_monitor,
+        previous=previous_registry,
+    )
+
+    counts = {"complete": 0, "partial": 0, "pending": 0}
+    for item in combined:
+        status = str(item.get("outcome_status") or "PENDING").strip().lower()
+        if status in counts:
+            counts[status] += 1
+        else:
+            counts["pending"] += 1
+
+    research_system[LIVE_LEARNING_STORAGE_KEY] = combined
+    research_system["predictive_model_monitor"] = model_monitor
+    research_system["predictive_model_registry"] = model_registry
+    research_system[LIVE_LEARNING_STATUS_KEY] = {
+        "last_logged_at": now.isoformat(),
+        "last_source": "cloud_live_learning_outbox",
+        "last_logged": len(incoming),
+        "last_matured": int(maturation_summary.get("updated") or 0),
+        "total": len(combined),
+        **counts,
+        "horizons_minutes": [5, 15, 30, 60],
+        "research_only": True,
+        "affects_live_ranking": False,
+        "affects_execution": False,
+        "champion_model_id": model_registry.get("champion_model_id"),
+        "model_registry_status": model_registry.get("status"),
+    }
+    data["research_system"] = research_system
+    persist_store(store, data)
+
+    processed_ids = {
+        str(item.get("id") or "").strip()
+        for item in incoming
+        if str(item.get("id") or "").strip()
+    }
+    latest_outbox = outbox_store.load_latest()
+    latest_system = (
+        dict(latest_outbox.get("research_system") or {})
+        if isinstance(latest_outbox.get("research_system"), dict)
+        else {}
+    )
+    remaining = [
+        dict(item)
+        for item in latest_system.get(LIVE_LEARNING_STORAGE_KEY) or []
+        if isinstance(item, dict)
+        and str(item.get("id") or "").strip() not in processed_ids
+    ]
+    latest_system[LIVE_LEARNING_STORAGE_KEY] = remaining
+    latest_system["live_learning_outbox_status"] = {
+        "last_drained_at": now.isoformat(),
+        "last_drained": len(processed_ids),
+        "remaining": len(remaining),
+        "research_only": True,
+    }
+    latest_outbox["research_system"] = latest_system
+    persist_store(outbox_store, latest_outbox)
+
+    return {
+        "queued": len(incoming),
+        "merged": len(incoming),
+        "matured": int(maturation_summary.get("updated") or 0),
+        "remaining": len(remaining),
+    }
 
 
 def build_router() -> GeminiResearchRouter:
@@ -806,6 +1003,16 @@ def print_predictive_ml_router_summary(library: dict[str, Any]) -> None:
 
 def main() -> int:
     store = build_store()
+    outbox_store = build_live_learning_outbox_store()
+    live_learning = drain_live_learning_outbox(store, outbox_store)
+    if live_learning.get("queued"):
+        print(
+            "Drained live-learning outbox: "
+            f"{int(live_learning.get('merged') or 0)} merged, "
+            f"{int(live_learning.get('matured') or 0)} matured, "
+            f"{int(live_learning.get('remaining') or 0)} remaining.",
+            flush=True,
+        )
     worker_id = env("RESEARCH_WORKER_ID") or (
         f"{socket.gethostname()}:{os.getpid()}"
     )
