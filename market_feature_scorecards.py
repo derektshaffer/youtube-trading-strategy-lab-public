@@ -11,7 +11,7 @@ from market_feature_validation import (
     run_detector_event_study,
     summarize_detector_events,
 )
-from youtube_strategy_engine import parse_symbols
+from youtube_strategy_engine import parse_symbols, split_safe_raw_research_rows
 
 
 def _sample_quality(event_count: int, symbol_count: int, session_count: int) -> str:
@@ -58,8 +58,28 @@ def run_detector_scorecards(
         start=start,
         end=end,
         timeframe=timeframe,
+        adjustment="raw",
         max_pages=max_pages,
     )
+    if not hasattr(market, "split_actions"):
+        raise ValueError(
+            "Detector scorecards require split metadata so raw historical "
+            "price structure cannot cross an unhandled split boundary."
+        )
+    split_actions = market.split_actions(
+        clean,
+        start=start,
+        end=end,
+    )
+    market_data_integrity_by_symbol: dict[str, dict[str, Any]] = {}
+    for symbol in clean:
+        safe_rows, integrity = split_safe_raw_research_rows(
+            list((rows_by_symbol or {}).get(symbol) or []),
+            split_actions,
+            symbol,
+        )
+        rows_by_symbol[symbol] = safe_rows
+        market_data_integrity_by_symbol[symbol] = integrity
 
     all_events: list[dict[str, Any]] = []
     by_symbol: list[dict[str, Any]] = []
@@ -85,6 +105,7 @@ def run_detector_scorecards(
                     "market_sessions": selected_sessions,
                     "event_count": 0,
                     "detector_counts": {},
+                    "market_data_integrity": market_data_integrity_by_symbol.get(symbol) or {},
                 }
             )
             continue
@@ -117,6 +138,7 @@ def run_detector_scorecards(
                 "market_sessions": selected_sessions,
                 "event_count": len(symbol_events),
                 "detector_counts": dict(detector_counts),
+                "market_data_integrity": market_data_integrity_by_symbol.get(symbol) or {},
             }
         )
 
@@ -155,6 +177,8 @@ def run_detector_scorecards(
         item["sample_quality"] = _sample_quality(event_count, symbol_count, session_count)
 
     return {
+        "market_data_integrity_contract": "split_safe_raw_v1",
+        "market_data_integrity_by_symbol": market_data_integrity_by_symbol,
         "symbols_requested": len(clean),
         "symbols_with_data": sum(1 for item in by_symbol if int(item.get("bars") or 0) > 0),
         "bars_analyzed": total_bars,
@@ -170,7 +194,8 @@ def run_detector_scorecards(
         "summary": summary,
         "by_symbol": by_symbol,
         "note": (
-            "Scorecards summarize detector behavior across stocks and sessions. Sample-quality labels "
+            "Scorecards use actual raw historical prices and restart each symbol at its latest split boundary. "
+            "They summarize detector behavior across stocks and sessions. Sample-quality labels "
             "describe breadth only; they do not certify profitability or make a detector eligible for "
             "live scoring."
         ),
