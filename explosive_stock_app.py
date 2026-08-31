@@ -13,6 +13,10 @@ from explosive_stock_core import (
     MAX_EXPLOSIVE_SCAN_SYMBOLS,
     scan_explosive_candidates,
 )
+from explosive_stock_storage import (
+    DEFAULT_EXPLOSIVE_BACKUP_PATH,
+    build_explosive_store,
+)
 from sec_catalyst_intelligence import SecEdgarClient, classify_recent_sec_filings
 from trading_app_runtime import market_client, setting
 from trading_glass_theme import inject_research_glass_theme
@@ -71,6 +75,39 @@ view = st.sidebar.radio(
 )
 st.sidebar.caption(f"Model: {EXPLOSIVE_MODEL_VERSION}")
 
+DEFAULT_EXPLOSIVE_BACKUP_REPOSITORY = "derektshaffer/derektshaffer-youtube-trading-strategy-lab"
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _load_cloud_latent_prescreen() -> dict[str, Any]:
+    """Read only the Explosive Lab artifact; never touch Trading Lab's library."""
+    repository = (
+        setting("EXPLOSIVE_STOCK_BACKUP_REPOSITORY")
+        or setting("GITHUB_BACKUP_REPOSITORY")
+        or DEFAULT_EXPLOSIVE_BACKUP_REPOSITORY
+    )
+    token = (
+        setting("EXPLOSIVE_STOCK_BACKUP_TOKEN")
+        or setting("GITHUB_BACKUP_TOKEN")
+        or setting("GITHUB_TOKEN")
+    )
+    if not repository or not token:
+        return {"error": "Explosive Lab cloud storage is not configured."}
+    try:
+        store = build_explosive_store(
+            repository,
+            token,
+            branch=setting("EXPLOSIVE_STOCK_BACKUP_BRANCH") or setting("GITHUB_BACKUP_BRANCH"),
+            path=setting("EXPLOSIVE_STOCK_BACKUP_PATH", DEFAULT_EXPLOSIVE_BACKUP_PATH),
+            directory=".streamlit_explosive_stock_lab",
+        )
+        data = store.load_latest()
+    except AppError as exc:
+        return {"error": str(exc)}
+    research_system = data.get("research_system") if isinstance(data.get("research_system"), dict) else {}
+    prescreen = research_system.get("explosive_prescreen")
+    return dict(prescreen) if isinstance(prescreen, dict) else {}
+
 
 def _fmt(value: Any, suffix: str = "", digits: int = 1) -> str:
     number = safe_float(value)
@@ -86,6 +123,7 @@ def _result_rows(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
             {
                 "Ticker": item.get("symbol"),
                 "State": item.get("activation_state"),
+                "Latent": safe_float((item.get("latent_prescreen") or {}).get("latent_score")),
                 "Profile": safe_float(item.get("profile_score"), 0.0) or 0.0,
                 "Risk": safe_float(item.get("risk_score"), 0.0) or 0.0,
                 "Day %": safe_float(metrics.get("day_change_pct")),
@@ -209,15 +247,39 @@ def _render_candidate(item: dict[str, Any], *, detailed: bool) -> None:
 
 if view == "Scanner":
     st.markdown("## Explosive Stock Scanner")
-    st.caption(
-        "The first interactive universe uses current gainers + most-active stocks to keep API work fast. "
-        "A broader latent-candidate pre-screen will be added as a cloud/historical job so we can find names "
-        "before they appear on a normal movers list."
-    )
+    cloud_prescreen = _load_cloud_latent_prescreen()
+    cloud_candidates = [
+        item
+        for item in cloud_prescreen.get("candidates") or []
+        if isinstance(item, dict) and str(item.get("symbol") or "").strip()
+    ]
+    if cloud_candidates:
+        st.success(
+            "Whole-market latent prescreen available · "
+            f"{len(cloud_candidates)} saved candidates · "
+            f"generated {cloud_prescreen.get('generated_at') or 'recently'}."
+        )
+        st.caption(
+            "The cloud pre-screen searches active U.S. equities using completed daily history first. "
+            "The interactive scan then adds live price/volume, intraday structure, and catalyst evidence."
+        )
+    elif cloud_prescreen.get("error"):
+        st.caption("Cloud latent prescreen unavailable: " + str(cloud_prescreen.get("error")))
+    else:
+        st.caption(
+            "No saved whole-market latent prescreen is available yet. "
+            "You can still use the live market-attention universe or a manual ticker list."
+        )
 
+    universe_options = [
+        "Cloud latent-candidate shortlist",
+        "Automatic market-attention universe",
+        "Manual ticker list",
+    ]
     universe_mode = st.radio(
         "Candidate universe",
-        ["Automatic market-attention universe", "Manual ticker list"],
+        universe_options,
+        index=0 if cloud_candidates else 1,
         horizontal=True,
     )
     scan_limit = st.slider(
@@ -239,8 +301,26 @@ if view == "Scanner":
         status = st.status("Building explosive-stock candidate universe…", expanded=True)
         try:
             market = market_client()
+            latent_lookup: dict[str, dict[str, Any]] = {}
             if universe_mode == "Manual ticker list":
                 symbols = parse_symbols(manual_symbols)
+            elif universe_mode == "Cloud latent-candidate shortlist":
+                latent_lookup = {
+                    str(item.get("symbol") or "").strip().upper(): dict(item)
+                    for item in cloud_candidates
+                }
+                symbols = [
+                    str(item.get("symbol") or "").strip().upper()
+                    for item in cloud_candidates[:scan_limit]
+                ]
+                if not symbols:
+                    raise AppError(
+                        "The cloud latent shortlist is not populated yet. "
+                        "Use the market-attention universe for now."
+                    )
+                status.write(
+                    f"Loaded {len(symbols)} whole-market latent candidates from the isolated cloud prescreen…"
+                )
             else:
                 status.write("Loading current gainers and most-active stocks…")
                 gainers = market.movers(top=min(50, scan_limit))
@@ -258,6 +338,10 @@ if view == "Scanner":
                 symbols[:scan_limit],
                 progress=status.write,
             )
+            for item in results:
+                symbol_key = str(item.get("symbol") or "").strip().upper()
+                if symbol_key in latent_lookup:
+                    item["latent_prescreen"] = latent_lookup[symbol_key]
             st.session_state["explosive_scan_results"] = results
             status.update(
                 label=f"Explosive scan complete · {len(results)} stocks scored",
