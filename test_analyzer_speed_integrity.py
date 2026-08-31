@@ -86,6 +86,71 @@ class AnalyzerSpeedIntegrityTests(unittest.TestCase):
             )
         self.assertEqual(mocked.call_count, 2)
 
+    def test_completed_deep_history_is_reused(self):
+        """Identical requests ending before today should share one Alpaca fetch."""
+        engine._ALPACA_BAR_HISTORY_CACHE.clear()
+        market = engine.AlpacaMarketData("key", "secret", live_feed="iex", historical_feed="sip")
+        cutoff = market._history_cache_cutoff_utc()
+        start = cutoff - timedelta(days=5)
+        end = cutoff - timedelta(minutes=1)
+        response = {
+            "bars": {"TEST": [{"t": "2026-08-28T14:30:00Z", "c": 10.0}]},
+            "next_page_token": None,
+        }
+        with patch.object(market, "_get", return_value=response) as mocked:
+            first = market.bars(
+                ["TEST"],
+                start=start,
+                end=end,
+                timeframe="1Min",
+                feed=market.historical_feed,
+                max_pages=2,
+            )
+            second = market.bars(
+                ["TEST"],
+                start=start,
+                end=end,
+                timeframe="1Min",
+                feed=market.historical_feed,
+                max_pages=2,
+            )
+        self.assertEqual(mocked.call_count, 1)
+        self.assertEqual(first, second)
+        self.assertIsNot(first["TEST"][0], second["TEST"][0])
+
+    def test_spanning_request_reuses_only_deep_prefix(self):
+        """Long Analyzer requests may cache old history, but today's suffix stays fresh."""
+        engine._ALPACA_BAR_HISTORY_CACHE.clear()
+        market = engine.AlpacaMarketData("key", "secret", live_feed="iex", historical_feed="sip")
+        cutoff = market._history_cache_cutoff_utc()
+        start = cutoff - timedelta(days=5)
+        end = engine.utc_now()
+        responses = [
+            {"bars": {"TEST": [{"t": "2026-08-28T14:30:00Z", "c": 10.0}]}, "next_page_token": None},
+            {"bars": {"TEST": [{"t": "2026-08-31T14:30:00Z", "c": 11.0}]}, "next_page_token": None},
+            {"bars": {"TEST": [{"t": "2026-08-31T14:30:00Z", "c": 12.0}]}, "next_page_token": None},
+        ]
+        with patch.object(market, "_get", side_effect=responses) as mocked:
+            first = market.bars(
+                ["TEST"],
+                start=start,
+                end=end,
+                timeframe="1Min",
+                feed=market.historical_feed,
+                max_pages=2,
+            )
+            second = market.bars(
+                ["TEST"],
+                start=start,
+                end=end,
+                timeframe="1Min",
+                feed=market.historical_feed,
+                max_pages=2,
+            )
+        self.assertEqual(mocked.call_count, 3)
+        self.assertEqual(first["TEST"][-1]["c"], 11.0)
+        self.assertEqual(second["TEST"][-1]["c"], 12.0)
+
 
 if __name__ == "__main__":
     unittest.main()
