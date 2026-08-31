@@ -31,7 +31,11 @@ _boot_message = str(
 ).strip()
 _boot_status = None
 if _boot_message:
-    _boot_status = st.status(_boot_message, expanded=False)
+    _boot_status_factory = getattr(st, "status", None)
+    if callable(_boot_status_factory):
+        _boot_status = _boot_status_factory(_boot_message, expanded=False)
+    else:
+        st.info(_boot_message)
 
 # Heavy research/ML imports intentionally happen only after access is granted.
 # This keeps the password screen fast and lets navigation show a loading state
