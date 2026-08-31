@@ -362,7 +362,7 @@ if view == "Scanner":
             selection_mode="single-row",
             key="explosive_ranked_candidates_table",
         )
-        selected_rows = list((table_event.selection or {}).get("rows") or [])
+        selected_rows = list(table_event.selection.rows or [])
         if selected_rows:
             selected_index = int(selected_rows[0])
             if 0 <= selected_index < len(results):
