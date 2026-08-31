@@ -103,6 +103,7 @@ latest_finder_checkpoint = _stock_strategy_finder.latest_finder_checkpoint
 merge_finder_checkpoint_into_library = _stock_strategy_finder.merge_finder_checkpoint_into_library
 merge_finder_report_into_library = _stock_strategy_finder.merge_finder_report_into_library
 finder_evidence_verdict = _stock_strategy_finder.finder_evidence_verdict
+apply_paper_fidelity_to_verdict = _stock_strategy_finder.apply_paper_fidelity_to_verdict
 parameter_stability_test = _stock_strategy_finder.parameter_stability_test
 validated_status_ready = _stock_strategy_finder.validated_status_ready
 run_stock_strategy_finder = _stock_strategy_finder.run_stock_strategy_finder
@@ -6439,6 +6440,10 @@ elif module == "Strategy Lab":
                             ),
                         }
                     )
+                evidence_verdict = apply_paper_fidelity_to_verdict(
+                    evidence_verdict,
+                    paper_fidelity,
+                )
 
                 st.session_state["til_strategy_lab_result"] = {
                     "ticker": ticker,
