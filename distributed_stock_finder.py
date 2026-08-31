@@ -70,6 +70,8 @@ from youtube_strategy_engine import (
 
 UTC = timezone.utc
 MAX_FINALIZATION_RECOVERIES = 3
+DISTRIBUTED_PLAN_VERSION = 2
+DISTRIBUTED_SHARD_VERSION = 2
 
 
 def env(name: str, default: str = "") -> str:
@@ -313,6 +315,22 @@ def _resumable_plan_for_job(
                 f"Saved distributed run {run_id} reports completed shards, but its "
                 "private run plan is missing. Refusing to start over or discard the checkpoint."
             )
+        return None
+
+    plan_version = int(plan.get("version") or 0)
+    integrity = plan.get("market_data_integrity")
+    if (
+        plan_version != DISTRIBUTED_PLAN_VERSION
+        or not isinstance(integrity, dict)
+        or str(integrity.get("mode") or "") not in {
+            "raw_prices",
+            "raw_prices_post_latest_split",
+        }
+    ):
+        # Pre-integrity plans may contain split-adjusted or otherwise unverified
+        # price history. They are deliberately not resumed under the newer engine.
+        # Returning None causes the retry to create a fresh research window/plan;
+        # the old private artifacts remain untouched for forensic recovery.
         return None
 
     job_id = str(job.get("id") or "")
@@ -884,7 +902,7 @@ def command_prepare(preferred_job_id: str = "") -> int:
                 shard_index += 1
 
         plan = {
-            "version": 1,
+            "version": DISTRIBUTED_PLAN_VERSION,
             "run_id": run_id,
             "parent_job_id": job_id,
             "symbol": symbol,
@@ -998,7 +1016,7 @@ def _command_shard(run_id: str, index: int) -> int:
     artifacts.write_json_gz(
         shard_path(run_id, index),
         {
-            "version": 1,
+            "version": DISTRIBUTED_SHARD_VERSION,
             "run_id": run_id,
             "index": int(index),
             "timeframe": timeframe,
