@@ -4576,6 +4576,27 @@ def backtest_limitations(strategy: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(limitations))
 
 
+def strategy_live_behavior_settings(strategy: dict[str, Any]) -> dict[str, Any]:
+    """Return the backtest behavior settings that live eligibility must mirror."""
+    validated = (
+        strategy.get("validated_backtest_settings")
+        if isinstance(strategy.get("validated_backtest_settings"), dict)
+        else {}
+    )
+    optimized = (
+        strategy.get("optimized_backtest_settings")
+        if isinstance(strategy.get("optimized_backtest_settings"), dict)
+        else {}
+    )
+    if bool(strategy.get("using_validated_rules")) and validated:
+        return dict(validated)
+    if optimized:
+        return dict(optimized)
+    if validated:
+        return dict(validated)
+    return {}
+
+
 def strategy_uses_pullback_breakout(strategy: dict[str, Any]) -> bool:
     """Identify strategies whose stated entry setup is a pullback/bull-flag continuation."""
     text_parts = [
@@ -8714,6 +8735,7 @@ def snapshot_metrics(
 
 def match_strategy(metrics: dict[str, Any], strategy: dict[str, Any]) -> dict[str, Any]:
     rules = normalize_machine_rules(strategy.get("machine_rules"))
+    behavior_settings = strategy_live_behavior_settings(strategy)
     checks: list[dict[str, Any]] = []
     chart_checks = metrics.get("chart_checks") if isinstance(metrics.get("chart_checks"), dict) else {}
     market_features = metrics.get("market_features") if isinstance(metrics.get("market_features"), dict) else {}
@@ -8924,6 +8946,21 @@ def match_strategy(metrics: dict[str, Any], strategy: dict[str, Any]) -> dict[st
             "status": "unknown" if observed is None else ("pass" if bool(observed) else "fail"),
         })
 
+    implicit_pullback_breakout = (
+        bool(behavior_settings.get("require_pullback_breakout_for_pullback_strategies"))
+        and strategy_uses_pullback_breakout(strategy)
+        and rules.get("require_fast_ema_pullback") is not True
+        and rules.get("require_pullback_breakout") is None
+    )
+    if implicit_pullback_breakout:
+        observed = chart_checks.get("pullback_breakout")
+        checks.append({
+            "label": "Backtest-required pullback breakout",
+            "actual": observed,
+            "required": True,
+            "status": "unknown" if observed is None else ("pass" if bool(observed) else "fail"),
+        })
+
     if rules.get("catalyst_required"):
         catalyst_value = metrics.get("has_catalyst")
         catalyst_status = "unknown" if catalyst_value is None else ("pass" if bool(catalyst_value) else "fail")
@@ -8941,17 +8978,40 @@ def match_strategy(metrics: dict[str, Any], strategy: dict[str, Any]) -> dict[st
     # cannot be presented as eligible for a morning-only strategy.
     session_start = parse_clock_minutes(rules.get("session_start"))
     session_end = parse_clock_minutes(rules.get("session_end"))
-    if session_start is not None or session_end is not None:
-        now_et = utc_now().astimezone(ET)
-        clock_minute = now_et.hour * 60 + now_et.minute
+    ignore_session_end = bool(behavior_settings.get("ignore_strategy_session_end"))
+    now_et = utc_now().astimezone(ET)
+    clock_minute = now_et.hour * 60 + now_et.minute
+
+    if "allow_extended_hours" in behavior_settings:
+        allow_extended = bool(behavior_settings.get("allow_extended_hours"))
+        earliest_execution = 4 * 60 if allow_extended else 9 * 60 + 30
+        latest_execution = 20 * 60 if allow_extended else 16 * 60
+        execution_allowed = earliest_execution <= clock_minute < latest_execution
+        checks.append(
+            {
+                "label": "Validated execution hours",
+                "actual": now_et.strftime("%H:%M ET"),
+                "required": "04:00–20:00 ET" if allow_extended else "09:30–16:00 ET",
+                "status": "pass" if execution_allowed else "fail",
+            }
+        )
+
+    effective_session_end = None if ignore_session_end else session_end
+    if session_start is not None or effective_session_end is not None:
         earliest = session_start if session_start is not None else 0
-        latest = session_end if session_end is not None else 23 * 60 + 59
-        if session_start is not None and session_end is not None:
-            required_window = f"{session_start // 60:02d}:{session_start % 60:02d}–{session_end // 60:02d}:{session_end % 60:02d} ET"
+        latest = effective_session_end if effective_session_end is not None else 23 * 60 + 59
+        if session_start is not None and effective_session_end is not None:
+            required_window = (
+                f"{session_start // 60:02d}:{session_start % 60:02d}–"
+                f"{effective_session_end // 60:02d}:{effective_session_end % 60:02d} ET"
+            )
         elif session_start is not None:
             required_window = f"at/after {session_start // 60:02d}:{session_start % 60:02d} ET"
         else:
-            required_window = f"at/before {session_end // 60:02d}:{session_end % 60:02d} ET"
+            required_window = (
+                f"at/before {effective_session_end // 60:02d}:"
+                f"{effective_session_end % 60:02d} ET"
+            )
         checks.append(
             {
                 "label": "Entry time window",
