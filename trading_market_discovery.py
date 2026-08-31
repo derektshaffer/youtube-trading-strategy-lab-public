@@ -18,6 +18,8 @@ from youtube_strategy_engine import (
     parse_symbols,
     resample_intraday_bars,
     snapshot_metrics,
+    strategy_live_behavior_settings,
+    strategy_uses_pullback_breakout,
     utc_now,
 )
 
@@ -162,14 +164,8 @@ def _strategy_live_timeframe(strategy: dict[str, Any]) -> str:
 
 def _strategy_allows_extended_hours(strategy: dict[str, Any]) -> bool:
     """Mirror the backtest execution-hours setting for live chart evaluation."""
-    settings = None
-    if bool(strategy.get("using_validated_rules")):
-        settings = strategy.get("validated_backtest_settings")
-    if not isinstance(settings, dict):
-        settings = strategy.get("optimized_backtest_settings")
-    if not isinstance(settings, dict):
-        settings = strategy.get("validated_backtest_settings")
-    if isinstance(settings, dict) and "allow_extended_hours" in settings:
+    settings = strategy_live_behavior_settings(strategy)
+    if "allow_extended_hours" in settings:
         return bool(settings.get("allow_extended_hours"))
     return True
 
@@ -214,7 +210,14 @@ def _strategy_chart_checks(
 
 def _needs_chart_data(strategy: dict[str, Any]) -> bool:
     rules = normalize_machine_rules(strategy.get("machine_rules"))
-    return any(
+    behavior_settings = strategy_live_behavior_settings(strategy)
+    implicit_pullback_breakout = (
+        bool(behavior_settings.get("require_pullback_breakout_for_pullback_strategies"))
+        and strategy_uses_pullback_breakout(strategy)
+        and rules.get("require_fast_ema_pullback") is not True
+        and rules.get("require_pullback_breakout") is None
+    )
+    return implicit_pullback_breakout or any(
         rules.get(name) is not None and rules.get(name) is not False
         for name in (
             "vwap_reclaim",
