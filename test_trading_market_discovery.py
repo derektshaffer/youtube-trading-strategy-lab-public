@@ -183,6 +183,71 @@ class MarketDiscoveryTests(unittest.TestCase):
             discovery._needs_chart_data({"machine_rules": {"min_price": 1.0}})
         )
 
+    def test_multi_strategy_scan_uses_each_strategy_candle_interval_for_market_features(self):
+        market = FakeMarket()
+        strategies = [
+            {
+                "id": "one-minute",
+                "name": "One Minute",
+                "direction": "long",
+                "_finder_timeframe": "1Min",
+                "machine_rules": {"min_price": 1.0},
+            },
+            {
+                "id": "five-minute",
+                "name": "Five Minute",
+                "direction": "long",
+                "_finder_timeframe": "5Min",
+                "machine_rules": {"min_price": 1.0},
+            },
+        ]
+
+        def fake_match(metrics, strategy):
+            expected_bars = 2 if strategy["id"] == "one-minute" else 1
+            self.assertEqual(
+                metrics.get("market_features", {}).get("bar_count"),
+                expected_bars,
+            )
+            return {
+                "status": "WATCH",
+                "score": 80.0 if strategy["id"] == "one-minute" else 90.0,
+                "unknown": 0,
+                "checks": [],
+            }
+
+        with (
+            patch.object(discovery, "effective_strategy_for_live", side_effect=lambda item: item),
+            patch.object(discovery, "average_completed_daily_volume", return_value=1_000_000),
+            patch.object(
+                discovery,
+                "snapshot_metrics",
+                return_value={
+                    "symbol": "AAA",
+                    "price": 10.0,
+                    "relative_volume": 1.5,
+                    "day_change_pct": 2.0,
+                    "spread_pct": 0.1,
+                },
+            ),
+            patch.object(discovery, "match_strategy", side_effect=fake_match),
+        ):
+            results = discovery.scan_market_strategies(
+                market,
+                ["AAA"],
+                strategies,
+            )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["best_strategy_id"], "five-minute")
+        self.assertEqual(results[0]["timeframe"], "5Min")
+        self.assertEqual(results[0]["market_features"]["features"]["bar_count"], 1)
+        by_id = {
+            item["strategy_id"]: item
+            for item in results[0]["strategy_matches"]
+        }
+        self.assertEqual(by_id["one-minute"]["timeframe"], "1Min")
+        self.assertEqual(by_id["five-minute"]["timeframe"], "5Min")
+
     def test_multi_strategy_scan_reuses_one_market_data_pass_and_builds_features_once_per_stock(self):
         market = FakeMarket()
         strategies = [
