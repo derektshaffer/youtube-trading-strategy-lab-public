@@ -25,10 +25,8 @@ class FinderHotDeployImportTests(unittest.TestCase):
             'st.session_state["til_finder_profile"] = "Current Regime"',
             source,
         )
-        self.assertIn(
-            '"Recent Behavior" if str(value) == "Current Regime" else str(value)',
-            source,
-        )
+        self.assertIn('"Recent Behavior (faster)"', source)
+        self.assertIn('if str(value) == "Current Regime"', source)
 
     def test_completed_cloud_result_handoff_defers_both_widget_updates(self):
         source = APP_PATH.read_text(encoding="utf-8")
