@@ -1460,6 +1460,44 @@ class CloudBackupReadTests(unittest.TestCase):
         raw_request.assert_called_once_with(cloud._contents_url())
 
 
+    def test_cold_restore_preserves_exact_remote_blob_bytes(self):
+        cloud = engine.GitHubCloudBackup(
+            "owner/private-backups",
+            "token",
+            branch="main",
+            path="trading-intelligence-lab/intelligence_library.json",
+        )
+        cloud._repository_checked = True
+        library = {
+            "version": 2,
+            "strategies": [{"id": "s1", "name": "Test"}],
+            "updated_at": "2026-08-31T00:00:00Z",
+        }
+        raw = json.dumps(library, indent=2).encode("utf-8")
+        record = {
+            "type": "file",
+            "sha": hashlib.sha1(
+                f"blob {len(raw)}\0".encode("utf-8") + raw
+            ).hexdigest(),
+            "size": 75_000_000,
+            "encoding": "none",
+        }
+        with patch.object(cloud, "_request", return_value=record), patch.object(
+            cloud,
+            "_request_bytes",
+            return_value=raw,
+        ):
+            with tempfile.TemporaryDirectory() as directory:
+                store = engine.StrategyStore(directory, cloud_backup=cloud)
+                restored = store.load()
+                self.assertEqual(restored["strategies"][0]["id"], "s1")
+                self.assertEqual(store.path.read_bytes(), raw)
+                self.assertEqual(
+                    store.local_library_revision()["sha"],
+                    record["sha"],
+                )
+
+
 class CloudBackupFirstWriteTests(unittest.TestCase):
     def test_large_library_git_push_round_trip_against_local_bare_repository(self):
         with tempfile.TemporaryDirectory() as directory:
