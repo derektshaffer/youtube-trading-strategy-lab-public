@@ -1053,6 +1053,8 @@ def load_library(
             except AppError as exc:
                 data = _recover_cloud_library_conflict(store, exc)
         st.session_state[_LIBRARY_LAST_CLOUD_REFRESH_KEY] = now
+        if not remote_sha:
+            remote_sha = str(getattr(store, "restored_cloud_sha", "") or "")
         if remote_sha:
             st.session_state[_LIBRARY_REMOTE_SHA_KEY] = remote_sha
     else:

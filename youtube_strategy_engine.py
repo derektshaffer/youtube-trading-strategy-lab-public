@@ -2354,6 +2354,7 @@ class StrategyStore:
         self.cloud_backup = cloud_backup
         self.cloud_status_path = self.directory / "cloud_backup_status.json"
         self.restored_on_startup = False
+        self.restored_cloud_sha = ""
 
     @staticmethod
     def blank() -> dict[str, Any]:
@@ -2413,6 +2414,7 @@ class StrategyStore:
             if remote is None:
                 return self.blank()
             remote_library = self.normalize_library(remote["library"])
+            self.restored_cloud_sha = str(remote.get("sha") or "")
             raw_remote = remote.get("_raw_bytes")
             if isinstance(raw_remote, (bytes, bytearray)):
                 # Preserve the exact Git blob on cold restore. This lets the

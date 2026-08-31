@@ -1048,6 +1048,7 @@ class DurableStorageTests(unittest.TestCase):
 
             self.assertEqual(cloud.read_calls, 1)
             self.assertTrue(store.restored_on_startup)
+            self.assertEqual(store.restored_cloud_sha, "a" * 40)
             self.assertTrue(store.path.exists())
             self.assertEqual(
                 loaded["knowledge_sources"][0]["title"],
