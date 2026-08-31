@@ -10265,7 +10265,7 @@ elif module == "Market Discovery":
 
         scan_slot = st.empty()
         scan_now = scan_slot.button(
-            "🔎 Find the best opportunities now",
+            "🔎 Scan for live strategy matches",
             type="primary",
             width="stretch",
             key="til_scan_current_market",
@@ -10401,7 +10401,12 @@ elif module == "Market Discovery":
         live_results = list(discovery_result.get("results") or [])
         if live_results:
             st.divider()
-            st.markdown("### Best opportunities found")
+            st.markdown("### Live strategy matches found")
+            st.caption(
+                "This screen finds stocks that currently fit strategy rules. "
+                "It does **not** mean the strategy is profitable or trade-ready. "
+                "Use the Validation and Next step columns to see what still needs to happen."
+            )
             live_learning_status = (
                 st.session_state.get("til_live_learning_market_discovery_status") or {}
             )
@@ -10426,8 +10431,8 @@ elif module == "Market Discovery":
                 (scanned_candidates + scan_batch_size - 1) // scan_batch_size,
             )
             st.caption(
-                "Each stock is paired with its highest-ranked strategy. Validated strategies rank ahead "
-                "of research-only strategies, then current setup quality, robustness, and rule match are considered. "
+                "Each stock is paired with its strongest current strategy match. Validated strategies rank ahead "
+                "of research-only strategies when the setup quality is comparable; robustness and rule match also matter. "
                 f"Candidate universe: {scanned_candidates} stocks across {scanned_batches} "
                 f"batch{'es' if scanned_batches != 1 else ''}."
             )
@@ -10449,8 +10454,8 @@ elif module == "Market Discovery":
                 table_rows.append(
                     {
                         "Stock": item.get("symbol"),
-                        "Best strategy": item.get("best_strategy_name"),
-                        "Strategy status": validation,
+                        "Best current match": item.get("best_strategy_name"),
+                        "Validation": validation,
                         "Current setup": item.get("status"),
                         "Rule match %": safe_float(item.get("score"), 0.0) or 0.0,
                         "Robustness": item.get("robustness_score"),
