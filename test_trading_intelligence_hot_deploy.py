@@ -30,6 +30,45 @@ class FinderHotDeployImportTests(unittest.TestCase):
             source,
         )
 
+    def test_completed_cloud_result_handoff_defers_both_widget_updates(self):
+        source = APP_PATH.read_text(encoding="utf-8")
+        pending_symbol_index = source.index(
+            'st.session_state.pop("til_pending_finder_symbol", "")'
+        )
+        symbol_widget_index = source.index('key="til_finder_symbol"')
+        self.assertLess(pending_symbol_index, symbol_widget_index)
+        self.assertIn(
+            'st.session_state["til_pending_finder_symbol"] = completed_symbol',
+            source,
+        )
+        self.assertIn(
+            'st.session_state["til_pending_finder_profile"] = completed_profile',
+            source,
+        )
+        self.assertNotIn(
+            'st.session_state["til_finder_symbol"] = completed_symbol',
+            source,
+        )
+
+    def test_finder_controls_survive_navigation_away_from_the_page(self):
+        source = APP_PATH.read_text(encoding="utf-8")
+        self.assertIn(
+            'st.session_state["til_finder_symbol_persisted"] = finder_symbol',
+            source,
+        )
+        self.assertIn(
+            'st.session_state["til_finder_profile_persisted"] = finder_profile_name',
+            source,
+        )
+        self.assertIn(
+            'st.session_state.get("til_finder_symbol_persisted") or "SDOT"',
+            source,
+        )
+        self.assertIn(
+            'st.session_state.get("til_finder_profile_persisted") or "Deep"',
+            source,
+        )
+
     def test_finder_recent_behavior_screen_uses_plain_language(self):
         source = APP_PATH.read_text(encoding="utf-8")
         self.assertIn(
