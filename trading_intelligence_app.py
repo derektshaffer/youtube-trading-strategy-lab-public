@@ -2181,7 +2181,10 @@ if module == "Stock Strategy Finder":
             list(SEARCH_PROFILES),
             index=1,
             key="til_finder_profile",
-            help="Deep is the recommended default. Very Deep can take substantially longer.",
+            help=(
+                "Deep is the recommended durable-history default. Current Regime searches roughly "
+                "the latest month for stocks whose behavior changes quickly. Very Deep can take substantially longer."
+            ),
         )
 
     finder_profile = search_profile(finder_profile_name)
@@ -2900,6 +2903,22 @@ if module == "Stock Strategy Finder":
                 "The best candidate is intentionally shown even though it is **not validated**. "
                 "This lets you inspect a setup that may work in the current stock regime without pretending it has proven durable."
             )
+
+        current_profile_name = str((finder_result.get("profile") or {}).get("name") or "")
+        if (
+            str(verdict.get("code") or "") != "ready_for_paper"
+            and current_profile_name != "Current Regime"
+        ):
+            if st.button(
+                "↻ Switch to Current Regime search",
+                key="til_finder_try_current_regime",
+                help=(
+                    "Use roughly the latest month of behavior to search for stock-specific setups "
+                    "that may be hidden by a much longer mixed historical regime."
+                ),
+            ):
+                st.session_state["til_finder_profile"] = "Current Regime"
+                st.rerun()
 
         with st.expander("Winning optimized rules", expanded=False):
             st.json(winner.get("optimized_rules") or {})
