@@ -81,6 +81,23 @@ SEARCH_PROFILES: dict[str, StockSearchProfile] = {
         stability_variants=24,
         description="Default stock-specific research. Tests every technically eligible family across three timeframes.",
     ),
+    "Current Regime": StockSearchProfile(
+        name="Current Regime",
+        history_days=35,
+        timeframes=("1Min", "5Min", "15Min"),
+        max_variants_per_strategy=120,
+        finalists_per_strategy=6,
+        execution_variants_per_finalist=6,
+        walk_forward_folds=3,
+        walk_forward_family_limit=4,
+        quick_family_limit=None,
+        stability_variants=18,
+        description=(
+            "Recent-behavior search for stocks whose character changes quickly. "
+            "Tests every technically eligible family on roughly the latest month, "
+            "then still applies holdout, walk-forward, cost, and parameter-stability checks."
+        ),
+    ),
     "Very Deep": StockSearchProfile(
         name="Very Deep",
         history_days=260,
@@ -100,7 +117,7 @@ SEARCH_PROFILES: dict[str, StockSearchProfile] = {
 def search_profile(name: str) -> StockSearchProfile:
     profile = SEARCH_PROFILES.get(str(name or "").strip())
     if profile is None:
-        raise AppError("Choose Quick, Deep, or Very Deep stock-strategy research.")
+        raise AppError("Choose Quick, Deep, Current Regime, or Very Deep stock-strategy research.")
     return profile
 
 
@@ -349,36 +366,229 @@ def parameter_stability_test(
     }
 
 
-def _verdict(
+def finder_evidence_verdict(
     robustness: dict[str, Any],
     stability: dict[str, Any],
     walk_forward: dict[str, Any],
+    optimization: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Classify the best stock-specific candidate without weakening validation.
+
+    "ready_for_paper" remains the strict validation tier. Lower tiers deliberately
+    preserve useful evidence so a historically profitable candidate is not hidden
+    merely because it failed walk-forward or parameter-stability gates.
+    """
     score = safe_float(robustness.get("score"), 0.0) or 0.0
     independent = bool(robustness.get("independently_positive"))
     stable_pct = safe_float(stability.get("positive_pct"), 0.0) or 0.0
-    walk_pct = safe_float((walk_forward.get("summary") or {}).get("profitable_fold_pct"), 0.0) or 0.0
+    walk_summary = walk_forward.get("summary") or {}
+    walk_pct = safe_float(walk_summary.get("profitable_fold_pct"), 0.0) or 0.0
+
+    winner = (optimization or {}).get("winner") or {}
+    periods = [
+        winner.get("training_metrics") or {},
+        winner.get("validation_metrics") or {},
+        winner.get("holdout_metrics") or {},
+        winner.get("stress_metrics") or {},
+    ]
+    period_pnls = [
+        safe_float(metrics.get("net_pnl"), 0.0) or 0.0
+        for metrics in periods
+    ]
+    period_trades = [
+        int(safe_float(metrics.get("trade_count"), 0) or 0)
+        for metrics in periods
+    ]
+    aggregate_pnl = sum(period_pnls)
+    aggregate_trades = sum(period_trades)
+    validation_positive = period_trades[1] > 0 and period_pnls[1] > 0
+    holdout_positive = period_trades[2] > 0 and period_pnls[2] > 0
 
     if independent and score >= 65.0 and stable_pct >= 55.0 and walk_pct >= 50.0:
         return {
             "code": "ready_for_paper",
             "label": "READY FOR PAPER TESTING",
             "tone": "success",
+            "research_tier": "validated",
+            "paper_ready": True,
             "reason": "The selected stock-specific strategy survived the current holdout, cost, walk-forward, and parameter-stability gates.",
         }
+
     if score >= 50.0 or (walk_pct >= 50.0 and stable_pct >= 40.0):
         return {
             "code": "promising",
-            "label": "PROMISING — NEEDS MORE EVIDENCE",
+            "label": "PROMISING STOCK-SPECIFIC SETUP",
             "tone": "warning",
-            "reason": "Some evidence survived, but the strategy has not cleared every robustness gate.",
+            "research_tier": "promising",
+            "paper_ready": False,
+            "reason": "Meaningful evidence survived, but one or more robustness gates still failed. Keep the candidate visible for research instead of treating it as validated.",
         }
+
+    if (
+        aggregate_trades > 0
+        and aggregate_pnl > 0
+        and (validation_positive or holdout_positive)
+    ):
+        return {
+            "code": "historical_candidate",
+            "label": "HISTORICALLY PROFITABLE CANDIDATE — NOT VALIDATED",
+            "tone": "warning",
+            "research_tier": "historical_candidate",
+            "paper_ready": False,
+            "reason": "The Finder found a configuration with useful historical profitability, but it was not durable enough across the independent validation, walk-forward, stress, or nearby-parameter checks.",
+        }
+
     return {
         "code": "no_robust_strategy",
-        "label": "NO ROBUST STRATEGY FOUND",
+        "label": "NO RELIABLE EDGE FOUND",
         "tone": "error",
-        "reason": "The broad search found historical candidates, but the strongest candidate did not survive enough independent tests to justify paper deployment.",
+        "research_tier": "no_reliable_edge",
+        "paper_ready": False,
+        "reason": "The broad search tested historical candidates, but the strongest configuration did not show enough positive evidence to justify even a promising stock-specific classification.",
     }
+
+
+def apply_paper_fidelity_to_verdict(
+    verdict: dict[str, Any],
+    paper_fidelity: dict[str, Any],
+) -> dict[str, Any]:
+    """Downgrade paper readiness when live/paper execution cannot reproduce it."""
+    if (
+        str(verdict.get("code") or "") == "ready_for_paper"
+        and str(paper_fidelity.get("status") or "") != "ready"
+    ):
+        return {
+            "code": "historically_robust_execution_gap",
+            "label": "ROBUST HISTORICALLY — PAPER ENGINE NOT YET FAITHFUL",
+            "tone": "warning",
+            "research_tier": "historically_robust_execution_gap",
+            "paper_ready": False,
+            "reason": (
+                "The strategy survived the historical robustness gates, but Paper Auto cannot yet "
+                "reproduce the same trade-management rules. Keep it in research/paper-manual mode "
+                "until live execution fidelity is implemented."
+            ),
+        }
+    return dict(verdict or {})
+
+
+def validated_status_ready(
+    verdict: dict[str, Any],
+    paper_fidelity: dict[str, Any],
+    walk_forward: dict[str, Any] | None,
+) -> bool:
+    """One shared meaning of validated across Finder and manual Strategy Lab."""
+    return (
+        bool(walk_forward)
+        and str(verdict.get("code") or "") == "ready_for_paper"
+        and str(paper_fidelity.get("status") or "") == "ready"
+    )
+
+
+def regime_diagnostics(
+    rows: list[dict[str, Any]],
+    source_strategy: dict[str, Any],
+    optimization_report: dict[str, Any],
+) -> dict[str, Any]:
+    """Describe how the frozen winning rules behave across trailing regimes.
+
+    These windows are diagnostics only. They do not re-optimize or participate in
+    winner selection, so they cannot turn a research-only candidate into a
+    validated strategy.
+    """
+    winner = optimization_report.get("winner") or {}
+    if not winner:
+        return {"status": "unavailable", "windows": []}
+
+    timeframe = str(optimization_report.get("timeframe") or "5Min")
+    timeframe_rows = resample_intraday_bars(
+        rows,
+        timeframe,
+        include_extended_hours=True,
+    )
+    frame = bars_to_frame(timeframe_rows, include_extended_hours=True)
+    if "session" not in frame.columns:
+        return {"status": "unavailable", "windows": []}
+    sessions = list(dict.fromkeys(frame["session"].tolist()))
+    if not sessions:
+        return {"status": "unavailable", "windows": []}
+
+    settings = BacktestSettings(
+        **(
+            winner.get("optimized_backtest_settings")
+            or optimization_report.get("backtest_settings")
+            or {}
+        )
+    )
+    candidate = {
+        **source_strategy,
+        "machine_rules": normalize_machine_rules(
+            winner.get("optimized_rules")
+            or source_strategy.get("machine_rules")
+        ),
+    }
+
+    requested = [
+        ("Recent regime", 20),
+        ("Intermediate regime", 60),
+        ("Longer regime", 120),
+        ("Full search history", len(sessions)),
+    ]
+    windows: list[dict[str, Any]] = []
+    seen_counts: set[int] = set()
+    for label, requested_sessions in requested:
+        count = min(len(sessions), max(1, int(requested_sessions)))
+        if count in seen_counts:
+            continue
+        seen_counts.add(count)
+        selected_sessions = sessions[-count:]
+        selected_rows = _rows_for_sessions(timeframe_rows, selected_sessions)
+        metrics = (
+            run_backtest(
+                selected_rows,
+                candidate,
+                str(optimization_report.get("symbol") or ""),
+                settings,
+            ).get("metrics")
+            or {}
+        )
+        windows.append(
+            {
+                "label": label,
+                "session_count": count,
+                "start_session": selected_sessions[0],
+                "end_session": selected_sessions[-1],
+                "metrics": metrics,
+                "profitable": (
+                    int(safe_float(metrics.get("trade_count"), 0) or 0) > 0
+                    and (safe_float(metrics.get("net_pnl"), 0.0) or 0.0) > 0
+                ),
+            }
+        )
+    return {
+        "status": "complete",
+        "timeframe": timeframe,
+        "windows": windows,
+        "note": (
+            "Regime diagnostics replay the already-selected frozen rules over trailing windows. "
+            "They are descriptive and never count as independent validation."
+        ),
+    }
+
+
+def _verdict(
+    robustness: dict[str, Any],
+    stability: dict[str, Any],
+    walk_forward: dict[str, Any],
+    optimization: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Backward-compatible internal alias."""
+    return finder_evidence_verdict(
+        robustness,
+        stability,
+        walk_forward,
+        optimization,
+    )
 
 
 def complete_stock_strategy_finder_from_optimization(
@@ -482,27 +692,19 @@ def complete_stock_strategy_finder_from_optimization(
         perf_counter() - stability_started,
         3,
     )
-    verdict = _verdict(robustness, stability, walk)
+    regime_report = regime_diagnostics(
+        one_minute_rows,
+        winner_source,
+        optimization,
+    )
+    verdict = _verdict(robustness, stability, walk, optimization)
     paper_fidelity = paper_execution_fidelity({
         **winner_source,
         "validation_status": "research_only",
         "validated_rules": None,
         "machine_rules": winner.get("optimized_rules") or winner_source.get("machine_rules") or {},
     })
-    if (
-        str(verdict.get("code") or "") == "ready_for_paper"
-        and str(paper_fidelity.get("status") or "") != "ready"
-    ):
-        verdict = {
-            "code": "historically_robust_execution_gap",
-            "label": "ROBUST HISTORICALLY — PAPER ENGINE NOT YET FAITHFUL",
-            "tone": "warning",
-            "reason": (
-                "The strategy survived the historical robustness gates, but Paper Auto cannot yet "
-                "reproduce the same trade-management rules. Keep it in research/paper-manual mode "
-                "until live execution fidelity is implemented."
-            ),
-        }
+    verdict = apply_paper_fidelity_to_verdict(verdict, paper_fidelity)
     if total_started is not None:
         stage_timings["total"] = round(
             perf_counter() - total_started,
@@ -542,6 +744,7 @@ def complete_stock_strategy_finder_from_optimization(
         "walk_forward": walk,
         "robustness": robustness,
         "parameter_stability": stability,
+        "regime_diagnostics": regime_report,
         "paper_execution_fidelity": paper_fidelity,
         "verdict": verdict,
         "winner_source_strategy_id": source_id,
@@ -816,6 +1019,7 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
         "distributed": report.get("distributed") or {},
         "robustness": report.get("robustness") or {},
         "parameter_stability": report.get("parameter_stability") or {},
+        "regime_diagnostics": report.get("regime_diagnostics") or {},
         "paper_execution_fidelity": report.get("paper_execution_fidelity") or {},
         "walk_forward_summary": (report.get("walk_forward") or {}).get("summary") or {},
         "training_metrics": winner.get("training_metrics") or {},
@@ -872,7 +1076,11 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
             f"{source_id}|{symbol}".encode("utf-8")
         ).hexdigest()[:18]
         verdict = report.get("verdict") or {}
-        ready_for_paper = str(verdict.get("code") or "") == "ready_for_paper"
+        ready_for_paper = validated_status_ready(
+            verdict,
+            report.get("paper_execution_fidelity") or {},
+            report.get("walk_forward") or {},
+        )
         child = {
             **source,
             "id": child_id,
