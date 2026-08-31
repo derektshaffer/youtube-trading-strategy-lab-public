@@ -88,6 +88,99 @@ def compact_router(router: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def profit_first_validation_summary(
+    validation_runs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build a compact profit-first view from saved strict-validation evidence."""
+
+    def metrics_positive(metrics: dict[str, Any]) -> bool:
+        return (
+            int(float(metrics.get("trade_count") or 0)) > 0
+            and float(metrics.get("net_pnl") or 0.0) > 0.0
+        )
+
+    latest_by_strategy: dict[str, dict[str, Any]] = {}
+    ordered = sorted(
+        validation_runs,
+        key=lambda item: str(item.get("generated_at") or ""),
+        reverse=True,
+    )
+    for run in ordered:
+        strategy_key = str(
+            run.get("strategy_id")
+            or run.get("strategy_name")
+            or run.get("id")
+            or ""
+        )
+        if not strategy_key or strategy_key in latest_by_strategy:
+            continue
+        validation = run.get("validation_metrics") if isinstance(run.get("validation_metrics"), dict) else {}
+        holdout = run.get("holdout_metrics") if isinstance(run.get("holdout_metrics"), dict) else {}
+        stress = run.get("stress_metrics") if isinstance(run.get("stress_metrics"), dict) else {}
+        robustness = run.get("robustness") if isinstance(run.get("robustness"), dict) else {}
+        walk = run.get("walk_forward_summary") if isinstance(run.get("walk_forward_summary"), dict) else {}
+        validation_positive = metrics_positive(validation)
+        holdout_positive = metrics_positive(holdout)
+        stress_positive = metrics_positive(stress)
+        strict = bool(
+            str(run.get("validation_status") or "").lower() == "validated"
+            and validation_positive
+            and holdout_positive
+            and stress_positive
+        )
+        latest_by_strategy[strategy_key] = {
+            "strategy_id": run.get("strategy_id"),
+            "strategy_name": run.get("strategy_name"),
+            "symbol": run.get("symbol"),
+            "generated_at": run.get("generated_at"),
+            "validation_status": run.get("validation_status"),
+            "strict_profit_edge": strict,
+            "robustness_score": robustness.get("score"),
+            "validation_metrics": validation,
+            "holdout_metrics": holdout,
+            "stress_metrics": stress,
+            "walk_forward_profitable_pct": walk.get("profitable_fold_pct"),
+            "positive_evidence_periods": sum(
+                (validation_positive, holdout_positive, stress_positive)
+            ),
+        }
+
+    latest = list(latest_by_strategy.values())
+    strict_edges = [item for item in latest if item["strict_profit_edge"]]
+    strict_edges.sort(
+        key=lambda item: (
+            float(item.get("robustness_score") or 0.0),
+            float((item.get("holdout_metrics") or {}).get("net_pnl") or 0.0),
+        ),
+        reverse=True,
+    )
+    near_misses = [item for item in latest if not item["strict_profit_edge"]]
+    near_misses.sort(
+        key=lambda item: (
+            int(item.get("positive_evidence_periods") or 0),
+            float(item.get("robustness_score") or 0.0),
+            float((item.get("holdout_metrics") or {}).get("net_pnl") or 0.0),
+        ),
+        reverse=True,
+    )
+    return {
+        "saved_validation_run_count": len(validation_runs),
+        "distinct_strategy_count": len(latest),
+        "validated_run_count": sum(
+            1
+            for item in validation_runs
+            if str(item.get("validation_status") or "").lower() == "validated"
+        ),
+        "strict_profit_edge_count": len(strict_edges),
+        "strict_profit_edges": strict_edges[:20],
+        "closest_research_candidates": near_misses[:20],
+        "criteria": (
+            "Latest saved run for a strategy must be labeled validated and have positive trade count "
+            "and net P/L in validation, untouched holdout, and higher-cost stress periods."
+        ),
+    }
+
+
 def summarize(path: Path) -> dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
     now = datetime.now(UTC)
@@ -282,6 +375,10 @@ def summarize(path: Path) -> dict[str, Any]:
             "latest": latest_autonomous_validations,
             "latest_research_runs": latest_autonomous_research_runs,
         },
+        "profit_first": profit_first_validation_summary(validation_runs),
+        "strategy_validation_status_counts": counter_dict(
+            item.get("validation_status") for item in strategies
+        ),
         "interpretation_notes": [
             "Counts are records currently retained in the durable library; if collections are retention-capped they are not guaranteed all-time lifetime totals.",
             "Duplicate checks flag exact active dedupe keys, payloads, or normalized topics; semantically similar wording may still require review.",
