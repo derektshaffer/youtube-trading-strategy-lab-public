@@ -8,8 +8,10 @@ from explosive_stock_core import (
     completed_daily_profile,
     completed_intraday_rows,
     forward_explosion_labels,
+    rank_latent_daily_candidates,
     scan_explosive_candidates,
     score_explosive_profile,
+    score_latent_daily_candidate,
 )
 
 
@@ -143,6 +145,26 @@ class ExplosiveStockCoreTests(unittest.TestCase):
         )
         self.assertGreater(diluted["risk_score"], clean["risk_score"])
         self.assertTrue(any("dilution" in warning.lower() for warning in diluted["warnings"]))
+
+    def test_latent_prescreen_score_is_not_probability(self):
+        profile = completed_daily_profile(_daily_rows(35))
+        candidate = score_latent_daily_candidate("TEST", profile)
+        self.assertIsNotNone(candidate)
+        self.assertFalse(candidate["score_is_probability"])
+        self.assertEqual(candidate["validation_status"], "experimental_unvalidated")
+
+    def test_latent_prescreen_rejects_insufficient_history(self):
+        profile = completed_daily_profile(_daily_rows(10))
+        self.assertIsNone(score_latent_daily_candidate("TEST", profile))
+
+    def test_rank_latent_daily_candidates_is_bounded(self):
+        universe = {
+            f"T{index}": _daily_rows(35, start_price=2.0 + index * 0.1)
+            for index in range(6)
+        }
+        ranked = rank_latent_daily_candidates(universe, top_n=3)
+        self.assertLessEqual(len(ranked), 3)
+        self.assertTrue(all(item.get("score_is_probability") is False for item in ranked))
 
     def test_candidate_does_not_fabricate_float_or_market_cap(self):
         now = datetime(2026, 8, 31, 18, 0, 30, tzinfo=timezone.utc)
