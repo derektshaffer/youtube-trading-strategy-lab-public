@@ -5314,16 +5314,20 @@ elif module == "Strategy Integrity":
         strategy_id = str(strategy.get("id") or strategy.get("name") or "")
         integrity_reports[strategy_id] = report
         dimensions = report.get("dimension_summary") or {}
+        requirement_count = int(report.get("requirement_count") or 0)
+        modeled_count = int(report.get("modeled_count") or 0)
+        coverage_value = safe_float(report.get("coverage_pct"))
         integrity_rows.append(
             {
                 "Strategy family": strategy.get("name") or "Unnamed strategy",
                 "Backtester match": report.get("label"),
                 "Rules modeled": (
-                    f"{int(report.get('modeled_count') or 0)} of "
-                    f"{int(report.get('requirement_count') or 0)} "
-                    f"({safe_float(report.get('coverage_pct'), 0.0) or 0.0:.1f}%)"
+                    "N/A — no rules detected"
+                    if requirement_count == 0
+                    else f"{modeled_count} of {requirement_count} ({coverage_value or 0.0:.1f}%)"
                 ),
-                "Coverage sort": safe_float(report.get("coverage_pct"), 0.0) or 0.0,
+                "Coverage sort": coverage_value,
+                "Rules detected count": requirement_count,
                 "Important rules missing": int(report.get("critical_missing_count") or 0),
                 "Missing exit rules": int((dimensions.get("exit") or {}).get("missing") or 0),
                 "Missing stock-selection rules": int((dimensions.get("universe") or {}).get("missing") or 0),
@@ -5337,19 +5341,38 @@ elif module == "Strategy Integrity":
     else:
         faithful = sum(1 for row in integrity_rows if row["Backtester match"] == "FULLY MODELED FOR CURRENT REQUIREMENTS")
         partial = sum(1 for row in integrity_rows if row["Backtester match"] == "PARTIALLY MODELED")
+        unknown = sum(1 for row in integrity_rows if row["Backtester match"] == "NO RULES DETECTED")
         blocked = sum(1 for row in integrity_rows if row["Backtester match"] == "IMPORTANT LOGIC NOT MODELED")
-        average_coverage = sum(float(row["Coverage sort"]) for row in integrity_rows) / max(1, len(integrity_rows))
+        measurable_coverages = [
+            float(row["Coverage sort"])
+            for row in integrity_rows
+            if row.get("Coverage sort") is not None
+        ]
+        average_coverage = (
+            sum(measurable_coverages) / len(measurable_coverages)
+            if measurable_coverages
+            else None
+        )
 
-        audit_cols = st.columns(4)
+        audit_cols = st.columns(5)
         audit_cols[0].metric("Strategies fully represented", faithful)
         audit_cols[1].metric("Strategies partly represented", partial)
-        audit_cols[2].metric("Strategies with critical gaps", blocked)
-        audit_cols[3].metric("Avg. strategy rules reproduced", f"{average_coverage:.1f}%")
-        st.caption(
-            f"{average_coverage:.1f}% means the backtester can reproduce about "
-            f"{average_coverage:.0f}% of the detected strategy rules on average. "
-            "This is not a profitability, accuracy, confidence, or win-rate score."
+        audit_cols[2].metric("No rules detected", unknown)
+        audit_cols[3].metric("Strategies with critical gaps", blocked)
+        audit_cols[4].metric(
+            "Avg. strategy rules reproduced",
+            "N/A" if average_coverage is None else f"{average_coverage:.1f}%",
         )
+        if average_coverage is None:
+            st.caption(
+                "Average coverage is N/A because no strategies currently have measurable detected-rule coverage."
+            )
+        else:
+            st.caption(
+                f"{average_coverage:.1f}% means the backtester can reproduce about "
+                f"{average_coverage:.0f}% of detected strategy rules on average, excluding strategies "
+                "where no rules were detected. This is not a profitability, accuracy, confidence, or win-rate score."
+            )
 
         if blocked:
             st.error(
@@ -5366,11 +5389,14 @@ elif module == "Strategy Integrity":
             st.success("The currently detected defining requirements are represented by the backtester.")
 
         audit_frame = pd.DataFrame(integrity_rows).sort_values(
-            by=["Important rules missing", "Coverage sort"],
-            ascending=[False, True],
+            by=["Important rules missing", "Rules detected count", "Coverage sort"],
+            ascending=[False, True, True],
+            na_position="last",
         )
-        if "Coverage sort" in audit_frame.columns:
-            audit_frame = audit_frame.drop(columns=["Coverage sort"])
+        audit_frame = audit_frame.drop(
+            columns=["Coverage sort", "Rules detected count"],
+            errors="ignore",
+        )
         st.dataframe(audit_frame, width="stretch", hide_index=True)
 
         # Audit raw source variations too. A minority exit/selection variation can
@@ -5471,10 +5497,26 @@ elif module == "Strategy Integrity":
 
         st.markdown(f"### {selected_strategy.get('name') or 'Unnamed strategy'}")
         fidelity_cols = st.columns(4)
+        detail_requirement_count = int(report.get("requirement_count") or 0)
+        detail_coverage = safe_float(report.get("coverage_pct"))
         fidelity_cols[0].metric("Backtester match", report.get("label"))
-        fidelity_cols[1].metric("Rules represented", f"{safe_float(report.get('coverage_pct'), 0.0):.1f}%")
-        fidelity_cols[2].metric("Rules modeled", f"{int(report.get('modeled_count') or 0)}/{int(report.get('requirement_count') or 0)}")
+        fidelity_cols[1].metric(
+            "Rules represented",
+            "N/A" if detail_requirement_count == 0 else f"{detail_coverage or 0.0:.1f}%",
+        )
+        fidelity_cols[2].metric(
+            "Rules modeled",
+            (
+                "N/A"
+                if detail_requirement_count == 0
+                else f"{int(report.get('modeled_count') or 0)}/{detail_requirement_count}"
+            ),
+        )
         fidelity_cols[3].metric("Important rules missing", int(report.get("critical_missing_count") or 0))
+        if detail_requirement_count == 0:
+            st.caption(
+                "No source rules were detected for this strategy, so fidelity cannot be scored yet."
+            )
 
         source_ids = {
             str(value)
