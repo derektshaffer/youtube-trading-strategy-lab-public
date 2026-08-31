@@ -3332,15 +3332,25 @@ if module == "Stock Strategy Finder":
             str(verdict.get("code") or "") != "ready_for_paper"
             and current_profile_name != "Current Regime"
         ):
-            if st.button(
+            regime_switch_slot = st.empty()
+            switch_regime = regime_switch_slot.button(
                 "↻ Switch to Recent Behavior search",
                 key="til_finder_try_current_regime",
                 help=(
                     "Search roughly the latest month of behavior for stock-specific setups "
                     "that may be hidden by a much longer mixed historical history."
                 ),
-            ):
+            )
+            if switch_regime:
+                regime_switch_slot.button(
+                    "↻ Loading Recent Behavior search…",
+                    disabled=True,
+                    key="til_finder_try_current_regime_busy",
+                )
                 st.session_state["til_pending_finder_profile"] = "Current Regime"
+                st.session_state["_trading_app_boot_message"] = (
+                    "Loading Recent Behavior Finder…"
+                )
                 st.rerun()
 
         with st.expander("Winning optimized rules", expanded=False):
@@ -6011,10 +6021,23 @@ elif module == "Make Strategy Testable":
                     for item in compiled.get("unmapped_requirements") or []:
                         st.write("• " + str(item))
 
-        if accepted_overrides and st.button(
-            "Remove all AI test assumptions",
-            width="stretch",
-        ):
+        remove_assumptions_slot = st.empty()
+        remove_assumptions = (
+            remove_assumptions_slot.button(
+                "Remove all AI test assumptions",
+                width="stretch",
+                key="til_remove_ai_test_assumptions",
+            )
+            if accepted_overrides
+            else False
+        )
+        if remove_assumptions:
+            remove_assumptions_slot.button(
+                "Removing AI test assumptions…",
+                width="stretch",
+                disabled=True,
+                key="til_remove_ai_test_assumptions_busy",
+            )
             data = load_library(mutable=True)
             for item in data.get("strategies") or []:
                 if str(item.get("id") or "") == str(compiler_strategy.get("id") or ""):
@@ -8367,11 +8390,19 @@ elif module == "Pattern Validation":
         )
 
     ml_preset_cols = st.columns([1.35, 2.65])
-    if ml_preset_cols[0].button(
+    ml_benchmark_slot = ml_preset_cols[0].empty()
+    load_ml_benchmark = ml_benchmark_slot.button(
         "Load broader 5-stock benchmark",
         width="stretch",
         key="til_load_broader_ml_benchmark",
-    ):
+    )
+    if load_ml_benchmark:
+        ml_benchmark_slot.button(
+            "Loading benchmark preset…",
+            width="stretch",
+            disabled=True,
+            key="til_load_broader_ml_benchmark_busy",
+        )
         broader_symbols = "SDOT RR KULR FCEL ACHR"
         st.session_state["til_ml_symbols"] = broader_symbols
         st.session_state["til_ml_symbols_input"] = broader_symbols
@@ -9605,11 +9636,21 @@ elif module == "Market Discovery":
             f"Scanning the exact Finder setup: **{requested_strategy.get('name') or 'stock-specific candidate'}**. "
             "This may be research-only; its validation status will stay visible in the scan results."
         )
-        if st.button(
+        clear_discovery_slot = st.empty()
+        clear_discovery = clear_discovery_slot.button(
             "Clear setup filter and scan the full strategy library",
             key="til_clear_market_discovery_strategy_filter",
-        ):
+        )
+        if clear_discovery:
+            clear_discovery_slot.button(
+                "Loading full strategy library…",
+                disabled=True,
+                key="til_clear_market_discovery_strategy_filter_busy",
+            )
             st.session_state.pop("til_market_discovery_strategy_id", None)
+            st.session_state["_trading_app_boot_message"] = (
+                "Loading full Market Discovery strategy library…"
+            )
             st.rerun()
 
     if integrity_blocked_count:
