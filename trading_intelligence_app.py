@@ -17,7 +17,10 @@ import pandas as pd
 import streamlit as st
 
 from app_access import require_app_access
-from finder_report_persistence import latest_completed_finder_report
+from finder_report_persistence import (
+    latest_completed_finder_report,
+    newest_matching_finder_report,
+)
 from hot_deploy_imports import load_current_source_module
 from market_feature_scorecards import run_detector_scorecards
 from market_detector_gate import evaluate_scorecard_report
@@ -98,6 +101,7 @@ import stock_strategy_finder as _stock_strategy_finder
 _required_finder_attributes = (
     "finder_evidence_verdict",
     "apply_paper_fidelity_to_verdict",
+    "stock_finder_strategy_families",
     "validated_status_ready",
 )
 _finder_module = _stock_strategy_finder
@@ -128,6 +132,7 @@ validated_status_ready = _finder_module.validated_status_ready
 run_stock_strategy_finder = _finder_module.run_stock_strategy_finder
 search_profile = _finder_module.search_profile
 selected_strategies_for_profile = _finder_module.selected_strategies_for_profile
+stock_finder_strategy_families = _finder_module.stock_finder_strategy_families
 from trading_catalyst_core import (
     catalyst_intelligence_summary,
     classify_catalyst,
@@ -1782,15 +1787,38 @@ managed_integrity_reports = {
     str(item.get("id") or item.get("name") or ""): strategy_integrity_report(item)
     for item in managed_strategies
 }
+stock_specific_strategies = [
+    item
+    for item in strategies
+    if str(item.get("source_type") or "").strip().casefold()
+    == "stock_specific_finder"
+]
+downstream_strategies = [*stock_specific_strategies, *managed_strategies]
+downstream_integrity_reports = {
+    **managed_integrity_reports,
+    **{
+        str(item.get("id") or item.get("name") or ""): strategy_integrity_report(item)
+        for item in stock_specific_strategies
+    },
+}
 integrity_safe_strategies = [
     item
-    for item in managed_strategies
+    for item in downstream_strategies
     if str(
-        (managed_integrity_reports.get(str(item.get("id") or item.get("name") or "")) or {}).get("status")
+        (
+            downstream_integrity_reports.get(
+                str(item.get("id") or item.get("name") or "")
+            )
+            or {}
+        ).get("status")
         or ""
     ) != "blocked"
 ]
-integrity_blocked_count = max(0, len(managed_strategies) - len(integrity_safe_strategies))
+integrity_blocked_count = sum(
+    1
+    for report in managed_integrity_reports.values()
+    if str((report or {}).get("status") or "") == "blocked"
+)
 
 top_gap, top_search, top_actions = st.columns([2.55, 1.35, .72], vertical_alignment="center")
 with top_gap:
@@ -1954,9 +1982,9 @@ if module == "Stock Strategy Finder":
                     ),
                     width="stretch",
                 ):
-                    st.session_state["til_finder_symbol"] = completed_symbol
+                    st.session_state["til_pending_finder_symbol"] = completed_symbol
                     if completed_profile in SEARCH_PROFILES:
-                        st.session_state["til_finder_profile"] = completed_profile
+                        st.session_state["til_pending_finder_profile"] = completed_profile
                     st.rerun()
 
 
@@ -2188,16 +2216,33 @@ if module == "Stock Strategy Finder":
         st.session_state.pop("til_pending_finder_profile", "") or ""
     )
     if pending_finder_profile in SEARCH_PROFILES:
-        # Apply the requested profile before the selectbox is instantiated.
-        # Streamlit forbids assigning to a widget's session-state key later in
-        # the same render after that widget has already been created.
+        # Apply requested values before their widgets are instantiated.
         st.session_state["til_finder_profile"] = pending_finder_profile
+        st.session_state["til_finder_profile_persisted"] = pending_finder_profile
+    pending_finder_symbol = str(
+        st.session_state.pop("til_pending_finder_symbol", "") or ""
+    ).strip().upper()
+    if pending_finder_symbol:
+        st.session_state["til_finder_symbol"] = pending_finder_symbol
+        st.session_state["til_finder_symbol_persisted"] = pending_finder_symbol
+
+    finder_profile_options = list(SEARCH_PROFILES)
+    finder_profile_default = str(
+        st.session_state.get("til_finder_profile_persisted") or "Deep"
+    )
+    if finder_profile_default not in SEARCH_PROFILES:
+        finder_profile_default = "Deep"
+    if "til_finder_symbol" not in st.session_state:
+        st.session_state["til_finder_symbol"] = str(
+            st.session_state.get("til_finder_symbol_persisted") or "SDOT"
+        )
+    if "til_finder_profile" not in st.session_state:
+        st.session_state["til_finder_profile"] = finder_profile_default
 
     finder_a, finder_b = st.columns([1.15, 1.0])
     with finder_a:
         finder_symbol = st.text_input(
             "Stock to research",
-            value=str(st.session_state.get("til_finder_symbol") or "SDOT"),
             placeholder="SDOT",
             max_chars=10,
             key="til_finder_symbol",
@@ -2206,8 +2251,7 @@ if module == "Stock Strategy Finder":
     with finder_b:
         finder_profile_name = st.selectbox(
             "Search depth",
-            list(SEARCH_PROFILES),
-            index=1,
+            finder_profile_options,
             key="til_finder_profile",
             format_func=lambda value: (
                 "Recent Behavior" if str(value) == "Current Regime" else str(value)
@@ -2218,14 +2262,18 @@ if module == "Stock Strategy Finder":
             ),
         )
 
+    st.session_state["til_finder_symbol_persisted"] = finder_symbol
+    st.session_state["til_finder_profile_persisted"] = finder_profile_name
+
     finder_profile = search_profile(finder_profile_name)
     finder_profile_display = (
         "Recent Behavior"
         if str(finder_profile.name) == "Current Regime"
         else str(finder_profile.name)
     )
+    finder_family_strategies = stock_finder_strategy_families(strategies)
     finder_candidates, finder_skips = selected_strategies_for_profile(
-        strategies,
+        finder_family_strategies,
         finder_symbol or "UNKNOWN",
         finder_profile,
     )
@@ -2300,7 +2348,12 @@ if module == "Stock Strategy Finder":
         library,
         finder_symbol,
     )
-    finder_result = session_finder_result if session_result_matches else saved_finder_result
+    finder_result = newest_matching_finder_report(
+        session_finder_result if session_result_matches else {},
+        saved_finder_result,
+        finder_symbol,
+        finder_profile.name,
+    )
 
     checkpoint_status = str((saved_finder_checkpoint or {}).get("status") or "").lower()
     checkpoint_engine_state = dict((saved_finder_checkpoint or {}).get("engine_state") or {})
@@ -2765,7 +2818,7 @@ if module == "Stock Strategy Finder":
                 )
             finder_report = run_stock_strategy_finder(
                 finder_rows,
-                strategies,
+                finder_family_strategies,
                 finder_symbol,
                 **finder_run_kwargs,
             )
@@ -6282,7 +6335,16 @@ elif module == "Strategy Lab":
         )
         risk_per_trade = float(risk_cols[1].number_input("Risk budget per trade (%)", 0.1, 10.0, 0.5, 0.1))
         max_position = float(risk_cols[2].number_input("Maximum total position (%)", 1.0, 100.0, 20.0, 1.0))
-        max_drawdown = float(risk_cols[3].number_input("Validation drawdown ceiling (%)", 1.0, 75.0, 15.0, 1.0))
+        max_drawdown = float(
+            risk_cols[3].number_input(
+                "Validation drawdown ceiling (%)",
+                1.0,
+                20.0,
+                15.0,
+                1.0,
+                help="The shared strict validation protocol never permits a drawdown ceiling above 20%.",
+            )
+        )
 
         with st.expander("Advanced validation settings", expanded=False):
             v1, v2, v3, v4 = st.columns(4)
@@ -6303,7 +6365,7 @@ elif module == "Strategy Lab":
                 w1, w2, w3 = st.columns(3)
                 wf_history_sessions = int(w1.number_input("Minimum prior sessions per fold", 5, 60, 8, 1))
                 wf_test_sessions = int(w2.number_input("Unseen sessions per fold", 1, 10, 2, 1))
-                wf_folds = int(w3.number_input("Walk-forward folds", 1, 6, 3, 1))
+                wf_folds = int(w3.number_input("Walk-forward folds", 2, 6, 3, 1))
             else:
                 wf_history_sessions, wf_test_sessions, wf_folds = 8, 2, 3
 
@@ -6406,6 +6468,8 @@ elif module == "Strategy Lab":
                     minimum_validation_trades=int(minimum_validation_trades),
                     training_fraction=float(training_fraction),
                     validation_fraction=float(validation_fraction),
+                    stress_cost_multiplier=1.75,
+                    automatic_slippage=True,
                     maximum_drawdown_pct=max_drawdown,
                     selection_mode="validated",
                 )
