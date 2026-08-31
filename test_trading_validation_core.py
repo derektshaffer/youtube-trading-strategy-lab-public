@@ -2,7 +2,42 @@
 
 import unittest
 
-from trading_validation_core import validation_strength
+from trading_validation_core import _walk_forward_session_splits, validation_strength
+
+
+class WalkForwardSplitTests(unittest.TestCase):
+    def test_session_embargo_is_never_used_for_training_or_external_test(self):
+        sessions = [f"2026-08-{day:02d}" for day in range(1, 13)]
+        splits = _walk_forward_session_splits(
+            sessions,
+            minimum_history_sessions=5,
+            test_sessions_per_fold=2,
+            embargo_sessions=1,
+        )
+        self.assertGreaterEqual(len(splits), 2)
+
+        first = splits[0]
+        self.assertEqual(first["history_sessions"], sessions[:5])
+        self.assertEqual(first["embargo_sessions"], [sessions[5]])
+        self.assertEqual(first["external_test_sessions"], sessions[6:8])
+        self.assertTrue(
+            set(first["history_sessions"]).isdisjoint(first["embargo_sessions"])
+        )
+        self.assertTrue(
+            set(first["embargo_sessions"]).isdisjoint(first["external_test_sessions"])
+        )
+
+        second = splits[1]
+        self.assertEqual(second["embargo_sessions"], [sessions[7]])
+        self.assertEqual(second["external_test_sessions"], sessions[8:10])
+        self.assertLess(
+            sessions.index(second["history_sessions"][-1]),
+            sessions.index(second["embargo_sessions"][0]),
+        )
+        self.assertLess(
+            sessions.index(second["embargo_sessions"][-1]),
+            sessions.index(second["external_test_sessions"][0]),
+        )
 
 
 class ValidationStrengthTests(unittest.TestCase):
