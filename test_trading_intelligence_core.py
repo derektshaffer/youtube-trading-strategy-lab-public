@@ -882,25 +882,39 @@ class BookAnalyzerResilienceTests(unittest.TestCase):
 
 
 class StrategyIntegrityTests(unittest.TestCase):
-    def test_paper_execution_fidelity_separates_dynamic_backtest_support_from_live_support(self):
+    def test_paper_execution_fidelity_fails_closed_until_runner_manages_full_lifecycle(self):
         fixed = {
             "id": "fixed",
             "direction": "long",
             "machine_rules": {"stop_loss_pct": 3.0, "reward_risk": 2.0},
         }
-        dynamic = {
-            "id": "dynamic",
+        timed = {
+            "id": "timed",
             "direction": "long",
             "machine_rules": {
                 "stop_loss_pct": 3.0,
                 "reward_risk": 2.0,
+                "max_hold_minutes": 20,
                 "exit_below_vwap": True,
             },
         }
-        self.assertEqual(paper_execution_fidelity(fixed)["status"], "ready")
-        blocked = paper_execution_fidelity(dynamic)
-        self.assertEqual(blocked["status"], "blocked")
-        self.assertIn("VWAP-loss exit", blocked["unsupported_management"])
+
+        fixed_blocked = paper_execution_fidelity(fixed)
+        self.assertEqual(fixed_blocked["status"], "blocked")
+        self.assertIn(
+            "Guaranteed end-of-session flattening",
+            fixed_blocked["unsupported_management"],
+        )
+        self.assertTrue(fixed_blocked["research_backtest_forces_session_flat"])
+        self.assertFalse(fixed_blocked["paper_runner_persistent_manager"])
+
+        timed_blocked = paper_execution_fidelity(timed)
+        self.assertEqual(timed_blocked["status"], "blocked")
+        self.assertIn(
+            "Maximum holding-time exit",
+            timed_blocked["unsupported_management"],
+        )
+        self.assertIn("VWAP-loss exit", timed_blocked["unsupported_management"])
 
     def test_legacy_validation_is_invalidated_when_defining_logic_was_never_modeled(self):
         strategy = {
