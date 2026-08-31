@@ -676,6 +676,24 @@ class FinderPersistenceTests(unittest.TestCase):
             },
             "walk_forward": {"summary": {"profitable_fold_pct": 75}},
             "optimization": {
+                "rankings": [
+                    {
+                        "source_strategy_id": source["id"],
+                        "strategy_name": source["name"],
+                        "timeframe": "5Min",
+                        "status": "VALIDATED",
+                        "score": 88.0,
+                        "adequate_sample": True,
+                        "optimized_rules": source["machine_rules"],
+                        "optimized_backtest_settings": {},
+                        "validation_metrics": {
+                            "net_pnl": 50,
+                            "return_pct": 2.5,
+                            "trade_count": 8,
+                        },
+                        "stress_metrics": {"net_pnl": 30},
+                    }
+                ],
                 "winner": {
                     "status": "VALIDATED",
                     "optimized_rules": source["machine_rules"],
@@ -795,6 +813,15 @@ class FinderPersistenceTests(unittest.TestCase):
         )
         self.assertEqual(restored["paper_validation_status"], "ready")
         self.assertEqual(restored["timeframe"], "5Min")
+        self.assertEqual(len(restored["tested_strategy_rankings"]), 1)
+        self.assertEqual(
+            restored["tested_strategy_rankings"][0]["source_strategy_id"],
+            source["id"],
+        )
+        self.assertEqual(
+            restored["tested_strategy_rankings"][0]["validation_metrics"]["return_pct"],
+            2.5,
+        )
         self.assertEqual(restored["strategy_fidelity_engine_version"], 1)
         self.assertEqual(restored["paper_execution_fidelity"]["status"], "ready")
         self.assertEqual(
