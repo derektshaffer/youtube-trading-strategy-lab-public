@@ -75,7 +75,8 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
         for marker in (
             "WHAT DO YOU WANT TO DO?",
             "Find & test a strategy",
-            "Current signal & confidence",
+            "Steps 2–5 appear automatically after Step 1 finds a strategy.",
+            "Standalone Stock Analyzer",
             "Find stocks worth watching",
             "Add research material",
             "AI discoveries & research",
