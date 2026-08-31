@@ -87,6 +87,7 @@ except AttributeError:
     )
 from trading_app_runtime import market_client, setting
 from trading_glass_theme import inject_research_glass_theme
+from trading_readiness import build_trust_readiness_summary
 
 # Do not reload shared modules in place during a Streamlit rerun. Doing so can
 # expose partially initialized modules to the file watcher and other pages.
@@ -3307,6 +3308,17 @@ elif module == "Overview":
     )
     overview_queue = research_queue_status(library)
     overview_research_system = dict(library.get("research_system") or {})
+    overview_readiness = build_trust_readiness_summary(canonical_strategies, library)
+
+    if not overview_readiness["production_probability_ready"]:
+        st.warning(
+            "**Current trust status: research and shadow testing only.** "
+            f"{overview_readiness['historically_validated_strategies']} strategy families have passed the current historical gate; "
+            f"{overview_readiness['paper_ready_strategies']} are currently marked ready for Paper Auto; "
+            f"{overview_readiness['shadow_probability_models']} probability models are eligible for shadow observation; and "
+            "**0 probability models are approved to influence live ranking or execution.** "
+            "A shadow probability is an experiment, not a validated prediction."
+        )
 
     st.markdown("### What do you want to do?")
     st.caption(
@@ -3390,9 +3402,9 @@ elif module == "Overview":
         delta_color="off",
     )
     status_cols[3].metric(
-        "Validated",
+        "Historically validated",
         overview_validated,
-        "passed current validation gate",
+        "research gate; not a live guarantee",
         delta_color="off",
     )
     status_cols[4].metric(
@@ -3439,6 +3451,19 @@ elif module == "Overview":
         st.caption(
             "Strategy Library, Blueprint, Rule Builder, Strategy Lab, Validation, Market Universe, "
             "Catalyst Intelligence, and System Health remain available under Advanced / Research Details."
+        )
+
+    with st.expander("Where the Lab\'s learning information comes from", expanded=False):
+        st.markdown(
+            "- **Idea sources:** books, PDFs, notes, public videos, grounded web research, SEC filings, and catalyst research.\\n"
+            "- **Market evidence:** causal historical price/volume data and market features available at each timestamp.\\n"
+            "- **Validation evidence:** chronological training, untouched holdout, walk-forward, cross-stock, and execution-cost tests.\\n"
+            "- **Forward evidence:** paper/shadow observations collected after a prediction is recorded."
+        )
+        st.caption(
+            "Research sources suggest what might work. Deterministic market-data tests decide whether the idea survives. "
+            "Neither source agreement nor an AI opinion counts as historical validation, and historical validation alone "
+            "does not make a probability production-ready."
         )
 
 
