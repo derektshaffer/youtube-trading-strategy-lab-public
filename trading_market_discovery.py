@@ -16,6 +16,7 @@ from youtube_strategy_engine import (
     match_strategy,
     normalize_machine_rules,
     parse_symbols,
+    resample_intraday_bars,
     snapshot_metrics,
     utc_now,
 )
@@ -130,13 +131,64 @@ def _latest_previous_day_high_breakout(
     return prior_close <= previous_day_high and current_close > previous_day_high
 
 
+def _strategy_live_timeframe(strategy: dict[str, Any]) -> str:
+    """Use the same candle interval that produced the live/validated candidate."""
+    last_validation = (
+        strategy.get("last_validation")
+        if isinstance(strategy.get("last_validation"), dict)
+        else {}
+    )
+    for value in (
+        strategy.get("_finder_timeframe"),
+        strategy.get("validated_timeframe"),
+        last_validation.get("timeframe"),
+        strategy.get("timeframe"),
+    ):
+        timeframe = str(value or "").strip()
+        if timeframe in {"1Min", "5Min", "15Min"}:
+            return timeframe
+    return "1Min"
+
+
+def _strategy_allows_extended_hours(strategy: dict[str, Any]) -> bool:
+    """Mirror the backtest execution-hours setting for live chart evaluation."""
+    settings = None
+    if bool(strategy.get("using_validated_rules")):
+        settings = strategy.get("validated_backtest_settings")
+    if not isinstance(settings, dict):
+        settings = strategy.get("optimized_backtest_settings")
+    if not isinstance(settings, dict):
+        settings = strategy.get("validated_backtest_settings")
+    if isinstance(settings, dict) and "allow_extended_hours" in settings:
+        return bool(settings.get("allow_extended_hours"))
+    return True
+
+
+def _prepare_strategy_intraday_rows(
+    rows: list[dict[str, Any]],
+    strategy: dict[str, Any],
+) -> list[dict[str, Any]]:
+    return resample_intraday_bars(
+        rows,
+        _strategy_live_timeframe(strategy),
+        include_extended_hours=_strategy_allows_extended_hours(strategy),
+    )
+
+
 def _strategy_chart_checks(
     rows: list[dict[str, Any]],
     strategy: dict[str, Any],
     daily_reference: dict[str, float | None],
+    *,
+    prepared_rows: bool = False,
 ) -> dict[str, Any]:
-    """Use intraday candles plus completed daily references without extra downloads."""
-    checks = chart_trigger_checks(rows, strategy)
+    """Use strategy-aligned candles plus completed daily references without extra downloads."""
+    effective_rows = rows if prepared_rows else _prepare_strategy_intraday_rows(rows, strategy)
+    checks = chart_trigger_checks(
+        effective_rows,
+        strategy,
+        include_extended_hours=_strategy_allows_extended_hours(strategy),
+    )
     if daily_reference.get("previous_day_volume_ratio") is not None:
         checks["previous_day_volume_ratio"] = daily_reference["previous_day_volume_ratio"]
     if daily_reference.get("previous_day_change_pct") is not None:
@@ -144,7 +196,7 @@ def _strategy_chart_checks(
     rules = normalize_machine_rules(strategy.get("machine_rules"))
     if rules.get("previous_day_high_breakout"):
         checks["previous_day_high_breakout"] = _latest_previous_day_high_breakout(
-            rows,
+            effective_rows,
             daily_reference.get("previous_day_high"),
         )
     return checks
@@ -657,10 +709,11 @@ def analyze_stock_strategies(
         progress=progress,
         message="Loading intraday market features…",
     ).get(ticker, [])
-    market_features = build_market_features(intraday_rows)
 
     comparisons: list[dict[str, Any]] = []
     for strategy in usable:
+        strategy_rows = _prepare_strategy_intraday_rows(intraday_rows, strategy)
+        strategy_market_features = build_market_features(strategy_rows)
         rules = normalize_machine_rules(strategy.get("machine_rules"))
         enriched = dict(metrics)
         enriched.update(
@@ -672,13 +725,14 @@ def analyze_stock_strategies(
         )
         if rules.get("catalyst_required"):
             enriched["has_catalyst"] = bool(news_items)
-        if intraday_rows and _needs_chart_data(strategy):
+        if strategy_rows and _needs_chart_data(strategy):
             enriched["chart_checks"] = _strategy_chart_checks(
-                intraday_rows,
+                strategy_rows,
                 strategy,
                 daily_reference,
+                prepared_rows=True,
             )
-        enriched["market_features"] = dict(market_features.get("features") or {})
+        enriched["market_features"] = dict(strategy_market_features.get("features") or {})
         signal = match_strategy(enriched, strategy)
         validation_status = str(strategy.get("validation_status") or "unvalidated")
         validation = (
@@ -698,6 +752,9 @@ def analyze_stock_strategies(
                 "score": signal.get("score") or 0,
                 "unknown": signal.get("unknown") or 0,
                 "signal": signal,
+                "market_features": strategy_market_features,
+                "timeframe": _strategy_live_timeframe(strategy),
+                "allow_extended_hours": _strategy_allows_extended_hours(strategy),
             }
         )
 
@@ -711,10 +768,17 @@ def analyze_stock_strategies(
         ),
         reverse=True,
     )
+    primary_market_features = (
+        comparisons[0].get("market_features")
+        if comparisons and isinstance(comparisons[0].get("market_features"), dict)
+        else build_market_features(intraday_rows)
+    )
     return {
         "symbol": ticker,
         "metrics": metrics,
-        "market_features": market_features,
+        "market_features": primary_market_features,
+        "timeframe": comparisons[0].get("timeframe") if comparisons else "1Min",
+        "allow_extended_hours": comparisons[0].get("allow_extended_hours") if comparisons else True,
         "news_count": len(news_items),
         "news_items": news_items,
         "comparisons": comparisons,
