@@ -1,0 +1,78 @@
+name: Profit First Targeted Revalidation Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      strategy_id:
+        description: "Strategy ID to revalidate"
+        required: false
+        default: "til-e375e878fadbe87a841b"
+  push:
+    branches: [main]
+    paths:
+      - "profit_first_targeted_audit.py"
+      - ".github/workflows/profit-first-targeted-revalidation.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  targeted-revalidation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      BACKUP_REPOSITORY: ${{ secrets.TRADING_LAB_BACKUP_REPOSITORY }}
+      BACKUP_TOKEN: ${{ secrets.TRADING_LAB_BACKUP_TOKEN }}
+      BACKUP_BRANCH: ${{ vars.GITHUB_BACKUP_BRANCH || 'main' }}
+      BACKUP_PATH: ${{ vars.TRADING_INTELLIGENCE_BACKUP_PATH || 'trading-intelligence-lab/intelligence_library.json' }}
+      ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+      ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+      ALPACA_LIVE_FEED: ${{ vars.ALPACA_LIVE_FEED || 'iex' }}
+      ALPACA_HISTORICAL_FEED: ${{ vars.ALPACA_HISTORICAL_FEED || 'sip' }}
+      PROFIT_FIRST_TARGET_STRATEGY_ID: ${{ github.event.inputs.strategy_id || 'til-e375e878fadbe87a841b' }}
+      PROFIT_FIRST_TARGET_UNIVERSE_SIZE: ${{ vars.RESEARCH_VALIDATION_UNIVERSE_SIZE || '250' }}
+      PROFIT_FIRST_TARGET_SYMBOLS_PER_STRATEGY: ${{ vars.RESEARCH_VALIDATION_SYMBOLS_PER_STRATEGY || '6' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Validate audit secrets
+        shell: bash
+        run: |
+          missing=0
+          for name in BACKUP_REPOSITORY BACKUP_TOKEN ALPACA_API_KEY ALPACA_SECRET_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing required Actions secret: $name"
+              missing=1
+            fi
+          done
+          test "$missing" -eq 0
+
+      - name: Clone durable library read-only
+        shell: bash
+        run: |
+          git clone --depth 1 --branch "$BACKUP_BRANCH" --single-branch \
+            "https://x-access-token:${BACKUP_TOKEN}@github.com/${BACKUP_REPOSITORY}.git" backup-repo
+          test -f "backup-repo/$BACKUP_PATH"
+
+      - name: Run current-protocol targeted revalidation
+        run: |
+          python profit_first_targeted_audit.py \
+            "backup-repo/$BACKUP_PATH" \
+            "/tmp/profit_first_targeted_revalidation.json"
+
+      - name: Upload compact audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: profit-first-targeted-revalidation
+          path: /tmp/profit_first_targeted_revalidation.json
+          if-no-files-found: error
+          retention-days: 14
