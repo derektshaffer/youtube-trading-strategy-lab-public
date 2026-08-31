@@ -2942,6 +2942,11 @@ if module == "Stock Strategy Finder":
         result_cols[3].metric("Holdout P/L", f"${safe_float(holdout.get('net_pnl'), 0.0):,.2f}")
         result_cols[4].metric("Walk-forward profitable", f"{safe_float(walk.get('profitable_fold_pct'), 0.0):.0f}%")
         result_cols[5].metric("Nearby settings profitable", f"{safe_float(stability.get('positive_pct'), 0.0):.0f}%")
+        if walk.get("embargo_sessions") is not None:
+            st.caption(
+                f"Walk-forward boundary protection: {int(walk.get('embargo_sessions') or 0)} full session(s) "
+                "are omitted between each fold's optimization history and external test block."
+            )
 
         distributed_details = dict(finder_result.get("distributed") or {})
         if distributed_details.get("enabled"):
@@ -6785,13 +6790,14 @@ elif module == "Strategy Lab":
             if walk_report:
                 summary = walk_report.get("summary") or {}
                 st.markdown("### Rolling walk-forward")
-                wf_cols = st.columns(5)
+                wf_cols = st.columns(6)
                 wf_cols[0].metric("Walk-forward score", f"{safe_float(summary.get('score'), 0.0):.1f}/100")
                 wf_cols[1].metric("Profitable folds", f"{safe_float(summary.get('profitable_fold_pct'), 0.0):.0f}%")
                 wf_cols[2].metric("External trades", int(summary.get("external_trade_count") or 0))
                 wf_cols[3].metric("External net P/L", f"${safe_float(summary.get('external_net_pnl'), 0.0):,.2f}")
                 pf = summary.get("external_profit_factor")
                 wf_cols[4].metric("External profit factor", f"{safe_float(pf, 0.0):.2f}" if pf is not None else "—")
+                wf_cols[5].metric("Embargo", f"{int(summary.get('embargo_sessions') or 0)} session")
 
                 fold_rows = []
                 for fold in walk_report.get("folds") or []:
@@ -6800,6 +6806,11 @@ elif module == "Strategy Lab":
                         {
                             "Fold": fold.get("fold"),
                             "Optimized through": fold.get("history_end"),
+                            "Embargo": (
+                                f"{fold.get('embargo_start')} → {fold.get('embargo_end')}"
+                                if fold.get("embargo_start")
+                                else "None"
+                            ),
                             "Unseen test": f"{fold.get('external_test_start')} → {fold.get('external_test_end')}",
                             "Strategy": fold.get("selected_strategy_name"),
                             "Trades": int(safe_float(metrics.get("trade_count"), 0) or 0),
