@@ -3237,6 +3237,7 @@ class AlpacaMarketData:
         end: datetime,
         timeframe: str = "1Min",
         feed: str | None = None,
+        adjustment: str = "split",
         max_pages: int = 15,
         progress: Callable[[int], None] | None = None,
     ) -> dict[str, list[dict[str, Any]]]:
@@ -3244,6 +3245,10 @@ class AlpacaMarketData:
         if not clean:
             return {}
         chosen_feed = feed or self.historical_feed
+        chosen_adjustment = str(adjustment or "split").strip().lower()
+        allowed_adjustments = {"raw", "split", "dividend", "spin-off", "all", "split,spin-off"}
+        if chosen_adjustment not in allowed_adjustments:
+            raise AppError("Choose a supported historical bar adjustment mode.")
         merged = {symbol: [] for symbol in clean}
         page_token: str | None = None
         seen_tokens: set[str] = set()
@@ -3254,7 +3259,7 @@ class AlpacaMarketData:
                 "start": isoformat_utc(start),
                 "end": isoformat_utc(end),
                 "limit": 10000,
-                "adjustment": "split",
+                "adjustment": chosen_adjustment,
                 "feed": chosen_feed,
                 "sort": "asc",
             }
@@ -3289,6 +3294,108 @@ class AlpacaMarketData:
             )
         return merged
 
+    def corporate_actions(
+        self,
+        symbols: list[str],
+        *,
+        start: datetime,
+        end: datetime,
+        types: tuple[str, ...] = ("forward_split", "reverse_split", "unit_split"),
+        max_pages: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Return timestamped corporate actions for the requested symbols.
+
+        The method is intentionally narrow for research integrity. Callers can use
+        split actions to avoid mixing incompatible pre/post-split raw price history.
+        """
+        clean = parse_symbols(symbols)
+        if not clean:
+            return []
+        allowed_types = {
+            "forward_split",
+            "reverse_split",
+            "unit_split",
+            "cash_dividend",
+            "stock_dividend",
+            "spin_off",
+            "cash_merger",
+            "stock_merger",
+            "stock_and_cash_merger",
+            "redemption",
+            "name_change",
+            "worthless_removal",
+            "rights_distribution",
+            "partial_call",
+            "reorganization",
+        }
+        selected_types = tuple(
+            item for item in dict.fromkeys(str(value).strip().lower() for value in types)
+            if item in allowed_types
+        )
+        if not selected_types:
+            return []
+
+        page_token: str | None = None
+        seen_tokens: set[str] = set()
+        actions: list[dict[str, Any]] = []
+        for _ in range(max(1, int(max_pages))):
+            params: dict[str, Any] = {
+                "symbols": ",".join(clean),
+                "types": ",".join(selected_types),
+                "start": start.date().isoformat(),
+                "end": end.date().isoformat(),
+                "limit": 1000,
+                "sort": "asc",
+                "data_quality": "complete",
+            }
+            if page_token:
+                params["page_token"] = page_token
+            response = self._get("/v1/corporate-actions", params)
+            payload = response.get("corporate_actions") if isinstance(response, dict) else None
+            if isinstance(payload, dict):
+                for collection_name, rows in payload.items():
+                    if not isinstance(rows, list):
+                        continue
+                    inferred_type = str(collection_name or "").strip().lower()
+                    if inferred_type.endswith("s"):
+                        inferred_type = inferred_type[:-1]
+                    for raw in rows:
+                        if not isinstance(raw, dict):
+                            continue
+                        item = dict(raw)
+                        item["collection"] = str(collection_name or "")
+                        item["action_type"] = inferred_type
+                        actions.append(item)
+            next_token = response.get("next_page_token") if isinstance(response, dict) else None
+            if not next_token:
+                break
+            token = str(next_token)
+            if token in seen_tokens:
+                raise AppError("Alpaca returned a repeated corporate-action pagination token.")
+            seen_tokens.add(token)
+            page_token = token
+        else:
+            raise AppError(
+                "Corporate-action history exceeded the safe pagination limit for this research window."
+            )
+        return actions
+
+    def split_actions(
+        self,
+        symbols: list[str],
+        *,
+        start: datetime,
+        end: datetime,
+        max_pages: int = 20,
+    ) -> list[dict[str, Any]]:
+        return self.corporate_actions(
+            symbols,
+            start=start,
+            end=end,
+            types=("forward_split", "reverse_split", "unit_split"),
+            max_pages=max_pages,
+        )
+
     def news(self, symbols: list[str], hours: int = 24) -> dict[str, list[dict[str, Any]]]:
         clean = parse_symbols(symbols)
         if not clean:
@@ -3313,6 +3420,74 @@ class AlpacaMarketData:
                 if normalized in output:
                     output[normalized].append(item)
         return output
+
+
+def split_safe_raw_research_rows(
+    rows: list[dict[str, Any]],
+    actions: list[dict[str, Any]],
+    symbol: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Keep the newest internally comparable raw-price segment after a stock split.
+
+    Raw bars preserve the price that was actually tradable at the time, which is
+    essential for absolute price rules. A split makes raw prices on opposite sides
+    of the event mechanically incomparable for indicators and day-change features,
+    so research restarts at the latest split ex-date instead of manufacturing a
+    false momentum move across the split boundary.
+    """
+    clean_symbol = str(symbol or "").strip().upper()
+    split_dates: list[date] = []
+    matched: list[dict[str, Any]] = []
+    for action in actions or []:
+        if not isinstance(action, dict):
+            continue
+        if str(action.get("symbol") or "").strip().upper() != clean_symbol:
+            continue
+        raw_date = action.get("ex_date") or action.get("process_date")
+        try:
+            event_date = date.fromisoformat(str(raw_date))
+        except (TypeError, ValueError):
+            continue
+        split_dates.append(event_date)
+        matched.append(dict(action))
+
+    if not split_dates:
+        return list(rows or []), {
+            "mode": "raw_prices",
+            "split_detected": False,
+            "latest_split_date": None,
+            "rows_before": len(rows or []),
+            "rows_after": len(rows or []),
+            "discarded_pre_split_rows": 0,
+            "note": "Raw historical prices retained; no split boundary was detected in the research window.",
+        }
+
+    latest = max(split_dates)
+    kept: list[dict[str, Any]] = []
+    for raw in rows or []:
+        timestamp = raw.get("t")
+        try:
+            parsed = pd.to_datetime(timestamp, utc=True, errors="raise")
+            session_date = parsed.tz_convert(ET).date()
+        except Exception:
+            continue
+        if session_date >= latest:
+            kept.append(raw)
+
+    return kept, {
+        "mode": "raw_prices_post_latest_split",
+        "split_detected": True,
+        "latest_split_date": latest.isoformat(),
+        "split_count_in_window": len(matched),
+        "rows_before": len(rows or []),
+        "rows_after": len(kept),
+        "discarded_pre_split_rows": max(0, len(rows or []) - len(kept)),
+        "note": (
+            "Raw historical prices are used so absolute price filters reflect prices actually "
+            "tradable at the time. Pre-split rows were excluded at the latest split boundary "
+            "to avoid false indicator/day-change jumps."
+        ),
+    }
 
 
 def bars_to_frame(
@@ -3704,7 +3879,10 @@ def backtest_limitations(strategy: dict[str, Any]) -> list[str]:
     if rules.get("catalyst_required"):
         limitations.append("Historical, point-in-time news catalysts are not included in this backtest.")
     if rules.get("max_spread_pct") is not None:
-        limitations.append("Historical bid/ask quotes are unavailable; the spread limit is estimated through configured trading costs.")
+        limitations.append(
+            "Historical bid/ask quotes are not attached to this backtest, so max_spread_pct is NOT enforced. "
+            "Configured spread/slippage costs model execution drag but are not a substitute for the entry spread rule."
+        )
     if str(strategy.get("direction", "long")).lower() not in {"long", "both"}:
         limitations.append("This release evaluates long trades only; short-only strategies cannot be backtested.")
     if rules.get("stop_below_fast_ema") is True:
@@ -4995,7 +5173,6 @@ def generate_strategy_variants(
         ("min_previous_day_volume_ratio", (0.50, 0.70, 0.85, 1.15, 1.30, 1.60), 0.10, 50.0, False),
         ("min_previous_day_change_pct", (0.50, 0.70, 0.85, 1.15, 1.30, 1.60), -50.0, 200.0, False),
         ("min_dollar_volume", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 100.0, 2_000_000_000.0, False),
-        ("max_spread_pct", (0.60, 0.80, 1.25, 1.60), 0.01, 50.0, False),
         ("max_vwap_distance_pct", (0.50, 0.70, 0.85, 1.20, 1.50, 2.0), 0.05, 100.0, False),
         ("minimum_vwap_hold_bars", (0.50, 0.75, 1.25, 1.50, 2.0), 1.0, 8.0, True),
         ("min_volume_acceleration_ratio", (0.50, 0.70, 0.85, 1.15, 1.30, 1.60), 0.10, 20.0, False),
