@@ -4080,6 +4080,58 @@ elif module == "Profit First":
         delta_color="off",
     )
 
+    automatic_profit_job = next(
+        (
+            item
+            for item in (library.get("research_queue") or [])
+            if isinstance(item, dict)
+            and str(item.get("type") or "") == "autonomous_validation"
+            and str(item.get("status") or "") in {"queued", "running", "retry"}
+            and str((item.get("payload") or {}).get("origin") or "")
+            == "automatic_profit_first_validation"
+        ),
+        None,
+    )
+    if automatic_profit_job is not None:
+        automatic_payload = (
+            automatic_profit_job.get("payload")
+            if isinstance(automatic_profit_job.get("payload"), dict)
+            else {}
+        )
+        automatic_ids = [
+            str(value or "").strip()
+            for value in automatic_payload.get("strategy_ids") or []
+            if str(value or "").strip()
+        ]
+        strategy_names_by_id = {
+            str(item.get("id") or ""): str(item.get("name") or item.get("id") or "Strategy")
+            for item in (library.get("strategies") or [])
+            if isinstance(item, dict) and item.get("id")
+        }
+        automatic_names = [
+            strategy_names_by_id.get(strategy_id, strategy_id)
+            for strategy_id in automatic_ids
+        ]
+        automatic_state = str(
+            automatic_profit_job.get("status") or "queued"
+        ).replace("_", " ").upper()
+        st.info(
+            f"**Automatic profit-first validator · {automatic_state}** — "
+            + (
+                "Testing " + ", ".join(automatic_names)
+                if automatic_names
+                else "Selecting the strongest testable research candidate"
+            )
+            + ". Failures stay research-only; only strategies that clear the full "
+            "current validation protocol can become profit-first edges."
+        )
+    else:
+        st.caption(
+            "Automatic profit-first validation is enabled. The cloud worker prioritizes "
+            "the strongest faithfully modeled unproven candidates and does not recycle "
+            "current-protocol failures automatically."
+        )
+
     if profit_edges:
         st.success(
             f"The Lab currently has {len(profit_edges)} strict profit-first "
