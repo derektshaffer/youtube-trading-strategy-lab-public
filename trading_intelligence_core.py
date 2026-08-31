@@ -1223,7 +1223,7 @@ def upgrade_native_strategy_rules(strategy: dict[str, Any]) -> dict[str, Any]:
         )
         manual_or_finder_current = (
             str(market_integrity.get("mode") or "")
-            in {"raw_prices", "raw_prices_post_latest_split"}
+            in {"raw_prices", "raw_prices_post_latest_split", "raw_prices_post_corporate_action"}
             and bool(reuse_audit)
         )
         autonomous_current = (
