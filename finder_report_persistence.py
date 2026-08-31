@@ -16,6 +16,8 @@ def finder_summary_to_report(summary: dict[str, Any]) -> dict[str, Any]:
         "validation_metrics": summary.get("validation_metrics") or {},
         "holdout_metrics": summary.get("holdout_metrics") or {},
         "stress_metrics": summary.get("stress_metrics") or {},
+        "execution_sensitivity": summary.get("execution_sensitivity") or {},
+        "holdout_execution_sensitivity": summary.get("holdout_execution_sensitivity") or {},
     }
     return {
         "version": "stock-strategy-finder-v1-restored",
