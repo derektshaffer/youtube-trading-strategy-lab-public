@@ -1225,6 +1225,7 @@ def upgrade_native_strategy_rules(strategy: dict[str, Any]) -> dict[str, Any]:
             str(market_integrity.get("mode") or "")
             in {"raw_prices", "raw_prices_post_latest_split", "raw_prices_post_corporate_action"}
             and reuse_audit.get("pristine") is True
+            and bool(last_validation.get("holdout_sessions"))
         )
         autonomous_reuse_audit = (
             last_autonomous.get("holdout_reuse_audit")
@@ -1236,6 +1237,7 @@ def upgrade_native_strategy_rules(strategy: dict[str, Any]) -> dict[str, Any]:
             and str(last_autonomous.get("market_data_integrity_contract") or "")
             == "split_safe_raw_v1"
             and autonomous_reuse_audit.get("pristine") is True
+            and bool(last_autonomous.get("holdout_sessions"))
         )
         if not (manual_or_finder_current or autonomous_current):
             item["previous_validation_invalidated_by_methodology_upgrade"] = {
