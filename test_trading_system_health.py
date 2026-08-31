@@ -121,7 +121,7 @@ class TradingSystemHealthTests(unittest.TestCase):
 
         source = Path("trading_intelligence_app.py").read_text(encoding="utf-8")
         start = source.index('elif module == "Strategy Lab":')
-        end = source.index('elif module == "Standalone Stock Analyzer":', start)
+        end = source.index('elif module == "Universe Research":', start)
         strategy_lab = source[start:end]
 
         self.assertIn(
