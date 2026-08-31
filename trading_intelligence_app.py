@@ -1717,6 +1717,7 @@ def queue_workspace_navigation(section: str) -> None:
         st.session_state.pop("til_analyzer_strategy_id", None)
     if section == "Strategy Lab":
         st.session_state.pop("til_strategy_lab_candidate_payload", None)
+        st.session_state.pop("til_guided_validation_mode", None)
     st.session_state["til_navigate_to"] = section
     prime_action_feedback(_route_loading_label(section))
 
@@ -1729,6 +1730,13 @@ def queue_strategy_validation_from_analyzer(
     payload = dict(strategy or {})
     if ticker:
         st.session_state["til_strategy_lab_ticker"] = ticker
+    st.session_state["til_guided_validation_mode"] = True
+    finder_days = int(safe_float(payload.get("_finder_history_days"), 0) or 0)
+    if finder_days:
+        st.session_state["til_strategy_lab_history_days"] = max(7, min(180, finder_days))
+    finder_timeframe = str(payload.get("_finder_timeframe") or "")
+    if finder_timeframe in {"1Min", "5Min", "15Min"}:
+        st.session_state["til_strategy_lab_timeframe"] = finder_timeframe
     if payload.get("id"):
         st.session_state["til_strategy_lab_candidate_payload"] = payload
         st.session_state["til_selected_strategy_id"] = str(payload.get("id") or "")
@@ -6977,10 +6985,18 @@ elif module == "AI Research Autopilot":
 
 
 elif module == "Strategy Lab":
-    st.caption(
-        "Choose a strategy from any source, download historical Alpaca candles, optimize only on "
-        "earlier sessions, then evaluate separate validation and untouched holdout periods."
-    )
+    guided_validation_mode = bool(st.session_state.get("til_guided_validation_mode"))
+    if guided_validation_mode:
+        st.success(
+            "Guided validation mode: the strategy and ticker from Step 2 are preloaded. "
+            "Walk-forward testing is required and already turned on. Keep the defaults unless you "
+            "have a specific reason to change them, then click Optimize + validate strategy."
+        )
+    else:
+        st.caption(
+            "Choose a strategy from any source, download historical Alpaca candles, optimize only on "
+            "earlier sessions, then evaluate separate validation and untouched holdout periods."
+        )
 
     if integrity_blocked_count:
         st.warning(
@@ -7076,12 +7092,31 @@ elif module == "Strategy Lab":
             max_chars=10,
         ).strip().upper()
         st.session_state["til_strategy_lab_ticker"] = ticker
-        history_days = top[1].slider("Historical calendar days", 7, 180, 30, 1)
-        timeframe = top[2].selectbox("Candle size", ["1Min", "5Min", "15Min"], index=1)
+        guided_history_days = int(
+            safe_float(st.session_state.get("til_strategy_lab_history_days"), 30) or 30
+        )
+        history_days = top[1].slider(
+            "Historical calendar days",
+            7,
+            180,
+            max(7, min(180, guided_history_days)),
+            1,
+        )
+        timeframe_options = ["1Min", "5Min", "15Min"]
+        guided_timeframe = str(st.session_state.get("til_strategy_lab_timeframe") or "5Min")
+        timeframe = top[2].selectbox(
+            "Candle size",
+            timeframe_options,
+            index=(
+                timeframe_options.index(guided_timeframe)
+                if guided_timeframe in timeframe_options
+                else 1
+            ),
+        )
         search_depth = top[3].selectbox(
             "Optimization depth",
             [12, 36, 96, 160],
-            index=1,
+            index=2 if guided_validation_mode else 1,
             format_func=lambda value: {
                 12: "Quick · 12 base variants",
                 36: "Balanced · 36 base variants",
@@ -7115,7 +7150,8 @@ elif module == "Strategy Lab":
             minimum_validation_trades = v4.number_input("Minimum validation/holdout trades", 1, 25, 2, 1)
             run_walk_forward = st.checkbox(
                 "Run rolling walk-forward re-optimization",
-                value=False,
+                value=True if guided_validation_mode else False,
+                disabled=guided_validation_mode,
                 help=(
                     "Required before a manual Strategy Lab result can be saved as validated. "
                     "Each fold re-optimizes using only earlier sessions, freezes the winner, "
@@ -10666,6 +10702,14 @@ elif module == "Stock Analyzer":
                 candidate_strategy.pop("validated_backtest_settings", None)
                 candidate_strategy.pop("validated_at", None)
 
+            candidate_strategy["_finder_timeframe"] = candidate.get("timeframe")
+            candidate_strategy["_finder_history_days"] = int(
+                safe_float(
+                    ((finder_run_summary or {}).get("profile_details") or {}).get("history_days"),
+                    0,
+                )
+                or 0
+            )
             option_id = str(candidate_strategy.get("id") or "")
             if not option_id:
                 continue
