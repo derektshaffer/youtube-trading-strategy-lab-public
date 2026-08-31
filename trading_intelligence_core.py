@@ -2038,9 +2038,11 @@ def strategy_semantic_coverage(strategy: dict[str, Any]) -> dict[str, Any]:
 
     total = len(requirements)
     modeled = sum(1 for item in requirements if item["modeled"])
-    # No detected requirements means coverage is unknown, not perfect.
-    # 0/0 must never be represented as 100% fidelity.
-    coverage = None if total == 0 else round(modeled / total * 100.0, 1)
+    # No detected requirements means coverage is not measurable, not perfect.
+    # Keep the raw field numeric for compatibility with downstream scoring code,
+    # and carry an explicit measurability flag so 0/0 is never displayed as 100%.
+    coverage_measurable = total > 0
+    coverage = round(modeled / total * 100.0, 1) if coverage_measurable else 0.0
     missing = [item for item in requirements if not item["modeled"]]
     critical_missing = [item for item in missing if item.get("critical")]
     dimension_summary: dict[str, dict[str, int]] = {}
@@ -2057,6 +2059,7 @@ def strategy_semantic_coverage(strategy: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "coverage_pct": coverage,
+        "coverage_measurable": coverage_measurable,
         "requirement_count": total,
         "modeled_count": modeled,
         "modeled_requirements": [item["label"] for item in requirements if item["modeled"]],
@@ -2092,6 +2095,7 @@ def strategy_integrity_report(strategy: dict[str, Any]) -> dict[str, Any]:
         "status": status,
         "label": label,
         "coverage_pct": semantic.get("coverage_pct"),
+        "coverage_measurable": bool(semantic.get("coverage_measurable")),
         "requirement_count": int(semantic.get("requirement_count") or 0),
         "modeled_count": int(semantic.get("modeled_count") or 0),
         "critical_missing_count": critical_missing,
