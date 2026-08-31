@@ -1,4 +1,5 @@
 import unittest
+from datetime import date
 from unittest.mock import patch
 
 import trading_market_discovery as discovery
@@ -35,6 +36,64 @@ class FakeMarket:
 
 
 class MarketDiscoveryTests(unittest.TestCase):
+    def test_completed_daily_reference_supplies_prior_session_rules_without_today_leakage(self):
+        rows = [
+            {"t": "2026-08-25T04:00:00Z", "c": 10.0, "h": 10.5, "v": 100.0},
+            {"t": "2026-08-26T04:00:00Z", "c": 10.5, "h": 11.0, "v": 120.0},
+            {"t": "2026-08-27T04:00:00Z", "c": 11.0, "h": 11.5, "v": 80.0},
+            {"t": "2026-08-28T04:00:00Z", "c": 12.0, "h": 12.5, "v": 300.0},
+            # Current-day partial daily bar must never enter prior-session references.
+            {"t": "2026-08-30T04:00:00Z", "c": 20.0, "h": 25.0, "v": 9999.0},
+        ]
+        reference = discovery._completed_daily_reference(
+            rows,
+            today_et=date(2026, 8, 30),
+        )
+        self.assertEqual(reference["previous_day_high"], 12.5)
+        self.assertAlmostEqual(
+            reference["previous_day_change_pct"],
+            (12.0 / 11.0 - 1.0) * 100.0,
+        )
+        self.assertAlmostEqual(reference["previous_day_volume_ratio"], 3.0)
+
+    def test_previous_day_high_breakout_uses_latest_intraday_cross(self):
+        rows = [
+            {"t": "2026-08-31T14:00:00Z", "c": 12.40},
+            {"t": "2026-08-31T14:01:00Z", "c": 12.60},
+        ]
+        self.assertTrue(
+            discovery._latest_previous_day_high_breakout(rows, 12.50)
+        )
+        self.assertFalse(
+            discovery._latest_previous_day_high_breakout(rows, 13.00)
+        )
+
+    def test_strategy_chart_checks_overrides_missing_prior_day_fields_from_daily_history(self):
+        strategy = {"machine_rules": {"previous_day_high_breakout": True}}
+        rows = [
+            {"t": "2026-08-31T14:00:00Z", "c": 12.40},
+            {"t": "2026-08-31T14:01:00Z", "c": 12.60},
+        ]
+        reference = {
+            "previous_day_high": 12.50,
+            "previous_day_change_pct": 4.0,
+            "previous_day_volume_ratio": 2.2,
+        }
+        with patch.object(
+            discovery,
+            "chart_trigger_checks",
+            return_value={
+                "previous_day_high_breakout": None,
+                "previous_day_change_pct": None,
+                "previous_day_volume_ratio": None,
+            },
+        ):
+            checks = discovery._strategy_chart_checks(rows, strategy, reference)
+
+        self.assertTrue(checks["previous_day_high_breakout"])
+        self.assertEqual(checks["previous_day_change_pct"], 4.0)
+        self.assertEqual(checks["previous_day_volume_ratio"], 2.2)
+
     def test_chart_data_gate_covers_live_chart_dependent_rules(self):
         for rule_name, rule_value in (
             ("previous_day_high_breakout", True),
