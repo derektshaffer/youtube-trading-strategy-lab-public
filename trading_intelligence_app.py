@@ -1758,10 +1758,12 @@ def prime_action_feedback(message: str) -> None:
 def queue_workspace_navigation(section: str) -> None:
     """Route from a button callback so loading feedback appears immediately."""
     if section == "Stock Analyzer":
-        # A normal sidebar visit means "analyze freely", not "continue a Step-1 run".
+        # A normal sidebar visit means "analyze freely", not continue a guided
+        # Finder/Market-Discovery handoff.
         st.session_state.pop("til_guided_strategy_id", None)
         st.session_state.pop("til_guided_finder_run_id", None)
         st.session_state.pop("til_analyzer_strategy_id", None)
+        st.session_state.pop("til_analyzer_direct_strategy_id", None)
     if section == "Strategy Lab":
         st.session_state.pop("til_strategy_lab_candidate_payload", None)
         st.session_state.pop("til_guided_validation_mode", None)
@@ -1789,6 +1791,23 @@ def queue_strategy_validation_from_analyzer(
         st.session_state["til_selected_strategy_id"] = str(payload.get("id") or "")
     st.session_state["til_navigate_to"] = "Strategy Lab"
     prime_action_feedback(f"Opening strict validation for {ticker or 'this stock'}…")
+
+
+def queue_stock_analyzer_from_market_discovery(
+    symbol: str,
+    strategy_id: str,
+) -> None:
+    ticker = str(symbol or "").strip().upper()
+    chosen_strategy_id = str(strategy_id or "").strip()
+    if ticker:
+        st.session_state["til_analyzer_ticker"] = ticker
+    if chosen_strategy_id:
+        st.session_state["til_guided_strategy_id"] = chosen_strategy_id
+        st.session_state["til_analyzer_direct_strategy_id"] = chosen_strategy_id
+    st.session_state.pop("til_guided_finder_run_id", None)
+    st.session_state.pop("til_analyzer_strategy_id", None)
+    st.session_state["til_navigate_to"] = "Stock Analyzer"
+    prime_action_feedback(f"Reviewing {ticker or 'stock'} current setup…")
 
 
 def queue_paper_test_from_analyzer(symbol: str, strategy_id: str = "") -> None:
@@ -1819,6 +1838,7 @@ def queue_stock_analyzer_from_finder(
         st.session_state["til_guided_finder_run_id"] = guided_run_id
     else:
         st.session_state.pop("til_guided_finder_run_id", None)
+    st.session_state.pop("til_analyzer_direct_strategy_id", None)
     st.session_state.pop("til_analyzer_strategy_id", None)
     st.session_state["til_navigate_to"] = "Stock Analyzer"
     prime_action_feedback(f"Checking {ticker or 'stock'} current signal…")
@@ -10415,7 +10435,17 @@ elif module == "Market Discovery":
             table_rows = []
             for item in live_results:
                 metrics = item.get("metrics") or {}
-                validation = str(item.get("validation_status") or "unvalidated").replace("_", " ").title()
+                validation_raw = str(
+                    item.get("validation_status") or "unvalidated"
+                ).strip().lower()
+                validation = validation_raw.replace("_", " ").title()
+                current_setup = str(item.get("status") or "UNKNOWN").upper()
+                if validation_raw != "validated":
+                    next_step = "③ Validate this stock + strategy"
+                elif current_setup == "MATCH":
+                    next_step = "⑤ Paper test this setup"
+                else:
+                    next_step = "④ Review current setup"
                 table_rows.append(
                     {
                         "Stock": item.get("symbol"),
@@ -10424,6 +10454,7 @@ elif module == "Market Discovery":
                         "Current setup": item.get("status"),
                         "Rule match %": safe_float(item.get("score"), 0.0) or 0.0,
                         "Robustness": item.get("robustness_score"),
+                        "Next step": next_step,
                         "Other matching strategies": max(
                             0,
                             int(item.get("matching_strategy_count") or 0) - 1,
@@ -10439,7 +10470,83 @@ elif module == "Market Discovery":
                         ),
                     }
                 )
-            st.dataframe(pd.DataFrame(table_rows), width="stretch", hide_index=True)
+
+            st.info(
+                "**Click any row to continue with that exact stock + strategy.** "
+                "Research-only rows go to strict validation. A validated MATCH goes to paper testing. "
+                "Other validated rows open the detailed current-setup review."
+            )
+            opportunity_table_event = st.dataframe(
+                pd.DataFrame(table_rows),
+                width="stretch",
+                hide_index=True,
+                key="til_market_discovery_opportunity_table",
+                on_select="rerun",
+                selection_mode="single-row",
+            )
+            opportunity_selection = getattr(
+                opportunity_table_event,
+                "selection",
+                None,
+            )
+            if isinstance(opportunity_selection, dict):
+                selected_opportunity_rows = list(
+                    opportunity_selection.get("rows") or []
+                )
+            else:
+                selected_opportunity_rows = list(
+                    getattr(opportunity_selection, "rows", []) or []
+                )
+
+            if selected_opportunity_rows:
+                selected_row_index = int(selected_opportunity_rows[0])
+                if 0 <= selected_row_index < len(live_results):
+                    selected_opportunity = live_results[selected_row_index]
+                    selected_symbol = str(
+                        selected_opportunity.get("symbol") or ""
+                    ).strip().upper()
+                    selected_strategy_id = str(
+                        selected_opportunity.get("best_strategy_id") or ""
+                    ).strip()
+                    selected_strategy = next(
+                        (
+                            strategy
+                            for strategy in integrity_safe_strategies
+                            if str(strategy.get("id") or "") == selected_strategy_id
+                        ),
+                        None,
+                    )
+                    selected_validation = str(
+                        selected_opportunity.get("validation_status")
+                        or "unvalidated"
+                    ).strip().lower()
+                    selected_setup = str(
+                        selected_opportunity.get("status") or "UNKNOWN"
+                    ).upper()
+
+                    if selected_strategy is None:
+                        st.error(
+                            "That strategy is no longer available in the current safe strategy library. "
+                            "Rerun the market scan before continuing."
+                        )
+                    elif selected_validation != "validated":
+                        queue_strategy_validation_from_analyzer(
+                            selected_symbol,
+                            dict(selected_strategy),
+                        )
+                        st.rerun()
+                    elif selected_setup == "MATCH":
+                        queue_paper_test_from_analyzer(
+                            selected_symbol,
+                            selected_strategy_id,
+                        )
+                        st.rerun()
+                    else:
+                        queue_stock_analyzer_from_market_discovery(
+                            selected_symbol,
+                            selected_strategy_id,
+                        )
+                        st.rerun()
 
             matches = [
                 item for item in live_results
@@ -10467,7 +10574,7 @@ elif module == "Market Discovery":
             }
             inspected = inspect_labels[
                 st.selectbox(
-                    "Inspect an opportunity",
+                    "Preview an opportunity here instead (optional)",
                     list(inspect_labels),
                     key="til_market_discovery_inspect",
                 )
@@ -10578,6 +10685,9 @@ elif module == "Stock Analyzer":
         )
 
         guided_strategy_id = str(st.session_state.get("til_guided_strategy_id") or "").strip()
+        direct_strategy_id = str(
+            st.session_state.get("til_analyzer_direct_strategy_id") or ""
+        ).strip()
         guided_finder_run_id = str(
             st.session_state.get("til_guided_finder_run_id") or ""
         ).strip()
@@ -10601,8 +10711,8 @@ elif module == "Stock Analyzer":
             ),
             None,
         )
-        if finder_run_summary is None and guided_strategy_id:
-            # Compatibility for a handoff created before run IDs were carried.
+        if finder_run_summary is None and guided_strategy_id and not direct_strategy_id:
+            # Compatibility for a Finder handoff created before run IDs were carried.
             # Still stay strictly on this ticker.
             finder_run_summary = next(
                 (
@@ -10787,9 +10897,9 @@ elif module == "Stock Analyzer":
             ]
 
         if finder_run_summary is None and guided_strategy is not None:
-            # A very old handoff with no recoverable run data: show only the
-            # actual Step-1 winner rather than contaminating this ticker with
-            # unrelated library strategies.
+            # A direct Market Discovery handoff (or a very old Finder handoff)
+            # should show only the exact chosen strategy rather than contaminate
+            # this ticker with unrelated library strategies.
             strategy_by_id = {str(guided_strategy.get("id") or ""): guided_strategy}
             ranking_by_id = {
                 str(guided_strategy.get("id") or ""): {
@@ -10800,10 +10910,15 @@ elif module == "Stock Analyzer":
                 }
             }
             strategy_option_ids = list(strategy_by_id)
-            ranking_note = (
-                "This older result does not contain its tested-strategy ranking. "
-                "Only the Step-1 winner is shown; rerun Step 1 once to populate ranked alternatives."
-            )
+            if direct_strategy_id:
+                ranking_note = (
+                    "Reviewing the exact strategy you selected in Market Discovery."
+                )
+            else:
+                ranking_note = (
+                    "This older result does not contain its tested-strategy ranking. "
+                    "Only the Step-1 winner is shown; rerun Step 1 once to populate ranked alternatives."
+                )
 
         if finder_run_summary is not None and not strategy_option_ids and guided_strategy is not None:
             option_id = str(guided_strategy.get("id") or "")
