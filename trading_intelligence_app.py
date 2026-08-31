@@ -4204,6 +4204,25 @@ elif module == "Profit First":
                 )
 
             strongest_strategy_id = str(strongest_near.get("strategy_id") or "")
+            strongest_library_strategy = next(
+                (
+                    item
+                    for item in (library.get("strategies") or [])
+                    if isinstance(item, dict)
+                    and str(item.get("id") or "") == strongest_strategy_id
+                ),
+                None,
+            )
+            strongest_readiness = (
+                research_readiness(strongest_library_strategy)
+                if strongest_library_strategy is not None
+                else {}
+            )
+            strongest_integrity = (
+                strategy_integrity_report(strongest_library_strategy)
+                if strongest_library_strategy is not None
+                else {}
+            )
             strongest_strategy = next(
                 (
                     item
@@ -4231,7 +4250,45 @@ elif module == "Profit First":
                 ),
                 None,
             )
-            if active_target_revalidation is not None:
+            if (
+                strongest_library_strategy is not None
+                and str(strongest_readiness.get("label") or "") != "ready_for_backtest"
+            ):
+                missing_fidelity = list(
+                    strongest_integrity.get("critical_missing_requirements") or []
+                )
+                st.error(
+                    "**Revalidation is blocked by strategy fidelity.** "
+                    "The Lab will not run strict validation until the deterministic backtester "
+                    "can faithfully execute the strategy's defining requirements."
+                )
+                if missing_fidelity:
+                    st.markdown(
+                        "**Must be resolved first:** "
+                        + "; ".join(str(item) for item in missing_fidelity[:6])
+                    )
+                fidelity_actions = st.columns(2)
+                if fidelity_actions[0].button(
+                    "⚖ Review fidelity gaps →",
+                    width="stretch",
+                    key="til_profit_first_open_integrity",
+                ):
+                    st.session_state["til_integrity_strategy_id"] = strongest_strategy_id
+                    navigate_to_workspace("Strategy Integrity", pending=True)
+                if fidelity_actions[1].button(
+                    "≣ Open Rule Builder →",
+                    width="stretch",
+                    key="til_profit_first_open_rule_builder",
+                ):
+                    st.session_state["til_selected_strategy_id"] = strongest_strategy_id
+                    navigate_to_workspace("Make Strategy Testable", pending=True)
+                st.caption(
+                    "Research assumptions may resolve qualitative numeric thresholds, but unavailable "
+                    "historical data such as point-in-time float must remain a hard blocker for the "
+                    "original source strategy. A deliberately modified derivative hypothesis must be "
+                    "tracked separately."
+                )
+            elif active_target_revalidation is not None:
                 target_state = str(
                     active_target_revalidation.get("status") or "queued"
                 ).replace("_", " ").upper()
