@@ -2903,13 +2903,13 @@ if module == "Stock Strategy Finder":
             if isinstance(item, dict)
         ]
         if regime_windows:
-            st.markdown("### Same winning rules across recent market regimes")
+            st.markdown("### Same winning rules across different recent time periods")
             regime_rows = []
             for regime in regime_windows:
                 metrics = regime.get("metrics") or {}
                 regime_rows.append(
                     {
-                        "Regime": regime.get("label"),
+                        "Time period": str(regime.get("label") or "").replace("regime", "period"),
                         "Sessions": int(regime.get("session_count") or 0),
                         "Period": f"{regime.get('start_session')} → {regime.get('end_session')}",
                         "Trades": int(safe_float(metrics.get("trade_count"), 0) or 0),
@@ -2932,7 +2932,7 @@ if module == "Stock Strategy Finder":
         if str(verdict.get("code") or "") in {"historical_candidate", "promising"}:
             st.info(
                 "The best candidate is intentionally shown even though it is **not validated**. "
-                "This lets you inspect a setup that may work in the current stock regime without pretending it has proven durable."
+                "This lets you inspect a setup that may work in the stock's recent behavior without pretending it has proven durable."
             )
 
         current_profile_name = str((finder_result.get("profile") or {}).get("name") or "")
