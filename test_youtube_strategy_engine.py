@@ -2179,6 +2179,62 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(result["status"], "VERIFY")
         self.assertGreater(result["unknown"], 0)
 
+    def test_live_matcher_respects_validated_regular_hours_setting(self):
+        strategy = simple_strategy()
+        strategy["optimized_backtest_settings"] = {"allow_extended_hours": False}
+        premarket = datetime(2026, 8, 31, 8, 0, tzinfo=ET).astimezone(timezone.utc)
+        regular = datetime(2026, 8, 31, 10, 0, tzinfo=ET).astimezone(timezone.utc)
+
+        with patch.object(engine, "utc_now", return_value=premarket):
+            blocked = engine.match_strategy({"price": 10.0}, strategy)
+        with patch.object(engine, "utc_now", return_value=regular):
+            allowed = engine.match_strategy({"price": 10.0}, strategy)
+
+        self.assertNotEqual(blocked["status"], "MATCH")
+        self.assertEqual(allowed["status"], "MATCH")
+
+    def test_live_matcher_respects_ignore_session_end_behavior(self):
+        strategy = simple_strategy(session_end="10:00")
+        strategy["optimized_backtest_settings"] = {"ignore_strategy_session_end": True}
+        afternoon = datetime(2026, 8, 31, 14, 0, tzinfo=ET).astimezone(timezone.utc)
+
+        with patch.object(engine, "utc_now", return_value=afternoon):
+            ignored = engine.match_strategy({"price": 10.0}, strategy)
+
+        strategy["optimized_backtest_settings"] = {"ignore_strategy_session_end": False}
+        with patch.object(engine, "utc_now", return_value=afternoon):
+            enforced = engine.match_strategy({"price": 10.0}, strategy)
+
+        self.assertEqual(ignored["status"], "MATCH")
+        self.assertNotEqual(enforced["status"], "MATCH")
+
+    def test_live_matcher_applies_implicit_pullback_breakout_behavior(self):
+        strategy = simple_strategy()
+        strategy["name"] = "Micro Pullback"
+        strategy["optimized_backtest_settings"] = {
+            "require_pullback_breakout_for_pullback_strategies": True
+        }
+
+        failed = engine.match_strategy(
+            {"price": 10.0, "chart_checks": {"pullback_breakout": False}},
+            strategy,
+        )
+        passed = engine.match_strategy(
+            {"price": 10.0, "chart_checks": {"pullback_breakout": True}},
+            strategy,
+        )
+        self.assertNotEqual(failed["status"], "MATCH")
+        self.assertEqual(passed["status"], "MATCH")
+
+    def test_live_behavior_settings_prefer_validated_settings_when_rules_are_validated(self):
+        strategy = simple_strategy()
+        strategy["using_validated_rules"] = True
+        strategy["validated_backtest_settings"] = {"allow_extended_hours": False}
+        strategy["optimized_backtest_settings"] = {"allow_extended_hours": True}
+        self.assertFalse(
+            engine.strategy_live_behavior_settings(strategy)["allow_extended_hours"]
+        )
+
     def test_matching_all_measurable_rules_reports_match(self):
         metrics = {"symbol": "NVDA", "price": 100, "above_vwap": True, "vwap": 98}
         result = engine.match_strategy(metrics, simple_strategy(above_vwap=True))
