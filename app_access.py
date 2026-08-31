@@ -99,7 +99,7 @@ def _remember_access(streamlit: Any, expected: str) -> None:
         pass
 
 
-def require_app_access(streamlit: Any) -> None:
+def require_app_access(streamlit: Any, *, app_name: str = "Trading Intelligence Lab") -> None:
     """Require the app password at most about twice per day on the same URL/browser."""
     expected = configured_access_password(streamlit)
     if not expected:
@@ -133,7 +133,7 @@ def require_app_access(streamlit: Any) -> None:
         streamlit.session_state["_trading_app_boot_message"] = (
             "Password accepted · loading Trading Intelligence Lab…"
         )
-        streamlit.info("Password accepted — loading Trading Intelligence Lab…")
+        streamlit.info(f"Password accepted — loading {app_name}…")
         _remember_access(streamlit, expected)
         streamlit.rerun()
     if submitted:
