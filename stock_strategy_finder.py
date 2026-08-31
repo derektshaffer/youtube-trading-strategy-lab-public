@@ -1086,7 +1086,11 @@ def holdout_reuse_audit(
     substantially the same dates in later research can still be useful, but it must
     not retain the same validation meaning after developers have seen those outcomes.
     """
-    optimization = report.get("optimization") or {}
+    optimization = (
+        report.get("optimization")
+        if isinstance(report.get("optimization"), dict)
+        else report
+    )
     current_sessions = sorted(
         {
             str(value)
@@ -1103,7 +1107,11 @@ def holdout_reuse_audit(
     exposures: list[dict[str, Any]] = []
     current_set = set(current_sessions)
     threshold = max(1.0, min(100.0, float(material_overlap_pct)))
-    for prior in data.get("stock_strategy_finder_runs") or []:
+    prior_runs = [
+        *list(data.get("stock_strategy_finder_runs") or []),
+        *list(data.get("validation_runs") or []),
+    ]
+    for prior in prior_runs:
         if not isinstance(prior, dict):
             continue
         if str(prior.get("symbol") or "").strip().upper() != symbol:
@@ -1195,13 +1203,21 @@ def apply_holdout_reuse_guard(
     robustness["reasons"] = list(dict.fromkeys(reasons))
     guarded["robustness"] = robustness
 
-    optimization = dict(guarded.get("optimization") or {})
+    nested_optimizer = isinstance(guarded.get("optimization"), dict)
+    optimization = (
+        dict(guarded.get("optimization") or {})
+        if nested_optimizer
+        else guarded
+    )
     winner = dict(optimization.get("winner") or {})
     if str(winner.get("status") or "").strip().upper() == "VALIDATED":
         winner["pre_holdout_reuse_status"] = winner.get("status")
         winner["status"] = "HOLDOUT REUSED"
     optimization["winner"] = winner
-    guarded["optimization"] = optimization
+    if nested_optimizer:
+        guarded["optimization"] = optimization
+    else:
+        guarded["winner"] = winner
     return guarded
 
 
