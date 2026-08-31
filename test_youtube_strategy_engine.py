@@ -1798,6 +1798,57 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(actions[0]["action_type"], "forward_split")
         self.assertEqual(actions[1]["action_type"], "reverse_split")
 
+    def test_research_reset_actions_include_stock_dividend_and_spin_off(self):
+        market = engine.AlpacaMarketData("key", "secret")
+        response = {
+            "corporate_actions": {
+                "stock_dividends": [
+                    {"symbol": "TEST", "ex_date": "2026-08-20"},
+                ],
+                "spin_offs": [
+                    {"symbol": "TEST", "ex_date": "2026-08-21"},
+                ],
+            },
+            "next_page_token": None,
+        }
+        with patch.object(market, "_get", return_value=response) as mocked:
+            actions = market.research_reset_actions(
+                ["TEST"],
+                start=engine.utc_now() - timedelta(days=30),
+                end=engine.utc_now(),
+            )
+        self.assertEqual(
+            {item["action_type"] for item in actions},
+            {"stock_dividend", "spin_off"},
+        )
+        self.assertIn("stock_dividend", mocked.call_args.args[1]["types"])
+        self.assertIn("spin_off", mocked.call_args.args[1]["types"])
+
+    def test_raw_rows_restart_at_stock_dividend_without_claiming_split(self):
+        rows = [
+            bar(18, 0, 10, 10.1, 9.9, 10),
+            bar(19, 0, 10, 10.1, 9.9, 10),
+            bar(20, 0, 8, 8.1, 7.9, 8),
+            bar(21, 0, 8.1, 8.2, 8.0, 8.1),
+        ]
+        kept, audit = engine.split_safe_raw_research_rows(
+            rows,
+            [
+                {
+                    "symbol": "TEST",
+                    "ex_date": "2026-08-20",
+                    "action_type": "stock_dividend",
+                }
+            ],
+            "TEST",
+        )
+        self.assertEqual(len(kept), 2)
+        self.assertTrue(audit["corporate_action_reset_detected"])
+        self.assertFalse(audit["split_detected"])
+        self.assertEqual(audit["latest_price_reset_date"], "2026-08-20")
+        self.assertEqual(audit["mode"], "raw_prices_post_corporate_action")
+        self.assertEqual(audit["reset_action_types"], ["stock_dividend"])
+
     def test_split_safe_raw_rows_restart_at_latest_split(self):
         rows = [
             bar(18, 0, 10, 10.1, 9.9, 10),
