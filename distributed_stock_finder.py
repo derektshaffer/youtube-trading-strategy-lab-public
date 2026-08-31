@@ -37,6 +37,7 @@ from stock_strategy_finder import (
     merge_finder_report_into_library,
     search_profile,
     selected_strategies_for_profile,
+    stock_finder_strategy_families,
     stock_finder_optimizer_settings,
 )
 from trading_catalyst_core import (
@@ -779,11 +780,9 @@ def command_prepare(preferred_job_id: str = "") -> int:
         run_id = "dist-" + hashlib.sha256(
             f"{job_id}|{job.get('attempts')}|{isoformat_utc(utc_now())}".encode("utf-8")
         ).hexdigest()[:20]
-        strategies = [
-            dict(item)
-            for item in library.get("strategies") or []
-            if isinstance(item, dict)
-        ]
+        strategies = stock_finder_strategy_families(
+            list(library.get("strategies") or [])
+        )
         selected, skipped = selected_strategies_for_profile(
             strategies,
             symbol,
