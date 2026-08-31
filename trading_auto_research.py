@@ -1719,6 +1719,15 @@ def merge_autonomous_research_into_library(
             gate_reasons.append(
                 "Autonomous final holdout overlaps outcomes exposed by an earlier research cycle."
             )
+            if str(winner.get("status") or "").strip().upper() == "VALIDATED":
+                winner["pre_holdout_reuse_status"] = winner.get("status")
+                winner["status"] = "HOLDOUT REUSED"
+
+        # Keep the UI-facing report, durable research run, strategy record, and
+        # validation ledger on the same effective verdict after persistence guards.
+        result["validation_status"] = status
+        result["gate_reasons"] = gate_reasons
+        result["holdout_reuse_audit"] = holdout_audit
 
         item["validation_status"] = status
         item["optimization_status"] = str(winner.get("status") or "not_run").lower().replace(" ", "_")
