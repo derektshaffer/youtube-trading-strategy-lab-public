@@ -1227,7 +1227,7 @@ def upgrade_native_strategy_rules(strategy: dict[str, Any]) -> dict[str, Any]:
             and bool(reuse_audit)
         )
         autonomous_current = (
-            int(last_autonomous.get("validation_method_version") or 0) >= 3
+            int(last_autonomous.get("validation_method_version") or 0) >= 4
         )
         if not (manual_or_finder_current or autonomous_current):
             item["previous_validation_invalidated_by_methodology_upgrade"] = {
