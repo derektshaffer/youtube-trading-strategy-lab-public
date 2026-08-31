@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -64,3 +65,34 @@ def latest_completed_finder_report(
             continue
         return finder_summary_to_report(summary)
     return {}
+
+
+def newest_matching_finder_report(
+    session_report: dict[str, Any] | None,
+    saved_report: dict[str, Any] | None,
+    symbol: str,
+    profile_name: str,
+) -> dict[str, Any]:
+    """Choose the newest exact saved/session result for the current controls."""
+    target_symbol = str(symbol or "").strip().upper()
+    target_profile = str(profile_name or "").strip()
+    candidates: list[tuple[datetime, int, dict[str, Any]]] = []
+    for saved_priority, raw in enumerate((session_report, saved_report)):
+        report = dict(raw or {})
+        if str(report.get("symbol") or "").strip().upper() != target_symbol:
+            continue
+        if str((report.get("profile") or {}).get("name") or "").strip() != target_profile:
+            continue
+        raw_generated_at = str(report.get("generated_at") or "").strip()
+        try:
+            generated_at = datetime.fromisoformat(raw_generated_at.replace("Z", "+00:00"))
+            if generated_at.tzinfo is None:
+                generated_at = generated_at.replace(tzinfo=timezone.utc)
+            generated_at = generated_at.astimezone(timezone.utc)
+        except (TypeError, ValueError):
+            generated_at = datetime.min.replace(tzinfo=timezone.utc)
+        # Prefer the durable report on an exact timestamp tie.
+        candidates.append((generated_at, saved_priority, report))
+    if not candidates:
+        return {}
+    return max(candidates, key=lambda item: (item[0], item[1]))[2]
