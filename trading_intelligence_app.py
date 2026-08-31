@@ -1004,7 +1004,11 @@ def load_library(
         return result(cached_data)
 
     remote_sha = ""
-    if cloud_refresh_due and store.cloud_backup is not None:
+    if (
+        cloud_refresh_due
+        and store.cloud_backup is not None
+        and store.path.exists()
+    ):
         try:
             revision = store.cloud_backup.library_revision()
             remote_sha = str((revision or {}).get("sha") or "")
@@ -1091,12 +1095,26 @@ def load_library(
         for item in data.get("strategies") or []
         if isinstance(item, dict)
     ]
+
+    def without_render_only_fields(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        cleaned: list[dict[str, Any]] = []
+        for item in items:
+            value = dict(item)
+            value.pop("research_readiness", None)
+            cleaned.append(value)
+        return cleaned
+
     upgraded_strategies: list[dict[str, Any]] = []
     for raw in raw_strategy_records:
         upgraded = upgrade_native_strategy_rules(raw)
         upgraded["research_readiness"] = research_readiness(upgraded)
         upgraded_strategies.append(upgraded)
-    native_strategy_changed = upgraded_strategies != raw_strategy_records
+    # research_readiness is derived on every render and should not make the
+    # durable ~75 MB library look modified by itself.
+    native_strategy_changed = (
+        without_render_only_fields(upgraded_strategies)
+        != without_render_only_fields(raw_strategy_records)
+    )
     data["strategies"] = upgraded_strategies
 
     data, sources_changed = reconcile_knowledge_sources(data)
@@ -1125,7 +1143,10 @@ def load_library(
     for item in canonical_families:
         item["research_readiness"] = research_readiness(item)
 
-    canonical_changed = canonical_families != existing_canonical
+    canonical_changed = (
+        without_render_only_fields(canonical_families)
+        != without_render_only_fields(existing_canonical)
+    )
     data["strategies"] = [*source_and_other, *canonical_families]
 
     prepared_changed = (
