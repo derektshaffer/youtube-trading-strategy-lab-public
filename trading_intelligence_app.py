@@ -2858,6 +2858,7 @@ if module == "Stock Strategy Finder":
                 finder_symbol,
                 **finder_run_kwargs,
             )
+            finder_report["market_data_integrity"] = split_guard
 
             # Flush the newest optimizer state/loser ledger before writing the final result.
             checkpoint_record["status"] = "complete"
