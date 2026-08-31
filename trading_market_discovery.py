@@ -67,10 +67,28 @@ def _needs_chart_data(strategy: dict[str, Any]) -> bool:
         rules.get(name) is not None and rules.get(name) is not False
         for name in (
             "vwap_reclaim",
+            "previous_day_high_breakout",
+            "min_previous_day_volume_ratio",
+            "min_previous_day_change_pct",
             "breakout_lookback_bars",
             "opening_range_minutes",
             "volume_surge_ratio",
             "minimum_green_bars",
+            "avwap_anchor_mode",
+            "require_price_above_avwap",
+            "avwap_reclaim",
+            "require_avwap_rising",
+            "require_avwap_pullback",
+            "max_avwap_distance_pct",
+            "stop_below_avwap",
+            "require_price_above_fast_ema",
+            "require_price_above_slow_ema",
+            "require_price_above_trend_ema",
+            "max_fast_ema_distance_pct",
+            "require_fast_ema_rising",
+            "require_fast_ema_pullback",
+            "max_pullback_number",
+            "require_pullback_breakout",
         )
     )
 
