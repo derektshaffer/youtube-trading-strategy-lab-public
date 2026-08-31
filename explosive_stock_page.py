@@ -352,28 +352,26 @@ if view == "Scanner":
     results = list(st.session_state.get("explosive_scan_results") or [])
     if results:
         st.markdown("### Ranked candidates")
-        st.dataframe(
-            pd.DataFrame(_result_rows(results)),
+        st.caption("Click any candidate row to open that ticker in the Explosive Analyzer.")
+        ranked_rows = _result_rows(results)
+        table_event = st.dataframe(
+            pd.DataFrame(ranked_rows),
             hide_index=True,
             width="stretch",
+            on_select="rerun",
+            selection_mode="single-row",
+            key="explosive_ranked_candidates_table",
         )
-        choices = {
-            f"{item.get('symbol')} · {item.get('activation_state')} · "
-            f"{safe_float(item.get('profile_score'), 0.0):.0f}/100": item
-            for item in results
-        }
-        selected_label = st.selectbox("Inspect candidate", list(choices))
-        selected = choices[selected_label]
-        _render_candidate(selected, detailed=False)
-
-        if st.button(
-            f"Open {selected.get('symbol')} in Explosive Analyzer →",
-            type="primary",
-            width="stretch",
-        ):
-            st.session_state["explosive_analyzer_symbol"] = str(selected.get("symbol") or "")
-            st.session_state["explosive_stock_view"] = "Analyzer"
-            st.rerun()
+        selected_rows = list((table_event.selection or {}).get("rows") or [])
+        if selected_rows:
+            selected_index = int(selected_rows[0])
+            if 0 <= selected_index < len(results):
+                selected = results[selected_index]
+                st.session_state["explosive_analyzer_symbol"] = str(
+                    selected.get("symbol") or ""
+                )
+                st.session_state["explosive_stock_view"] = "Analyzer"
+                st.rerun()
 
 else:
     st.markdown("## Explosive Stock Analyzer")
