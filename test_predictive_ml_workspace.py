@@ -128,15 +128,17 @@ def test_predictive_ml_workspace_reduces_memory_and_checkpoints_baseline():
     assert "Baseline result saved durably." in block[baseline_call:generalization_call]
 
 
-def test_similarity_validator_import_survives_stale_streamlit_module_cache():
+def test_similarity_validator_lazy_import_survives_stale_streamlit_module_cache():
     source = Path("trading_intelligence_app.py").read_text(encoding="utf-8")
     assert "from predictive_ml_pipeline import (" not in source
-    assert "import predictive_ml_pipeline as _predictive_ml_pipeline" in source
-    assert "except AttributeError:" in source
-    assert 'load_current_source_module(\n        "predictive_ml_pipeline"\n    )' in source
+    assert "import predictive_ml_pipeline as _predictive_ml_pipeline" not in source
+    assert "def _lazy_module_call(" in source
+    assert "module = importlib.import_module(module_name)" in source
+    assert 'if function is None and module_name == "predictive_ml_pipeline":' in source
+    assert "module = load_current_source_module(module_name)" in source
+    assert "def similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline(" in source
     assert (
-        "_current_predictive_ml_pipeline."
-        "similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline"
+        '"similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline"'
         in source
     )
 
@@ -158,12 +160,12 @@ def test_predictive_ml_workspace_compares_three_model_architectures():
     assert "training_uses_same_symbol_only" not in block
 
 
-def test_ticker_specific_validator_import_survives_stale_streamlit_cache():
+def test_ticker_specific_validator_lazy_import_survives_stale_streamlit_cache():
     source = Path("trading_intelligence_app.py").read_text(encoding="utf-8")
-    assert "except AttributeError:" in source
-    assert "_current_predictive_ml_pipeline_for_ticker = load_current_source_module(" in source
+    assert "def ticker_specific_walk_forward_logistic_baseline(" in source
     assert (
-        "_current_predictive_ml_pipeline_for_ticker."
-        "ticker_specific_walk_forward_logistic_baseline"
+        '"predictive_ml_pipeline",\n'
+        '        "ticker_specific_walk_forward_logistic_baseline"'
         in source
     )
+    assert "module = load_current_source_module(module_name)" in source
