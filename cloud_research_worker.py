@@ -490,6 +490,70 @@ def close_blocked_targeted_validation_jobs(
     return result, closed
 
 
+def _profit_first_queue_status(data: dict[str, Any]) -> dict[str, Any]:
+    research_system = (
+        data.get("research_system")
+        if isinstance(data.get("research_system"), dict)
+        else {}
+    )
+    status = research_system.get("profit_first_validation_queue")
+    return dict(status) if isinstance(status, dict) else {}
+
+
+def _set_profit_first_queue_status(
+    data: dict[str, Any],
+    ranking: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist a fresh semantic queue snapshot without timestamp-only churn."""
+    result = dict(data or {})
+    research_system = (
+        dict(result.get("research_system") or {})
+        if isinstance(result.get("research_system"), dict)
+        else {}
+    )
+    previous = (
+        dict(research_system.get("profit_first_validation_queue") or {})
+        if isinstance(research_system.get("profit_first_validation_queue"), dict)
+        else {}
+    )
+    next_status = {
+        **ranking,
+        "validation_method_version": AUTONOMOUS_VALIDATION_METHOD_VERSION,
+    }
+    previous_semantic = {
+        key: value
+        for key, value in previous.items()
+        if key != "updated_at"
+    }
+    if previous_semantic == next_status and previous.get("updated_at"):
+        next_status["updated_at"] = previous.get("updated_at")
+    else:
+        next_status["updated_at"] = datetime.now(timezone.utc).isoformat().replace(
+            "+00:00", "Z"
+        )
+    research_system["profit_first_validation_queue"] = next_status
+    result["research_system"] = research_system
+    return result
+
+
+def refresh_automatic_profit_first_validation_job(
+    store: StrategyStore,
+    data: dict[str, Any],
+    *,
+    maximum_candidates: int = 2,
+) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any]]:
+    """Re-rank Profit First and persist only when its queue state actually changes."""
+    before = _profit_first_queue_status(data)
+    updated, job, status = ensure_automatic_profit_first_validation_job(
+        data,
+        maximum_candidates=maximum_candidates,
+    )
+    after = _profit_first_queue_status(updated)
+    if job is not None or before != after:
+        persist_store(store, updated)
+    return updated, job, status
+
+
 def ensure_automatic_profit_first_validation_job(
     data: dict[str, Any],
     *,
@@ -511,11 +575,13 @@ def ensure_automatic_profit_first_validation_job(
                 active.get("payload") if isinstance(active.get("payload"), dict) else {}
             ),
         }
+        result = _set_profit_first_queue_status(result, ranking)
         return result, None, ranking
 
     candidates = list(ranking.get("candidates") or [])
     if not candidates:
         ranking = {**ranking, "queue_status": "no-eligible-candidates"}
+        result = _set_profit_first_queue_status(result, ranking)
         return result, None, ranking
 
     # Do not recreate an identical terminal batch. New validation evidence changes
@@ -536,6 +602,7 @@ def ensure_automatic_profit_first_validation_job(
                 "queue_status": "already-attempted",
                 "existing_job_id": item.get("id"),
             }
+            result = _set_profit_first_queue_status(result, ranking)
             return result, None, ranking
 
     strategy_ids = [
@@ -563,17 +630,7 @@ def ensure_automatic_profit_first_validation_job(
         "queued_job_id": (job or {}).get("id"),
         "queued_strategy_ids": strategy_ids,
     }
-    research_system = (
-        dict(result.get("research_system") or {})
-        if isinstance(result.get("research_system"), dict)
-        else {}
-    )
-    research_system["profit_first_validation_queue"] = {
-        **ranking,
-        "updated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "validation_method_version": AUTONOMOUS_VALIDATION_METHOD_VERSION,
-    }
-    result["research_system"] = research_system
+    result = _set_profit_first_queue_status(result, ranking)
     return result, job, ranking
 
 
@@ -1329,12 +1386,12 @@ def main() -> int:
                 )
 
     data = store.load_latest()
-    data, profit_first_job, profit_first_status = ensure_automatic_profit_first_validation_job(
+    data, profit_first_job, profit_first_status = refresh_automatic_profit_first_validation_job(
+        store,
         data,
         maximum_candidates=int(env("PROFIT_FIRST_VALIDATION_BATCH_SIZE", "2") or 2),
     )
     if profit_first_job:
-        persist_store(store, data)
         print(
             "Queued automatic profit-first validation job "
             f"{profit_first_job.get('id')} for "
@@ -1374,6 +1431,25 @@ def main() -> int:
     completed = 0
     for _ in range(jobs_per_run):
         data = store.load_latest()
+        # Re-evaluate Profit First before every worker slot. A completed strict
+        # validation can therefore advance immediately to the next candidate
+        # batch instead of spending the remaining run on lower-priority work.
+        data, profit_first_job, profit_first_status = refresh_automatic_profit_first_validation_job(
+            store,
+            data,
+            maximum_candidates=int(env("PROFIT_FIRST_VALIDATION_BATCH_SIZE", "2") or 2),
+        )
+        if profit_first_job:
+            print(
+                "Queued next automatic profit-first validation job "
+                f"{profit_first_job.get('id')} for "
+                + ", ".join(
+                    str(value)
+                    for value in profit_first_status.get("queued_strategy_ids") or []
+                )
+                + ".",
+                flush=True,
+            )
         data, job = claim_next_research_job(
             data,
             worker_id,
