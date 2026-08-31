@@ -130,6 +130,14 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
                 self.assertIn(marker, source)
         self.assertNotIn('"Strategy to check"', source)
 
+    def test_cold_start_renders_status_before_heavy_imports_and_skips_render_uploads(self):
+        source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        self.assertIn("Starting Trading Intelligence Lab…", source)
+        self.assertIn("Core modules loaded · loading research library…", source)
+        self.assertIn("Trading Intelligence Lab ready", source)
+        self.assertIn("Ordinary page rendering must never turn a cold start", source)
+        self.assertIn("if mutable or force_cloud_refresh:", source)
+
     def test_strategy_integrity_audit_is_available_in_advanced_ui(self):
         source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
         core = (ROOT / "trading_intelligence_core.py").read_text(encoding="utf-8")
@@ -165,10 +173,8 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
         self.assertIn("excluded from cross-stock research", source)
         self.assertIn("excluded because", source)
         self.assertIn("Review integrity gaps", source)
-        self.assertIn(
-            "legacy_changed or native_strategy_changed or sources_changed or canonical_changed",
-            source,
-        )
+        self.assertIn("prepared_changed", source)
+        self.assertIn("_til_library_prepared_changes_pending", source)
 
     def test_legacy_finder_results_are_visibly_marked_pre_integrity(self):
         source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
