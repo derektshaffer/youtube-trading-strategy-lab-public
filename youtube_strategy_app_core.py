@@ -2271,7 +2271,7 @@ with backtest_tab:
                             timeframe=timeframe,
                             adjustment="raw",
                         )
-                        split_actions = market.split_actions(
+                        split_actions = market.research_reset_actions(
                             tickers,
                             start=start,
                             end=end,
@@ -2917,7 +2917,7 @@ with optimizer_tab:
                             timeframe=selected_interval,
                             adjustment="raw",
                         ).get(ticker, [])
-                        split_actions = market.split_actions(
+                        split_actions = market.research_reset_actions(
                             [ticker],
                             start=start,
                             end=end,
@@ -2927,11 +2927,11 @@ with optimizer_tab:
                             split_actions,
                             ticker,
                         )
-                        if optimizer_market_data_integrity.get("split_detected"):
+                        if optimizer_market_data_integrity.get("corporate_action_reset_detected"):
                             st.info(
                                 "Historical integrity guard: raw prices retained and optimizer history "
                                 f"restarted at {optimizer_market_data_integrity.get('latest_split_date')} "
-                                "after the latest split."
+                                "after the latest price-changing corporate action."
                             )
                         progress_bar.progress(
                             0.20,
