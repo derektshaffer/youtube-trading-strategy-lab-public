@@ -45,6 +45,16 @@ class ProfitFirstWorkflowTests(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, self.source)
 
+    def test_profit_first_shows_automatic_validator_status(self):
+        for marker in (
+            "Automatic profit-first validator",
+            "automatic_profit_first_validation",
+            "Failures stay research-only",
+            "does not recycle current-protocol failures automatically",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, self.source)
+
     def test_profit_first_blocks_revalidation_until_strategy_is_faithfully_modeled(self):
         for marker in (
             "Revalidation is blocked by strategy fidelity.",
