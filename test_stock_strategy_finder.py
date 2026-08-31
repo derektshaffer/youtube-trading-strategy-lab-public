@@ -571,6 +571,16 @@ class FinderPersistenceTests(unittest.TestCase):
                     "validation_metrics": {"net_pnl": 50},
                     "holdout_metrics": {"net_pnl": 40},
                     "stress_metrics": {"net_pnl": 30},
+                    "execution_sensitivity": {
+                        "score": 82.0,
+                        "label": "ROBUST",
+                        "passes_validation_gate": True,
+                    },
+                    "holdout_execution_sensitivity": {
+                        "score": 76.0,
+                        "label": "ROBUST",
+                        "passes_validation_gate": True,
+                    },
                 }
             },
             "configuration_history": [
@@ -679,6 +689,14 @@ class FinderPersistenceTests(unittest.TestCase):
             "Recent regime",
         )
         self.assertEqual(restored["optimization"]["winner"]["holdout_metrics"]["net_pnl"], 40)
+        self.assertEqual(
+            restored["optimization"]["winner"]["execution_sensitivity"]["score"],
+            82.0,
+        )
+        self.assertEqual(
+            restored["optimization"]["winner"]["holdout_execution_sensitivity"]["score"],
+            76.0,
+        )
 
         completed_checkpoint = finder.latest_finder_checkpoint(merged, "SDOT", "Deep")
         self.assertEqual(completed_checkpoint["status"], "complete")
