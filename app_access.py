@@ -130,6 +130,10 @@ def require_app_access(streamlit: Any) -> None:
             width="stretch",
         )
     if submitted and access_password_matches(candidate, expected):
+        streamlit.session_state["_trading_app_boot_message"] = (
+            "Password accepted · loading Trading Intelligence Lab…"
+        )
+        streamlit.info("Password accepted — loading Trading Intelligence Lab…")
         _remember_access(streamlit, expected)
         streamlit.rerun()
     if submitted:
