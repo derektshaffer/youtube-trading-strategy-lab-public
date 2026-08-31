@@ -44,7 +44,7 @@ AUTO_EVENT_WINDOW_BUFFER_DAYS = 30
 # choose symbols. This prevents end-of-day/event-window hindsight from deciding
 # which earlier intraday bars are allowed into the test sample.
 AUTO_VALIDATION_WINDOW_DAYS = 180
-AUTONOMOUS_VALIDATION_METHOD_VERSION = 2
+AUTONOMOUS_VALIDATION_METHOD_VERSION = 3
 AUTO_TIMEFRAME = "5Min"
 
 
