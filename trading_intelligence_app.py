@@ -5351,7 +5351,8 @@ elif module == "Strategy Integrity":
         dimensions = report.get("dimension_summary") or {}
         requirement_count = int(report.get("requirement_count") or 0)
         modeled_count = int(report.get("modeled_count") or 0)
-        coverage_value = safe_float(report.get("coverage_pct"))
+        coverage_value = safe_float(report.get("coverage_pct"), 0.0) or 0.0
+        coverage_measurable = bool(report.get("coverage_measurable")) and requirement_count > 0
         integrity_rows.append(
             {
                 "Strategy family": strategy.get("name") or "Unnamed strategy",
@@ -5361,7 +5362,7 @@ elif module == "Strategy Integrity":
                     if requirement_count == 0
                     else f"{modeled_count} of {requirement_count} ({coverage_value or 0.0:.1f}%)"
                 ),
-                "Coverage sort": coverage_value,
+                "Coverage sort": coverage_value if coverage_measurable else None,
                 "Rules detected count": requirement_count,
                 "Important rules missing": int(report.get("critical_missing_count") or 0),
                 "Missing exit rules": int((dimensions.get("exit") or {}).get("missing") or 0),
@@ -5533,7 +5534,7 @@ elif module == "Strategy Integrity":
         st.markdown(f"### {selected_strategy.get('name') or 'Unnamed strategy'}")
         fidelity_cols = st.columns(4)
         detail_requirement_count = int(report.get("requirement_count") or 0)
-        detail_coverage = safe_float(report.get("coverage_pct"))
+        detail_coverage = safe_float(report.get("coverage_pct"), 0.0) or 0.0
         fidelity_cols[0].metric("Backtester match", report.get("label"))
         fidelity_cols[1].metric(
             "Rules represented",
