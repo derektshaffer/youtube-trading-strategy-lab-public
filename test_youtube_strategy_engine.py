@@ -1018,6 +1018,42 @@ class DurableStorageTests(unittest.TestCase):
             self.assertEqual(restored["knowledge_sources"][0]["title"], "Saved Book")
             self.assertTrue(restarted.path.exists())
 
+    def test_cold_load_latest_downloads_cloud_library_only_once(self):
+        class FakeCloud:
+            repository = "owner/private-backups"
+            path = "trading-intelligence-lab/intelligence_library.json"
+
+            def __init__(self):
+                self.read_calls = 0
+                self.library = {
+                    "version": 2,
+                    "strategies": [],
+                    "knowledge_sources": [
+                        {"id": "book1", "title": "Cold-start Book"}
+                    ],
+                    "updated_at": "2026-08-31T14:00:00Z",
+                }
+
+            def read_library(self):
+                self.read_calls += 1
+                return {
+                    "library": json.loads(json.dumps(self.library)),
+                    "sha": "a" * 40,
+                }
+
+        with tempfile.TemporaryDirectory() as directory:
+            cloud = FakeCloud()
+            store = engine.StrategyStore(directory, cloud_backup=cloud)
+            loaded = store.load_latest()
+
+            self.assertEqual(cloud.read_calls, 1)
+            self.assertTrue(store.restored_on_startup)
+            self.assertTrue(store.path.exists())
+            self.assertEqual(
+                loaded["knowledge_sources"][0]["title"],
+                "Cold-start Book",
+            )
+
     def test_verified_persistence_status_uses_metadata_not_full_library_download(self):
         class FakeCloud:
             repository = "owner/private-backups"
