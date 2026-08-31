@@ -2038,7 +2038,9 @@ def strategy_semantic_coverage(strategy: dict[str, Any]) -> dict[str, Any]:
 
     total = len(requirements)
     modeled = sum(1 for item in requirements if item["modeled"])
-    coverage = 100.0 if total == 0 else round(modeled / total * 100.0, 1)
+    # No detected requirements means coverage is unknown, not perfect.
+    # 0/0 must never be represented as 100% fidelity.
+    coverage = None if total == 0 else round(modeled / total * 100.0, 1)
     missing = [item for item in requirements if not item["modeled"]]
     critical_missing = [item for item in missing if item.get("critical")]
     dimension_summary: dict[str, dict[str, int]] = {}
@@ -2070,12 +2072,16 @@ def strategy_semantic_coverage(strategy: dict[str, Any]) -> dict[str, Any]:
 def strategy_integrity_report(strategy: dict[str, Any]) -> dict[str, Any]:
     """Return a plain-language source-to-backtester fidelity verdict."""
     semantic = strategy_semantic_coverage(strategy)
-    coverage = safe_float(semantic.get("coverage_pct"), 0.0) or 0.0
+    requirement_count = int(semantic.get("requirement_count") or 0)
+    coverage = safe_float(semantic.get("coverage_pct"))
     critical_missing = int(semantic.get("critical_missing_count") or 0)
-    if critical_missing:
+    if requirement_count == 0:
+        status = "unknown"
+        label = "NO RULES DETECTED"
+    elif critical_missing:
         status = "blocked"
         label = "IMPORTANT LOGIC NOT MODELED"
-    elif semantic.get("requirement_count") and coverage < SEMANTIC_BACKTEST_COVERAGE_GATE:
+    elif coverage is not None and coverage < SEMANTIC_BACKTEST_COVERAGE_GATE:
         status = "partial"
         label = "PARTIALLY MODELED"
     else:
@@ -2085,7 +2091,7 @@ def strategy_integrity_report(strategy: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": status,
         "label": label,
-        "coverage_pct": coverage,
+        "coverage_pct": semantic.get("coverage_pct"),
         "requirement_count": int(semantic.get("requirement_count") or 0),
         "modeled_count": int(semantic.get("modeled_count") or 0),
         "critical_missing_count": critical_missing,
