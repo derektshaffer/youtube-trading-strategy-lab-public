@@ -93,6 +93,19 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, source)
 
+    def test_stock_analyzer_allows_in_page_strategy_switching(self):
+        source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        for marker in (
+            '"Strategy to check"',
+            'key="til_analyzer_strategy_id"',
+            "selected_strategy_id",
+            "strategy_by_id",
+            "test it against the same stock without returning to Step 1",
+            'analysis["_selected_strategy_id"]',
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, source)
+
     def test_strategy_integrity_audit_is_available_in_advanced_ui(self):
         source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
         core = (ROOT / "trading_intelligence_core.py").read_text(encoding="utf-8")
