@@ -67,7 +67,9 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
         self.assertIn("scan_market_strategies(", source)
         self.assertIn("def scan_market_strategies(", market_source)
         self.assertIn("Automatic strategy coverage", source)
-        self.assertIn("Find the best opportunities now", source)
+        self.assertIn("Scan for live strategy matches", source)
+        self.assertIn("Live strategy matches found", source)
+        self.assertIn("It does **not** mean the strategy is profitable or trade-ready.", source)
         self.assertNotIn('"Strategy to scan for"', source)
 
     def test_market_discovery_rows_route_to_the_logical_next_step(self):
