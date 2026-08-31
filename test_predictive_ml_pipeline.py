@@ -31,13 +31,22 @@ def _bar(day: int, minute: int, close: float, volume: float = 1000.0) -> dict:
 
 
 class FakeMarket:
-    def __init__(self, rows_by_symbol):
+    def __init__(self, rows_by_symbol, split_actions=None):
         self.rows_by_symbol = rows_by_symbol
+        self._split_actions = list(split_actions or [])
         self.calls = []
 
     def bars(self, symbols, **kwargs):
         self.calls.append({"symbols": list(symbols), **kwargs})
         return {symbol: list(self.rows_by_symbol.get(symbol) or []) for symbol in symbols}
+
+    def split_actions(self, symbols, **kwargs):
+        allowed = set(symbols)
+        return [
+            dict(item)
+            for item in self._split_actions
+            if str(item.get("symbol") or "").upper() in allowed
+        ]
 
 
 def test_cross_stock_dataset_reuses_one_batched_history_request():
@@ -58,6 +67,8 @@ def test_cross_stock_dataset_reuses_one_batched_history_request():
     )
     assert len(market.calls) == 1
     assert market.calls[0]["symbols"] == ["AAA", "BBB"]
+    assert market.calls[0]["adjustment"] == "raw"
+    assert report["market_data_integrity_contract"] == "split_safe_raw_v1"
     assert report["symbols_requested"] == 2
     assert report["symbols_with_data"] == 2
     assert report["bars_analyzed"] == 20
@@ -65,6 +76,42 @@ def test_cross_stock_dataset_reuses_one_batched_history_request():
     assert all(row["symbol"] in {"AAA", "BBB"} for row in report["records"])
     assert all(name.startswith("feature__") for name in report["feature_columns"])
     assert all(name.startswith("label__") for name in report["label_columns"])
+
+
+def test_cross_stock_dataset_restarts_price_context_at_split_boundary():
+    rows = {
+        "AAA": [
+            _bar(18, i, 10.0 + i * 0.01) for i in range(5)
+        ] + [
+            _bar(20, i, 1.0 + i * 0.01) for i in range(6)
+        ],
+        "BBB": [_bar(20, i, 20.0 + i * 0.02) for i in range(6)],
+    }
+    market = FakeMarket(
+        rows,
+        split_actions=[
+            {
+                "symbol": "AAA",
+                "ex_date": "2026-08-20",
+                "action_type": "forward_split",
+            }
+        ],
+    )
+    report = build_cross_stock_training_dataset(
+        market,
+        ["AAA", "BBB"],
+        start="2026-08-18",
+        end="2026-08-21",
+        horizons=(1,),
+        swing_radius=1,
+    )
+
+    integrity = report["market_data_integrity_by_symbol"]["AAA"]
+    assert integrity["split_detected"] is True
+    assert integrity["latest_split_date"] == "2026-08-20"
+    assert integrity["discarded_pre_split_rows"] == 5
+    aaa = next(item for item in report["by_symbol"] if item["symbol"] == "AAA")
+    assert aaa["raw_bars"] == 6
 
 
 def test_training_dataset_round_trip_is_atomic_and_lossless(tmp_path: Path):
