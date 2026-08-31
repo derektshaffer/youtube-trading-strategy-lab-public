@@ -294,7 +294,7 @@ def score_setup(
         adjustment="raw",
         max_pages=30,
     ).get(ticker, [])
-    if not hasattr(market, "split_actions"):
+    if not hasattr(market, "research_reset_actions"):
         raise AppError(
             "Historical ML scoring requires split metadata so price/liquidity "
             "features cannot cross an unhandled split boundary."
