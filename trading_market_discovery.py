@@ -62,6 +62,16 @@ def merge_momentum_candidate_universe(
     return result
 
 
+def _completed_daily_history_window(
+    *,
+    days: int = 45,
+    now: datetime | None = None,
+) -> tuple[datetime, datetime]:
+    """Return a stable completed-day window so repeated live checks share cache keys."""
+    end = AlpacaMarketData._history_cache_cutoff_utc(now)
+    return end - timedelta(days=max(1, int(days))), end
+
+
 def _completed_daily_reference(
     rows: list[dict[str, Any]],
     *,
@@ -284,15 +294,13 @@ def _scan_strategy_universe_batch(
         progress("Loading current snapshots…")
     snapshots = market.snapshots(clean)
 
-    historical_end = utc_now() - timedelta(
-        minutes=16 if market.historical_feed == "sip" and market.live_feed != "sip" else 1
-    )
+    daily_start, daily_end = _completed_daily_history_window()
     if progress:
         progress("Building relative-volume baselines…")
     daily = market.bars(
         clean,
-        start=historical_end - timedelta(days=45),
-        end=historical_end,
+        start=daily_start,
+        end=daily_end,
         timeframe="1Day",
         max_pages=8,
     )
@@ -405,15 +413,13 @@ def _scan_market_strategies_batch(
         progress(f"Loading current snapshots for {len(clean)} stocks…")
     snapshots = market.snapshots(clean)
 
-    historical_end = utc_now() - timedelta(
-        minutes=16 if market.historical_feed == "sip" and market.live_feed != "sip" else 1
-    )
+    daily_start, daily_end = _completed_daily_history_window()
     if progress:
         progress("Building shared relative-volume baselines…")
     daily = market.bars(
         clean,
-        start=historical_end - timedelta(days=45),
-        end=historical_end,
+        start=daily_start,
+        end=daily_end,
         timeframe="1Day",
         max_pages=8,
     )
@@ -679,15 +685,13 @@ def analyze_stock_strategies(
     if not snapshot:
         raise AppError(f"No current Alpaca snapshot was available for {ticker}.")
 
-    historical_end = utc_now() - timedelta(
-        minutes=16 if market.historical_feed == "sip" and market.live_feed != "sip" else 1
-    )
+    daily_start, daily_end = _completed_daily_history_window()
     if progress:
         progress("Calculating relative-volume baseline…")
     daily = market.bars(
         [ticker],
-        start=historical_end - timedelta(days=45),
-        end=historical_end,
+        start=daily_start,
+        end=daily_end,
         timeframe="1Day",
         max_pages=5,
     )
