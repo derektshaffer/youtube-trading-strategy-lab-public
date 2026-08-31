@@ -18,8 +18,8 @@ from trading_auto_research import (
     AUTONOMOUS_VALIDATION_METHOD_VERSION,
     run_autonomous_research,
 )
-from trading_intelligence_core import research_readiness
-from youtube_strategy_engine import AlpacaMarketData, AppError, safe_float
+from trading_intelligence_core import research_readiness, strategy_integrity_report
+from youtube_strategy_engine import AlpacaMarketData, AppError, normalize_machine_rules, safe_float
 
 
 def _env(name: str, default: str = "") -> str:
@@ -152,10 +152,44 @@ def main() -> int:
 
     readiness = research_readiness(requested)
     if readiness.get("label") != "ready_for_backtest":
-        raise AppError(
-            f"Target strategy {args.strategy_id} is not ready for backtest: "
-            f"{readiness.get('label') or 'unknown'}"
+        diagnostic = {
+            "read_only": True,
+            "requested_strategy_id": requested.get("id"),
+            "requested_strategy_name": requested.get("name"),
+            "requested_parent_strategy_id": requested.get("parent_strategy_id"),
+            "requested_source_type": requested.get("source_type"),
+            "status": "blocked_before_revalidation",
+            "blocker": "strategy_integrity",
+            "readiness": readiness,
+            "integrity": strategy_integrity_report(requested),
+            "machine_rules": {
+                key: value
+                for key, value in normalize_machine_rules(
+                    requested.get("machine_rules")
+                ).items()
+                if value is not None
+            },
+            "research_rule_overrides": {
+                key: value
+                for key, value in normalize_machine_rules(
+                    requested.get("research_rule_overrides")
+                ).items()
+                if value is not None
+            },
+            "unresolved_rules": [
+                str(value)
+                for value in requested.get("unresolved_rules") or []
+                if str(value).strip()
+            ],
+        }
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(diagnostic, indent=2, sort_keys=True, default=str) + "\n",
+            encoding="utf-8",
         )
+        print(json.dumps(diagnostic, indent=2, default=str))
+        return 0
 
     market = AlpacaMarketData(
         _env("ALPACA_API_KEY"),
