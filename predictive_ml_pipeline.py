@@ -25,7 +25,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from market_feature_validation import DEFAULT_HORIZONS, build_supervised_feature_rows, limit_rows_to_recent_market_sessions
-from youtube_strategy_engine import parse_symbols
+from youtube_strategy_engine import parse_symbols, split_safe_raw_research_rows
 
 
 def _number(value: Any) -> float | None:
@@ -633,8 +633,30 @@ def build_cross_stock_training_dataset(
         start=start,
         end=end,
         timeframe=timeframe,
+        adjustment="raw",
         max_pages=max_pages,
     )
+    if not hasattr(market, "split_actions"):
+        raise ValueError(
+            "Predictive ML requires point-in-time split metadata so raw historical "
+            "price context cannot cross an unhandled split boundary."
+        )
+    split_actions = market.split_actions(
+        clean,
+        start=start,
+        end=end,
+    )
+    market_data_integrity_by_symbol: dict[str, dict[str, Any]] = {}
+    split_safe_rows_by_symbol: dict[str, list[dict[str, Any]]] = {}
+    for symbol in clean:
+        safe_rows, integrity = split_safe_raw_research_rows(
+            list((rows_by_symbol or {}).get(symbol) or []),
+            split_actions,
+            symbol,
+        )
+        split_safe_rows_by_symbol[symbol] = safe_rows
+        market_data_integrity_by_symbol[symbol] = integrity
+    rows_by_symbol = split_safe_rows_by_symbol
 
     records: list[dict[str, Any]] = []
     feature_columns: set[str] = set()
@@ -648,6 +670,7 @@ def build_cross_stock_training_dataset(
 
     def process_symbol(index: int, symbol: str) -> dict[str, Any]:
         raw_rows = list((rows_by_symbol or {}).get(symbol) or [])
+        integrity = dict(market_data_integrity_by_symbol.get(symbol) or {})
         rows = _filter_rows_by_market_session(raw_rows, clean_session_mode)
         rows, selected_sessions = limit_rows_to_recent_market_sessions(
             rows, session_limit
@@ -663,6 +686,7 @@ def build_cross_stock_training_dataset(
                 "records": [],
                 "feature_columns": [],
                 "label_columns": [],
+                "market_data_integrity": integrity,
             }
 
         if progress and worker_count == 1:
@@ -702,6 +726,7 @@ def build_cross_stock_training_dataset(
             "records": symbol_records,
             "feature_columns": list(report.get("feature_columns") or []),
             "label_columns": list(report.get("label_columns") or []),
+            "market_data_integrity": integrity,
         }
 
     if progress:
@@ -761,6 +786,7 @@ def build_cross_stock_training_dataset(
                 "sessions": int(result.get("sessions") or 0),
                 "market_sessions": selected_sessions,
                 "rows": len(symbol_records),
+                "market_data_integrity": result.get("market_data_integrity") or {},
             }
         )
 
@@ -792,6 +818,8 @@ def build_cross_stock_training_dataset(
     ]
     return {
         "causal_replay": True,
+        "market_data_integrity_contract": "split_safe_raw_v1",
+        "market_data_integrity_by_symbol": market_data_integrity_by_symbol,
         "symbols_requested": len(clean),
         "symbols_with_data": sum(1 for item in by_symbol if int(item.get("bars") or 0) > 0),
         "bars_loaded": bars_loaded,
@@ -832,6 +860,8 @@ def build_cross_stock_training_dataset(
             f"Market-hours regime: {clean_session_mode}; regular, premarket, and after-hours rows are never mixed. "
             f"Supervised observations are sampled every {max(1, int(observation_stride_bars))} bar(s) while "
             "all causal features still use every underlying candle. "
+            "Historical bars use actual raw prices and restart each symbol at its latest split boundary, "
+            "so price-band and dollar-liquidity context cannot be rewritten by later split adjustment. "
             "Context features use current/past bars plus completed prior sessions only. Historical float and "
             "catalyst-profile fields are intentionally excluded until point-in-time coverage is trustworthy."
         ),
