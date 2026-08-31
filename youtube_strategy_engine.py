@@ -2413,6 +2413,12 @@ class StrategyStore:
         local = self.load()
         if self.cloud_backup is None:
             return local
+        if self.restored_on_startup:
+            # load() just restored this exact cloud snapshot because the local
+            # file was missing. Re-downloading the same large private library
+            # immediately would double cold-start I/O and JSON decoding for no
+            # additional reconciliation benefit.
+            return local
         try:
             remote = self.cloud_backup.read_library()
         except AppError as exc:
