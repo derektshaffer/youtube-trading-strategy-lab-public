@@ -23,7 +23,7 @@ from indicator_cross_validation import cross_validate_indicators
 from youtube_strategy_engine import add_indicators, bars_to_frame, safe_float
 
 
-RETROSPECTIVE_TEACHER_VERSION = 2
+RETROSPECTIVE_TEACHER_VERSION = 3
 
 
 def _iso(value: Any) -> str:
