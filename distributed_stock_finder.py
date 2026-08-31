@@ -849,7 +849,7 @@ def command_prepare(preferred_job_id: str = "") -> int:
         if not rows:
             raise AppError(f"No historical bars were returned for {symbol}.")
 
-        split_actions = market.split_actions(
+        split_actions = market.research_reset_actions(
             [symbol],
             start=start,
             end=end,
@@ -861,7 +861,7 @@ def command_prepare(preferred_job_id: str = "") -> int:
         )
         if not rows:
             raise AppError(f"No split-safe raw-price history remained for {symbol}.")
-        if split_guard.get("split_detected"):
+        if split_guard.get("corporate_action_reset_detected"):
             print(
                 "[prepare] corporate-action guard: raw prices preserved; "
                 f"research restarted at {split_guard.get('latest_split_date')} after "
