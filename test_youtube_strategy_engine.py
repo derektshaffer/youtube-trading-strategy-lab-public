@@ -365,6 +365,40 @@ class EmaRuleTests(unittest.TestCase):
         self.assertTrue(frame["trend_ema"].tail(2).notna().all())
         self.assertTrue(bool(frame["fast_ema_pullback_recent"].tail(5).any()))
 
+    def test_missing_ema_touch_tolerance_fails_pullback_closed(self):
+        rows = []
+        prices = [10.0, 10.2, 10.4, 10.6, 10.8, 10.7, 10.9, 11.0]
+        for minute, price in enumerate(prices):
+            rows.append(
+                bar(
+                    18,
+                    minute,
+                    price - 0.05,
+                    price + 0.08,
+                    price - (0.25 if minute == 5 else 0.08),
+                    price,
+                    10_000,
+                )
+            )
+        strategy = simple_strategy(
+            fast_ema_period=3,
+            require_fast_ema_pullback=True,
+        )
+        frame = engine.add_indicators(engine.bars_to_frame(rows), strategy)
+        self.assertFalse(bool(frame["fast_ema_pullback_recent"].any()))
+        self.assertIn(
+            "fails that condition closed",
+            " ".join(engine.backtest_limitations(strategy)),
+        )
+
+    def test_missing_ema_stop_buffer_is_reported_as_unmodeled(self):
+        strategy = simple_strategy(
+            fast_ema_period=9,
+            stop_below_fast_ema=True,
+        )
+        limitations = " ".join(engine.backtest_limitations(strategy))
+        self.assertIn("did not specify an exact buffer", limitations)
+
     def test_optimizer_can_tune_ema_pullback_tolerance(self):
         strategy = simple_strategy(
             fast_ema_period=9,
