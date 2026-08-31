@@ -3498,6 +3498,7 @@ def historical_entry_spread_audit(
     maximum_stress_multiplier: float = 2.0,
     max_samples: int = 24,
     quote_lookback_seconds: int = 60,
+    maximum_quote_age_seconds: float = 5.0,
 ) -> dict[str, Any]:
     """Compare modeled spread assumptions with real quotes at frozen holdout entries.
 
@@ -3522,6 +3523,7 @@ def historical_entry_spread_audit(
             continue
         eligible.append((stamp, trade))
     eligible.sort(key=lambda item: item[0])
+    holdout_trade_count = len(eligible)
 
     sample_limit = max(1, int(max_samples))
     if len(eligible) > sample_limit:
@@ -3559,11 +3561,31 @@ def historical_entry_spread_audit(
                 }
             )
             continue
+        quote_timestamp = quote.get("timestamp")
+        try:
+            quote_stamp = pd.to_datetime(
+                quote_timestamp,
+                utc=True,
+                errors="raise",
+            ).to_pydatetime()
+            quote_age_seconds = max(0.0, (stamp - quote_stamp).total_seconds())
+        except Exception:
+            quote_age_seconds = float("inf")
+        fresh_quote = quote_age_seconds <= max(
+            0.0,
+            float(maximum_quote_age_seconds),
+        )
         observations.append(
             {
                 "entry_time": isoformat_utc(stamp),
                 "quote_found": True,
-                "quote_timestamp": quote.get("timestamp"),
+                "quote_fresh": fresh_quote,
+                "quote_timestamp": quote_timestamp,
+                "quote_age_seconds": (
+                    round(quote_age_seconds, 3)
+                    if math.isfinite(quote_age_seconds)
+                    else None
+                ),
                 "bid": safe_float(quote.get("bid")),
                 "ask": safe_float(quote.get("ask")),
                 "spread_bps": round(safe_float(quote.get("spread_bps"), 0.0) or 0.0, 3),
@@ -3574,7 +3596,9 @@ def historical_entry_spread_audit(
     spreads = sorted(
         float(item["spread_bps"])
         for item in observations
-        if item.get("quote_found") and safe_float(item.get("spread_bps")) is not None
+        if item.get("quote_found")
+        and item.get("quote_fresh")
+        and safe_float(item.get("spread_bps")) is not None
     )
     quote_count = len(spreads)
     attempted = len(eligible)
@@ -3616,14 +3640,11 @@ def historical_entry_spread_audit(
         "status": status,
         "label": label,
         "symbol": ticker,
-        "holdout_trade_count": sum(
-            1
-            for trade in trades or []
-            if isinstance(trade, dict)
-        ),
+        "holdout_trade_count": holdout_trade_count,
         "sampled_entry_count": attempted,
         "quote_count": quote_count,
         "coverage_pct": round(coverage_pct, 1),
+        "maximum_quote_age_seconds": round(float(maximum_quote_age_seconds), 3),
         "modeled_spread_bps": round(modeled, 3),
         "maximum_stress_multiplier": round(maximum_multiplier, 3),
         "tested_spread_ceiling_bps": round(tested_ceiling, 3),
@@ -3639,7 +3660,8 @@ def historical_entry_spread_audit(
         "post_selection_diagnostic": True,
         "note": (
             "Real historical quotes are sampled only at the frozen winner's untouched-holdout "
-            "entry moments. This checks whether the modeled spread stress range covered observed "
+            "entry moments, and stale quotes do not count toward coverage. This checks whether "
+            "the modeled spread stress range covered observed "
             "execution conditions; it does not make max_spread_pct an optimized historical rule."
         ),
     }
