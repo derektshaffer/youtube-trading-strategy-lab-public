@@ -29,13 +29,15 @@ require_app_access(st)
 _boot_message = str(
     st.session_state.get("_trading_app_boot_message") or ""
 ).strip()
+_boot_status_factory = getattr(st, "status", None)
 _boot_status = None
-if _boot_message:
-    _boot_status_factory = getattr(st, "status", None)
-    if callable(_boot_status_factory):
-        _boot_status = _boot_status_factory(_boot_message, expanded=False)
-    else:
-        st.info(_boot_message)
+if callable(_boot_status_factory):
+    _boot_status = _boot_status_factory(
+        _boot_message or "Starting Trading Intelligence Lab…",
+        expanded=False,
+    )
+else:
+    st.info(_boot_message or "Starting Trading Intelligence Lab…")
 
 # Heavy research/ML imports intentionally happen only after access is granted.
 # This keeps the password screen fast and lets navigation show a loading state
@@ -323,11 +325,9 @@ from youtube_strategy_engine import (
 
 if _boot_status is not None:
     _boot_status.update(
-        label="Trading Intelligence Lab loaded",
-        state="complete",
+        label="Core modules loaded · loading research library…",
         expanded=False,
     )
-    st.session_state.pop("_trading_app_boot_message", None)
 
 st.markdown(
     """
@@ -1128,15 +1128,28 @@ def load_library(
     canonical_changed = canonical_families != existing_canonical
     data["strategies"] = [*source_and_other, *canonical_families]
 
-    if legacy_changed or native_strategy_changed or sources_changed or canonical_changed:
-        try:
-            data = store.save(data)
-            # save() created a new remote commit, so learn its SHA cheaply on
-            # the next scheduled revision probe instead of assuming the old one.
-            st.session_state.pop(_LIBRARY_REMOTE_SHA_KEY, None)
-            st.session_state[_LIBRARY_LAST_CLOUD_REFRESH_KEY] = now
-        except AppError:
-            data = store.load()
+    prepared_changed = (
+        legacy_changed
+        or native_strategy_changed
+        or sources_changed
+        or canonical_changed
+    )
+    if prepared_changed:
+        # Ordinary page rendering must never turn a cold start into a synchronous
+        # ~75 MB cloud upload. Apply compatibility/canonical upgrades in memory.
+        # Persist them only during an explicit mutable/refresh workflow where the
+        # user already expects storage I/O.
+        if mutable or force_cloud_refresh:
+            try:
+                data = store.save(data)
+                # save() created a new remote commit, so learn its SHA cheaply on
+                # the next scheduled revision probe instead of assuming the old one.
+                st.session_state.pop(_LIBRARY_REMOTE_SHA_KEY, None)
+                st.session_state[_LIBRARY_LAST_CLOUD_REFRESH_KEY] = now
+            except AppError:
+                data = store.load()
+        else:
+            st.session_state["_til_library_prepared_changes_pending"] = True
 
     st.session_state[_LIBRARY_RENDER_CACHE_KEY] = {
         "updated_at": str(data.get("updated_at") or ""),
@@ -1895,11 +1908,20 @@ _library_cold_start = not isinstance(
 )
 _library_status_factory = getattr(st, "status", None)
 _library_load_status = (
-    _library_status_factory("Loading research library…", expanded=False)
-    if _library_cold_start and callable(_library_status_factory)
-    else None
+    _boot_status
+    if _library_cold_start and _boot_status is not None
+    else (
+        _library_status_factory("Loading research library…", expanded=False)
+        if _library_cold_start and callable(_library_status_factory)
+        else None
+    )
 )
-if _library_cold_start and _library_load_status is None:
+if _library_load_status is not None and _library_cold_start:
+    _library_load_status.update(
+        label="Loading research library…",
+        expanded=False,
+    )
+elif _library_cold_start:
     # Lightweight/test Streamlit shims may not implement st.status.
     st.info("Loading research library…")
 try:
@@ -1909,10 +1931,11 @@ try:
     library = load_library()
     if _library_load_status is not None:
         _library_load_status.update(
-            label="Research library loaded",
+            label="Trading Intelligence Lab ready",
             state="complete",
             expanded=False,
         )
+    st.session_state.pop("_trading_app_boot_message", None)
 except AppError as exc:
     library_load_error = exc
     if _library_load_status is not None:
