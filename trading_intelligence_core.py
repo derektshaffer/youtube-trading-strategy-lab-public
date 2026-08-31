@@ -1195,6 +1195,53 @@ def upgrade_native_strategy_rules(strategy: dict[str, Any]) -> dict[str, Any]:
             item.pop("validated_rules", None)
             item.pop("validated_backtest_settings", None)
             item.pop("validated_at", None)
+
+    # Methodology migration: trusted validation labels must also come from the
+    # post-audit historical-data contract. Preserve the old evidence for review,
+    # but never keep frozen validated rules active when the provenance is legacy
+    # or unknown.
+    if str(item.get("validation_status") or "").lower() == "validated":
+        last_validation = (
+            item.get("last_validation")
+            if isinstance(item.get("last_validation"), dict)
+            else {}
+        )
+        last_autonomous = (
+            item.get("last_autonomous_research")
+            if isinstance(item.get("last_autonomous_research"), dict)
+            else {}
+        )
+        market_integrity = (
+            last_validation.get("market_data_integrity")
+            if isinstance(last_validation.get("market_data_integrity"), dict)
+            else {}
+        )
+        reuse_audit = (
+            last_validation.get("holdout_reuse_audit")
+            if isinstance(last_validation.get("holdout_reuse_audit"), dict)
+            else {}
+        )
+        manual_or_finder_current = (
+            str(market_integrity.get("mode") or "")
+            in {"raw_prices", "raw_prices_post_latest_split"}
+            and bool(reuse_audit)
+        )
+        autonomous_current = (
+            int(last_autonomous.get("validation_method_version") or 0) >= 3
+        )
+        if not (manual_or_finder_current or autonomous_current):
+            item["previous_validation_invalidated_by_methodology_upgrade"] = {
+                "reason": (
+                    "The saved validation predates the current split-safe raw-price and "
+                    "holdout-exposure integrity contract."
+                ),
+                "required_action": "Re-run validation under the current methodology.",
+            }
+            item["validation_status"] = "unvalidated"
+            item["optimization_status"] = "revalidation_required"
+            item.pop("validated_rules", None)
+            item.pop("validated_backtest_settings", None)
+            item.pop("validated_at", None)
     return item
 
 
