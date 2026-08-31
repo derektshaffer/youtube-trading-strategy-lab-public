@@ -7863,14 +7863,17 @@ elif module == "Strategy Lab":
                         if validation_status == "validated":
                             item["validated_rules"] = winner.get("optimized_rules") or {}
                             item["validated_backtest_settings"] = winner.get("optimized_backtest_settings") or {}
+                            item["validated_timeframe"] = lab_result.get("timeframe")
                             item["validated_at"] = report.get("generated_at")
                         else:
                             item.pop("validated_rules", None)
                             item.pop("validated_backtest_settings", None)
+                            item.pop("validated_timeframe", None)
                             item.pop("validated_at", None)
                         item["last_validation"] = {
                             "symbol": report.get("symbol"),
                             "generated_at": report.get("generated_at"),
+                            "timeframe": lab_result.get("timeframe"),
                             "robustness_score": strength.get("score"),
                             "robustness_label": strength.get("label"),
                             "optimizer_status": winner.get("status"),
@@ -7906,10 +7909,12 @@ elif module == "Strategy Lab":
                             new_item["validated_backtest_settings"] = (
                                 winner.get("optimized_backtest_settings") or {}
                             )
+                            new_item["validated_timeframe"] = lab_result.get("timeframe")
                             new_item["validated_at"] = report.get("generated_at")
                         else:
                             new_item.pop("validated_rules", None)
                             new_item.pop("validated_backtest_settings", None)
+                            new_item.pop("validated_timeframe", None)
                             new_item.pop("validated_at", None)
                         new_item["last_validation"] = {
                             "symbol": report.get("symbol"),
