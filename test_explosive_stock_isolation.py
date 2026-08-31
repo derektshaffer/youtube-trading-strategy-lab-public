@@ -11,9 +11,16 @@ class ExplosiveStockIsolationTests(unittest.TestCase):
         self.root = Path(__file__).resolve().parent
 
     def test_explosive_app_does_not_import_trading_intelligence_app(self):
+        router = (self.root / "explosive_stock_app.py").read_text(encoding="utf-8")
+        page = (self.root / "explosive_stock_page.py").read_text(encoding="utf-8")
+        for source in (router, page):
+            self.assertNotIn("import trading_intelligence_app", source)
+            self.assertNotIn("from trading_intelligence_app import", source)
+
+    def test_explosive_router_hides_shared_pages_directory(self):
         source = (self.root / "explosive_stock_app.py").read_text(encoding="utf-8")
-        self.assertNotIn("import trading_intelligence_app", source)
-        self.assertNotIn("from trading_intelligence_app import", source)
+        self.assertIn('st.navigation([page], position="hidden").run()', source)
+        self.assertIn('"explosive_stock_page.py"', source)
 
     def test_trading_intelligence_app_does_not_import_explosive_runtime(self):
         source = (self.root / "trading_intelligence_app.py").read_text(encoding="utf-8")
@@ -36,10 +43,14 @@ class ExplosiveStockIsolationTests(unittest.TestCase):
         self.assertNotIn("group: trading-intelligence-library-writer", source)
 
     def test_explosive_app_uses_its_own_session_state_namespace(self):
-        source = (self.root / "explosive_stock_app.py").read_text(encoding="utf-8")
+        source = (self.root / "explosive_stock_page.py").read_text(encoding="utf-8")
         self.assertIn('st.session_state["explosive_scan_results"]', source)
         self.assertIn('st.session_state["explosive_analysis_result"]', source)
         self.assertNotIn('st.session_state["til_stock_analysis"]', source)
+
+    def test_explosive_page_names_its_own_access_gate(self):
+        source = (self.root / "explosive_stock_page.py").read_text(encoding="utf-8")
+        self.assertIn('require_app_access(st, app_name="Explosive Stock Lab")', source)
 
 
 if __name__ == "__main__":
