@@ -7249,10 +7249,30 @@ elif module == "Universe Research":
                     start=start_time,
                     end=end_time,
                     timeframe=universe_timeframe,
+                    adjustment="raw",
                     max_pages=40,
                     progress=universe_history_progress,
                 )
-                update_task_bar(universe_bar, universe_monitor, 0.50, "Historical candles ready")
+                split_actions = market.split_actions(
+                    universe_symbols,
+                    start=start_time,
+                    end=end_time,
+                )
+                universe_integrity_by_symbol: dict[str, dict[str, Any]] = {}
+                for symbol in universe_symbols:
+                    safe_rows, integrity = split_safe_raw_research_rows(
+                        list(rows_by_symbol.get(symbol) or []),
+                        split_actions,
+                        symbol,
+                    )
+                    rows_by_symbol[symbol] = safe_rows
+                    universe_integrity_by_symbol[symbol] = integrity
+                update_task_bar(
+                    universe_bar,
+                    universe_monitor,
+                    0.50,
+                    "Split-safe raw historical candles ready",
+                )
 
                 rules = normalize_machine_rules(effective_universe_strategy.get("machine_rules"))
                 catalyst_summary_by_symbol = {}
@@ -7305,6 +7325,7 @@ elif module == "Universe Research":
                 report["timeframe"] = universe_timeframe
                 report["history_days"] = universe_days
                 report["catalyst_summary_by_symbol"] = catalyst_summary_by_symbol
+                report["market_data_integrity_by_symbol"] = universe_integrity_by_symbol
                 st.session_state["til_universe_result"] = report
                 status_box.update(
                     label=f"Cross-stock test complete · {report.get('symbols_tested')} stocks",
