@@ -61,7 +61,7 @@ def run_detector_scorecards(
         adjustment="raw",
         max_pages=max_pages,
     )
-    if not hasattr(market, "split_actions"):
+    if not hasattr(market, "research_reset_actions"):
         raise ValueError(
             "Detector scorecards require split metadata so raw historical "
             "price structure cannot cross an unhandled split boundary."
