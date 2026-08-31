@@ -59,4 +59,4 @@ jobs:
           git pull --rebase origin "$BACKUP_BRANCH"
           git push origin "HEAD:$BACKUP_BRANCH"
 
-# Compact audit trigger marker v3.
+# Compact audit trigger marker v4.
