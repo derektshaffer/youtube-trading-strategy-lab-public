@@ -55,6 +55,18 @@ class AnalyzerSpeedIntegrityTests(unittest.TestCase):
         self.assertIn("saved current-setup check is stale", self.analyzer_source)
         self.assertIn("if stock_result_matches and stock_result_is_fresh:", self.analyzer_source)
 
+    def test_stock_analyzer_defers_research_only_live_learning(self):
+        self.assertIn("queue_live_learning_cycle(", self.analyzer_source)
+        self.assertNotIn("persist_live_learning_cycle(", self.analyzer_source)
+
+    def test_live_learning_queue_does_not_fetch_market_history_or_main_library(self):
+        queue_start = self.app_source.index("def queue_live_learning_cycle(")
+        queue_end = self.app_source.index("def persist_live_learning_cycle(", queue_start)
+        queue_source = self.app_source[queue_start:queue_end]
+        self.assertIn("build_live_learning_outbox_store()", queue_source)
+        self.assertNotIn("market.bars(", queue_source)
+        self.assertNotIn("intelligence_store()", queue_source)
+
     def test_live_runner_remains_explicit_refresh_only(self):
         self.assertIn('"Refresh live signal"', self.live_runner_source)
         self.assertIn("if refresh:", self.live_runner_source)
