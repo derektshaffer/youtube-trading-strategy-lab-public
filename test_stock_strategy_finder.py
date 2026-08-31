@@ -425,6 +425,87 @@ class ParameterStabilityIntegrityTests(unittest.TestCase):
         self.assertIn("full pre-holdout causal warmup", result["note"])
 
 
+class HoldoutReuseIntegrityTests(unittest.TestCase):
+    def _report(self):
+        candidate = strategy("reuse-family", breakout_lookback_bars=10)
+        return {
+            "generated_at": "2026-08-30T10:00:00+00:00",
+            "symbol": "TEST",
+            "profile": {"name": "Deep"},
+            "timeframe": "5Min",
+            "winner_source_strategy_id": candidate["id"],
+            "winner_strategy_name": candidate["name"],
+            "verdict": {
+                "code": "ready_for_paper",
+                "label": "READY FOR PAPER TESTING",
+                "research_tier": "validated",
+                "paper_ready": True,
+            },
+            "robustness": {
+                "score": 78.0,
+                "label": "PROMISING",
+                "independently_positive": True,
+                "reasons": [],
+            },
+            "paper_execution_fidelity": {"status": "ready"},
+            "walk_forward": {"summary": {"profitable_fold_pct": 75.0}},
+            "optimization": {
+                "holdout_sessions": [
+                    "2026-08-25",
+                    "2026-08-26",
+                    "2026-08-27",
+                    "2026-08-28",
+                ],
+                "winner": {
+                    "status": "VALIDATED",
+                    "optimized_rules": candidate["machine_rules"],
+                    "optimized_backtest_settings": {},
+                    "training_metrics": {"net_pnl": 100.0},
+                    "validation_metrics": {"net_pnl": 40.0},
+                    "holdout_metrics": {"net_pnl": 30.0},
+                    "stress_metrics": {"net_pnl": 20.0},
+                },
+            },
+        }
+
+    def test_first_saved_holdout_is_pristine(self):
+        report = finder.apply_holdout_reuse_guard({}, self._report())
+        self.assertTrue(report["holdout_reuse_audit"]["pristine"])
+        self.assertEqual(report["verdict"]["code"], "ready_for_paper")
+        self.assertEqual(report["optimization"]["winner"]["status"], "VALIDATED")
+
+    def test_materially_reused_holdout_cannot_remain_validated(self):
+        report = self._report()
+        prior = {
+            "id": "prior-run",
+            "generated_at": "2026-08-29T10:00:00+00:00",
+            "symbol": "TEST",
+            "profile": "Current Regime",
+            "timeframe": "1Min",
+            "holdout_sessions": [
+                "2026-08-25",
+                "2026-08-26",
+                "2026-08-27",
+            ],
+        }
+        guarded = finder.apply_holdout_reuse_guard(
+            {"stock_strategy_finder_runs": [prior]},
+            report,
+        )
+        self.assertFalse(guarded["holdout_reuse_audit"]["pristine"])
+        self.assertEqual(
+            guarded["holdout_reuse_audit"]["prior_material_exposure_count"],
+            1,
+        )
+        self.assertEqual(guarded["verdict"]["code"], "holdout_reused")
+        self.assertFalse(guarded["verdict"]["paper_ready"])
+        self.assertFalse(guarded["robustness"]["independently_positive"])
+        self.assertEqual(
+            guarded["optimization"]["winner"]["status"],
+            "HOLDOUT REUSED",
+        )
+
+
 class FinderPersistenceTests(unittest.TestCase):
     def test_merge_saves_loser_ledger_and_stock_specific_child(self):
         source = strategy("source-family", breakout_lookback_bars=20)
