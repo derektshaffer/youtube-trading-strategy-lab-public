@@ -116,6 +116,34 @@ class TradingSystemHealthTests(unittest.TestCase):
         )
         self.assertIn('elif module == "System Health":', source)
 
+    def test_strategy_lab_renders_fresh_results_without_forced_rerun(self):
+        from pathlib import Path
+
+        source = Path("trading_intelligence_app.py").read_text(encoding="utf-8")
+        start = source.index('elif module == "Strategy Lab":')
+        end = source.index('elif module == "Standalone Stock Analyzer":', start)
+        strategy_lab = source[start:end]
+
+        self.assertIn(
+            'number_input("Starting simulation cash ($)", 1000.0, 1000000.0, 2000.0, 1000.0)',
+            strategy_lab,
+        )
+        self.assertIn(
+            'number_input("Risk budget per trade (%)", 0.1, 10.0, 10.0, 0.1)',
+            strategy_lab,
+        )
+        self.assertIn(
+            'number_input("Maximum total position (%)", 1.0, 100.0, 100.0, 1.0)',
+            strategy_lab,
+        )
+        self.assertIn('st.session_state["til_strategy_lab_result"] = {', strategy_lab)
+        self.assertIn('strategy_lab_slot.success("Optimization + validation complete — results below.")', strategy_lab)
+        self.assertIn('"til_strategy_lab_last_run"', strategy_lab)
+        self.assertNotIn(
+            'complete_task_bar(task_bar, lab_monitor, "Optimization + validation complete")\n                st.rerun()',
+            strategy_lab,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
