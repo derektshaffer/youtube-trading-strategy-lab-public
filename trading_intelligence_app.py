@@ -3524,12 +3524,32 @@ elif module == "Retrospective Learning":
                         start=teacher_start,
                         end=teacher_end,
                         timeframe=teacher_timeframe,
+                        adjustment="raw",
                         max_pages=80,
                     )
                     teacher_rows = list(rows_by_symbol.get(teacher_symbol) or [])
                     if not teacher_rows:
                         raise AppError(
                             f"No historical bars were returned for {teacher_symbol}."
+                        )
+                    split_actions = market.split_actions(
+                        [teacher_symbol],
+                        start=teacher_start,
+                        end=teacher_end,
+                    )
+                    teacher_rows, teacher_market_data_integrity = split_safe_raw_research_rows(
+                        teacher_rows,
+                        split_actions,
+                        teacher_symbol,
+                    )
+                    if not teacher_rows:
+                        raise AppError(
+                            f"No split-safe raw-price history remained for {teacher_symbol}."
+                        )
+                    if teacher_market_data_integrity.get("split_detected"):
+                        teacher_status.write(
+                            "Corporate-action integrity guard · teaching history restarted at "
+                            f"{teacher_market_data_integrity.get('latest_split_date')}."
                         )
                     teacher_status.write(
                         "Assigning hindsight labels, then rebuilding every feature snapshot "
@@ -3545,6 +3565,8 @@ elif module == "Retrospective Learning":
                         breakout_outcome_bars=breakout_outcome,
                         breakout_success_move_pct=breakout_move,
                     )
+                    teacher_run["market_data_integrity_contract"] = "split_safe_raw_v1"
+                    teacher_run["market_data_integrity"] = teacher_market_data_integrity
                     fresh_library = load_library(force_cloud_refresh=True, mutable=True)
                     updated_library = merge_retrospective_teacher_run(
                         fresh_library,
