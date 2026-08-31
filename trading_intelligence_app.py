@@ -3058,7 +3058,7 @@ if module == "Stock Strategy Finder":
                 "Observed bid/ask spreads at sampled untouched-holdout entries exceeded "
                 "the largest spread assumption in the tested cost curve."
             )
-        elif str(finder_spread_audit.get("status") or "") == "LIMITED":
+        elif str(finder_spread_audit.get("status") or "") in {"LIMITED", "LIMITED_FEED"}:
             st.warning(
                 "Historical quote coverage at holdout entries was limited, so real-spread "
                 "confirmation remains incomplete."
@@ -6981,10 +6981,10 @@ elif module == "Strategy Lab":
                     "Observed bid/ask spreads at sampled untouched-holdout entries exceeded "
                     "the largest spread assumption in the tested cost curve."
                 )
-            elif str(lab_spread_display.get("status") or "") == "LIMITED":
+            elif str(lab_spread_display.get("status") or "") in {"LIMITED", "LIMITED_FEED"}:
                 st.warning(
-                    "Historical quote coverage at holdout entries was limited, so real-spread "
-                    "confirmation remains incomplete."
+                    "Historical quote confirmation at holdout entries was limited by coverage or "
+                    "a non-consolidated feed, so SIP/NBBO execution confirmation remains incomplete."
                 )
 
             if not walk_report:
