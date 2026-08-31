@@ -637,7 +637,7 @@ def intelligence_store() -> StrategyStore:
 
 
 LIBRARY_CLOUD_REFRESH_SECONDS = 60.0
-_LIBRARY_RENDER_CACHE_KEY = "_til_library_render_cache"
+_LIBRARY_RENDER_CACHE_KEY = "_til_library_render_cache"\nANALYZER_RESULT_MAX_AGE_SECONDS = 180
 _LIBRARY_LAST_CLOUD_REFRESH_KEY = "_til_library_last_cloud_refresh_monotonic"
 _LIBRARY_REMOTE_SHA_KEY = "_til_library_remote_sha"
 
@@ -11160,6 +11160,7 @@ elif module == "Stock Analyzer":
                 analysis["_selected_strategy_id"] = str(selected_strategy_id or "")
 
                 analyzer_as_of = utc_now()
+                analysis["_analyzed_at"] = analyzer_as_of.isoformat()
                 analyzer_news = [
                     classify_catalyst(item)
                     for item in (analysis.get("news_items") or [])
@@ -11224,12 +11225,36 @@ elif module == "Stock Analyzer":
                 st.error(f"Stock analysis failed: {exc}")
 
         stock_result = st.session_state.get("til_stock_analysis") or {}
-        if (
+        stock_result_matches = bool(
             stock_result
             and stock_result.get("symbol") == analyzer_ticker
             and str(stock_result.get("_selected_strategy_id") or "")
             == str(selected_strategy_id or "")
-        ):
+        )
+        stock_result_age_seconds: float | None = None
+        if stock_result_matches:
+            try:
+                stock_result_checked_at = datetime.fromisoformat(
+                    str(stock_result.get("_analyzed_at") or "").replace("Z", "+00:00")
+                )
+                stock_result_age_seconds = max(
+                    0.0,
+                    (utc_now() - stock_result_checked_at).total_seconds(),
+                )
+            except (TypeError, ValueError):
+                stock_result_age_seconds = None
+
+        stock_result_is_fresh = bool(
+            stock_result_age_seconds is not None
+            and stock_result_age_seconds <= ANALYZER_RESULT_MAX_AGE_SECONDS
+        )
+        if stock_result_matches and not stock_result_is_fresh:
+            st.warning(
+                "The saved current-setup check is stale, so its old signal is hidden. "
+                "Press Check current setup again to load fresh market data."
+            )
+
+        if stock_result_matches and stock_result_is_fresh:
             metrics = stock_result.get("metrics") or {}
             comparisons = list(stock_result.get("comparisons") or [])
             st.divider()
