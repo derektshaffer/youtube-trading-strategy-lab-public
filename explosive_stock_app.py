@@ -317,7 +317,7 @@ else:
             market = market_client()
 
             sec_items: list[dict[str, Any]] = []
-            sec_user_agent = setting("SEC_EDGAR_USER_AGENT")
+            sec_user_agent = setting("SEC_USER_AGENT") or setting("SEC_EDGAR_USER_AGENT")
             if sec_user_agent:
                 status.write("Checking recent SEC filings for structural/dilution risk…")
                 try:
