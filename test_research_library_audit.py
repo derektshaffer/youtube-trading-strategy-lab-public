@@ -15,6 +15,8 @@ def run(
     holdout_pnl: float = 0.0,
     stress_pnl: float = 0.0,
     robustness: float = 0.0,
+    optimizer_status: str = "VALIDATED",
+    verdict_code: str = "ready_for_paper",
     generated_at: str = "2026-08-31T20:00:00Z",
 ) -> dict:
     def metrics(pnl: float) -> dict:
@@ -27,7 +29,7 @@ def run(
         "symbol": "TEST",
         "generated_at": generated_at,
         "validation_status": status,
-        "optimizer_status": "PROMISING",
+        "optimizer_status": optimizer_status,
         "robustness": {"score": robustness, "label": "STRONG"},
         "validation_metrics": metrics(validation_pnl),
         "holdout_metrics": metrics(holdout_pnl),
@@ -35,9 +37,9 @@ def run(
         "walk_forward_summary": {"profitable_fold_pct": 66.7},
         "parameter_stability": {"label": "MIXED", "positive_pct": 50.0},
         "evidence_verdict": {
-            "code": "promising",
-            "label": "PROMISING STOCK-SPECIFIC SETUP",
-            "reason": "A stability gate still failed.",
+            "code": verdict_code,
+            "label": "READY FOR PAPER TESTING",
+            "reason": "The current strict historical validation gate passed.",
         },
         "paper_execution_fidelity": {"status": "ready"},
         "historical_spread_audit": {"status": "OK"},
@@ -77,13 +79,34 @@ class ResearchLibraryProfitFirstAuditTests(unittest.TestCase):
         self.assertEqual(report["strict_profit_edge_count"], 1)
         self.assertEqual(report["strict_profit_edges"][0]["strategy_id"], "strict")
         strict = report["strict_profit_edges"][0]
-        self.assertEqual(strict["optimizer_status"], "PROMISING")
+        self.assertEqual(strict["optimizer_status"], "VALIDATED")
         self.assertEqual(strict["parameter_stability_positive_pct"], 50.0)
-        self.assertEqual(strict["evidence_verdict_code"], "promising")
-        self.assertEqual(strict["evidence_verdict_reason"], "A stability gate still failed.")
+        self.assertEqual(strict["evidence_verdict_code"], "ready_for_paper")
+        self.assertEqual(
+            strict["evidence_verdict_reason"],
+            "The current strict historical validation gate passed.",
+        )
         self.assertEqual(strict["paper_execution_status"], "ready")
         self.assertEqual(strict["historical_spread_status"], "OK")
         self.assertEqual(strict["holdout_reuse_status"], "CLEAN")
+
+    def test_legacy_unstable_high_score_is_capped_and_requires_revalidation(self):
+        legacy = run(
+            "legacy",
+            validation_pnl=30.98,
+            holdout_pnl=102.64,
+            stress_pnl=10.4,
+            robustness=94.7,
+            optimizer_status="UNSTABLE",
+        )
+        legacy.pop("evidence_verdict")
+        report = profit_first_validation_summary([legacy])
+        candidate = report["closest_research_candidates"][0]
+        self.assertTrue(candidate["requires_revalidation"])
+        self.assertFalse(candidate["current_protocol"])
+        self.assertEqual(candidate["stored_robustness_score"], 94.7)
+        self.assertEqual(candidate["robustness_score"], 49.0)
+        self.assertIn("re-run strict validation", candidate["blocker"])
 
     def test_latest_run_controls_each_strategy_status(self):
         report = profit_first_validation_summary(
