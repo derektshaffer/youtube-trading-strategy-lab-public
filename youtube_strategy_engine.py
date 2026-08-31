@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+from statistics import median
 import subprocess
 import tempfile
 from time import sleep
@@ -3975,6 +3976,7 @@ class OptimizationSettings:
     training_fraction: float = 0.60
     validation_fraction: float = 0.20
     stress_cost_multiplier: float = 1.5
+    execution_sensitivity_multipliers: tuple[float, ...] = (1.25, 1.5, 1.75, 2.0)
     optimize_position_sizing: bool = True
     automatic_slippage: bool = False
     max_execution_variants_per_finalist: int = 7
@@ -3998,6 +4000,13 @@ class OptimizationSettings:
             raise AppError("Reserve at least 10% of the sessions for a final untouched holdout test.")
         if not 1.0 <= self.stress_cost_multiplier <= 5.0:
             raise AppError("The higher-cost stress test must use a multiplier between 1 and 5.")
+        sensitivity = [float(value) for value in self.execution_sensitivity_multipliers]
+        if len(sensitivity) < 2:
+            raise AppError("Execution sensitivity needs at least two higher-cost multipliers.")
+        if any(value <= 1.0 or value > 5.0 for value in sensitivity):
+            raise AppError("Execution-sensitivity multipliers must be greater than 1 and no more than 5.")
+        if sensitivity != sorted(set(sensitivity)):
+            raise AppError("Execution-sensitivity multipliers must be unique and ordered from low to high.")
         if not 1 <= self.max_execution_variants_per_finalist <= 64:
             raise AppError("Test between 1 and 64 risk and position-size combinations per finalist.")
         if self.selection_mode not in {"validated", "historical_pnl"}:
@@ -4060,6 +4069,100 @@ def summarize_trades(trades: list[dict[str, Any]], starting_cash: float) -> dict
         "max_drawdown_pct": round(max_drawdown, 2),
         "average_winner": round(sum(wins) / len(wins), 2) if wins else 0.0,
         "average_loser": round(sum(losses) / len(losses), 2) if losses else 0.0,
+    }
+
+
+def summarize_execution_sensitivity(
+    baseline_metrics: dict[str, Any],
+    points: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Summarize how quickly simulated edge degrades as execution costs worsen.
+
+    The curve is intentionally based on several predeclared cost multipliers instead
+    of one pass/fail stress point. It is diagnostic robustness evidence, not a
+    probability of future profit.
+    """
+    baseline_pnl = safe_float(baseline_metrics.get("net_pnl"), 0.0) or 0.0
+    normalized: list[dict[str, Any]] = []
+    for point in sorted(
+        [item for item in points if isinstance(item, dict)],
+        key=lambda item: safe_float(item.get("multiplier"), 0.0) or 0.0,
+    ):
+        multiplier = safe_float(point.get("multiplier"))
+        metrics = point.get("metrics") or {}
+        if multiplier is None:
+            continue
+        pnl = safe_float(metrics.get("net_pnl"), 0.0) or 0.0
+        retention_pct = (
+            round(pnl / baseline_pnl * 100.0, 1)
+            if baseline_pnl > 0
+            else None
+        )
+        normalized.append(
+            {
+                "multiplier": round(float(multiplier), 3),
+                "spread_bps": safe_float(point.get("spread_bps"), 0.0) or 0.0,
+                "slippage_bps": safe_float(point.get("slippage_bps"), 0.0) or 0.0,
+                "metrics": metrics,
+                "profitable": bool(pnl > 0),
+                "pnl_change": round(pnl - baseline_pnl, 2),
+                "pnl_retention_pct": retention_pct,
+            }
+        )
+
+    if baseline_pnl <= 0 or not normalized:
+        return {
+            "score": 0.0,
+            "label": "NOT APPLICABLE",
+            "passes_validation_gate": False,
+            "baseline_net_pnl": round(baseline_pnl, 2),
+            "profitable_multiplier_pct": 0.0,
+            "median_pnl_retention_pct": None,
+            "first_unprofitable_multiplier": None,
+            "points": normalized,
+            "note": (
+                "Execution-cost sensitivity is only meaningful after the baseline "
+                "validation period has positive simulated P/L."
+            ),
+        }
+
+    profitable_pct = round(
+        sum(1 for point in normalized if point["profitable"]) / len(normalized) * 100.0,
+        1,
+    )
+    retention_values = [
+        float(point["pnl_retention_pct"])
+        for point in normalized
+        if point.get("pnl_retention_pct") is not None
+    ]
+    median_retention_pct = round(median(retention_values), 1) if retention_values else 0.0
+    retention_component = max(0.0, min(100.0, median_retention_pct))
+    score = round(profitable_pct * 0.60 + retention_component * 0.40, 1)
+    if score >= 75.0:
+        label = "ROBUST"
+    elif score >= 50.0:
+        label = "MIXED"
+    else:
+        label = "FRAGILE"
+    first_unprofitable = next(
+        (point["multiplier"] for point in normalized if not point["profitable"]),
+        None,
+    )
+
+    return {
+        "score": score,
+        "label": label,
+        "passes_validation_gate": label != "FRAGILE",
+        "baseline_net_pnl": round(baseline_pnl, 2),
+        "profitable_multiplier_pct": profitable_pct,
+        "median_pnl_retention_pct": median_retention_pct,
+        "first_unprofitable_multiplier": first_unprofitable,
+        "points": normalized,
+        "note": (
+            "Execution sensitivity combines the share of higher-cost scenarios that "
+            "remain profitable with median P/L retention across the whole curve. "
+            "It does not treat any one multiplier as a magic cutoff."
+        ),
     }
 
 
@@ -5941,15 +6044,49 @@ def _optimize_stock_strategies_historical(
         )
         best = sized_candidates[0]
         chosen_settings = best["settings"]
-        stressed_settings = replace(
-            chosen_settings,
-            spread_bps=chosen_settings.spread_bps * optimizer.stress_cost_multiplier,
-            slippage_bps=chosen_settings.slippage_bps * optimizer.stress_cost_multiplier,
-        )
-        stress_metrics = evaluate(best["rules"], stressed_settings)["metrics"]
-        notify(f"{name}: higher-cost stress test")
-
         metrics = best["metrics"]
+        sensitivity_points: list[dict[str, Any]] = []
+        sensitivity_multipliers = sorted(
+            set(
+                [
+                    *[float(value) for value in optimizer.execution_sensitivity_multipliers],
+                    float(optimizer.stress_cost_multiplier),
+                ]
+            )
+        )
+        for cost_multiplier in sensitivity_multipliers:
+            sensitivity_settings = replace(
+                chosen_settings,
+                spread_bps=chosen_settings.spread_bps * cost_multiplier,
+                slippage_bps=chosen_settings.slippage_bps * cost_multiplier,
+            )
+            sensitivity_metrics = evaluate(best["rules"], sensitivity_settings)["metrics"]
+            remember_configuration(
+                source_strategy,
+                f"cost_sensitivity_{cost_multiplier:.2f}x",
+                best["rules"],
+                sensitivity_settings,
+                sensitivity_metrics,
+            )
+            sensitivity_points.append(
+                {
+                    "multiplier": cost_multiplier,
+                    "spread_bps": sensitivity_settings.spread_bps,
+                    "slippage_bps": sensitivity_settings.slippage_bps,
+                    "metrics": sensitivity_metrics,
+                }
+            )
+        execution_sensitivity = summarize_execution_sensitivity(metrics, sensitivity_points)
+        stress_point = min(
+            sensitivity_points,
+            key=lambda point: abs(
+                float(point["multiplier"]) - float(optimizer.stress_cost_multiplier)
+            ),
+        )
+        stress_metrics = stress_point["metrics"]
+        notify(f"{name}: execution-cost sensitivity sweep")
+
+
         pnl = safe_float(metrics.get("net_pnl"), 0.0) or 0.0
         drawdown = safe_float(metrics.get("max_drawdown_pct"), 0.0) or 0.0
         trade_count = int(safe_float(metrics.get("trade_count"), 0.0) or 0.0)
@@ -6011,6 +6148,8 @@ def _optimize_stock_strategies_historical(
             "full_metrics": metrics,
             "holdout_metrics": {},
             "stress_metrics": stress_metrics,
+            "execution_sensitivity": execution_sensitivity,
+            "execution_sensitivity_tests": len(execution_sensitivity.get("points") or []),
             "score": round(pnl, 2),
             "status": status,
             "adequate_sample": adequate_sample,
@@ -6836,24 +6975,60 @@ def optimize_stock_strategies(
             notify(f"Checking unseen validation sessions for {name}")
         best = max(validated, key=lambda item: (item["validation_score"], -item["variant_index"], -item["execution_index"]))
         chosen_settings = best["settings"]
-        stressed_settings = replace(
-            chosen_settings,
-            spread_bps=chosen_settings.spread_bps * optimizer.stress_cost_multiplier,
-            slippage_bps=chosen_settings.slippage_bps * optimizer.stress_cost_multiplier,
-        )
-        stressed = evaluate({**source_strategy, "machine_rules": best["rules"]}, "validation", stressed_settings)
-        stress_metrics = _period_metrics(stressed, set(validation_sessions), stressed_settings.starting_cash)
-        remember_configuration(
-            source_strategy,
-            "cost_stress",
-            best["rules"],
-            stressed_settings,
-            stress_metrics,
-        )
-        notify(f"Stress-testing {name} with higher trading costs")
-
         training_metrics = best["training_metrics"]
         validation_metrics = best["validation_metrics"]
+        sensitivity_points: list[dict[str, Any]] = []
+        sensitivity_multipliers = sorted(
+            set(
+                [
+                    *[float(value) for value in optimizer.execution_sensitivity_multipliers],
+                    float(optimizer.stress_cost_multiplier),
+                ]
+            )
+        )
+        for cost_multiplier in sensitivity_multipliers:
+            sensitivity_settings = replace(
+                chosen_settings,
+                spread_bps=chosen_settings.spread_bps * cost_multiplier,
+                slippage_bps=chosen_settings.slippage_bps * cost_multiplier,
+            )
+            stressed = evaluate(
+                {**source_strategy, "machine_rules": best["rules"]},
+                "validation",
+                sensitivity_settings,
+            )
+            sensitivity_metrics = _period_metrics(
+                stressed,
+                set(validation_sessions),
+                sensitivity_settings.starting_cash,
+            )
+            remember_configuration(
+                source_strategy,
+                f"cost_sensitivity_{cost_multiplier:.2f}x",
+                best["rules"],
+                sensitivity_settings,
+                sensitivity_metrics,
+            )
+            sensitivity_points.append(
+                {
+                    "multiplier": cost_multiplier,
+                    "spread_bps": sensitivity_settings.spread_bps,
+                    "slippage_bps": sensitivity_settings.slippage_bps,
+                    "metrics": sensitivity_metrics,
+                }
+            )
+        execution_sensitivity = summarize_execution_sensitivity(
+            validation_metrics,
+            sensitivity_points,
+        )
+        stress_point = min(
+            sensitivity_points,
+            key=lambda point: abs(
+                float(point["multiplier"]) - float(optimizer.stress_cost_multiplier)
+            ),
+        )
+        stress_metrics = stress_point["metrics"]
+        notify(f"Stress-testing {name} across the execution-cost sensitivity curve")
         adequate_sample = (
             training_metrics["trade_count"] >= optimizer.minimum_training_trades
             and validation_metrics["trade_count"] >= optimizer.minimum_validation_trades
@@ -6866,7 +7041,7 @@ def optimize_stock_strategies(
             status = "NO VALIDATED EDGE"
         elif training_metrics["net_pnl"] <= 0:
             status = "UNSTABLE"
-        elif stress_metrics["net_pnl"] <= 0:
+        elif not execution_sensitivity.get("passes_validation_gate"):
             status = "COST SENSITIVE"
         else:
             status = "VALIDATED"
@@ -6918,6 +7093,8 @@ def optimize_stock_strategies(
                 "training_metrics": training_metrics,
                 "validation_metrics": validation_metrics,
                 "stress_metrics": stress_metrics,
+                "execution_sensitivity": execution_sensitivity,
+                "execution_sensitivity_tests": len(execution_sensitivity.get("points") or []),
                 "score": round(best["validation_score"], 2),
                 "status": status,
                 "adequate_sample": adequate_sample,
@@ -6954,7 +7131,17 @@ def optimize_stock_strategies(
         warnings.append("The highest-ranked setup has too few trades to support a reliable conclusion.")
     if winner["validation_metrics"]["net_pnl"] <= 0:
         warnings.append("No tested strategy earned a positive simulated result in the separate validation period.")
-    if winner["stress_metrics"]["net_pnl"] <= 0 and winner["validation_metrics"]["net_pnl"] > 0:
+    winner_sensitivity = winner.get("execution_sensitivity") or {}
+    sensitivity_label = str(winner_sensitivity.get("label") or "").upper()
+    if sensitivity_label == "FRAGILE" and winner["validation_metrics"]["net_pnl"] > 0:
+        warnings.append(
+            "The selected setup loses its edge quickly across the execution-cost sensitivity curve."
+        )
+    elif sensitivity_label == "MIXED" and winner["validation_metrics"]["net_pnl"] > 0:
+        warnings.append(
+            "Execution-cost robustness is mixed; review the full 1.25x–2.0x degradation curve."
+        )
+    elif not winner_sensitivity and winner["stress_metrics"]["net_pnl"] <= 0 and winner["validation_metrics"]["net_pnl"] > 0:
         warnings.append("The selected setup becomes unprofitable when estimated spread and slippage increase.")
     if winner["validation_metrics"]["max_drawdown_pct"] > optimizer.maximum_drawdown_pct:
         warnings.append("The selected setup exceeded your maximum acceptable drawdown during validation.")
