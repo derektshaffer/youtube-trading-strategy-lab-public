@@ -61,6 +61,95 @@ def merge_momentum_candidate_universe(
     return result
 
 
+def _completed_daily_reference(
+    rows: list[dict[str, Any]],
+    *,
+    today_et=None,
+) -> dict[str, float | None]:
+    """Derive prior-session metrics from completed daily bars only."""
+    today = today_et or utc_now().astimezone(ET).date()
+    by_day: dict[Any, dict[str, float]] = {}
+    for row in rows:
+        try:
+            timestamp = datetime.fromisoformat(str(row.get("t") or "").replace("Z", "+00:00"))
+            local_day = timestamp.astimezone(ET).date()
+            close = float(row.get("c"))
+            high = float(row.get("h"))
+            volume = float(row.get("v"))
+        except (TypeError, ValueError):
+            continue
+        if local_day >= today or close <= 0 or high <= 0 or volume <= 0:
+            continue
+        by_day[local_day] = {"close": close, "high": high, "volume": volume}
+
+    completed = [by_day[day] for day in sorted(by_day)]
+    if not completed:
+        return {
+            "previous_day_high": None,
+            "previous_day_change_pct": None,
+            "previous_day_volume_ratio": None,
+        }
+
+    previous = completed[-1]
+    previous_change = None
+    if len(completed) >= 2 and completed[-2]["close"] > 0:
+        previous_change = (previous["close"] / completed[-2]["close"] - 1.0) * 100.0
+
+    baseline_rows = completed[:-1][-20:]
+    previous_volume_ratio = None
+    if len(baseline_rows) >= 3:
+        baseline = sum(item["volume"] for item in baseline_rows) / len(baseline_rows)
+        if baseline > 0:
+            previous_volume_ratio = previous["volume"] / baseline
+
+    return {
+        "previous_day_high": previous["high"],
+        "previous_day_change_pct": previous_change,
+        "previous_day_volume_ratio": previous_volume_ratio,
+    }
+
+
+def _latest_previous_day_high_breakout(
+    rows: list[dict[str, Any]],
+    previous_day_high: float | None,
+) -> bool | None:
+    """Confirm a fresh cross above yesterday's high from current intraday closes."""
+    if previous_day_high is None:
+        return None
+    ordered = sorted(
+        (row for row in rows if isinstance(row, dict) and row.get("t")),
+        key=lambda row: str(row.get("t")),
+    )
+    if len(ordered) < 2:
+        return None
+    try:
+        prior_close = float(ordered[-2].get("c"))
+        current_close = float(ordered[-1].get("c"))
+    except (TypeError, ValueError):
+        return None
+    return prior_close <= previous_day_high and current_close > previous_day_high
+
+
+def _strategy_chart_checks(
+    rows: list[dict[str, Any]],
+    strategy: dict[str, Any],
+    daily_reference: dict[str, float | None],
+) -> dict[str, Any]:
+    """Use intraday candles plus completed daily references without extra downloads."""
+    checks = chart_trigger_checks(rows, strategy)
+    if daily_reference.get("previous_day_volume_ratio") is not None:
+        checks["previous_day_volume_ratio"] = daily_reference["previous_day_volume_ratio"]
+    if daily_reference.get("previous_day_change_pct") is not None:
+        checks["previous_day_change_pct"] = daily_reference["previous_day_change_pct"]
+    rules = normalize_machine_rules(strategy.get("machine_rules"))
+    if rules.get("previous_day_high_breakout"):
+        checks["previous_day_high_breakout"] = _latest_previous_day_high_breakout(
+            rows,
+            daily_reference.get("previous_day_high"),
+        )
+    return checks
+
+
 def _needs_chart_data(strategy: dict[str, Any]) -> bool:
     rules = normalize_machine_rules(strategy.get("machine_rules"))
     return any(
@@ -176,15 +265,28 @@ def _scan_strategy_universe_batch(
         snapshot = snapshots.get(symbol)
         if not snapshot:
             continue
-        average_volume = average_completed_daily_volume(daily.get(symbol, []))
+        daily_rows = daily.get(symbol, [])
+        average_volume = average_completed_daily_volume(daily_rows)
         metrics = snapshot_metrics(symbol, snapshot, average_daily_volume=average_volume)
         if metrics is None:
             continue
+        daily_reference = _completed_daily_reference(daily_rows)
         enriched = dict(metrics)
+        enriched.update(
+            {
+                key: value
+                for key, value in daily_reference.items()
+                if key != "previous_day_high" and value is not None
+            }
+        )
         if rules.get("catalyst_required"):
             enriched["has_catalyst"] = bool(news_by_symbol.get(symbol))
         if chart_rows.get(symbol) and _needs_chart_data(strategy):
-            enriched["chart_checks"] = chart_trigger_checks(chart_rows[symbol], strategy)
+            enriched["chart_checks"] = _strategy_chart_checks(
+                chart_rows[symbol],
+                strategy,
+                daily_reference,
+            )
 
         market_features = build_market_features(chart_rows.get(symbol, []))
         enriched["market_features"] = dict(market_features.get("features") or {})
@@ -288,20 +390,33 @@ def _scan_market_strategies_batch(
         snapshot = snapshots.get(symbol)
         if not snapshot:
             continue
-        average_volume = average_completed_daily_volume(daily.get(symbol, []))
+        daily_rows = daily.get(symbol, [])
+        average_volume = average_completed_daily_volume(daily_rows)
         metrics = snapshot_metrics(symbol, snapshot, average_daily_volume=average_volume)
         if metrics is None:
             continue
+        daily_reference = _completed_daily_reference(daily_rows)
 
         market_features = build_market_features(chart_rows.get(symbol, []))
         comparisons: list[dict[str, Any]] = []
         for raw, strategy in usable:
             rules = normalize_machine_rules(strategy.get("machine_rules"))
             enriched = dict(metrics)
+            enriched.update(
+                {
+                    key: value
+                    for key, value in daily_reference.items()
+                    if key != "previous_day_high" and value is not None
+                }
+            )
             if rules.get("catalyst_required"):
                 enriched["has_catalyst"] = bool(news_by_symbol.get(symbol))
             if chart_rows.get(symbol) and _needs_chart_data(strategy):
-                enriched["chart_checks"] = chart_trigger_checks(chart_rows[symbol], strategy)
+                enriched["chart_checks"] = _strategy_chart_checks(
+                    chart_rows[symbol],
+                    strategy,
+                    daily_reference,
+                )
             enriched["market_features"] = dict(market_features.get("features") or {})
 
             signal = match_strategy(enriched, strategy)
@@ -524,10 +639,12 @@ def analyze_stock_strategies(
         timeframe="1Day",
         max_pages=5,
     )
-    average_volume = average_completed_daily_volume(daily.get(ticker, []))
+    daily_rows = daily.get(ticker, [])
+    average_volume = average_completed_daily_volume(daily_rows)
     metrics = snapshot_metrics(ticker, snapshot, average_daily_volume=average_volume)
     if metrics is None:
         raise AppError(f"Alpaca returned an incomplete snapshot for {ticker}.")
+    daily_reference = _completed_daily_reference(daily_rows)
 
     if progress:
         progress("Loading recent catalyst context…")
@@ -546,10 +663,21 @@ def analyze_stock_strategies(
     for strategy in usable:
         rules = normalize_machine_rules(strategy.get("machine_rules"))
         enriched = dict(metrics)
+        enriched.update(
+            {
+                key: value
+                for key, value in daily_reference.items()
+                if key != "previous_day_high" and value is not None
+            }
+        )
         if rules.get("catalyst_required"):
             enriched["has_catalyst"] = bool(news_items)
         if intraday_rows and _needs_chart_data(strategy):
-            enriched["chart_checks"] = chart_trigger_checks(intraday_rows, strategy)
+            enriched["chart_checks"] = _strategy_chart_checks(
+                intraday_rows,
+                strategy,
+                daily_reference,
+            )
         enriched["market_features"] = dict(market_features.get("features") or {})
         signal = match_strategy(enriched, strategy)
         validation_status = str(strategy.get("validation_status") or "unvalidated")
