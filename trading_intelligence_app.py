@@ -31,13 +31,16 @@ _boot_message = str(
 ).strip()
 _boot_status_factory = getattr(st, "status", None)
 _boot_status = None
-if callable(_boot_status_factory):
-    _boot_status = _boot_status_factory(
-        _boot_message or "Starting Trading Intelligence Lab…",
-        expanded=False,
-    )
-else:
-    st.info(_boot_message or "Starting Trading Intelligence Lab…")
+_early_library_cold_start = not isinstance(
+    st.session_state.get("_til_library_render_cache"),
+    dict,
+)
+if _boot_message or _early_library_cold_start:
+    startup_label = _boot_message or "Starting Trading Intelligence Lab…"
+    if callable(_boot_status_factory):
+        _boot_status = _boot_status_factory(startup_label, expanded=False)
+    else:
+        st.info(startup_label)
 
 # Heavy research/ML imports intentionally happen only after access is granted.
 # This keeps the password screen fast and lets navigation show a loading state
@@ -324,10 +327,18 @@ from youtube_strategy_engine import (
 )
 
 if _boot_status is not None:
-    _boot_status.update(
-        label="Core modules loaded · loading research library…",
-        expanded=False,
-    )
+    if _early_library_cold_start:
+        _boot_status.update(
+            label="Core modules loaded · loading research library…",
+            expanded=False,
+        )
+    else:
+        _boot_status.update(
+            label="Trading Intelligence Lab ready",
+            state="complete",
+            expanded=False,
+        )
+        st.session_state.pop("_trading_app_boot_message", None)
 
 st.markdown(
     """

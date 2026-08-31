@@ -133,6 +133,9 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
     def test_cold_start_renders_status_before_heavy_imports_and_skips_render_uploads(self):
         source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
         self.assertIn("Starting Trading Intelligence Lab…", source)
+        self.assertIn("_early_library_cold_start", source)
+        self.assertIn('st.session_state.get("_til_library_render_cache")', source)
+        self.assertIn("if _boot_message or _early_library_cold_start:", source)
         self.assertIn("Core modules loaded · loading research library…", source)
         self.assertIn("Trading Intelligence Lab ready", source)
         self.assertIn("Ordinary page rendering must never turn a cold start", source)
