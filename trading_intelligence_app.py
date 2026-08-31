@@ -103,6 +103,7 @@ _required_finder_attributes = (
     "apply_paper_fidelity_to_verdict",
     "apply_historical_spread_integrity_guard",
     "apply_holdout_reuse_guard",
+    "record_holdout_exposure",
     "stock_finder_strategy_families",
     "validated_status_ready",
 )
@@ -131,6 +132,7 @@ finder_evidence_verdict = _finder_module.finder_evidence_verdict
 apply_paper_fidelity_to_verdict = _finder_module.apply_paper_fidelity_to_verdict
 apply_historical_spread_integrity_guard = _finder_module.apply_historical_spread_integrity_guard
 apply_holdout_reuse_guard = _finder_module.apply_holdout_reuse_guard
+record_holdout_exposure = _finder_module.record_holdout_exposure
 parameter_stability_test = _finder_module.parameter_stability_test
 validated_status_ready = _finder_module.validated_status_ready
 run_stock_strategy_finder = _finder_module.run_stock_strategy_finder
@@ -6856,10 +6858,22 @@ elif module == "Strategy Lab":
                     },
                     lab_spread_audit,
                 )
+                current_integrity_library = load_library(
+                    force_cloud_refresh=True,
+                    mutable=True,
+                )
                 integrity_wrapper = apply_holdout_reuse_guard(
-                    library,
+                    current_integrity_library,
                     integrity_wrapper,
                 )
+                exposure_library = record_holdout_exposure(
+                    current_integrity_library,
+                    integrity_wrapper,
+                    source="manual_strategy_lab",
+                    generated_at=str(report.get("generated_at") or ""),
+                )
+                intelligence_store().save(exposure_library)
+
                 report = integrity_wrapper.get("optimization") or report
                 strength = integrity_wrapper.get("robustness") or strength
                 winner = report.get("winner") or winner
