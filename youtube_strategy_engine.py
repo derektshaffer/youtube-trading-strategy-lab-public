@@ -4482,6 +4482,7 @@ def run_backtest(
         # several smaller entries rather than four full-size bets.
         if (
             previous["session"] == current["session"]
+            and prior_close_exit_reason is None
             and open_count_at_bar_open < int(settings.max_concurrent_positions)
             and evaluate_signal(
                 previous,
@@ -7592,10 +7593,10 @@ def finalize_stock_optimization(
         )
 
     if pre_holdout_status == "VALIDATED":
-        if holdout_limited:
-            winner["status"] = "HOLDOUT LIMITED"
-        elif holdout_failed:
+        if holdout_failed:
             winner["status"] = "HOLDOUT FAILED"
+        elif holdout_limited:
+            winner["status"] = "HOLDOUT LIMITED"
         elif holdout_cost_fragile:
             winner["status"] = "HOLDOUT COST SENSITIVE"
 
