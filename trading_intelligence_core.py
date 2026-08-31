@@ -2046,6 +2046,7 @@ def strategy_integrity_report(strategy: dict[str, Any]) -> dict[str, Any]:
 
 
 PAPER_EXECUTION_UNSUPPORTED_DYNAMIC_EXITS = {
+    "max_hold_minutes": "Maximum holding-time exit",
     "trailing_stop_pct": "Trailing-stop management",
     "move_stop_to_breakeven_at_r": "Move-to-breakeven management",
     "scale_out_fraction_pct": "Partial-profit / scale-out management",
@@ -2062,11 +2063,13 @@ PAPER_EXECUTION_UNSUPPORTED_DYNAMIC_EXITS = {
 
 
 def paper_execution_fidelity(strategy: dict[str, Any]) -> dict[str, Any]:
-    """Check whether Paper Auto can execute the same management as the research model.
+    """Check whether Paper Auto can reproduce the deterministic research lifecycle.
 
-    Paper Auto currently submits an Alpaca bracket order with one stop and one fixed
-    target. Dynamic exits can be backtested now, but must remain deployment-blocked
-    until the live runner actively manages those positions.
+    The research backtester is intraday-only: every surviving position is flattened
+    at the final available candle of the session. The current Streamlit Paper Auto
+    path submits an Alpaca bracket only when the user refreshes the page; it is not
+    a persistent position manager and therefore cannot guarantee that session-end
+    flatten, timed exits, or other dynamic management will occur.
     """
     effective = effective_strategy_for_live(strategy)
     rules = normalize_machine_rules(effective.get("machine_rules"))
@@ -2077,31 +2080,31 @@ def paper_execution_fidelity(strategy: dict[str, Any]) -> dict[str, Any]:
     ]
     if rules.get("avwap_anchor_mode") is not None:
         unsupported.append("Anchored VWAP signal/management parity")
-    if unsupported:
-        return {
-            "status": "blocked",
-            "label": "PAPER EXECUTION DOES NOT MATCH BACKTEST",
-            "unsupported_management": unsupported,
-            "reason": (
-                "The historical model uses dynamic trade management that the current Paper Auto "
-                "runner cannot reproduce with its fixed Alpaca bracket order."
-            ),
-        }
+
+    # This is a universal backtest/live mismatch today, not a strategy-specific
+    # optional feature: the deterministic engine never carries overnight.
+    unsupported.append("Guaranteed end-of-session flattening")
+    unsupported = list(dict.fromkeys(unsupported))
+
     if rules.get("reward_risk") is None:
-        return {
-            "status": "blocked",
-            "label": "NO FAITHFUL PAPER TARGET",
-            "unsupported_management": [],
-            "reason": (
-                "The strategy has no fixed reward/risk target and Paper Auto currently requires "
-                "one fixed target for its bracket order."
-            ),
-        }
+        unsupported.append("Fixed bracket profit target")
+
     return {
-        "status": "ready",
-        "label": "PAPER EXECUTION COMPATIBLE",
-        "unsupported_management": [],
-        "reason": "Current stop/target management can be represented by the paper bracket order.",
+        "status": "blocked",
+        "label": "PAPER EXECUTION DOES NOT FULLY MATCH BACKTEST",
+        "unsupported_management": list(dict.fromkeys(unsupported)),
+        "reason": (
+            "The current Paper Auto path is an entry helper, not a persistent trade manager. "
+            "It cannot yet guarantee the same intraday position lifecycle used by the backtester, "
+            "including mandatory session-end flattening"
+            + (
+                " and the strategy-specific management listed above."
+                if len(unsupported) > 1
+                else "."
+            )
+        ),
+        "research_backtest_forces_session_flat": True,
+        "paper_runner_persistent_manager": False,
     }
 
 
