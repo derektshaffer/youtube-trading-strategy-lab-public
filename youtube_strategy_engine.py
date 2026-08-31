@@ -4436,6 +4436,47 @@ def run_backtest(
         positions_at_open = list(positions)
         open_count_at_bar_open = len(positions_at_open)
 
+        # Close-based indicator exits become knowable only after the previous candle
+        # has completed. Execute them at the next candle's open rather than granting
+        # an impossible fill at the same close that generated the signal.
+        prior_close_exit_reason: str | None = None
+        previous_close = safe_float(previous.get("close"))
+        if previous_close is not None:
+            previous_vwap = safe_float(previous.get("vwap"))
+            previous_fast_ema = safe_float(previous.get("fast_ema"))
+            previous_avwap = safe_float(previous.get("avwap"))
+            if (
+                rules.get("exit_below_vwap") is True
+                and previous_vwap is not None
+                and previous_close < previous_vwap
+            ):
+                prior_close_exit_reason = "VWAP loss"
+            elif (
+                rules.get("exit_below_fast_ema") is True
+                and previous_fast_ema is not None
+                and previous_close < previous_fast_ema
+            ):
+                prior_close_exit_reason = "Fast EMA loss"
+            elif (
+                rules.get("exit_below_avwap") is True
+                and previous_avwap is not None
+                and previous_close < previous_avwap
+            ):
+                prior_close_exit_reason = "Anchored VWAP loss"
+
+        if prior_close_exit_reason and positions_at_open:
+            next_open = float(current["open"])
+            for position in positions_at_open:
+                close_position(
+                    position,
+                    next_open,
+                    current["timestamp"],
+                    prior_close_exit_reason,
+                )
+            positions = []
+            positions_at_open = []
+            open_count_at_bar_open = 0
+
         # One new entry can be layered onto each candle while the portfolio has a free
         # slot. Total risk and total notional remain capped, so four positions means
         # several smaller entries rather than four full-size bets.
@@ -4585,16 +4626,7 @@ def run_backtest(
                 if position.get("target_price") is not None and high >= float(position["target_price"]):
                     raw_exit = max(bar_open, float(position["target_price"]))
                     reason = "Profit target"
-            if reason is None and rules.get("exit_below_vwap") is True and safe_float(current.get("vwap")) is not None and float(current["close"]) < float(current["vwap"]):
-                raw_exit = float(current["close"])
-                reason = "VWAP loss"
-            elif reason is None and rules.get("exit_below_fast_ema") is True and safe_float(current.get("fast_ema")) is not None and float(current["close"]) < float(current["fast_ema"]):
-                raw_exit = float(current["close"])
-                reason = "Fast EMA loss"
-            elif reason is None and rules.get("exit_below_avwap") is True and safe_float(current.get("avwap")) is not None and float(current["close"]) < float(current["avwap"]):
-                raw_exit = float(current["close"])
-                reason = "Anchored VWAP loss"
-            elif reason is None and max_hold is not None:
+            if reason is None and max_hold is not None:
                 held_minutes = (current["timestamp"] - position["entry_time"]).total_seconds() / 60.0
                 if held_minutes >= max_hold:
                     raw_exit = float(current["close"])
@@ -7429,32 +7461,144 @@ def finalize_stock_optimization(
     rows: list[dict[str, Any]],
     strategies: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Inspect the final holdout exactly once after selecting every parameter."""
+    """Inspect the selected winner on holdout without using holdout to re-select it."""
     winner = report.get("winner") or {}
-    source = next((item for item in strategies if item.get("id") == winner.get("source_strategy_id")), None)
+    source = next(
+        (item for item in strategies if item.get("id") == winner.get("source_strategy_id")),
+        None,
+    )
     if not source:
         raise AppError("The selected strategy is no longer available for final holdout validation.")
-    selected_settings = BacktestSettings(**(winner.get("optimized_backtest_settings") or report.get("backtest_settings") or {}))
+
+    selected_settings = BacktestSettings(
+        **(
+            winner.get("optimized_backtest_settings")
+            or report.get("backtest_settings")
+            or {}
+        )
+    )
     selected_settings.validate()
     strategy = {**source, "machine_rules": winner.get("optimized_rules") or {}}
-    full_result = run_backtest(rows, strategy, str(report.get("symbol") or ""), selected_settings)
-    holdout = _period_metrics(full_result, set(report.get("holdout_sessions") or []), selected_settings.starting_cash)
+    symbol = str(report.get("symbol") or "")
+    holdout_sessions = set(report.get("holdout_sessions") or [])
+
+    # Freeze the development verdict before observing holdout. The final status may
+    # be downgraded by holdout evidence, but holdout is never used to select a
+    # different candidate or retune parameters.
+    pre_holdout_status = str(winner.get("status") or "")
+    winner["pre_holdout_status"] = pre_holdout_status
+
+    full_result = run_backtest(rows, strategy, symbol, selected_settings)
+    holdout = _period_metrics(
+        full_result,
+        holdout_sessions,
+        selected_settings.starting_cash,
+    )
     winner["holdout_metrics"] = holdout
     winner["full_metrics"] = full_result["metrics"]
     report["winning_backtest"] = full_result
     report["behavior_comparison"] = behavior_ab_comparison(
         rows,
         strategy,
-        str(report.get("symbol") or ""),
+        symbol,
         selected_settings,
     )
     report["recommended_backtest_settings"] = asdict(selected_settings)
+
+    # The development execution-cost curve is measured on validation data. Once the
+    # winner is frozen, repeat the same predeclared stress multipliers on holdout so
+    # final robustness evidence is genuinely out-of-selection-sample.
+    optimizer_payload = report.get("optimization_settings") or {}
+    raw_multipliers = list(
+        optimizer_payload.get("execution_sensitivity_multipliers")
+        or (1.25, 1.5, 1.75, 2.0)
+    )
+    raw_multipliers.append(
+        optimizer_payload.get("stress_cost_multiplier", 1.5)
+    )
+    holdout_multipliers: list[float] = []
+    for raw_multiplier in raw_multipliers:
+        multiplier = safe_float(raw_multiplier)
+        if multiplier is None or multiplier <= 1.0:
+            continue
+        if multiplier not in holdout_multipliers:
+            holdout_multipliers.append(float(multiplier))
+    holdout_multipliers.sort()
+
+    holdout_sensitivity_points: list[dict[str, Any]] = []
+    if holdout["trade_count"] > 0 and holdout["net_pnl"] > 0:
+        for cost_multiplier in holdout_multipliers:
+            sensitivity_settings = replace(
+                selected_settings,
+                spread_bps=selected_settings.spread_bps * cost_multiplier,
+                slippage_bps=selected_settings.slippage_bps * cost_multiplier,
+            )
+            stressed_result = run_backtest(
+                rows,
+                strategy,
+                symbol,
+                sensitivity_settings,
+            )
+            sensitivity_metrics = _period_metrics(
+                stressed_result,
+                holdout_sessions,
+                sensitivity_settings.starting_cash,
+            )
+            holdout_sensitivity_points.append(
+                {
+                    "multiplier": cost_multiplier,
+                    "spread_bps": sensitivity_settings.spread_bps,
+                    "slippage_bps": sensitivity_settings.slippage_bps,
+                    "metrics": sensitivity_metrics,
+                }
+            )
+
+    holdout_execution_sensitivity = summarize_execution_sensitivity(
+        holdout,
+        holdout_sensitivity_points,
+    )
+    winner["holdout_execution_sensitivity"] = holdout_execution_sensitivity
+    winner["holdout_execution_sensitivity_tests"] = len(
+        holdout_execution_sensitivity.get("points") or []
+    )
+
     warnings = list(report.get("warnings") or [])
-    minimum = int((report.get("optimization_settings") or {}).get("minimum_validation_trades") or 1)
-    if holdout["trade_count"] < minimum:
-        warnings.append("The final untouched holdout contains too few trades to confirm this strategy.")
-    if holdout["trade_count"] and holdout["net_pnl"] <= 0:
-        warnings.append("The selected setup did not stay profitable in its untouched final holdout period.")
+    minimum = int(
+        (report.get("optimization_settings") or {}).get(
+            "minimum_validation_trades"
+        )
+        or 1
+    )
+    holdout_limited = holdout["trade_count"] < minimum
+    holdout_failed = holdout["trade_count"] > 0 and holdout["net_pnl"] <= 0
+    holdout_cost_fragile = (
+        holdout["trade_count"] >= minimum
+        and holdout["net_pnl"] > 0
+        and not bool(holdout_execution_sensitivity.get("passes_validation_gate"))
+    )
+
+    if holdout_limited:
+        warnings.append(
+            "The final untouched holdout contains too few trades to confirm this strategy."
+        )
+    if holdout_failed:
+        warnings.append(
+            "The selected setup did not stay profitable in its untouched final holdout period."
+        )
+    if holdout_cost_fragile:
+        warnings.append(
+            "The selected setup stayed profitable in holdout at baseline costs but lost "
+            "execution robustness across the predeclared holdout cost-sensitivity curve."
+        )
+
+    if pre_holdout_status == "VALIDATED":
+        if holdout_limited:
+            winner["status"] = "HOLDOUT LIMITED"
+        elif holdout_failed:
+            winner["status"] = "HOLDOUT FAILED"
+        elif holdout_cost_fragile:
+            winner["status"] = "HOLDOUT COST SENSITIVE"
+
     if selected_settings.risk_per_trade_pct > 2.0:
         warnings.append(
             f"The selected {selected_settings.risk_per_trade_pct:g}% risk per trade is aggressive; "
@@ -7462,7 +7606,6 @@ def finalize_stock_optimization(
         )
     report["warnings"] = list(dict.fromkeys(warnings))
     return report
-
 
 def combine_stock_timeframe_reports(
     one_minute_rows: list[dict[str, Any]],
