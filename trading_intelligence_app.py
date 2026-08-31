@@ -348,6 +348,62 @@ st.markdown(
     .til-card strong {font-size:1.03rem;}
     .muted {color:#91a2b7;}
 
+    .til-guided-flow {
+        margin: 10px 0 22px 0;
+        padding: 15px;
+        border: 1px solid #2d4563;
+        border-radius: 15px;
+        background: linear-gradient(135deg, rgba(19,35,55,.95), rgba(11,22,36,.96));
+    }
+    .til-guided-flow-title {
+        font-size: .76rem;
+        font-weight: 850;
+        letter-spacing: .11em;
+        color: #8fa9c5;
+        margin-bottom: 10px;
+    }
+    .til-guided-flow-grid {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0,1fr));
+        gap: 8px;
+    }
+    .til-guided-step {
+        padding: 10px 11px;
+        border: 1px solid #293e59;
+        border-radius: 11px;
+        background: rgba(10,21,34,.72);
+        min-height: 78px;
+    }
+    .til-guided-step.active {
+        border-color: #45d7ff;
+        box-shadow: inset 0 0 0 1px rgba(69,215,255,.18);
+        background: rgba(18,50,70,.78);
+    }
+    .til-guided-step.complete {
+        border-color: #2d7359;
+        background: rgba(17,54,43,.55);
+    }
+    .til-guided-step-num {
+        display: inline-flex;
+        width: 23px;
+        height: 23px;
+        border-radius: 999px;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 5px;
+        font-size: .76rem;
+        font-weight: 900;
+        color: #08131f;
+        background: #86dfff;
+    }
+    .til-guided-step.complete .til-guided-step-num {background:#55dfa1;}
+    .til-guided-step strong {display:block;font-size:.92rem;line-height:1.15;}
+    .til-guided-step small {display:block;color:#91a7bd;font-size:.76rem;line-height:1.28;margin-top:4px;}
+    @media (max-width: 900px) {
+        .til-guided-flow-grid {grid-template-columns: 1fr;}
+        .til-guided-step {min-height: 0;}
+    }
+
     .til-finder-notice {
         border:1px solid transparent;
         border-radius:11px;
@@ -1476,8 +1532,8 @@ WORKSPACE_PAGE_META = {
     "Stock Strategy Finder": {
         "step": "00",
         "group": "Stock-Specific Edge",
-        "title": "Find the Best Strategy for a Stock",
-        "subtitle": "Enter a ticker. AI searches broadly, tests unusual combinations instead of vetoing them, then tries to disprove the strongest result on unseen data.",
+        "title": "Find & Test a Strategy",
+        "subtitle": "Enter a ticker. The Lab finds the strongest strategy candidate, tests it on unseen data, then guides you through the current signal, validation, and confidence.",
     },
     "Overview": {
         "step": "01",
@@ -1645,6 +1701,53 @@ def navigate_to_workspace(
         st.session_state["til_workspace_section"] = section
     st.session_state["_trading_app_boot_message"] = _route_loading_label(section)
     st.rerun()
+
+
+def prime_action_feedback(message: str) -> None:
+    """Show feedback before Streamlit begins an expensive full rerun."""
+    st.session_state["_trading_app_boot_message"] = str(message or "Working…")
+
+
+def queue_workspace_navigation(section: str) -> None:
+    """Route from a button callback so loading feedback appears immediately."""
+    st.session_state["til_navigate_to"] = section
+    prime_action_feedback(_route_loading_label(section))
+
+
+def queue_stock_analyzer_from_finder(symbol: str) -> None:
+    ticker = str(symbol or "").strip().upper()
+    if ticker:
+        st.session_state["til_analyzer_ticker"] = ticker
+    st.session_state["til_navigate_to"] = "Stock Analyzer"
+    prime_action_feedback(f"Checking {ticker or 'stock'} current signal…")
+
+
+def render_guided_strategy_flow(active_step: int = 1) -> None:
+    steps = [
+        (1, "Find", "Find and historically test the best strategy."),
+        (2, "Current Signal", "Check whether the stock matches it right now."),
+        (3, "Why It Matched", "See the rules that are passing or failing."),
+        (4, "Validation", "See whether the strategy survived unseen-data tests."),
+        (5, "Confidence", "Judge evidence strength without treating it as a win probability."),
+    ]
+    cards = []
+    current = max(1, min(5, int(active_step or 1)))
+    for number, title, detail in steps:
+        state = "complete" if number < current else "active" if number == current else ""
+        cards.append(
+            f'<div class="til-guided-step {state}">'
+            f'<span class="til-guided-step-num">{"✓" if number < current else number}</span>'
+            f'<strong>{html.escape(title)}</strong>'
+            f'<small>{html.escape(detail)}</small>'
+            '</div>'
+        )
+    st.markdown(
+        '<div class="til-guided-flow">'
+        '<div class="til-guided-flow-title">YOUR STRATEGY WORKFLOW</div>'
+        '<div class="til-guided-flow-grid">' + "".join(cards) + '</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
 
 def render_workspace_page_header(section: str) -> None:
@@ -1827,8 +1930,8 @@ with st.sidebar:
 
     primary_navigation = [
         ("Overview", "⌂  Home"),
-        ("Stock Strategy Finder", "◆  Find strategy for a stock"),
-        ("Stock Analyzer", "⌕  Analyze a stock now"),
+        ("Stock Strategy Finder", "①  Find & test a strategy"),
+        ("Stock Analyzer", "②–⑤  Current signal & confidence"),
         ("Market Discovery", "◎  Find stocks worth watching"),
         ("Knowledge Sources", "◇  Add research material"),
         ("AI Research Autopilot", "✦  AI discoveries & research"),
@@ -1836,14 +1939,23 @@ with st.sidebar:
     ]
     for section, label in primary_navigation:
         is_active = section == module
-        clicked = st.button(
-            label,
-            width="stretch",
-            type="primary" if is_active else "secondary",
-            key="til_simple_nav_" + _nav_key(section, active=is_active),
-        )
-        if clicked and not is_active:
-            navigate_to_workspace(section)
+        if is_active:
+            st.button(
+                label,
+                width="stretch",
+                type="primary",
+                key="til_simple_nav_" + _nav_key(section, active=True),
+                disabled=True,
+            )
+        else:
+            st.button(
+                label,
+                width="stretch",
+                type="secondary",
+                key="til_simple_nav_" + _nav_key(section),
+                on_click=queue_workspace_navigation,
+                args=(section,),
+            )
 
     advanced_sections = [
         "Strategy Library",
@@ -1866,14 +1978,24 @@ with st.sidebar:
         for section in advanced_sections:
             meta = WORKSPACE_PAGE_META.get(section) or {}
             is_active = section == module
-            clicked = st.button(
-                WORKSPACE_NAV_ICONS.get(section, "◇") + "  " + str(meta.get("title") or section),
-                width="stretch",
-                type="primary" if is_active else "secondary",
-                key="til_advanced_nav_" + _nav_key(section, active=is_active),
-            )
-            if clicked and not is_active:
-                navigate_to_workspace(section)
+            advanced_label = WORKSPACE_NAV_ICONS.get(section, "◇") + "  " + str(meta.get("title") or section)
+            if is_active:
+                st.button(
+                    advanced_label,
+                    width="stretch",
+                    type="primary",
+                    key="til_advanced_nav_" + _nav_key(section, active=True),
+                    disabled=True,
+                )
+            else:
+                st.button(
+                    advanced_label,
+                    width="stretch",
+                    type="secondary",
+                    key="til_advanced_nav_" + _nav_key(section),
+                    on_click=queue_workspace_navigation,
+                    args=(section,),
+                )
 
     system_status_color = "#47dda0" if system_status_word == "READY" else "#f3bd58"
     st.markdown(
@@ -2066,11 +2188,11 @@ if module == "Stock Strategy Finder":
         <div class="til-finder-intro">
           <div class="til-finder-intro-icon">◆</div>
           <div>
-            <div class="til-finder-intro-title">Stock-specific edge first</div>
+            <div class="til-finder-intro-title">Find and test a strategy — one stock at a time</div>
             <div class="til-finder-intro-copy">
-              Pick a stock. The Finder searches the strategy library broadly, explores unusual rule combinations,
-              optimizes the strongest regions, then tries to break the winner with unseen holdout, walk-forward,
-              higher-cost, and parameter-stability tests.
+              You choose the stock. The Lab searches strategy families, optimizes the strongest candidates,
+              and automatically tests the winner on unseen data. The technical research stays underneath;
+              the workflow below tells you what to do next.
             </div>
           </div>
           <div class="til-finder-policy"><span>AI VETO</span><strong>OFF</strong></div>
@@ -2078,6 +2200,9 @@ if module == "Stock Strategy Finder":
         """,
         unsafe_allow_html=True,
     )
+    render_guided_strategy_flow(active_step=1)
+    st.markdown("### Step 1 — Pick a stock")
+    st.caption("Start with the ticker. Deep is the normal thorough search; Recent Behavior is faster and focuses on roughly the latest month.")
 
     def render_recent_completed_cloud_runs(fresh_library: dict[str, Any]) -> None:
         recent_cloud_runs = [
@@ -2403,7 +2528,7 @@ if module == "Stock Strategy Finder":
     finder_a, finder_b = st.columns([1.15, 1.0])
     with finder_a:
         finder_symbol = st.text_input(
-            "Stock to research",
+            "Ticker",
             placeholder="SDOT",
             max_chars=10,
             key="til_finder_symbol",
@@ -2415,7 +2540,13 @@ if module == "Stock Strategy Finder":
             finder_profile_options,
             key="til_finder_profile",
             format_func=lambda value: (
-                "Recent Behavior" if str(value) == "Current Regime" else str(value)
+                "Recent Behavior (faster)"
+                if str(value) == "Current Regime"
+                else "Deep (recommended)"
+                if str(value) == "Deep"
+                else "Very Deep (slowest)"
+                if str(value) == "Very Deep"
+                else str(value)
             ),
             help=(
                 "Deep uses a longer history. Recent Behavior focuses on roughly the latest month "
@@ -2653,6 +2784,12 @@ if module == "Stock Strategy Finder":
             + " Open **14. System Health** to verify the complete worker path."
         )
 
+    st.markdown("### Step 2 — Find & test the best strategy")
+    st.caption(
+        "You do not need to run a separate validation page. The Finder automatically tests the winner on "
+        "untouched holdout data, walk-forward periods, higher execution costs, and nearby parameter settings."
+    )
+
     cloud_col, local_col = st.columns([1.0, 1.35])
     with cloud_col:
         cloud_finder_slot = st.empty()
@@ -2666,6 +2803,8 @@ if module == "Stock Strategy Finder":
                 or not stock_cloud_ready
             ),
             key="til_queue_stock_strategy_finder_cloud",
+            on_click=prime_action_feedback,
+            args=(f"Starting {finder_symbol or 'stock'} {finder_profile_display} cloud strategy search…",),
             help=(
                 "Queues the same stock-specific research for distributed cloud execution. "
                 "Strategy-family/timeframe shards run independently, then one final holdout, "
@@ -2804,6 +2943,10 @@ if module == "Stock Strategy Finder":
             or active_cloud_finder is not None
         ),
         key="til_run_stock_strategy_finder",
+        on_click=prime_action_feedback,
+        args=(
+            f"{'Resuming' if checkpoint_resumable else 'Starting'} {finder_symbol or 'stock'} {finder_profile_display} strategy search…",
+        ),
     )
 
     if run_finder and finder_symbol:
@@ -3209,6 +3352,26 @@ if module == "Stock Strategy Finder":
         result_cols[3].metric("Holdout P/L", f"${safe_float(holdout.get('net_pnl'), 0.0):,.2f}")
         result_cols[4].metric("Walk-forward profitable", f"{safe_float(walk.get('profitable_fold_pct'), 0.0):.0f}%")
         result_cols[5].metric("Nearby settings profitable", f"{safe_float(stability.get('positive_pct'), 0.0):.0f}%")
+
+        st.success(
+            f"Step 1 complete: {finder_symbol} has a tested strategy candidate. Next, check whether that setup matches the stock right now."
+        )
+        render_guided_strategy_flow(active_step=2)
+        st.markdown("### Step 2 — Current Signal")
+        st.caption(
+            "Historical testing tells us what worked. This next check asks whether the winning setup is actually present right now."
+        )
+        st.button(
+            f"② Check {finder_symbol} current signal →",
+            type="primary",
+            width="stretch",
+            key="til_finder_continue_current_signal",
+            on_click=queue_stock_analyzer_from_finder,
+            args=(finder_symbol,),
+        )
+        st.markdown("### Historical validation details")
+        st.caption("These details explain how hard the winning strategy was tested. You can ignore them until you want the deeper evidence.")
+
         if walk.get("embargo_sessions") is not None:
             st.caption(
                 f"Walk-forward boundary protection: {int(walk.get('embargo_sessions') or 0)} full session(s) "
@@ -10099,9 +10262,10 @@ elif module == "Market Discovery":
 
 
 elif module == "Stock Analyzer":
+    render_guided_strategy_flow(active_step=2)
     st.caption(
-        "Compare one stock against the strategy library using shared live market data, then inspect "
-        "which validated setup currently fits best."
+        "This is the live half of the guided workflow: check the current signal, see why it matched, "
+        "then review validation and evidence confidence."
     )
 
     if not integrity_safe_strategies:
@@ -10142,11 +10306,13 @@ elif module == "Stock Analyzer":
 
         analyzer_slot = st.empty()
         analyze_stock = analyzer_slot.button(
-            "🧭 Analyze stock against strategies",
+            "② Check current signal",
             type="primary",
             width="stretch",
             disabled=not analyzer_ticker or not analyzer_strategies,
             key="til_analyze_stock_strategies",
+            on_click=prime_action_feedback,
+            args=(f"Checking {analyzer_ticker or 'stock'} current signal…",),
         )
         if analyze_stock:
             analyzer_slot.button(
@@ -10258,7 +10424,7 @@ elif module == "Stock Analyzer":
             metrics = stock_result.get("metrics") or {}
             comparisons = list(stock_result.get("comparisons") or [])
             st.divider()
-            st.markdown(f"### {analyzer_ticker} strategy-fit report")
+            st.markdown(f"### Step 2 — Current Signal · {analyzer_ticker}")
             analyzer_learning_status = (
                 st.session_state.get("til_live_learning_stock_analyzer_status") or {}
             )
@@ -10347,11 +10513,64 @@ elif module == "Stock Analyzer":
 
             if comparisons:
                 best = comparisons[0]
-                best_validation = str(best.get("validation_status") or "unvalidated").replace("_", " ").title()
+                best_validation_raw = str(best.get("validation_status") or "unvalidated").strip().lower()
+                best_validation = best_validation_raw.replace("_", " ").title()
                 st.markdown(
                     f"**Best current strategy fit:** {best.get('strategy_name')} · "
-                    f"{best.get('status')} · {safe_float(best.get('score'), 0.0):.0f}% rule match · "
-                    f"{best_validation}"
+                    f"{best.get('status')} · {safe_float(best.get('score'), 0.0):.0f}% rule match"
+                )
+                st.caption(
+                    "Rule match tells you how many setup conditions are present right now. It is not a probability of profit."
+                )
+
+                st.markdown("### Step 3 — Why it matched")
+                inspect_options = {
+                    f"{item.get('strategy_name')} · {item.get('status')} · {safe_float(item.get('score'), 0.0):.0f}%": item
+                    for item in comparisons
+                }
+                chosen = inspect_options[st.selectbox("Strategy to inspect", list(inspect_options))]
+                signal = chosen.get("signal") or {}
+                checks = signal.get("checks") or []
+                if checks:
+                    for check in checks:
+                        state = str(check.get("status") or "").upper()
+                        icon = "✅" if state == "PASS" else "❓" if state == "UNKNOWN" else "❌"
+                        st.write(
+                            f"{icon} **{check.get('label') or 'Rule'}** — "
+                            f"current: {check.get('actual')} · required: {check.get('required')}"
+                        )
+                else:
+                    st.caption("No rule-by-rule checks were returned for this strategy match.")
+
+                st.markdown("### Step 4 — Validation")
+                chosen_validation_raw = str(chosen.get("validation_status") or "unvalidated").strip().lower()
+                chosen_validation = chosen_validation_raw.replace("_", " ").title()
+                robustness_score = safe_float(chosen.get("robustness_score"))
+                validation_cols = st.columns(2)
+                validation_cols[0].metric("Validation status", chosen_validation)
+                validation_cols[1].metric(
+                    "Historical robustness",
+                    "—" if robustness_score is None else f"{robustness_score:.1f}/100",
+                )
+                if chosen_validation_raw == "validated":
+                    st.success("This strategy cleared the app's strict historical validation gate.")
+                else:
+                    st.warning(
+                        "This is still a research candidate. It may match the stock right now, but it has not cleared every strict validation gate."
+                    )
+
+                st.markdown("### Step 5 — Confidence")
+                confidence_cols = st.columns(2)
+                confidence_cols[0].metric(
+                    "Evidence confidence",
+                    "Validated" if chosen_validation_raw == "validated" else "Research-only",
+                )
+                confidence_cols[1].metric(
+                    "Current rule match",
+                    f"{safe_float(chosen.get('score'), 0.0):.0f}%",
+                )
+                st.caption(
+                    "Confidence here means strength of the evidence + current rule fit. It is not a guaranteed win rate or a probability of profit."
                 )
 
                 comparison_rows = []
@@ -10367,28 +10586,8 @@ elif module == "Stock Analyzer":
                             "Source": item.get("source_title") or item.get("source_type"),
                         }
                     )
-                st.dataframe(pd.DataFrame(comparison_rows), width="stretch", hide_index=True)
-
-                inspect_options = {
-                    f"{item.get('strategy_name')} · {item.get('status')} · {safe_float(item.get('score'), 0.0):.0f}%": item
-                    for item in comparisons
-                }
-                chosen = inspect_options[st.selectbox("Inspect strategy fit", list(inspect_options))]
-                signal = chosen.get("signal") or {}
-                if chosen.get("robustness_score") is not None:
-                    st.caption(
-                        f"Historical robustness score: {safe_float(chosen.get('robustness_score'), 0.0):.1f}/100. "
-                        "This is a historical validation score, not a probability forecast."
-                    )
-                checks = signal.get("checks") or []
-                if checks:
-                    for check in checks:
-                        state = str(check.get("status") or "").upper()
-                        icon = "✅" if state == "PASS" else "❓" if state == "UNKNOWN" else "❌"
-                        st.write(
-                            f"{icon} **{check.get('label') or 'Rule'}** — "
-                            f"current: {check.get('actual')} · required: {check.get('required')}"
-                        )
+                with st.expander("Other strategy matches (optional)", expanded=False):
+                    st.dataframe(pd.DataFrame(comparison_rows), width="stretch", hide_index=True)
 
 
 elif module == "Live / Paper":
