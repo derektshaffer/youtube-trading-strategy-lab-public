@@ -1939,7 +1939,6 @@ with st.sidebar:
     primary_navigation = [
         ("Overview", "⌂  Home"),
         ("Stock Strategy Finder", "①  Find & test a strategy"),
-        ("Stock Analyzer", "②–⑤  Current signal & confidence"),
         ("Market Discovery", "◎  Find stocks worth watching"),
         ("Knowledge Sources", "◇  Add research material"),
         ("AI Research Autopilot", "✦  AI discoveries & research"),
@@ -1965,7 +1964,10 @@ with st.sidebar:
                 args=(section,),
             )
 
+    st.caption("Steps 2–5 appear automatically after Step 1 finds a strategy.")
+
     advanced_sections = [
+        "Stock Analyzer",
         "Strategy Library",
         "Strategy Integrity",
         "Retrospective Learning",
@@ -1986,7 +1988,11 @@ with st.sidebar:
         for section in advanced_sections:
             meta = WORKSPACE_PAGE_META.get(section) or {}
             is_active = section == module
-            advanced_label = WORKSPACE_NAV_ICONS.get(section, "◇") + "  " + str(meta.get("title") or section)
+            advanced_label = (
+                "⌕  Standalone Stock Analyzer"
+                if section == "Stock Analyzer"
+                else WORKSPACE_NAV_ICONS.get(section, "◇") + "  " + str(meta.get("title") or section)
+            )
             if is_active:
                 st.button(
                     advanced_label,
