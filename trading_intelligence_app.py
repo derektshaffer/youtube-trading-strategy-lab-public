@@ -1611,12 +1611,13 @@ def upsert_strategy_record(
 
 
 def profit_first_run_snapshot(run: dict[str, Any]) -> dict[str, Any]:
-    """Summarize whether one saved validation run is a profit-first edge candidate."""
+    """Summarize one saved validation run using today's profit-first integrity rules."""
     validation = run.get("validation_metrics") or {}
     holdout = run.get("holdout_metrics") or {}
     stress = run.get("stress_metrics") or {}
     robustness = run.get("robustness") or {}
     walk = run.get("walk_forward_summary") or {}
+    verdict = run.get("evidence_verdict") or {}
 
     def positive_period(metrics: dict[str, Any]) -> bool:
         return (
@@ -1628,10 +1629,53 @@ def profit_first_run_snapshot(run: dict[str, Any]) -> dict[str, Any]:
     holdout_positive = positive_period(holdout)
     stress_positive = positive_period(stress)
     validation_status = str(run.get("validation_status") or "").strip().lower()
-    robustness_score = safe_float(robustness.get("score"), 0.0) or 0.0
+    optimizer_status = str(run.get("optimizer_status") or "").strip().upper()
+    stored_robustness_score = safe_float(robustness.get("score"), 0.0) or 0.0
     walk_pct = safe_float(walk.get("profitable_fold_pct"), 0.0) or 0.0
+
+    # Old saved runs can contain robustness values calculated before current
+    # integrity caps existed. Re-apply the current optimizer-status ceiling when
+    # ranking old evidence so an UNSTABLE legacy run cannot appear as 90+/100.
+    status_caps = {
+        "LIMITED DATA": 39.0,
+        "DRAWDOWN TOO HIGH": 39.0,
+        "NO VALIDATED EDGE": 39.0,
+        "UNSTABLE": 49.0,
+        "COST SENSITIVE": 59.0,
+        "HOLDOUT LIMITED": 39.0,
+        "HOLDOUT FAILED": 39.0,
+        "HOLDOUT COST SENSITIVE": 49.0,
+        "HOLDOUT REUSED": 39.0,
+    }
+    robustness_cap = status_caps.get(optimizer_status, 100.0)
+    robustness_score = min(stored_robustness_score, robustness_cap)
+
+    verdict_code = str(verdict.get("code") or "").strip().lower()
+    robust_verdict_codes = {
+        "ready_for_paper",
+        "historically_robust_execution_gap",
+    }
+    autonomous = bool(run.get("autonomous"))
+    validation_method_version = int(
+        safe_float(run.get("validation_method_version"), 0) or 0
+    )
+    # Autonomous method v4 is the current strict point-in-time validator.
+    # Current manual Strategy-Lab saves carry an evidence verdict. Older manual
+    # records lack that field and must be revalidated before Profit First trusts them.
+    current_protocol = bool(
+        (autonomous and validation_method_version >= 4)
+        or (not autonomous and bool(verdict_code))
+    )
+    historical_gate_pass = bool(
+        (autonomous and validation_method_version >= 4 and validation_status == "validated")
+        or verdict_code in robust_verdict_codes
+    )
+    requires_revalidation = not current_protocol
+
     strict_profit_edge = bool(
         validation_status == "validated"
+        and current_protocol
+        and historical_gate_pass
         and validation_positive
         and holdout_positive
         and stress_positive
@@ -1643,7 +1687,22 @@ def profit_first_run_snapshot(run: dict[str, Any]) -> dict[str, Any]:
         positive_period_count * 30.0
         + min(25.0, robustness_score * 0.25)
         + min(15.0, walk_pct * 0.15)
+        - (20.0 if requires_revalidation else 0.0)
     )
+    if requires_revalidation:
+        blocker = (
+            "Legacy/incomplete validation record. Re-run strict validation under the "
+            "current protocol before treating this as a profit-first edge."
+        )
+    elif verdict.get("reason"):
+        blocker = str(verdict.get("reason"))
+    elif run.get("gate_reasons"):
+        blocker = " ".join(str(item) for item in (run.get("gate_reasons") or [])[:2])
+    elif optimizer_status and optimizer_status != "VALIDATED":
+        blocker = f"Optimizer status is {optimizer_status.replace('_', ' ').title()}."
+    else:
+        blocker = "The current strict validation gate was not fully satisfied."
+
     return {
         "strict_profit_edge": strict_profit_edge,
         "validation_positive": validation_positive,
@@ -1651,10 +1710,17 @@ def profit_first_run_snapshot(run: dict[str, Any]) -> dict[str, Any]:
         "stress_positive": stress_positive,
         "positive_period_count": positive_period_count,
         "robustness_score": robustness_score,
+        "stored_robustness_score": stored_robustness_score,
+        "robustness_cap": robustness_cap,
         "walk_forward_profitable_pct": walk_pct,
         "research_score": round(research_score, 2),
+        "optimizer_status": optimizer_status,
+        "current_protocol": current_protocol,
+        "requires_revalidation": requires_revalidation,
+        "validation_method_version": validation_method_version,
+        "evidence_verdict_code": verdict_code,
+        "blocker": blocker,
     }
-
 
 def profit_first_ranked_runs(
     runs: list[dict[str, Any]],
@@ -4099,7 +4165,10 @@ elif module == "Profit First":
                         "Strategy": run.get("strategy_name") or "Strategy",
                         "Anchor stock": run.get("symbol") or "—",
                         "Status": str(run.get("validation_status") or "research_only").replace("_", " ").title(),
+                        "Protocol": "Revalidate" if snapshot.get("requires_revalidation") else "Current",
+                        "Optimizer": str(snapshot.get("optimizer_status") or "—").replace("_", " ").title(),
                         "Robustness": round(safe_float(snapshot.get("robustness_score"), 0.0) or 0.0, 1),
+                        "Stored robustness": round(safe_float(snapshot.get("stored_robustness_score"), 0.0) or 0.0, 1),
                         "Validation P/L": round(safe_float(validation.get("net_pnl"), 0.0) or 0.0, 2),
                         "Holdout P/L": round(safe_float(holdout.get("net_pnl"), 0.0) or 0.0, 2),
                         "Stress P/L": round(safe_float(stress.get("net_pnl"), 0.0) or 0.0, 2),
@@ -4110,6 +4179,51 @@ elif module == "Profit First":
                     }
                 )
             st.dataframe(pd.DataFrame(near_rows), width="stretch", hide_index=True)
+
+            strongest_near = profit_near_misses[0]
+            strongest_snapshot = strongest_near.get("_profit_first") or {}
+            if strongest_snapshot.get("requires_revalidation"):
+                stored_score = safe_float(
+                    strongest_snapshot.get("stored_robustness_score"),
+                    0.0,
+                ) or 0.0
+                effective_score = safe_float(
+                    strongest_snapshot.get("robustness_score"),
+                    0.0,
+                ) or 0.0
+                st.warning(
+                    f"**Top historical candidate needs revalidation:** "
+                    f"{strongest_near.get('strategy_name') or 'Strategy'} was saved under an older/incomplete "
+                    f"validation record. Its stored robustness was {stored_score:.1f}/100, but applying today's "
+                    f"optimizer-status cap gives {effective_score:.1f}/100. It is not a validated edge."
+                )
+            else:
+                st.info(
+                    "**Why the strongest candidate is not validated:** "
+                    + str(strongest_snapshot.get("blocker") or "One or more strict gates failed.")
+                )
+
+            strongest_strategy_id = str(strongest_near.get("strategy_id") or "")
+            strongest_strategy = next(
+                (
+                    item
+                    for item in integrity_safe_strategies
+                    if str(item.get("id") or "") == strongest_strategy_id
+                ),
+                None,
+            )
+            if strongest_strategy is not None:
+                st.button(
+                    "↻ Re-run strict validation on strongest candidate →",
+                    type="primary",
+                    width="stretch",
+                    key="til_profit_first_revalidate_strongest",
+                    on_click=queue_strategy_validation_from_analyzer,
+                    args=(
+                        str(strongest_near.get("symbol") or ""),
+                        dict(strongest_strategy),
+                    ),
+                )
         else:
             st.info("No saved validation evidence exists yet.")
 
@@ -8298,6 +8412,7 @@ elif module == "Strategy Lab":
                     "robustness": strength,
                     "optimizer_status": winner.get("status"),
                     "validation_status": validation_status,
+                    "validation_protocol": "strict_manual_v1",
                     "training_metrics": training,
                     "validation_metrics": validation,
                     "holdout_metrics": holdout,
