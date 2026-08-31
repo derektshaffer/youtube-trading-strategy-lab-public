@@ -191,6 +191,7 @@ from trading_intelligence_core import (
     prepare_strategies_with_ai,
     reconcile_knowledge_sources,
     research_readiness,
+    paper_execution_fidelity,
     strategy_integrity_report,
     upgrade_native_strategy_rules,
 )
