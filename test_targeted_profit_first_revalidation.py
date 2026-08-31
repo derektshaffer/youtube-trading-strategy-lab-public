@@ -76,6 +76,62 @@ class TargetedProfitFirstRevalidationTests(unittest.TestCase):
         self.assertEqual(closed, 0)
         self.assertEqual(updated["research_queue"][0]["status"], "queued")
 
+    def test_blocked_targeted_job_is_closed_before_compute(self):
+        data = {
+            "strategies": [
+                {
+                    "id": TARGET,
+                    "name": "Moving Average Trend Pullback (9 EMA)",
+                    "source_type": "document",
+                }
+            ],
+            "research_queue": [
+                {
+                    "id": "blocked-target",
+                    "type": "autonomous_validation",
+                    "status": "queued",
+                    "payload": {
+                        "origin": "profit_first_revalidation",
+                        "strategy_ids": [TARGET],
+                    },
+                }
+            ],
+        }
+        with patch.object(
+            worker,
+            "research_readiness",
+            return_value={"label": "partially_modeled"},
+        ):
+            updated, closed = worker.close_blocked_targeted_validation_jobs(data)
+
+        self.assertEqual(closed, 1)
+        job = updated["research_queue"][0]
+        self.assertEqual(job["status"], "complete")
+        self.assertEqual(job["result_ref"], "blocked-by-strategy-fidelity")
+        self.assertIn("blocked strategy", job["status_message"])
+
+    def test_running_targeted_job_is_not_rewritten_by_cleanup(self):
+        data = {
+            "strategies": [{"id": TARGET}],
+            "research_queue": [
+                {
+                    "id": "running-target",
+                    "type": "autonomous_validation",
+                    "status": "running",
+                    "payload": {"strategy_ids": [TARGET]},
+                }
+            ],
+        }
+        with patch.object(
+            worker,
+            "research_readiness",
+            return_value={"label": "partially_modeled"},
+        ):
+            updated, closed = worker.close_blocked_targeted_validation_jobs(data)
+
+        self.assertEqual(closed, 0)
+        self.assertEqual(updated["research_queue"][0]["status"], "running")
+
     def test_target_payload_accepts_comma_separated_ids(self):
         self.assertEqual(
             worker._target_strategy_ids(
