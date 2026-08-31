@@ -641,7 +641,7 @@ def build_cross_stock_training_dataset(
             "Predictive ML requires point-in-time split metadata so raw historical "
             "price context cannot cross an unhandled split boundary."
         )
-    split_actions = market.split_actions(
+    split_actions = market.research_reset_actions(
         clean,
         start=start,
         end=end,
