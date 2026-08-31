@@ -657,7 +657,7 @@ def scan_explosive_candidates(
         key=lambda item: (
             state_rank.get(str(item.get("activation_state") or ""), 0),
             safe_float(item.get("profile_score"), 0.0) or 0.0,
-            -(safe_float(item.get("risk_score"), 100.0) or 100.0),
+            -(safe_float(item.get("risk_score"), 100.0) if safe_float(item.get("risk_score"), 100.0) is not None else 100.0),
             safe_float((item.get("metrics") or {}).get("relative_volume"), 0.0) or 0.0,
         ),
         reverse=True,
