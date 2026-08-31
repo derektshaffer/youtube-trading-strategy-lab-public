@@ -9002,7 +9002,12 @@ def match_strategy(metrics: dict[str, Any], strategy: dict[str, Any]) -> dict[st
     }
 
 
-def chart_trigger_checks(rows: list[dict[str, Any]], strategy: dict[str, Any]) -> dict[str, Any]:
+def chart_trigger_checks(
+    rows: list[dict[str, Any]],
+    strategy: dict[str, Any],
+    *,
+    include_extended_hours: bool = False,
+) -> dict[str, Any]:
     """Confirm chart-derived rules and prior-session metrics only from candles available at scan time."""
     fields = (
         "vwap_reclaim", "previous_day_high_breakout", "breakout_lookback_bars",
@@ -9014,7 +9019,7 @@ def chart_trigger_checks(rows: list[dict[str, Any]], strategy: dict[str, Any]) -
         "avwap_anchor_active", "avwap_reclaim",
     )
     outcome: dict[str, Any] = {name: None for name in fields}
-    frame = bars_to_frame(rows)
+    frame = bars_to_frame(rows, include_extended_hours=include_extended_hours)
     if frame.empty:
         return outcome
     enriched = add_indicators(frame, strategy)
