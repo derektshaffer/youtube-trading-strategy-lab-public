@@ -21,6 +21,7 @@ def finder_summary_to_report(summary: dict[str, Any]) -> dict[str, Any]:
     }
     return {
         "version": "stock-strategy-finder-v1-restored",
+        "run_id": summary.get("id"),
         "generated_at": summary.get("generated_at"),
         "symbol": str(summary.get("symbol") or "").upper(),
         "profile": summary.get("profile_details") or {"name": summary.get("profile")},
@@ -28,6 +29,7 @@ def finder_summary_to_report(summary: dict[str, Any]) -> dict[str, Any]:
         "search_policy": summary.get("search_policy") or {},
         "strategies_considered": summary.get("strategies_considered"),
         "strategies_tested": summary.get("strategies_tested"),
+        "tested_strategy_rankings": list(summary.get("tested_strategy_rankings") or []),
         "technical_skips": summary.get("technical_skips") or [],
         "estimated_work": summary.get("estimated_work") or {},
         "stage_timings_seconds": summary.get("stage_timings_seconds") or {},
