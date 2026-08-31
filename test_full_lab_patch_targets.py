@@ -74,14 +74,20 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
         source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
         for marker in (
             "WHAT DO YOU WANT TO DO?",
-            "Find strategy for a stock",
-            "Analyze a stock now",
+            "Find & test a strategy",
+            "Current signal & confidence",
             "Find stocks worth watching",
             "Add research material",
             "AI discoveries & research",
             "Advanced / Research Details",
             "What do you want to do?",
             "Find the best strategy for a stock",
+            "YOUR STRATEGY WORKFLOW",
+            "Step 3 — Why it matched",
+            "Step 4 — Validation",
+            "Step 5 — Confidence",
+            "on_click=queue_workspace_navigation",
+            "prime_action_feedback",
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, source)
