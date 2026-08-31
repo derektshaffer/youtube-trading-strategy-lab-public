@@ -5340,7 +5340,7 @@ elif module == "Strategy Integrity":
         audit_cols = st.columns(4)
         audit_cols[0].metric("Strategies fully represented", faithful)
         audit_cols[1].metric("Strategies partly represented", partial)
-        audit_cols[2].metric("Strategies blocked by missing logic", blocked)
+        audit_cols[2].metric("Strategies with critical gaps", blocked)
         audit_cols[3].metric("Average rules represented", f"{average_coverage:.1f}%")
 
         if blocked:
