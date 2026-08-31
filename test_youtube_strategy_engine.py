@@ -63,6 +63,51 @@ def simple_strategy(**rules) -> dict:
     }
 
 
+class ExecutionSensitivityTests(unittest.TestCase):
+    def test_default_curve_uses_predeclared_cost_multipliers(self):
+        settings = engine.OptimizationSettings()
+        self.assertEqual(
+            tuple(settings.execution_sensitivity_multipliers),
+            (1.25, 1.5, 1.75, 2.0),
+        )
+        settings.validate()
+
+    def test_curve_uses_whole_body_of_evidence_not_one_cutoff(self):
+        baseline = {"net_pnl": 100.0}
+        pnls = [80.0, 60.0, 40.0, -10.0]
+        points = [
+            {
+                "multiplier": multiplier,
+                "spread_bps": 12.0 * multiplier,
+                "slippage_bps": 8.0 * multiplier,
+                "metrics": {"net_pnl": pnl, "trade_count": 10, "profit_factor": 1.2},
+            }
+            for multiplier, pnl in zip((1.25, 1.5, 1.75, 2.0), pnls)
+        ]
+        result = engine.summarize_execution_sensitivity(baseline, points)
+        self.assertEqual(result["label"], "MIXED")
+        self.assertTrue(result["passes_validation_gate"])
+        self.assertEqual(result["profitable_multiplier_pct"], 75.0)
+        self.assertEqual(result["median_pnl_retention_pct"], 50.0)
+        self.assertEqual(result["first_unprofitable_multiplier"], 2.0)
+        self.assertEqual(result["score"], 65.0)
+
+    def test_curve_flags_fast_degradation_as_fragile(self):
+        baseline = {"net_pnl": 100.0}
+        pnls = [70.0, 40.0, -20.0, -50.0]
+        points = [
+            {
+                "multiplier": multiplier,
+                "metrics": {"net_pnl": pnl, "trade_count": 10},
+            }
+            for multiplier, pnl in zip((1.25, 1.5, 1.75, 2.0), pnls)
+        ]
+        result = engine.summarize_execution_sensitivity(baseline, points)
+        self.assertEqual(result["label"], "FRAGILE")
+        self.assertFalse(result["passes_validation_gate"])
+        self.assertEqual(result["score"], 34.0)
+
+
 class UrlTests(unittest.TestCase):
     def test_normalizes_watch_and_strips_playlist_tracking(self):
         self.assertEqual(
