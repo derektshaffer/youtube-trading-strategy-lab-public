@@ -2220,7 +2220,11 @@ class GitHubCloudBackup:
             )
             return blob_sha
 
-    def read_library(self) -> dict[str, Any] | None:
+    def read_library(
+        self,
+        *,
+        include_raw: bool = False,
+    ) -> dict[str, Any] | None:
         self._verify_private_repository()
         record = self._request(self._contents_url(), missing_ok=True)
         if record is None:
@@ -2274,7 +2278,10 @@ class GitHubCloudBackup:
         sha = str(record.get("sha") or "")
         if not re.fullmatch(r"[a-fA-F0-9]{40,64}", sha):
             raise AppError("GitHub did not return a valid version identifier for the cloud backup.")
-        return {"library": library, "sha": sha}
+        result = {"library": library, "sha": sha}
+        if include_raw:
+            result["_raw_bytes"] = raw
+        return result
 
     def save_library(
         self,
@@ -2399,11 +2406,21 @@ class StrategyStore:
         if not self.path.exists():
             if self.cloud_backup is None:
                 return self.blank()
-            remote = self.cloud_backup.read_library()
+            if isinstance(self.cloud_backup, GitHubCloudBackup):
+                remote = self.cloud_backup.read_library(include_raw=True)
+            else:
+                remote = self.cloud_backup.read_library()
             if remote is None:
                 return self.blank()
             remote_library = self.normalize_library(remote["library"])
-            self._write_local(remote_library, make_backup=False)
+            raw_remote = remote.get("_raw_bytes")
+            if isinstance(raw_remote, (bytes, bytearray)):
+                # Preserve the exact Git blob on cold restore. This lets the
+                # next metadata-only revision check prove local == cloud without
+                # downloading the large file again.
+                self._write_local_bytes(bytes(raw_remote), make_backup=False)
+            else:
+                self._write_local(remote_library, make_backup=False)
             self._record_cloud_success(remote_library)
             self.restored_on_startup = True
             # The cloud response has already been parsed and validated. Do not
@@ -2660,6 +2677,24 @@ class StrategyStore:
     def _record_cloud_write_success(self, data: dict[str, Any]) -> None:
         self._record_cloud_success(data)
         self._record_cloud_status(last_write_at=isoformat_utc(utc_now()))
+
+    def _write_local_bytes(self, raw: bytes, *, make_backup: bool = True) -> None:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix="strategy_",
+            suffix=".json",
+            dir=self.directory,
+        )
+        try:
+            with os.fdopen(descriptor, "wb") as temporary:
+                temporary.write(raw)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            if make_backup:
+                self._make_automatic_backup()
+            os.replace(temporary_name, self.path)
+        finally:
+            if os.path.exists(temporary_name):
+                os.unlink(temporary_name)
 
     def _write_local(self, value: dict[str, Any], *, make_backup: bool = True) -> None:
         descriptor, temporary_name = tempfile.mkstemp(prefix="strategy_", suffix=".json", dir=self.directory)
