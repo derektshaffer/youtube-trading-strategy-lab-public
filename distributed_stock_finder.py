@@ -285,6 +285,26 @@ def shard_path(run_id: str, index: int) -> str:
     return f"{run_root(run_id)}/shard-{int(index):03d}.json.gz"
 
 
+def _plan_has_current_integrity(plan: dict[str, Any]) -> bool:
+    integrity = plan.get("market_data_integrity")
+    return (
+        int(plan.get("version") or 0) == DISTRIBUTED_PLAN_VERSION
+        and isinstance(integrity, dict)
+        and str(integrity.get("mode") or "") in {
+            "raw_prices",
+            "raw_prices_post_latest_split",
+        }
+    )
+
+
+def _require_current_integrity_plan(plan: dict[str, Any], run_id: str) -> None:
+    if not _plan_has_current_integrity(plan):
+        raise AppError(
+            f"Distributed Finder run {run_id} predates the current market-data integrity "
+            "contract and cannot be finalized or extended. Start a fresh run."
+        )
+
+
 def _completed_shard_numbers(payload: dict[str, Any]) -> set[int]:
     return {
         int(value)
@@ -317,16 +337,7 @@ def _resumable_plan_for_job(
             )
         return None
 
-    plan_version = int(plan.get("version") or 0)
-    integrity = plan.get("market_data_integrity")
-    if (
-        plan_version != DISTRIBUTED_PLAN_VERSION
-        or not isinstance(integrity, dict)
-        or str(integrity.get("mode") or "") not in {
-            "raw_prices",
-            "raw_prices_post_latest_split",
-        }
-    ):
+    if not _plan_has_current_integrity(plan):
         # Pre-integrity plans may contain split-adjusted or otherwise unverified
         # price history. They are deliberately not resumed under the newer engine.
         # Returning None causes the retry to create a fresh research window/plan;
@@ -949,6 +960,7 @@ def command_prepare(preferred_job_id: str = "") -> int:
 def _command_shard(run_id: str, index: int) -> int:
     artifacts = PrivateRunArtifactStore()
     plan = artifacts.read_json_gz(plan_path(run_id))
+    _require_current_integrity_plan(plan, run_id)
     specs = [
         item
         for item in plan.get("shards") or []
@@ -1108,6 +1120,7 @@ def command_aggregate(run_id: str) -> int:
         except Exception:
             pass
         raise
+    _require_current_integrity_plan(plan, run_id)
     job_id = str(plan.get("parent_job_id") or "")
     specs = [item for item in plan.get("shards") or [] if isinstance(item, dict)]
     finalization_stage = ["loading_saved_shards"]
@@ -1125,9 +1138,17 @@ def command_aggregate(run_id: str) -> int:
         for spec in specs:
             index = int(spec.get("index") or 0)
             try:
-                shard_payloads.append(
-                    artifacts.read_json_gz(shard_path(run_id, index))
-                )
+                payload = artifacts.read_json_gz(shard_path(run_id, index))
+                if (
+                    int(payload.get("version") or 0) != DISTRIBUTED_SHARD_VERSION
+                    or str(payload.get("run_id") or "") != run_id
+                    or int(payload.get("index") or -1) != index
+                ):
+                    raise AppError(
+                        f"Distributed Finder shard {index} does not match the current "
+                        "integrity/version contract."
+                    )
+                shard_payloads.append(payload)
             except FileNotFoundError:
                 missing.append(index)
         if missing:
