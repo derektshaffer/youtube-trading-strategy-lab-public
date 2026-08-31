@@ -170,13 +170,66 @@ def _strategy_allows_extended_hours(strategy: dict[str, Any]) -> bool:
     return True
 
 
+def _completed_candle_cutoff(
+    timeframe: str,
+    *,
+    now: datetime | None = None,
+) -> datetime:
+    """Return the start of the currently forming candle in New York time."""
+    interval = {"1Min": 1, "5Min": 5, "15Min": 15}.get(str(timeframe or ""))
+    if interval is None:
+        raise AppError("Choose a supported candle interval: 1Min, 5Min, or 15Min.")
+    current = now or utc_now()
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=ET)
+    current_et = current.astimezone(ET)
+    clock_minute = current_et.hour * 60 + current_et.minute
+    bucket_minute = (clock_minute // interval) * interval
+    return datetime.combine(
+        current_et.date(),
+        datetime.min.time(),
+        tzinfo=ET,
+    ) + timedelta(minutes=bucket_minute)
+
+
+def _completed_intraday_rows(
+    rows: list[dict[str, Any]],
+    timeframe: str,
+    *,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Drop the currently forming source candle/bucket before live rule evaluation."""
+    cutoff = _completed_candle_cutoff(timeframe, now=now)
+    completed: list[dict[str, Any]] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            timestamp = datetime.fromisoformat(
+                str(row.get("t") or "").replace("Z", "+00:00")
+            )
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=ET)
+            if timestamp.astimezone(ET) >= cutoff:
+                continue
+        except (TypeError, ValueError):
+            # Unparseable rows were already unusable for deterministic candle ordering.
+            continue
+        completed.append(row)
+    return completed
+
+
 def _prepare_strategy_intraday_rows(
     rows: list[dict[str, Any]],
     strategy: dict[str, Any],
+    *,
+    now: datetime | None = None,
 ) -> list[dict[str, Any]]:
+    timeframe = _strategy_live_timeframe(strategy)
+    completed_rows = _completed_intraday_rows(rows, timeframe, now=now)
     return resample_intraday_bars(
-        rows,
-        _strategy_live_timeframe(strategy),
+        completed_rows,
+        timeframe,
         include_extended_hours=_strategy_allows_extended_hours(strategy),
     )
 
