@@ -45,6 +45,20 @@ class ProfitFirstWorkflowTests(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, self.source)
 
+    def test_profit_first_revalidation_uses_durable_cloud_validator(self):
+        for marker in (
+            "Revalidate strongest candidate under current protocol",
+            '"origin": "profit_first_revalidation"',
+            '"strategy_ids": [strongest_strategy_id]',
+            '"autonomous_validation"',
+            'priority=100',
+            'workflow="continuous-trading-research.yml"',
+            "Current-protocol revalidation",
+            "untouched holdout, stress, cross-stock, and walk-forward gates",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, self.source)
+
     def test_profit_first_does_not_hide_failure_to_find_an_edge(self):
         self.assertIn("No strategy currently clears the strict profit-first bar.", self.source)
         self.assertIn("Closest research candidates — still not validated profitable edges", self.source)
