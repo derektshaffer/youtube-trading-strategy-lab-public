@@ -2001,6 +2001,35 @@ class DynamicExitBacktestTests(unittest.TestCase):
             rows[2]["t"],
         )
 
+    def test_time_limit_exit_fills_at_bar_open_when_limit_has_elapsed(self):
+        rows = [
+            bar(18, 0, 10.0, 10.1, 9.9, 10.0),
+            bar(18, 1, 10.0, 10.2, 9.8, 10.0),
+            bar(18, 2, 8.0, 12.5, 7.9, 12.0),
+        ]
+        strategy = simple_strategy(
+            stop_loss_pct=50,
+            reward_risk=None,
+            max_hold_minutes=1,
+        )
+        result = engine.run_backtest(
+            rows,
+            strategy,
+            "TEST",
+            engine.BacktestSettings(
+                spread_bps=0,
+                slippage_bps=0,
+                max_concurrent_positions=1,
+                allow_extended_hours=False,
+            ),
+        )
+
+        self.assertEqual(result["metrics"]["trade_count"], 1)
+        trade = result["trades"][0]
+        self.assertEqual(trade["reason"], "Time limit")
+        self.assertEqual(trade["exit_price"], 8.0)
+        self.assertEqual(trade["exit_time"], rows[2]["t"])
+
     def test_breakeven_rule_moves_stop_after_r_trigger(self):
         rows = [
             bar(18, 0, 10.0, 10.1, 9.9, 10.0),
