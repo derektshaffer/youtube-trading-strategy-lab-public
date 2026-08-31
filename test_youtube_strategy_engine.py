@@ -108,6 +108,68 @@ class ExecutionSensitivityTests(unittest.TestCase):
         self.assertEqual(result["score"], 34.0)
 
 
+class FinalHoldoutIntegrityTests(unittest.TestCase):
+    def test_negative_holdout_revokes_validated_status_without_reselection(self):
+        settings = engine.BacktestSettings(
+            spread_bps=10,
+            slippage_bps=5,
+            allow_extended_hours=False,
+        )
+        report = {
+            "symbol": "TEST",
+            "holdout_sessions": ["2026-08-20"],
+            "backtest_settings": engine.asdict(settings),
+            "optimization_settings": {
+                "minimum_validation_trades": 2,
+                "execution_sensitivity_multipliers": (1.25, 1.5, 1.75, 2.0),
+                "stress_cost_multiplier": 1.75,
+            },
+            "winner": {
+                "source_strategy_id": "test-strategy",
+                "status": "VALIDATED",
+                "optimized_rules": simple_strategy()["machine_rules"],
+                "optimized_backtest_settings": engine.asdict(settings),
+            },
+            "warnings": [],
+        }
+        fake_result = {
+            "trades": [
+                {
+                    "entry_time": "2026-08-20T14:00:00Z",
+                    "pnl": -5.0,
+                },
+                {
+                    "entry_time": "2026-08-20T15:00:00Z",
+                    "pnl": -7.0,
+                },
+            ],
+            "metrics": {
+                "trade_count": 2,
+                "net_pnl": -12.0,
+                "max_drawdown_pct": 0.12,
+            },
+        }
+
+        with patch.object(engine, "run_backtest", return_value=fake_result), patch.object(
+            engine,
+            "behavior_ab_comparison",
+            return_value={},
+        ):
+            result = engine.finalize_stock_optimization(
+                report,
+                [],
+                [simple_strategy()],
+            )
+
+        winner = result["winner"]
+        self.assertEqual(winner["pre_holdout_status"], "VALIDATED")
+        self.assertEqual(winner["status"], "HOLDOUT FAILED")
+        self.assertEqual(winner["holdout_metrics"]["net_pnl"], -12.0)
+        self.assertFalse(
+            winner["holdout_execution_sensitivity"]["passes_validation_gate"]
+        )
+
+
 class UrlTests(unittest.TestCase):
     def test_normalizes_watch_and_strips_playlist_tracking(self):
         self.assertEqual(
@@ -1900,6 +1962,44 @@ class DynamicExitBacktestTests(unittest.TestCase):
         self.assertEqual(trade["reason"], "Stop loss")
         self.assertIsNone(trade["target_price"])
         self.assertGreater(trade["pnl"], 0)
+
+    def test_close_based_vwap_exit_fills_at_next_bar_open(self):
+        rows = [
+            bar(18, 0, 10.0, 10.1, 9.9, 10.0),
+            bar(18, 1, 10.0, 11.2, 9.8, 11.0),
+            bar(18, 2, 9.0, 9.3, 8.9, 9.1),
+        ]
+        strategy = simple_strategy(
+            max_price=10.5,
+            stop_loss_pct=50,
+            reward_risk=None,
+            exit_below_vwap=True,
+        )
+        prepared = engine.add_indicators(engine.bars_to_frame(rows), strategy)
+        prepared.loc[1, "vwap"] = 12.0
+
+        result = engine.run_backtest(
+            rows,
+            strategy,
+            "TEST",
+            engine.BacktestSettings(
+                spread_bps=0,
+                slippage_bps=0,
+                max_concurrent_positions=1,
+                allow_extended_hours=False,
+            ),
+            prepared_indicators=prepared,
+        )
+
+        self.assertEqual(result["metrics"]["trade_count"], 1)
+        trade = result["trades"][0]
+        self.assertEqual(trade["reason"], "VWAP loss")
+        self.assertEqual(trade["entry_price"], 10.0)
+        self.assertEqual(trade["exit_price"], 9.0)
+        self.assertEqual(
+            trade["exit_time"],
+            rows[2]["t"],
+        )
 
     def test_breakeven_rule_moves_stop_after_r_trigger(self):
         rows = [
