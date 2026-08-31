@@ -233,6 +233,7 @@ from youtube_strategy_engine import (
     normalize_machine_rules,
     optimize_stock_strategies,
     safe_float,
+    split_safe_raw_research_rows,
     utc_now,
 )
 
@@ -2739,6 +2740,7 @@ if module == "Stock Strategy Finder":
                 start=finder_start,
                 end=finder_end,
                 timeframe="1Min",
+                adjustment="raw",
                 max_pages=300,
                 progress=finder_history_progress,
             )
@@ -2746,8 +2748,31 @@ if module == "Stock Strategy Finder":
             if not finder_rows:
                 raise AppError(f"No usable historical bars were returned for {finder_symbol}.")
 
+            split_actions = market.split_actions(
+                [finder_symbol],
+                start=finder_start,
+                end=finder_end,
+            )
+            finder_rows, split_guard = split_safe_raw_research_rows(
+                finder_rows,
+                split_actions,
+                finder_symbol,
+            )
+            if not finder_rows:
+                raise AppError(
+                    f"No split-safe raw-price history remained for {finder_symbol}."
+                )
+            checkpoint_record["market_data_integrity"] = split_guard
+            if split_guard.get("split_detected"):
+                finder_status.write(
+                    "Corporate-action integrity guard · raw prices preserved · "
+                    f"research restarted at {split_guard.get('latest_split_date')} "
+                    f"after discarding {int(split_guard.get('discarded_pre_split_rows') or 0):,} "
+                    "pre-split candles"
+                )
+
             finder_status.write(
-                f"Historical bars ready · {len(finder_rows):,} one-minute candles · "
+                f"Historical bars ready · {len(finder_rows):,} split-safe raw-price one-minute candles · "
                 f"{len(finder_candidates)} strategy families queued"
             )
             checkpoint_record["progress"] = max(float(checkpoint_record.get("progress") or 0.0), 0.16)
