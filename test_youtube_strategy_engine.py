@@ -1824,6 +1824,35 @@ class ProviderTests(unittest.TestCase):
         self.assertIn("stock_dividend", mocked.call_args.args[1]["types"])
         self.assertIn("spin_off", mocked.call_args.args[1]["types"])
 
+    def test_research_reset_actions_pad_process_date_but_filter_on_ex_date(self):
+        market = engine.AlpacaMarketData("key", "secret")
+        response = {
+            "corporate_actions": {
+                "forward_splits": [
+                    {"symbol": "TEST", "ex_date": "2026-08-20"},
+                    {"symbol": "TEST", "ex_date": "2026-07-01"},
+                ]
+            },
+            "next_page_token": None,
+        }
+        start = datetime(2026, 8, 18, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 22, tzinfo=timezone.utc)
+        with patch.object(market, "_get", return_value=response) as mocked:
+            actions = market.research_reset_actions(
+                ["TEST"],
+                start=start,
+                end=end,
+            )
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["ex_date"], "2026-08-20")
+        params = mocked.call_args.args[1]
+        self.assertEqual(params["start"], "2025-08-17")
+        self.assertGreaterEqual(
+            date.fromisoformat(params["end"]),
+            date(2026, 8, 22),
+        )
+
     def test_raw_rows_restart_at_stock_dividend_without_claiming_split(self):
         rows = [
             bar(18, 0, 10, 10.1, 9.9, 10),
