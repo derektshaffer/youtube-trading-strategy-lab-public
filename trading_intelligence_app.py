@@ -2756,7 +2756,7 @@ if module == "Stock Strategy Finder":
             if not finder_rows:
                 raise AppError(f"No usable historical bars were returned for {finder_symbol}.")
 
-            split_actions = market.split_actions(
+            split_actions = market.research_reset_actions(
                 [finder_symbol],
                 start=finder_start,
                 end=finder_end,
@@ -2771,7 +2771,7 @@ if module == "Stock Strategy Finder":
                     f"No split-safe raw-price history remained for {finder_symbol}."
                 )
             checkpoint_record["market_data_integrity"] = split_guard
-            if split_guard.get("split_detected"):
+            if split_guard.get("corporate_action_reset_detected"):
                 finder_status.write(
                     "Corporate-action integrity guard · raw prices preserved · "
                     f"research restarted at {split_guard.get('latest_split_date')} "
@@ -3046,8 +3046,8 @@ if module == "Stock Strategy Finder":
         integrity_cols[2].metric(
             "Price-history contract",
             (
-                "Raw · post-split"
-                if finder_market_integrity.get("split_detected")
+                "Raw · post-action"
+                if finder_market_integrity.get("corporate_action_reset_detected")
                 else "Raw"
             ),
         )
@@ -3568,7 +3568,7 @@ elif module == "Retrospective Learning":
                         raise AppError(
                             f"No historical bars were returned for {teacher_symbol}."
                         )
-                    split_actions = market.split_actions(
+                    split_actions = market.research_reset_actions(
                         [teacher_symbol],
                         start=teacher_start,
                         end=teacher_end,
@@ -3582,7 +3582,7 @@ elif module == "Retrospective Learning":
                         raise AppError(
                             f"No split-safe raw-price history remained for {teacher_symbol}."
                         )
-                    if teacher_market_data_integrity.get("split_detected"):
+                    if teacher_market_data_integrity.get("corporate_action_reset_detected"):
                         teacher_status.write(
                             "Corporate-action integrity guard · teaching history restarted at "
                             f"{teacher_market_data_integrity.get('latest_split_date')}."
@@ -6644,7 +6644,7 @@ elif module == "Strategy Lab":
                 if not rows:
                     raise AppError(f"No historical {timeframe} candles were returned for {ticker}.")
 
-                split_actions = market.split_actions(
+                split_actions = market.research_reset_actions(
                     [ticker],
                     start=start_time,
                     end=end_time,
@@ -6658,7 +6658,7 @@ elif module == "Strategy Lab":
                     raise AppError(
                         f"No split-safe raw-price history remained for {ticker}."
                     )
-                if lab_market_data_integrity.get("split_detected"):
+                if lab_market_data_integrity.get("corporate_action_reset_detected"):
                     update_task_bar(
                         task_bar,
                         lab_monitor,
@@ -6972,7 +6972,7 @@ elif module == "Strategy Lab":
             )
             integrity_cols[2].metric(
                 "Price-history contract",
-                "Raw · post-split" if lab_market_display.get("split_detected") else "Raw",
+                "Raw · post-action" if lab_market_display.get("corporate_action_reset_detected") else "Raw",
             )
             if not lab_reuse_display.get("pristine", True):
                 st.warning(str(lab_reuse_display.get("note") or "Final holdout has been reused."))
@@ -7352,7 +7352,7 @@ elif module == "Universe Research":
                     max_pages=40,
                     progress=universe_history_progress,
                 )
-                split_actions = market.split_actions(
+                split_actions = market.research_reset_actions(
                     universe_symbols,
                     start=start_time,
                     end=end_time,
@@ -7509,8 +7509,8 @@ elif module == "Validation":
                     ),
                     "Real spread audit": spread_audit.get("status") or "—",
                     "Price history": (
-                        "Raw · post-split"
-                        if market_integrity.get("split_detected")
+                        "Raw · post-action"
+                        if market_integrity.get("corporate_action_reset_detected")
                         else ("Raw" if market_integrity else "Legacy/unknown")
                     ),
                 }
