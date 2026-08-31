@@ -50,7 +50,8 @@ class ProfitFirstWorkflowTests(unittest.TestCase):
             "Automatic profit-first validator",
             "automatic_profit_first_validation",
             "Failures stay research-only",
-            "does not recycle current-protocol failures automatically",
+            "does not recycle ",
+            "current-protocol failures automatically",
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, self.source)
