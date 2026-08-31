@@ -1,5 +1,5 @@
 import unittest
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import patch
 
 import trading_market_discovery as discovery
@@ -36,6 +36,48 @@ class FakeMarket:
 
 
 class MarketDiscoveryTests(unittest.TestCase):
+    def test_strategy_preparation_drops_current_partial_five_minute_bucket(self):
+        strategy = {
+            "_finder_timeframe": "5Min",
+            "optimized_backtest_settings": {"allow_extended_hours": True},
+        }
+        rows = []
+        for minute in range(7):
+            local = datetime(2026, 8, 31, 14, 30, tzinfo=discovery.ET) + timedelta(minutes=minute)
+            rows.append(
+                {
+                    "t": local.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "o": 10.0 + minute / 10,
+                    "h": 10.2 + minute / 10,
+                    "l": 9.9 + minute / 10,
+                    "c": 10.1 + minute / 10,
+                    "v": 100,
+                }
+            )
+        now = datetime(2026, 8, 31, 14, 37, 30, tzinfo=discovery.ET)
+        prepared = discovery._prepare_strategy_intraday_rows(
+            rows,
+            strategy,
+            now=now,
+        )
+        self.assertEqual(len(prepared), 1)
+        self.assertEqual(prepared[0]["c"], rows[4]["c"])
+
+    def test_completed_intraday_rows_excludes_current_one_minute_bar(self):
+        prior = datetime(2026, 8, 31, 14, 36, tzinfo=discovery.ET)
+        current = datetime(2026, 8, 31, 14, 37, tzinfo=discovery.ET)
+        rows = [
+            {"t": prior.astimezone(timezone.utc).isoformat(), "c": 10.0},
+            {"t": current.astimezone(timezone.utc).isoformat(), "c": 11.0},
+        ]
+        completed = discovery._completed_intraday_rows(
+            rows,
+            "1Min",
+            now=current + timedelta(seconds=30),
+        )
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0]["c"], 10.0)
+
     def test_strategy_live_timeframe_prefers_finder_winner_interval(self):
         self.assertEqual(
             discovery._strategy_live_timeframe({"_finder_timeframe": "15Min"}),
