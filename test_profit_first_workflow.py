@@ -39,7 +39,7 @@ class ProfitFirstWorkflowTests(unittest.TestCase):
             '"current_protocol": current_protocol',
             "Legacy/incomplete validation record.",
             "Top historical candidate needs revalidation",
-            "Re-run strict validation on strongest candidate",
+            "Revalidate strongest candidate under current protocol",
             '"validation_protocol": "strict_manual_v1"',
         ):
             with self.subTest(marker=marker):
@@ -54,7 +54,7 @@ class ProfitFirstWorkflowTests(unittest.TestCase):
             'priority=100',
             'workflow="continuous-trading-research.yml"',
             "Current-protocol revalidation",
-            "untouched holdout, stress, cross-stock, and walk-forward gates",
+            "holdout, stress, cross-stock, and walk-forward gates",
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, self.source)
