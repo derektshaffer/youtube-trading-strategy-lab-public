@@ -5318,9 +5318,12 @@ elif module == "Strategy Integrity":
             {
                 "Strategy family": strategy.get("name") or "Unnamed strategy",
                 "Backtester match": report.get("label"),
-                "Rules represented %": safe_float(report.get("coverage_pct"), 0.0) or 0.0,
-                "Rules represented": int(report.get("modeled_count") or 0),
-                "Rules detected": int(report.get("requirement_count") or 0),
+                "Rules modeled": (
+                    f"{int(report.get('modeled_count') or 0)} of "
+                    f"{int(report.get('requirement_count') or 0)} "
+                    f"({safe_float(report.get('coverage_pct'), 0.0) or 0.0:.1f}%)"
+                ),
+                "Coverage sort": safe_float(report.get("coverage_pct"), 0.0) or 0.0,
                 "Important rules missing": int(report.get("critical_missing_count") or 0),
                 "Missing exit rules": int((dimensions.get("exit") or {}).get("missing") or 0),
                 "Missing stock-selection rules": int((dimensions.get("universe") or {}).get("missing") or 0),
@@ -5335,7 +5338,7 @@ elif module == "Strategy Integrity":
         faithful = sum(1 for row in integrity_rows if row["Backtester match"] == "FULLY MODELED FOR CURRENT REQUIREMENTS")
         partial = sum(1 for row in integrity_rows if row["Backtester match"] == "PARTIALLY MODELED")
         blocked = sum(1 for row in integrity_rows if row["Backtester match"] == "IMPORTANT LOGIC NOT MODELED")
-        average_coverage = sum(float(row["Rules represented %"]) for row in integrity_rows) / max(1, len(integrity_rows))
+        average_coverage = sum(float(row["Coverage sort"]) for row in integrity_rows) / max(1, len(integrity_rows))
 
         audit_cols = st.columns(4)
         audit_cols[0].metric("Strategies fully represented", faithful)
@@ -5363,9 +5366,11 @@ elif module == "Strategy Integrity":
             st.success("The currently detected defining requirements are represented by the backtester.")
 
         audit_frame = pd.DataFrame(integrity_rows).sort_values(
-            by=["Important rules missing", "Rules represented %"],
+            by=["Important rules missing", "Coverage sort"],
             ascending=[False, True],
         )
+        if "Coverage sort" in audit_frame.columns:
+            audit_frame = audit_frame.drop(columns=["Coverage sort"])
         st.dataframe(audit_frame, width="stretch", hide_index=True)
 
         # Audit raw source variations too. A minority exit/selection variation can
@@ -5444,7 +5449,7 @@ elif module == "Strategy Integrity":
             )
 
         strategy_options = {
-            f"{row['Strategy family']} · {row['Backtester match']} · {row['Rules represented %']:.0f}% represented": row
+            f"{row['Strategy family']} · {row['Backtester match']} · {row['Rules modeled']}": row
             for row in integrity_rows
         }
         selected_label = st.selectbox(
