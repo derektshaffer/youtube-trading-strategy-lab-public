@@ -4579,7 +4579,21 @@ def run_backtest(
         for position in positions:
             raw_exit: float | None = None
             reason: str | None = None
-            if low <= position["stop_price"]:
+
+            # A maximum holding period is known before the current candle begins.
+            # Once the threshold has elapsed, exit at this candle's open rather
+            # than looking through the candle and granting a same-close fill.
+            held_minutes_at_open = (
+                current["timestamp"] - position["entry_time"]
+            ).total_seconds() / 60.0
+            if (
+                max_hold is not None
+                and position["entry_time"] < current["timestamp"]
+                and held_minutes_at_open >= max_hold
+            ):
+                raw_exit = bar_open
+                reason = "Time limit"
+            elif low <= position["stop_price"]:
                 raw_exit = min(bar_open, position["stop_price"])
                 reason = "Stop loss"
             else:
@@ -4627,11 +4641,6 @@ def run_backtest(
                 if position.get("target_price") is not None and high >= float(position["target_price"]):
                     raw_exit = max(bar_open, float(position["target_price"]))
                     reason = "Profit target"
-            if reason is None and max_hold is not None:
-                held_minutes = (current["timestamp"] - position["entry_time"]).total_seconds() / 60.0
-                if held_minutes >= max_hold:
-                    raw_exit = float(current["close"])
-                    reason = "Time limit"
             if reason and raw_exit is not None:
                 close_position(position, raw_exit, current["timestamp"], reason)
             else:
