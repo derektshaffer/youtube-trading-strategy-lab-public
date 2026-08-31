@@ -2530,35 +2530,46 @@ if module == "Stock Strategy Finder":
             "profile": finder_profile.name,
             "requested_from": "Stock Strategy Finder",
         }
+        queued_job = None
+        queue_error = ""
         try:
-            queued_library, queued_job = enqueue_research_job(
-                load_library(force_cloud_refresh=True, mutable=True),
-                "stock_finder",
-                queue_payload,
-                priority=90 if finder_profile.name == "Very Deep" else 75,
-                dedupe_key=f"stock-finder:{finder_symbol}:{finder_profile.name}",
-                max_attempts=2,
-            )
+            try:
+                queued_library, queued_job = enqueue_research_job(
+                    load_library(force_cloud_refresh=True, mutable=True),
+                    "stock_finder",
+                    queue_payload,
+                    priority=90 if finder_profile.name == "Very Deep" else 75,
+                    dedupe_key=f"stock-finder:{finder_symbol}:{finder_profile.name}",
+                    max_attempts=2,
+                )
+            except AppError as exc:
+                # Streamlit can hot-deploy this page while an older helper remains
+                # cached. Load the current source under a private versioned name;
+                # never replace a shared sys.modules entry during a page rerun.
+                if "Unsupported research job type" not in str(exc):
+                    raise
+                _research_orchestrator = load_current_source_module(
+                    "trading_research_orchestrator"
+                )
+                queued_library, queued_job = _research_orchestrator.enqueue_research_job(
+                    load_library(force_cloud_refresh=True, mutable=True),
+                    "stock_finder",
+                    queue_payload,
+                    priority=90 if finder_profile.name == "Very Deep" else 75,
+                    dedupe_key=f"stock-finder:{finder_symbol}:{finder_profile.name}",
+                    max_attempts=2,
+                )
+            if queued_job:
+                intelligence_store().save(queued_library)
         except AppError as exc:
-            # Streamlit can hot-deploy this page while an older helper remains
-            # cached. Load the current source under a private versioned name;
-            # never replace a shared sys.modules entry during a page rerun.
-            if "Unsupported research job type" not in str(exc):
-                raise
-            _research_orchestrator = load_current_source_module(
-                "trading_research_orchestrator"
-            )
-            queued_library, queued_job = _research_orchestrator.enqueue_research_job(
-                load_library(force_cloud_refresh=True, mutable=True),
-                "stock_finder",
-                queue_payload,
-                priority=90 if finder_profile.name == "Very Deep" else 75,
-                dedupe_key=f"stock-finder:{finder_symbol}:{finder_profile.name}",
-                max_attempts=2,
-            )
+            queue_error = str(exc)
 
-        if queued_job:
-            intelligence_store().save(queued_library)
+        if queue_error:
+            st.error(
+                "Cloud Finder could not confirm a durable queue update. "
+                f"No automatic retry was started: {queue_error}"
+            )
+        elif queued_job:
             actions_token = setting("GITHUB_ACTIONS_TOKEN")
             actions_repository = setting(
                 "GITHUB_ACTIONS_REPOSITORY",
