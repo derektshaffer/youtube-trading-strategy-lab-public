@@ -195,11 +195,13 @@ class MarketDataFreshnessTests(unittest.TestCase):
 
     def test_dynamic_exit_strategy_is_blocked_before_broker_client(self):
         strategy = valid_strategy()
-        strategy["machine_rules"] = {
+        dynamic_rules = {
             "stop_loss_pct": 5.0,
             "reward_risk": 2.0,
             "trailing_stop_pct": 3.0,
         }
+        strategy["machine_rules"] = dict(dynamic_rules)
+        strategy["validated_rules"] = dict(dynamic_rules)
         with patch.object(
             runner,
             "paper_client",
