@@ -5341,7 +5341,12 @@ elif module == "Strategy Integrity":
         audit_cols[0].metric("Strategies fully represented", faithful)
         audit_cols[1].metric("Strategies partly represented", partial)
         audit_cols[2].metric("Strategies with critical gaps", blocked)
-        audit_cols[3].metric("Average rules represented", f"{average_coverage:.1f}%")
+        audit_cols[3].metric("Avg. strategy rules reproduced", f"{average_coverage:.1f}%")
+        st.caption(
+            f"{average_coverage:.1f}% means the backtester can reproduce about "
+            f"{average_coverage:.0f}% of the detected strategy rules on average. "
+            "This is not a profitability, accuracy, confidence, or win-rate score."
+        )
 
         if blocked:
             st.error(
