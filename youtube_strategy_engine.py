@@ -4390,12 +4390,17 @@ def add_indicators(frame: pd.DataFrame, strategy: dict[str, Any]) -> pd.DataFram
     ).min(axis=1)
     data.loc[crosses_ema, "fast_ema_touch_distance_pct"] = 0.0
 
-    tolerance = safe_float(rules.get("pullback_touch_tolerance_pct"), 0.5) or 0.5
-    fast_touch = (
-        data["fast_ema"].notna()
-        & data["fast_ema_touch_distance_pct"].notna()
-        & (data["fast_ema_touch_distance_pct"] <= float(tolerance))
-    )
+    tolerance = safe_float(rules.get("pullback_touch_tolerance_pct"))
+    if tolerance is None:
+        # Fail closed: a qualitative "near the EMA" requirement must not acquire
+        # an undeclared numeric tolerance inside the backtester.
+        fast_touch = pd.Series(False, index=data.index, dtype=bool)
+    else:
+        fast_touch = (
+            data["fast_ema"].notna()
+            & data["fast_ema_touch_distance_pct"].notna()
+            & (data["fast_ema_touch_distance_pct"] <= float(tolerance))
+        )
     prior_touch = fast_touch.groupby(data["session"], sort=False).shift(1).fillna(False).astype(bool)
     touch_start = fast_touch & ~prior_touch
     data["fast_ema_pullback_number"] = (
@@ -4492,12 +4497,17 @@ def apply_strategy_specific_indicators(
     ).min(axis=1)
     data.loc[crosses_ema, "fast_ema_touch_distance_pct"] = 0.0
 
-    tolerance = safe_float(rules.get("pullback_touch_tolerance_pct"), 0.5) or 0.5
-    fast_touch = (
-        data["fast_ema"].notna()
-        & data["fast_ema_touch_distance_pct"].notna()
-        & (data["fast_ema_touch_distance_pct"] <= float(tolerance))
-    )
+    tolerance = safe_float(rules.get("pullback_touch_tolerance_pct"))
+    if tolerance is None:
+        # Fail closed: a qualitative "near the EMA" requirement must not acquire
+        # an undeclared numeric tolerance inside the backtester.
+        fast_touch = pd.Series(False, index=data.index, dtype=bool)
+    else:
+        fast_touch = (
+            data["fast_ema"].notna()
+            & data["fast_ema_touch_distance_pct"].notna()
+            & (data["fast_ema_touch_distance_pct"] <= float(tolerance))
+        )
     prior_touch = fast_touch.groupby(data["session"], sort=False).shift(1).fillna(False).astype(bool)
     touch_start = fast_touch & ~prior_touch
     data["fast_ema_pullback_number"] = (
@@ -4536,6 +4546,15 @@ def backtest_limitations(strategy: dict[str, Any]) -> list[str]:
         )
     if str(strategy.get("direction", "long")).lower() not in {"long", "both"}:
         limitations.append("This release evaluates long trades only; short-only strategies cannot be backtested.")
+    if (
+        rules.get("require_fast_ema_pullback") is True
+        and rules.get("pullback_touch_tolerance_pct") is None
+    ):
+        limitations.append(
+            "The source requires a fast-EMA pullback but did not specify an exact proximity; "
+            "the backtester now fails that condition closed until a labeled research assumption "
+            "or source-supported tolerance is supplied."
+        )
     if rules.get("stop_below_fast_ema") is True:
         if rules.get("stop_ema_buffer_pct") is None:
             limitations.append(
@@ -5348,9 +5367,15 @@ def run_backtest(
                 stop_price = entry * (1.0 - stop_pct / 100.0)
                 if rules.get("stop_below_fast_ema") is True:
                     signal_ema = safe_float(previous.get("fast_ema"))
-                    if signal_ema is not None and signal_ema > 0:
-                        ema_buffer = max(0.0, safe_float(rules.get("stop_ema_buffer_pct"), 0.0) or 0.0)
-                        structural_stop = signal_ema * (1.0 - ema_buffer / 100.0)
+                    ema_buffer = safe_float(rules.get("stop_ema_buffer_pct"))
+                    if (
+                        signal_ema is not None
+                        and signal_ema > 0
+                        and ema_buffer is not None
+                    ):
+                        structural_stop = signal_ema * (
+                            1.0 - max(0.0, ema_buffer) / 100.0
+                        )
                         if 0 < structural_stop < entry:
                             stop_price = structural_stop
                 if rules.get("stop_below_avwap") is True:
