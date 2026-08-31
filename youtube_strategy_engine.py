@@ -69,10 +69,12 @@ GITHUB_CONTENTS_API_SAFE_BYTES = 1_000_000
 # from the current day remains live/fresh. A short TTL also protects against
 # retroactive adjustment changes (for example, same-day split processing).
 ALPACA_BAR_HISTORY_CACHE_MAX_ENTRIES = 64
+ALPACA_BAR_HISTORY_CACHE_MAX_ROWS_PER_ENTRY = 75_000
+ALPACA_BAR_HISTORY_CACHE_MAX_TOTAL_ROWS = 150_000
 ALPACA_BAR_HISTORY_CACHE_TTL_SECONDS = 15 * 60
 _ALPACA_BAR_HISTORY_CACHE: OrderedDict[
     tuple[Any, ...],
-    tuple[float, dict[str, list[dict[str, Any]]]],
+    tuple[float, int, dict[str, list[dict[str, Any]]]],
 ] = OrderedDict()
 _ALPACA_BAR_HISTORY_CACHE_LOCK = RLock()
 MAX_AUTOMATIC_BACKUPS = 30
@@ -3392,7 +3394,7 @@ class AlpacaMarketData:
             cached = _ALPACA_BAR_HISTORY_CACHE.get(key)
             if cached is None:
                 return None
-            saved_at, payload = cached
+            saved_at, _row_count, payload = cached
             if now_monotonic - saved_at > ALPACA_BAR_HISTORY_CACHE_TTL_SECONDS:
                 _ALPACA_BAR_HISTORY_CACHE.pop(key, None)
                 return None
@@ -3407,14 +3409,32 @@ class AlpacaMarketData:
         key: tuple[Any, ...],
         payload: dict[str, list[dict[str, Any]]],
     ) -> None:
+        row_count = sum(
+            len(rows)
+            for rows in payload.values()
+            if isinstance(rows, list)
+        )
+        # Deep research can return millions of one-minute rows. The shared cache is
+        # a latency optimization, not a second in-memory research database, so skip
+        # oversized entries rather than risking Streamlit/worker memory pressure.
+        if row_count > ALPACA_BAR_HISTORY_CACHE_MAX_ROWS_PER_ENTRY:
+            return
+
         stored = {
             symbol: [dict(row) for row in rows]
             for symbol, rows in payload.items()
         }
         with _ALPACA_BAR_HISTORY_CACHE_LOCK:
-            _ALPACA_BAR_HISTORY_CACHE[key] = (monotonic(), stored)
+            _ALPACA_BAR_HISTORY_CACHE[key] = (monotonic(), row_count, stored)
             _ALPACA_BAR_HISTORY_CACHE.move_to_end(key)
-            while len(_ALPACA_BAR_HISTORY_CACHE) > ALPACA_BAR_HISTORY_CACHE_MAX_ENTRIES:
+
+            def cached_rows() -> int:
+                return sum(item[1] for item in _ALPACA_BAR_HISTORY_CACHE.values())
+
+            while (
+                len(_ALPACA_BAR_HISTORY_CACHE) > ALPACA_BAR_HISTORY_CACHE_MAX_ENTRIES
+                or cached_rows() > ALPACA_BAR_HISTORY_CACHE_MAX_TOTAL_ROWS
+            ):
                 _ALPACA_BAR_HISTORY_CACHE.popitem(last=False)
 
     @staticmethod
