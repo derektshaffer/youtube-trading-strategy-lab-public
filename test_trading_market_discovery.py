@@ -35,6 +35,24 @@ class FakeMarket:
 
 
 class MarketDiscoveryTests(unittest.TestCase):
+    def test_chart_data_gate_covers_live_chart_dependent_rules(self):
+        for rule_name, rule_value in (
+            ("previous_day_high_breakout", True),
+            ("min_previous_day_volume_ratio", 1.5),
+            ("min_previous_day_change_pct", 5.0),
+            ("avwap_anchor_mode", "session_open"),
+            ("require_price_above_avwap", True),
+            ("require_fast_ema_pullback", True),
+            ("require_price_above_trend_ema", True),
+            ("require_pullback_breakout", True),
+        ):
+            strategy = {"machine_rules": {rule_name: rule_value}}
+            self.assertTrue(discovery._needs_chart_data(strategy), rule_name)
+
+        self.assertFalse(
+            discovery._needs_chart_data({"machine_rules": {"min_price": 1.0}})
+        )
+
     def test_multi_strategy_scan_reuses_one_market_data_pass_and_builds_features_once_per_stock(self):
         market = FakeMarket()
         strategies = [
