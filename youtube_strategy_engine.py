@@ -6,6 +6,7 @@ extract a structured hypothesis; a deterministic engine evaluates that hypothesi
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, time, timedelta, timezone
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -21,7 +22,8 @@ import shutil
 from statistics import median
 import subprocess
 import tempfile
-from time import sleep
+from threading import RLock
+from time import monotonic, sleep
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlencode, urlparse
@@ -62,6 +64,17 @@ GITHUB_API_URL = "https://api.github.com"
 # large libraries through Git data objects before the request body reaches that
 # endpoint; the current trading-intelligence library is already well above this.
 GITHUB_CONTENTS_API_SAFE_BYTES = 1_000_000
+# Repeated Analyzer/Scanner runs often ask Alpaca for the same multi-day history.
+# Cache only history that ends before the current New York calendar day; anything
+# from the current day remains live/fresh. A short TTL also protects against
+# retroactive adjustment changes (for example, same-day split processing).
+ALPACA_BAR_HISTORY_CACHE_MAX_ENTRIES = 64
+ALPACA_BAR_HISTORY_CACHE_TTL_SECONDS = 15 * 60
+_ALPACA_BAR_HISTORY_CACHE: OrderedDict[
+    tuple[Any, ...],
+    tuple[float, dict[str, list[dict[str, Any]]]],
+] = OrderedDict()
+_ALPACA_BAR_HISTORY_CACHE_LOCK = RLock()
 MAX_AUTOMATIC_BACKUPS = 30
 MAX_RECOVERY_ITEMS = 150
 MAX_STRATEGY_VERSIONS = 300
@@ -3336,26 +3349,111 @@ class AlpacaMarketData:
             data = data["snapshots"]
         return {str(symbol).upper(): snapshot for symbol, snapshot in data.items() if isinstance(snapshot, dict)}
 
-    def bars(
-        self,
+    @staticmethod
+    def _history_cache_cutoff_utc(now: datetime | None = None) -> datetime:
+        """Return the conservative boundary before which stock bars may be reused.
+
+        The current New York calendar day is never cached. That keeps premarket,
+        regular-session, and after-hours Analyzer reasoning live while still allowing
+        the expensive multi-day prefix of a request to be shared.
+        """
+        current = now or utc_now()
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=UTC)
+        current_et = current.astimezone(ET)
+        current_day_start_et = datetime.combine(current_et.date(), time.min, tzinfo=ET)
+        return current_day_start_et.astimezone(UTC)
+
+    @staticmethod
+    def _history_cache_key(
         symbols: list[str],
         *,
         start: datetime,
         end: datetime,
-        timeframe: str = "1Min",
-        feed: str | None = None,
-        adjustment: str = "split",
-        max_pages: int = 15,
+        timeframe: str,
+        feed: str,
+        adjustment: str,
+        max_pages: int,
+    ) -> tuple[Any, ...]:
+        return (
+            tuple(sorted(symbols)),
+            isoformat_utc(start),
+            isoformat_utc(end),
+            str(timeframe),
+            str(feed),
+            str(adjustment),
+            int(max_pages),
+        )
+
+    @staticmethod
+    def _history_cache_get(key: tuple[Any, ...]) -> dict[str, list[dict[str, Any]]] | None:
+        now_monotonic = monotonic()
+        with _ALPACA_BAR_HISTORY_CACHE_LOCK:
+            cached = _ALPACA_BAR_HISTORY_CACHE.get(key)
+            if cached is None:
+                return None
+            saved_at, payload = cached
+            if now_monotonic - saved_at > ALPACA_BAR_HISTORY_CACHE_TTL_SECONDS:
+                _ALPACA_BAR_HISTORY_CACHE.pop(key, None)
+                return None
+            _ALPACA_BAR_HISTORY_CACHE.move_to_end(key)
+            return {
+                symbol: [dict(row) for row in rows]
+                for symbol, rows in payload.items()
+            }
+
+    @staticmethod
+    def _history_cache_put(
+        key: tuple[Any, ...],
+        payload: dict[str, list[dict[str, Any]]],
+    ) -> None:
+        stored = {
+            symbol: [dict(row) for row in rows]
+            for symbol, rows in payload.items()
+        }
+        with _ALPACA_BAR_HISTORY_CACHE_LOCK:
+            _ALPACA_BAR_HISTORY_CACHE[key] = (monotonic(), stored)
+            _ALPACA_BAR_HISTORY_CACHE.move_to_end(key)
+            while len(_ALPACA_BAR_HISTORY_CACHE) > ALPACA_BAR_HISTORY_CACHE_MAX_ENTRIES:
+                _ALPACA_BAR_HISTORY_CACHE.popitem(last=False)
+
+    @staticmethod
+    def _merge_bar_maps(
+        symbols: list[str],
+        *chunks: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, list[dict[str, Any]]]:
+        merged: dict[str, list[dict[str, Any]]] = {symbol: [] for symbol in symbols}
+        for symbol in symbols:
+            by_timestamp: dict[str, dict[str, Any]] = {}
+            untimestamped: list[dict[str, Any]] = []
+            for chunk in chunks:
+                for row in chunk.get(symbol, []) or []:
+                    if not isinstance(row, dict):
+                        continue
+                    timestamp = str(row.get("t") or "")
+                    if timestamp:
+                        # Later chunks are fresher and intentionally win at a shared boundary.
+                        by_timestamp[timestamp] = row
+                    else:
+                        untimestamped.append(row)
+            merged[symbol] = [
+                dict(by_timestamp[timestamp])
+                for timestamp in sorted(by_timestamp)
+            ] + [dict(row) for row in untimestamped]
+        return merged
+
+    def _fetch_bars_uncached(
+        self,
+        clean: list[str],
+        *,
+        start: datetime,
+        end: datetime,
+        timeframe: str,
+        chosen_feed: str,
+        chosen_adjustment: str,
+        max_pages: int,
         progress: Callable[[int], None] | None = None,
     ) -> dict[str, list[dict[str, Any]]]:
-        clean = parse_symbols(symbols)
-        if not clean:
-            return {}
-        chosen_feed = feed or self.historical_feed
-        chosen_adjustment = str(adjustment or "split").strip().lower()
-        allowed_adjustments = {"raw", "split", "dividend", "spin-off", "all", "split,spin-off"}
-        if chosen_adjustment not in allowed_adjustments:
-            raise AppError("Choose a supported historical bar adjustment mode.")
         merged = {symbol: [] for symbol in clean}
         page_token: str | None = None
         seen_tokens: set[str] = set()
@@ -3400,6 +3498,86 @@ class AlpacaMarketData:
                 "a shorter period, or a larger candle interval."
             )
         return merged
+
+    def bars(
+        self,
+        symbols: list[str],
+        *,
+        start: datetime,
+        end: datetime,
+        timeframe: str = "1Min",
+        feed: str | None = None,
+        adjustment: str = "split",
+        max_pages: int = 15,
+        progress: Callable[[int], None] | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        clean = parse_symbols(symbols)
+        if not clean:
+            return {}
+        chosen_feed = feed or self.historical_feed
+        chosen_adjustment = str(adjustment or "split").strip().lower()
+        allowed_adjustments = {"raw", "split", "dividend", "spin-off", "all", "split,spin-off"}
+        if chosen_adjustment not in allowed_adjustments:
+            raise AppError("Choose a supported historical bar adjustment mode.")
+
+        start_utc = start.replace(tzinfo=UTC) if start.tzinfo is None else start.astimezone(UTC)
+        end_utc = end.replace(tzinfo=UTC) if end.tzinfo is None else end.astimezone(UTC)
+        cache_cutoff = self._history_cache_cutoff_utc()
+
+        def historical_chunk(chunk_start: datetime, chunk_end: datetime) -> dict[str, list[dict[str, Any]]]:
+            cache_key = self._history_cache_key(
+                clean,
+                start=chunk_start,
+                end=chunk_end,
+                timeframe=timeframe,
+                feed=chosen_feed,
+                adjustment=chosen_adjustment,
+                max_pages=max_pages,
+            )
+            cached = self._history_cache_get(cache_key)
+            if cached is not None:
+                return cached
+            fetched = self._fetch_bars_uncached(
+                clean,
+                start=chunk_start,
+                end=chunk_end,
+                timeframe=timeframe,
+                chosen_feed=chosen_feed,
+                chosen_adjustment=chosen_adjustment,
+                max_pages=max_pages,
+                progress=progress,
+            )
+            self._history_cache_put(cache_key, fetched)
+            return fetched
+
+        if end_utc <= cache_cutoff:
+            return historical_chunk(start_utc, end_utc)
+
+        if start_utc < cache_cutoff < end_utc:
+            historical = historical_chunk(start_utc, cache_cutoff)
+            current_session = self._fetch_bars_uncached(
+                clean,
+                start=cache_cutoff,
+                end=end_utc,
+                timeframe=timeframe,
+                chosen_feed=chosen_feed,
+                chosen_adjustment=chosen_adjustment,
+                max_pages=max_pages,
+                progress=progress,
+            )
+            return self._merge_bar_maps(clean, historical, current_session)
+
+        # Requests wholly inside the current New York calendar day always go live.
+        return self._fetch_bars_uncached(
+            clean,
+            start=start_utc,
+            end=end_utc,
+            timeframe=timeframe,
+            chosen_feed=chosen_feed,
+            chosen_adjustment=chosen_adjustment,
+            max_pages=max_pages,
+            progress=progress,
+        )
 
     def corporate_actions(
         self,
