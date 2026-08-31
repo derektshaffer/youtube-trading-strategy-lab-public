@@ -1620,10 +1620,10 @@ WORKSPACE_PAGE_META = {
         "subtitle": "Add point-in-time news and catalyst context so momentum setups are evaluated with the reason behind the move.",
     },
     "Stock Analyzer": {
-        "step": "2–5",
+        "step": "2–4",
         "group": "Guided Strategy Workflow",
-        "title": "Current Signal → Confidence",
-        "subtitle": "Deep-dive one ticker with strategy matches, market structure, catalysts, and current setup quality.",
+        "title": "Compare → Validate → Current Setup",
+        "subtitle": "Compare the strategies Step 1 tested, validate one, then check whether its setup is active now.",
     },
     "Live / Paper": {
         "step": "13",
@@ -1715,8 +1715,35 @@ def queue_workspace_navigation(section: str) -> None:
         st.session_state.pop("til_guided_strategy_id", None)
         st.session_state.pop("til_guided_finder_run_id", None)
         st.session_state.pop("til_analyzer_strategy_id", None)
+    if section == "Strategy Lab":
+        st.session_state.pop("til_strategy_lab_candidate_payload", None)
     st.session_state["til_navigate_to"] = section
     prime_action_feedback(_route_loading_label(section))
+
+
+def queue_strategy_validation_from_analyzer(
+    symbol: str,
+    strategy: dict[str, Any] | None,
+) -> None:
+    ticker = str(symbol or "").strip().upper()
+    payload = dict(strategy or {})
+    if ticker:
+        st.session_state["til_strategy_lab_ticker"] = ticker
+    if payload.get("id"):
+        st.session_state["til_strategy_lab_candidate_payload"] = payload
+        st.session_state["til_selected_strategy_id"] = str(payload.get("id") or "")
+    st.session_state["til_navigate_to"] = "Strategy Lab"
+    prime_action_feedback(f"Opening strict validation for {ticker or 'this stock'}…")
+
+
+def queue_paper_test_from_analyzer(symbol: str, strategy_id: str = "") -> None:
+    ticker = str(symbol or "").strip().upper()
+    if strategy_id:
+        st.session_state["til_selected_strategy_id"] = str(strategy_id)
+    if ticker:
+        st.session_state["til_analyzer_ticker"] = ticker
+    st.session_state["til_navigate_to"] = "Live / Paper"
+    prime_action_feedback(f"Opening paper testing for {ticker or 'this stock'}…")
 
 
 def queue_stock_analyzer_from_finder(
@@ -1744,11 +1771,11 @@ def queue_stock_analyzer_from_finder(
 
 def render_guided_strategy_flow(active_step: int = 1) -> None:
     steps = [
-        (1, "Find", "Find and historically test the best strategy."),
-        (2, "Current Signal", "Check whether the stock matches it right now."),
-        (3, "Why It Matched", "See the rules that are passing or failing."),
-        (4, "Validation", "See whether the strategy survived unseen-data tests."),
-        (5, "Confidence", "Judge evidence strength without treating it as a win probability."),
+        (1, "Search", "Test strategy families historically for this stock."),
+        (2, "Compare", "Review the ranked candidates from the search."),
+        (3, "Validate", "Try to break the selected candidate on unseen data."),
+        (4, "Current Setup", "Check whether a validated setup is present now."),
+        (5, "Paper Test", "Track real-time results before risking real money."),
     ]
     cards = []
     current = max(1, min(5, int(active_step or 1)))
@@ -3380,12 +3407,12 @@ if module == "Stock Strategy Finder":
         result_cols[5].metric("Nearby settings profitable", f"{safe_float(stability.get('positive_pct'), 0.0):.0f}%")
 
         st.success(
-            f"Step 1 complete: {finder_symbol} has a tested strategy candidate. Next, check whether that setup matches the stock right now."
+            f"Step 1 complete: {finder_symbol} now has ranked historical strategy candidates. Next, compare them and choose one to validate."
         )
         render_guided_strategy_flow(active_step=2)
-        st.markdown("### Step 2 — Current Signal")
+        st.markdown("### Step 2 — Compare the tested strategies")
         st.caption(
-            "Historical testing tells us what worked. This next check asks whether the winning setup is actually present right now."
+            "The next page shows only strategies that Step 1 actually tested for this stock, ranked by their historical search results."
         )
         guided_strategy_id = str(
             finder_result.get("stock_specific_strategy_id")
@@ -3393,7 +3420,7 @@ if module == "Stock Strategy Finder":
             or ""
         )
         st.button(
-            f"② Check {finder_symbol} current signal →",
+            f"② Compare {finder_symbol} tested strategies →",
             type="primary",
             width="stretch",
             key="til_finder_continue_current_signal",
@@ -6969,8 +6996,20 @@ elif module == "Strategy Lab":
             "Expand the missing machine rules before treating a backtest as meaningful."
         )
     else:
+        strategy_pool = list(integrity_safe_strategies)
+        handed_candidate = st.session_state.get("til_strategy_lab_candidate_payload")
+        if isinstance(handed_candidate, dict) and handed_candidate.get("id"):
+            strategy_pool = [
+                dict(handed_candidate),
+                *[
+                    item
+                    for item in strategy_pool
+                    if str(item.get("id") or "") != str(handed_candidate.get("id") or "")
+                ],
+            ]
+
         strategy_labels: dict[str, dict[str, Any]] = {}
-        for item in integrity_safe_strategies:
+        for item in strategy_pool:
             label = f"{item.get('name') or 'Unnamed strategy'} · {source_label(item)}"
             if label in strategy_labels:
                 label += f" · {str(item.get('id') or '')[:7]}"
@@ -7031,7 +7070,12 @@ elif module == "Strategy Lab":
             )
 
         top = st.columns(4)
-        ticker = top[0].text_input("Stock ticker", value="SDOT", max_chars=10).strip().upper()
+        ticker = top[0].text_input(
+            "Stock ticker",
+            value=str(st.session_state.get("til_strategy_lab_ticker") or "SDOT"),
+            max_chars=10,
+        ).strip().upper()
+        st.session_state["til_strategy_lab_ticker"] = ticker
         history_days = top[1].slider("Historical calendar days", 7, 180, 30, 1)
         timeframe = top[2].selectbox("Candle size", ["1Min", "5Min", "15Min"], index=1)
         search_depth = top[3].selectbox(
@@ -7656,8 +7700,10 @@ elif module == "Strategy Lab":
                 )
                 data = load_library(mutable=True)
                 validation_status = "validated" if can_mark_validated else "research_only"
+                saved_strategy_found = False
                 for item in data.get("strategies") or []:
                     if str(item.get("id") or "") == winner_id:
+                        saved_strategy_found = True
                         item["validation_status"] = validation_status
                         if validation_status == "validated":
                             item["validated_rules"] = winner.get("optimized_rules") or {}
@@ -7689,6 +7735,49 @@ elif module == "Strategy Lab":
                             "holdout_sessions": list(report.get("holdout_sessions") or []),
                         }
                         break
+
+                if not saved_strategy_found:
+                    handed_candidate = st.session_state.get("til_strategy_lab_candidate_payload")
+                    if (
+                        isinstance(handed_candidate, dict)
+                        and str(handed_candidate.get("id") or "") == winner_id
+                    ):
+                        new_item = dict(handed_candidate)
+                        new_item["source_type"] = "stock_specific_finder"
+                        new_item["optimized_for_symbol"] = str(report.get("symbol") or "").upper()
+                        new_item["validation_status"] = validation_status
+                        if validation_status == "validated":
+                            new_item["validated_rules"] = winner.get("optimized_rules") or {}
+                            new_item["validated_backtest_settings"] = (
+                                winner.get("optimized_backtest_settings") or {}
+                            )
+                            new_item["validated_at"] = report.get("generated_at")
+                        else:
+                            new_item.pop("validated_rules", None)
+                            new_item.pop("validated_backtest_settings", None)
+                            new_item.pop("validated_at", None)
+                        new_item["last_validation"] = {
+                            "symbol": report.get("symbol"),
+                            "generated_at": report.get("generated_at"),
+                            "robustness_score": strength.get("score"),
+                            "robustness_label": strength.get("label"),
+                            "optimizer_status": winner.get("status"),
+                            "training_metrics": training,
+                            "validation_metrics": validation,
+                            "holdout_metrics": holdout,
+                            "stress_metrics": stress,
+                            "execution_sensitivity": development_execution_sensitivity,
+                            "holdout_execution_sensitivity": holdout_execution_sensitivity,
+                            "walk_forward_summary": (walk_report or {}).get("summary"),
+                            "parameter_stability": stability_report,
+                            "evidence_verdict": evidence_verdict,
+                            "paper_execution_fidelity": paper_fidelity,
+                            "historical_spread_audit": lab_result.get("historical_spread_audit") or {},
+                            "holdout_reuse_audit": lab_result.get("holdout_reuse_audit") or {},
+                            "market_data_integrity": lab_result.get("market_data_integrity") or {},
+                            "holdout_sessions": list(report.get("holdout_sessions") or []),
+                        }
+                        data["strategies"] = [new_item, *(data.get("strategies") or [])]
 
                 run_id = f"{winner_id}:{report.get('symbol')}:{report.get('generated_at')}"
                 record = {
@@ -10365,8 +10454,8 @@ elif module == "Market Discovery":
 elif module == "Stock Analyzer":
     render_guided_strategy_flow(active_step=2)
     st.caption(
-        "This is the live half of the guided workflow: check the current signal, see why it matched, "
-        "then review validation and evidence confidence."
+        "Use this page in order: compare the Step-1 candidates, validate the one you want to trust, "
+        "then check whether that validated setup is active right now."
     )
 
     if not integrity_safe_strategies:
@@ -10728,9 +10817,37 @@ elif module == "Stock Analyzer":
                 "Turn off Only fully validated to compare the research candidates from Step 1."
             )
 
+        st.markdown("### What should I do next?")
+        selected_is_validated = (
+            str((selected_strategy or {}).get("validation_status") or "").lower()
+            == "validated"
+        )
+        if selected_strategy is not None and not selected_is_validated:
+            st.warning(
+                "This strategy is still research-only. Its current setup can be previewed, but "
+                "you should not use that preview as evidence that the strategy is profitable. "
+                "The next real step is strict historical validation."
+            )
+            st.button(
+                "③ Validate this strategy →",
+                type="primary",
+                width="stretch",
+                key="til_validate_selected_analyzer_strategy",
+                on_click=queue_strategy_validation_from_analyzer,
+                args=(analyzer_ticker, dict(selected_strategy)),
+            )
+            st.caption(
+                "Validation uses separate unseen data, untouched holdout data, higher-cost stress tests, "
+                "parameter stability, and walk-forward evidence."
+            )
+        elif selected_strategy is not None:
+            st.success(
+                "This strategy has passed strict historical validation. Next, check whether its setup is active now."
+            )
+
         analyzer_slot = st.empty()
         analyze_stock = analyzer_slot.button(
-            "② Check current signal",
+            "④ Check current setup" if selected_is_validated else "Preview current setup (optional)",
             type="primary",
             width="stretch",
             disabled=not analyzer_ticker or not analyzer_strategies,
@@ -10854,7 +10971,7 @@ elif module == "Stock Analyzer":
             metrics = stock_result.get("metrics") or {}
             comparisons = list(stock_result.get("comparisons") or [])
             st.divider()
-            st.markdown(f"### Step 2 — Current Signal · {analyzer_ticker}")
+            st.markdown(f"### Step 4 — Current Setup · {analyzer_ticker}")
             analyzer_learning_status = (
                 st.session_state.get("til_live_learning_stock_analyzer_status") or {}
             )
@@ -10953,7 +11070,7 @@ elif module == "Stock Analyzer":
                     "Rule match tells you how many setup conditions are present right now. It is not a probability of profit."
                 )
 
-                st.markdown("### Step 3 — Why it matched")
+                st.markdown("### Why the current setup matched")
                 inspect_options = {
                     f"{item.get('strategy_name')} · {item.get('status')} · {safe_float(item.get('score'), 0.0):.0f}%": item
                     for item in comparisons
@@ -10972,7 +11089,7 @@ elif module == "Stock Analyzer":
                 else:
                     st.caption("No rule-by-rule checks were returned for this strategy match.")
 
-                st.markdown("### Step 4 — Validation")
+                st.markdown("### Historical validation status")
                 chosen_validation_raw = str(chosen.get("validation_status") or "unvalidated").strip().lower()
                 chosen_validation = chosen_validation_raw.replace("_", " ").title()
                 robustness_score = safe_float(chosen.get("robustness_score"))
@@ -10989,7 +11106,7 @@ elif module == "Stock Analyzer":
                         "This is still a research candidate. It may match the stock right now, but it has not cleared every strict validation gate."
                     )
 
-                st.markdown("### Step 5 — Confidence")
+                st.markdown("### Evidence summary")
                 confidence_cols = st.columns(2)
                 confidence_cols[0].metric(
                     "Evidence confidence",
@@ -11000,8 +11117,32 @@ elif module == "Stock Analyzer":
                     f"{safe_float(chosen.get('score'), 0.0):.0f}%",
                 )
                 st.caption(
-                    "Confidence here means strength of the evidence + current rule fit. It is not a guaranteed win rate or a probability of profit."
+                    "This combines historical evidence and today's rule fit. It is not a guaranteed win rate or probability of profit."
                 )
+
+                chosen_status = str(chosen.get("status") or "").upper()
+                if chosen_validation_raw == "validated" and chosen_status == "MATCH":
+                    st.success(
+                        "This strategy passed historical validation and its setup is active now. "
+                        "The next step is paper testing—not real-money trading."
+                    )
+                    st.button(
+                        "⑤ Open paper testing →",
+                        type="primary",
+                        width="stretch",
+                        key="til_open_paper_from_analyzer",
+                        on_click=queue_paper_test_from_analyzer,
+                        args=(analyzer_ticker, str(selected_strategy_id or "")),
+                    )
+                elif chosen_validation_raw == "validated":
+                    st.info(
+                        "The strategy is historically validated, but its full setup is not active right now. "
+                        "Wait for the setup or compare another validated candidate."
+                    )
+                else:
+                    st.warning(
+                        "Do not move to paper/live trading yet. Validate this candidate first using the button above."
+                    )
 
                 comparison_rows = []
                 for item in comparisons:
