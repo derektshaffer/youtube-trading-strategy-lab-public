@@ -345,7 +345,7 @@ def _batched_bars(
             if rows and symbol not in skipped
         ]
         split_actions = (
-            market.split_actions(
+            market.research_reset_actions(
                 usable_symbols,
                 start=start,
                 end=end,
@@ -616,7 +616,7 @@ def load_point_in_time_intraday(
                 adjustment="raw",
                 max_pages=24,
             ).get(symbol, [])
-            actions = market.split_actions(
+            actions = market.research_reset_actions(
                 [symbol],
                 start=start,
                 end=end,
