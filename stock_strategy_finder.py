@@ -1445,6 +1445,7 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
                 "historical_spread_audit": report.get("historical_spread_audit") or {},
                 "market_data_integrity": report.get("market_data_integrity") or {},
                 "holdout_reuse_audit": report.get("holdout_reuse_audit") or {},
+                "holdout_sessions": list(optimization.get("holdout_sessions") or []),
             },
         }
         if not historically_validated:
