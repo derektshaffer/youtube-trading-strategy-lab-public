@@ -755,7 +755,8 @@ def main() -> int:
     if invalidated:
         persist_store(store, data)
         print(
-            f"Marked {invalidated} legacy autonomous validation result(s) for method-v2 revalidation.",
+            f"Marked {invalidated} legacy autonomous validation result(s) for "
+            f"method-v{AUTONOMOUS_VALIDATION_METHOD_VERSION} revalidation.",
             flush=True,
         )
         data = store.load_latest()
