@@ -341,14 +341,19 @@ def _scan_strategy_universe_batch(
         )
         if rules.get("catalyst_required"):
             enriched["has_catalyst"] = bool(news_by_symbol.get(symbol))
-        if chart_rows.get(symbol) and _needs_chart_data(strategy):
+        strategy_rows = _prepare_strategy_intraday_rows(
+            chart_rows.get(symbol, []),
+            strategy,
+        )
+        if strategy_rows and _needs_chart_data(strategy):
             enriched["chart_checks"] = _strategy_chart_checks(
-                chart_rows[symbol],
+                strategy_rows,
                 strategy,
                 daily_reference,
+                prepared_rows=True,
             )
 
-        market_features = build_market_features(chart_rows.get(symbol, []))
+        market_features = build_market_features(strategy_rows)
         enriched["market_features"] = dict(market_features.get("features") or {})
         signal = match_strategy(enriched, strategy)
         results.append(
@@ -455,9 +460,26 @@ def _scan_market_strategies_batch(
             continue
         daily_reference = _completed_daily_reference(daily_rows)
 
-        market_features = build_market_features(chart_rows.get(symbol, []))
+        market_contexts: dict[
+            tuple[str, bool],
+            tuple[list[dict[str, Any]], dict[str, Any]],
+        ] = {}
         comparisons: list[dict[str, Any]] = []
         for raw, strategy in usable:
+            context_key = (
+                _strategy_live_timeframe(strategy),
+                _strategy_allows_extended_hours(strategy),
+            )
+            if context_key not in market_contexts:
+                prepared_rows = _prepare_strategy_intraday_rows(
+                    chart_rows.get(symbol, []),
+                    strategy,
+                )
+                market_contexts[context_key] = (
+                    prepared_rows,
+                    build_market_features(prepared_rows),
+                )
+            strategy_rows, strategy_market_features = market_contexts[context_key]
             rules = normalize_machine_rules(strategy.get("machine_rules"))
             enriched = dict(metrics)
             enriched.update(
@@ -469,13 +491,16 @@ def _scan_market_strategies_batch(
             )
             if rules.get("catalyst_required"):
                 enriched["has_catalyst"] = bool(news_by_symbol.get(symbol))
-            if chart_rows.get(symbol) and _needs_chart_data(strategy):
+            if strategy_rows and _needs_chart_data(strategy):
                 enriched["chart_checks"] = _strategy_chart_checks(
-                    chart_rows[symbol],
+                    strategy_rows,
                     strategy,
                     daily_reference,
+                    prepared_rows=True,
                 )
-            enriched["market_features"] = dict(market_features.get("features") or {})
+            enriched["market_features"] = dict(
+                strategy_market_features.get("features") or {}
+            )
 
             signal = match_strategy(enriched, strategy)
             validation_status = str(
@@ -501,6 +526,9 @@ def _scan_market_strategies_batch(
                     "unknown": signal.get("unknown") or 0,
                     "signal": signal,
                     "has_catalyst": enriched.get("has_catalyst"),
+                    "market_features": strategy_market_features,
+                    "timeframe": context_key[0],
+                    "allow_extended_hours": context_key[1],
                 }
             )
 
@@ -526,7 +554,9 @@ def _scan_market_strategies_batch(
             {
                 "symbol": symbol,
                 "metrics": metrics,
-                "market_features": market_features,
+                "market_features": best.get("market_features") or {},
+                "timeframe": best.get("timeframe") or "1Min",
+                "allow_extended_hours": best.get("allow_extended_hours"),
                 "best_strategy_id": best.get("strategy_id"),
                 "best_strategy_name": best.get("strategy_name"),
                 "validation_status": best.get("validation_status"),
