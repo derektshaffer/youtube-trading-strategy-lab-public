@@ -1008,7 +1008,7 @@ class StrategyIntegrityTests(unittest.TestCase):
             },
             "validated_rules": {"breakout_lookback_bars": 20},
             "last_autonomous_research": {
-                "validation_method_version": 3,
+                "validation_method_version": 4,
                 "market_data_integrity_contract": "split_safe_raw_v1",
             },
         }
