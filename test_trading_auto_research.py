@@ -67,6 +67,9 @@ class InvalidHistoricalSymbolTests(unittest.TestCase):
                     for symbol in symbols
                 }
 
+            def split_actions(self, symbols, **kwargs):
+                return []
+
         market = FakeMarket()
         skipped = []
         messages = []
@@ -86,6 +89,45 @@ class InvalidHistoricalSymbolTests(unittest.TestCase):
         self.assertTrue(any("D012219" in message for message in messages))
         self.assertEqual(market.calls[0], ["AAPL", "D012219", "MSFT"])
         self.assertEqual(market.calls[1], ["AAPL", "MSFT"])
+
+    def test_batched_bars_trims_pre_split_history_and_records_integrity(self):
+        class FakeMarket:
+            def bars(self, symbols, **kwargs):
+                self.adjustment = kwargs.get("adjustment")
+                return {
+                    "TEST": [
+                        {"t": "2026-08-18T20:00:00Z", "c": 10.0, "h": 10.1, "l": 9.9, "v": 1000},
+                        {"t": "2026-08-19T20:00:00Z", "c": 10.2, "h": 10.3, "l": 10.0, "v": 1000},
+                        {"t": "2026-08-20T20:00:00Z", "c": 1.02, "h": 1.03, "l": 1.00, "v": 10000},
+                        {"t": "2026-08-21T20:00:00Z", "c": 1.05, "h": 1.06, "l": 1.01, "v": 10000},
+                    ]
+                }
+
+            def split_actions(self, symbols, **kwargs):
+                return [
+                    {
+                        "symbol": "TEST",
+                        "ex_date": "2026-08-20",
+                        "action_type": "forward_split",
+                    }
+                ]
+
+        market = FakeMarket()
+        integrity = {}
+        rows = _batched_bars(
+            market,
+            ["TEST"],
+            start=datetime(2026, 8, 18, tzinfo=timezone.utc),
+            end=datetime(2026, 8, 22, tzinfo=timezone.utc),
+            timeframe="1Day",
+            integrity_by_symbol=integrity,
+        )
+
+        self.assertEqual(market.adjustment, "raw")
+        self.assertEqual(len(rows["TEST"]), 2)
+        self.assertEqual(rows["TEST"][0]["t"], "2026-08-20T20:00:00Z")
+        self.assertTrue(integrity["TEST"]["split_detected"])
+        self.assertEqual(integrity["TEST"]["latest_split_date"], "2026-08-20")
 
     def test_non_symbol_provider_error_is_not_silently_swallowed(self):
         class FakeMarket:
