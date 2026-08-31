@@ -1113,6 +1113,7 @@ def holdout_reuse_audit(
 
     exposures: list[dict[str, Any]] = []
     current_set = set(current_sessions)
+    current_generated_at = str(report.get("generated_at") or "")
     threshold = max(0.0, min(100.0, float(material_overlap_pct)))
     prior_runs = [
         *list(data.get("stock_strategy_finder_runs") or []),
@@ -1130,6 +1131,20 @@ def holdout_reuse_audit(
             if str(value).strip()
         }
         if not prior_sessions or not current_set:
+            continue
+        prior_fingerprint = str(prior.get("holdout_fingerprint") or "")
+        same_exact_run = (
+            bool(current_generated_at)
+            and str(prior.get("generated_at") or "") == current_generated_at
+            and (
+                (fingerprint and prior_fingerprint == fingerprint)
+                or prior_sessions == current_set
+            )
+        )
+        if same_exact_run:
+            # Idempotent persistence/recovery of the same completed run is not
+            # a new research exposure. Only earlier/different runs contaminate
+            # the final holdout's independence.
             continue
         overlap = sorted(current_set & prior_sessions)
         if not overlap:
