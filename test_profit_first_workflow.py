@@ -45,6 +45,18 @@ class ProfitFirstWorkflowTests(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, self.source)
 
+    def test_profit_first_blocks_revalidation_until_strategy_is_faithfully_modeled(self):
+        for marker in (
+            "Revalidation is blocked by strategy fidelity.",
+            "critical_missing_requirements",
+            "Review fidelity gaps",
+            "Open Rule Builder",
+            "point-in-time float must remain a hard blocker",
+            "derivative hypothesis must be tracked separately",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, self.source)
+
     def test_profit_first_revalidation_uses_durable_cloud_validator(self):
         for marker in (
             "Revalidate strongest candidate under current protocol",
