@@ -6,3 +6,5 @@ __pycache__/
 .trading_intelligence_data/
 youtube-strategy-lab/
 trading-intelligence-lab/
+.trading_intelligence_live_learning_outbox/
+.cloud_live_learning_outbox/
