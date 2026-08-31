@@ -84,11 +84,30 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
             "What do you want to do?",
             "Find the best strategy for a stock",
             "YOUR STRATEGY WORKFLOW",
-            "Step 3 — Why it matched",
-            "Step 4 — Validation",
-            "Step 5 — Confidence",
+            "Compare → Validate → Current Setup",
+            "③ Validate this strategy →",
+            "④ Check current setup",
+            "⑤ Open paper testing →",
             "on_click=queue_workspace_navigation",
             "prime_action_feedback",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, source)
+
+    def test_guided_strategy_workflow_is_goal_ordered_and_actionable(self):
+        source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        for marker in (
+            '(1, "Search"',
+            '(2, "Compare"',
+            '(3, "Validate"',
+            '(4, "Current Setup"',
+            '(5, "Paper Test"',
+            '"③ Validate this strategy →"',
+            '"④ Check current setup"',
+            '"⑤ Open paper testing →"',
+            "queue_strategy_validation_from_analyzer",
+            "queue_paper_test_from_analyzer",
+            "til_strategy_lab_candidate_payload",
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, source)
