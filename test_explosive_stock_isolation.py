@@ -48,6 +48,13 @@ class ExplosiveStockIsolationTests(unittest.TestCase):
         self.assertIn('st.session_state["explosive_analysis_result"]', source)
         self.assertNotIn('st.session_state["til_stock_analysis"]', source)
 
+    def test_ranked_candidates_open_analyzer_on_row_selection(self):
+        source = (self.root / "explosive_stock_page.py").read_text(encoding="utf-8")
+        self.assertIn('on_select="rerun"', source)
+        self.assertIn('selection_mode="single-row"', source)
+        self.assertIn("table_event.selection.rows", source)
+        self.assertIn('st.session_state["explosive_stock_view"] = "Analyzer"', source)
+
     def test_explosive_page_names_its_own_access_gate(self):
         source = (self.root / "explosive_stock_page.py").read_text(encoding="utf-8")
         self.assertIn('require_app_access(st, app_name="Explosive Stock Lab")', source)
