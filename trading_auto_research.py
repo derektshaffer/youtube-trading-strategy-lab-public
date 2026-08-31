@@ -28,6 +28,7 @@ from youtube_strategy_engine import (
     normalize_machine_rules,
     optimize_stock_strategies,
     safe_float,
+    split_safe_raw_research_rows,
     utc_now,
 )
 
@@ -246,6 +247,7 @@ def _load_bar_batch_resilient(
                 start=start,
                 end=end,
                 timeframe=timeframe,
+                adjustment="raw",
                 max_pages=max_pages,
             ),
             [],
@@ -317,6 +319,7 @@ def _batched_bars(
     max_pages: int = 16,
     progress: Callable[[str], None] | None = None,
     skipped_symbols: list[str] | None = None,
+    integrity_by_symbol: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     output: dict[str, list[dict[str, Any]]] = {}
     clean = list(dict.fromkeys(str(symbol).upper() for symbol in symbols if str(symbol).strip()))
@@ -336,8 +339,32 @@ def _batched_bars(
             for symbol in skipped:
                 if symbol not in skipped_symbols:
                     skipped_symbols.append(symbol)
+
+        usable_symbols = [
+            symbol for symbol, rows in chunk.items()
+            if rows and symbol not in skipped
+        ]
+        split_actions = (
+            market.split_actions(
+                usable_symbols,
+                start=start,
+                end=end,
+            )
+            if usable_symbols
+            else []
+        )
         for symbol, rows in chunk.items():
-            output[symbol] = list(rows or [])
+            if not rows:
+                continue
+            safe_rows, integrity = split_safe_raw_research_rows(
+                list(rows or []),
+                split_actions,
+                symbol,
+            )
+            if integrity_by_symbol is not None:
+                integrity_by_symbol[symbol] = integrity
+            if safe_rows:
+                output[symbol] = safe_rows
     return output
 
 
@@ -1121,6 +1148,7 @@ def run_autonomous_research(
         f"{AUTO_DAILY_LOOKBACK_DAYS // 365} years of PRE-TEST daily history…",
     )
     skipped_historical_symbols: list[str] = []
+    daily_integrity_by_symbol: dict[str, dict[str, Any]] = {}
     daily_rows = _batched_bars(
         market,
         symbols,
@@ -1131,7 +1159,9 @@ def run_autonomous_research(
         max_pages=24,
         progress=progress,
         skipped_symbols=skipped_historical_symbols,
+        integrity_by_symbol=daily_integrity_by_symbol,
     )
+    universe["market_data_integrity_by_symbol"] = daily_integrity_by_symbol
     universe["skipped_unusable_historical_symbols"] = skipped_historical_symbols
     universe["skipped_unusable_historical_symbol_count"] = len(skipped_historical_symbols)
     lifecycle_by_symbol = {
@@ -1205,6 +1235,7 @@ def run_autonomous_research(
         progress,
         f"Loading untouched post-cutoff validation history for {len(validation_symbols)} finalist stocks…",
     )
+    validation_integrity_by_symbol: dict[str, dict[str, Any]] = {}
     intraday_rows = _batched_bars(
         market,
         validation_symbols,
@@ -1214,6 +1245,7 @@ def run_autonomous_research(
         batch_size=25,
         max_pages=64,
         progress=progress,
+        integrity_by_symbol=validation_integrity_by_symbol,
     )
     research_windows = {
         symbol: {
@@ -1221,6 +1253,7 @@ def run_autonomous_research(
             "discovery_cutoff": discovery_end.isoformat(),
             "start_date": validation_start.date().isoformat(),
             "end_date": validation_end.date().isoformat(),
+            "market_data_integrity": validation_integrity_by_symbol.get(symbol) or {},
         }
         for symbol in intraday_rows
     }
