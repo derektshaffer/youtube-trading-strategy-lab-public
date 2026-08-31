@@ -207,7 +207,8 @@ class EmaSemanticCoverageTests(unittest.TestCase):
         report = strategy_integrity_report(strategy)
         self.assertEqual(report["status"], "unknown")
         self.assertEqual(report["label"], "NO RULES DETECTED")
-        self.assertIsNone(report["coverage_pct"])
+        self.assertEqual(report["coverage_pct"], 0.0)
+        self.assertFalse(report["coverage_measurable"])
         self.assertEqual(report["requirement_count"], 0)
         self.assertEqual(report["modeled_count"], 0)
 
