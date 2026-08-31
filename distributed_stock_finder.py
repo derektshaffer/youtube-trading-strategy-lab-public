@@ -1139,10 +1139,15 @@ def command_aggregate(run_id: str) -> int:
             index = int(spec.get("index") or 0)
             try:
                 payload = artifacts.read_json_gz(shard_path(run_id, index))
+                payload_index = payload.get("index")
                 if (
                     int(payload.get("version") or 0) != DISTRIBUTED_SHARD_VERSION
                     or str(payload.get("run_id") or "") != run_id
-                    or int(payload.get("index") or -1) != index
+                    or (
+                        int(payload_index)
+                        if payload_index is not None
+                        else -1
+                    ) != index
                 ):
                     raise AppError(
                         f"Distributed Finder shard {index} does not match the current "
