@@ -165,6 +165,16 @@ class MarketDiscoveryTests(unittest.TestCase):
         self.assertEqual(checks["previous_day_change_pct"], 4.0)
         self.assertEqual(checks["previous_day_volume_ratio"], 2.2)
 
+    def test_chart_data_gate_covers_implicit_backtest_pullback_requirement(self):
+        strategy = {
+            "name": "Micro Pullback Continuation",
+            "machine_rules": {"min_price": 1.0},
+            "optimized_backtest_settings": {
+                "require_pullback_breakout_for_pullback_strategies": True,
+            },
+        }
+        self.assertTrue(discovery._needs_chart_data(strategy))
+
     def test_chart_data_gate_covers_live_chart_dependent_rules(self):
         for rule_name, rule_value in (
             ("previous_day_high_breakout", True),
