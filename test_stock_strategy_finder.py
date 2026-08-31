@@ -134,6 +134,22 @@ class StockStrategyFinderPolicyTests(unittest.TestCase):
         self.assertEqual({item["id"] for item in selected}, {"recent-a", "recent-b"})
         self.assertFalse(skipped)
 
+    def test_spread_rule_fails_closed_until_historical_quotes_are_enforced(self):
+        spread_strategy = strategy(
+            "spread-gated",
+            breakout_lookback_bars=10,
+            max_spread_pct=0.5,
+        )
+        selected, skipped = finder.selected_strategies_for_profile(
+            [spread_strategy],
+            "TEST",
+            finder.search_profile("Deep"),
+        )
+        self.assertEqual(selected, [])
+        self.assertEqual(len(skipped), 1)
+        self.assertIn("historical bid/ask quotes", skipped[0])
+        self.assertIn("not accepted as a substitute", skipped[0])
+
     def test_deep_search_estimate_is_large_for_many_families(self):
         work = finder.estimate_search_work(finder.search_profile("Deep"), 20)
         self.assertGreater(work["minimum_estimated_simulations"], 10_000)
