@@ -140,7 +140,12 @@ def search_profile(name: str) -> StockSearchProfile:
     return profile
 
 
-def _technical_eligibility(strategy: dict[str, Any], symbol: str) -> tuple[bool, str]:
+def _technical_eligibility(
+    strategy: dict[str, Any],
+    symbol: str,
+    *,
+    integrity_report: dict[str, Any] | None = None,
+) -> tuple[bool, str]:
     if not isinstance(strategy, dict) or not strategy.get("id"):
         return False, "missing stable strategy id"
     if str(strategy.get("direction") or "long").strip().casefold() not in {"long", "both"}:
@@ -150,7 +155,11 @@ def _technical_eligibility(strategy: dict[str, Any], symbol: str) -> tuple[bool,
     locked = str(strategy.get("optimized_for_symbol") or "").strip().upper()
     if locked and locked != symbol.upper():
         return False, f"strategy is explicitly locked to {locked}"
-    integrity = strategy_integrity_report(strategy)
+    integrity = (
+        dict(integrity_report)
+        if isinstance(integrity_report, dict)
+        else strategy_integrity_report(strategy)
+    )
     if str(integrity.get("status") or "") == "blocked":
         missing = list(integrity.get("critical_missing_requirements") or [])
         detail = ", ".join(str(item) for item in missing[:3]) or "important source logic"
@@ -188,7 +197,12 @@ def strategy_behavior_bucket(strategy: dict[str, Any]) -> str:
     return "|".join([category or "uncategorized", *sorted(set(tags))])
 
 
-def diverse_strategy_order(strategies: list[dict[str, Any]], symbol: str) -> tuple[list[dict[str, Any]], list[str]]:
+def diverse_strategy_order(
+    strategies: list[dict[str, Any]],
+    symbol: str,
+    *,
+    integrity_reports: dict[str, dict[str, Any]] | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
     """Round-robin across behavior buckets.
 
     This controls search *order only*. It never removes a technically eligible
@@ -197,7 +211,16 @@ def diverse_strategy_order(strategies: list[dict[str, Any]], symbol: str) -> tup
     buckets: dict[str, list[dict[str, Any]]] = {}
     skipped: list[str] = []
     for strategy in strategies:
-        eligible, reason = _technical_eligibility(strategy, symbol)
+        strategy_key = str(strategy.get("id") or strategy.get("name") or "")
+        eligible, reason = _technical_eligibility(
+            strategy,
+            symbol,
+            integrity_report=(
+                (integrity_reports or {}).get(strategy_key)
+                if integrity_reports
+                else None
+            ),
+        )
         if not eligible:
             skipped.append(f"{strategy.get('name') or 'Unnamed strategy'}: {reason}")
             continue
@@ -224,8 +247,14 @@ def selected_strategies_for_profile(
     strategies: list[dict[str, Any]],
     symbol: str,
     profile: StockSearchProfile,
+    *,
+    integrity_reports: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    ordered, skipped = diverse_strategy_order(strategies, symbol)
+    ordered, skipped = diverse_strategy_order(
+        strategies,
+        symbol,
+        integrity_reports=integrity_reports,
+    )
     if profile.quick_family_limit is not None:
         return ordered[: profile.quick_family_limit], skipped
     return ordered, skipped
