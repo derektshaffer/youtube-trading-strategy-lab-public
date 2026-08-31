@@ -3396,6 +3396,29 @@ class AlpacaMarketData:
             max_pages=max_pages,
         )
 
+    def research_reset_actions(
+        self,
+        symbols: list[str],
+        *,
+        start: datetime,
+        end: datetime,
+        max_pages: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Corporate actions that mechanically reset comparable raw-price history."""
+        return self.corporate_actions(
+            symbols,
+            start=start,
+            end=end,
+            types=(
+                "forward_split",
+                "reverse_split",
+                "unit_split",
+                "stock_dividend",
+                "spin_off",
+            ),
+            max_pages=max_pages,
+        )
+
     def historical_quote_at_or_before(
         self,
         symbol: str,
@@ -3681,6 +3704,7 @@ def split_safe_raw_research_rows(
     false momentum move across the split boundary.
     """
     clean_symbol = str(symbol or "").strip().upper()
+    reset_dates: list[date] = []
     split_dates: list[date] = []
     matched: list[dict[str, Any]] = []
     for action in actions or []:
@@ -3693,12 +3717,18 @@ def split_safe_raw_research_rows(
             event_date = date.fromisoformat(str(raw_date))
         except (TypeError, ValueError):
             continue
-        split_dates.append(event_date)
+        reset_dates.append(event_date)
+        action_type = str(action.get("action_type") or "").strip().lower()
+        if action_type in {"forward_split", "reverse_split", "unit_split"}:
+            split_dates.append(event_date)
         matched.append(dict(action))
 
-    if not split_dates:
+    if not reset_dates:
         return list(rows or []), {
             "mode": "raw_prices",
+            "corporate_action_reset_detected": False,
+            "latest_price_reset_date": None,
+            "reset_action_types": [],
             "split_detected": False,
             "latest_split_date": None,
             "rows_before": len(rows or []),
@@ -3707,7 +3737,15 @@ def split_safe_raw_research_rows(
             "note": "Raw historical prices retained; no split boundary was detected in the research window.",
         }
 
-    latest = max(split_dates)
+    latest = max(reset_dates)
+    latest_split = max(split_dates) if split_dates else None
+    reset_action_types = sorted(
+        {
+            str(action.get("action_type") or "").strip().lower()
+            for action in matched
+            if str(action.get("action_type") or "").strip()
+        }
+    )
     kept: list[dict[str, Any]] = []
     for raw in rows or []:
         timestamp = raw.get("t")
@@ -3720,17 +3758,26 @@ def split_safe_raw_research_rows(
             kept.append(raw)
 
     return kept, {
-        "mode": "raw_prices_post_latest_split",
-        "split_detected": True,
-        "latest_split_date": latest.isoformat(),
-        "split_count_in_window": len(matched),
+        "mode": "raw_prices_post_latest_split" if split_dates else "raw_prices_post_corporate_action",
+        "corporate_action_reset_detected": True,
+        "latest_price_reset_date": latest.isoformat(),
+        "reset_action_types": reset_action_types,
+        "split_detected": bool(split_dates),
+        "latest_split_date": latest_split.isoformat() if latest_split else None,
+        "split_count_in_window": sum(
+            1
+            for action in matched
+            if str(action.get("action_type") or "").strip().lower()
+            in {"forward_split", "reverse_split", "unit_split"}
+        ),
+        "price_reset_action_count_in_window": len(matched),
         "rows_before": len(rows or []),
         "rows_after": len(kept),
         "discarded_pre_split_rows": max(0, len(rows or []) - len(kept)),
         "note": (
             "Raw historical prices are used so absolute price filters reflect prices actually "
-            "tradable at the time. Pre-split rows were excluded at the latest split boundary "
-            "to avoid false indicator/day-change jumps."
+            "tradable at the time. Rows before the latest split, stock dividend, or spin-off "
+            "price-reset boundary were excluded to avoid false indicator/day-change jumps."
         ),
     }
 
