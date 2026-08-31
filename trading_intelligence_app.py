@@ -101,6 +101,7 @@ import stock_strategy_finder as _stock_strategy_finder
 _required_finder_attributes = (
     "finder_evidence_verdict",
     "apply_paper_fidelity_to_verdict",
+    "apply_historical_spread_integrity_guard",
     "stock_finder_strategy_families",
     "validated_status_ready",
 )
@@ -127,6 +128,7 @@ merge_finder_checkpoint_into_library = _finder_module.merge_finder_checkpoint_in
 merge_finder_report_into_library = _finder_module.merge_finder_report_into_library
 finder_evidence_verdict = _finder_module.finder_evidence_verdict
 apply_paper_fidelity_to_verdict = _finder_module.apply_paper_fidelity_to_verdict
+apply_historical_spread_integrity_guard = _finder_module.apply_historical_spread_integrity_guard
 parameter_stability_test = _finder_module.parameter_stability_test
 validated_status_ready = _finder_module.validated_status_ready
 run_stock_strategy_finder = _finder_module.run_stock_strategy_finder
@@ -230,6 +232,7 @@ from youtube_strategy_engine import (
     GitHubCloudBackup,
     OptimizationSettings,
     StrategyStore,
+    historical_entry_spread_audit,
     normalize_machine_rules,
     optimize_stock_strategies,
     safe_float,
@@ -2859,6 +2862,55 @@ if module == "Stock Strategy Finder":
                 **finder_run_kwargs,
             )
             finder_report["market_data_integrity"] = split_guard
+
+            # Post-selection execution audit: sample actual historical SIP/IEX quotes
+            # only at the frozen winner's holdout entries. This keeps quote volume
+            # bounded while checking whether our modeled spread envelope was too mild.
+            optimization_for_spread = finder_report.get("optimization") or {}
+            winner_for_spread = optimization_for_spread.get("winner") or {}
+            winning_backtest_for_spread = optimization_for_spread.get("winning_backtest") or {}
+            optimized_settings_for_spread = (
+                winner_for_spread.get("optimized_backtest_settings") or {}
+            )
+            optimizer_settings_for_spread = (
+                optimization_for_spread.get("optimization_settings") or {}
+            )
+            sensitivity_multipliers = [
+                safe_float(value)
+                for value in (
+                    optimizer_settings_for_spread.get("execution_sensitivity_multipliers")
+                    or (1.25, 1.5, 1.75, 2.0)
+                )
+            ]
+            maximum_stress_multiplier = max(
+                [value for value in sensitivity_multipliers if value is not None]
+                or [2.0]
+            )
+            spread_audit = historical_entry_spread_audit(
+                market,
+                finder_symbol,
+                list(winning_backtest_for_spread.get("trades") or []),
+                list(optimization_for_spread.get("holdout_sessions") or []),
+                modeled_spread_bps=(
+                    safe_float(optimized_settings_for_spread.get("spread_bps"), 12.0)
+                    or 12.0
+                ),
+                maximum_stress_multiplier=maximum_stress_multiplier,
+            )
+            finder_report = apply_historical_spread_integrity_guard(
+                finder_report,
+                spread_audit,
+            )
+            if spread_audit.get("status") == "UNDERMODELED":
+                finder_status.write(
+                    "Execution integrity warning · real holdout spreads exceeded the "
+                    "largest spread assumption in the tested sensitivity curve."
+                )
+            elif spread_audit.get("status") == "COVERED":
+                finder_status.write(
+                    "Execution integrity check · sampled real holdout spreads were "
+                    "covered by the modeled sensitivity range."
+                )
 
             # Flush the newest optimizer state/loser ledger before writing the final result.
             checkpoint_record["status"] = "complete"
