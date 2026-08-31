@@ -158,6 +158,11 @@ def _technical_eligibility(strategy: dict[str, Any], symbol: str) -> tuple[bool,
     rules = normalize_machine_rules(strategy.get("machine_rules"))
     if not any(value is not None for value in rules.values()):
         return False, "no machine-testable rules"
+    if rules.get("max_spread_pct") is not None:
+        return False, (
+            "max_spread_pct requires point-in-time historical bid/ask quotes; "
+            "fixed spread/slippage costs are not accepted as a substitute"
+        )
     return True, ""
 
 
@@ -1189,6 +1194,7 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
         "parameter_stability": report.get("parameter_stability") or {},
         "regime_diagnostics": report.get("regime_diagnostics") or {},
         "paper_execution_fidelity": report.get("paper_execution_fidelity") or {},
+        "market_data_integrity": report.get("market_data_integrity") or {},
         "holdout_reuse_audit": report.get("holdout_reuse_audit") or {},
         "holdout_sessions": list(optimization.get("holdout_sessions") or []),
         "holdout_fingerprint": (report.get("holdout_reuse_audit") or {}).get("holdout_fingerprint"),
@@ -1293,6 +1299,7 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
                 "stress_metrics": winner.get("stress_metrics") or {},
                 "walk_forward_summary": (report.get("walk_forward") or {}).get("summary") or {},
                 "parameter_stability": report.get("parameter_stability") or {},
+                "market_data_integrity": report.get("market_data_integrity") or {},
                 "holdout_reuse_audit": report.get("holdout_reuse_audit") or {},
             },
         }
