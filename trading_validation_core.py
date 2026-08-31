@@ -245,6 +245,38 @@ def validation_strength(
     }
 
 
+def _walk_forward_session_splits(
+    sessions: list[str],
+    *,
+    minimum_history_sessions: int,
+    test_sessions_per_fold: int,
+    embargo_sessions: int,
+) -> list[dict[str, Any]]:
+    """Build expanding session folds with an explicit unused embargo gap."""
+    minimum_history_sessions = max(1, int(minimum_history_sessions))
+    test_sessions_per_fold = max(1, int(test_sessions_per_fold))
+    embargo_sessions = max(0, int(embargo_sessions))
+    splits: list[dict[str, Any]] = []
+    test_start = minimum_history_sessions + embargo_sessions
+    while test_start + test_sessions_per_fold <= len(sessions):
+        history_end = test_start - embargo_sessions
+        history_sessions = list(sessions[:history_end])
+        embargo_block = list(sessions[history_end:test_start])
+        external_test = list(
+            sessions[test_start : test_start + test_sessions_per_fold]
+        )
+        if len(history_sessions) >= minimum_history_sessions and external_test:
+            splits.append(
+                {
+                    "history_sessions": history_sessions,
+                    "embargo_sessions": embargo_block,
+                    "external_test_sessions": external_test,
+                }
+            )
+        test_start += test_sessions_per_fold
+    return splits
+
+
 def walk_forward_validate(
     rows: list[dict[str, Any]],
     strategies: list[dict[str, Any]],
@@ -254,15 +286,17 @@ def walk_forward_validate(
     *,
     minimum_history_sessions: int = 8,
     test_sessions_per_fold: int = 2,
+    embargo_sessions: int = 1,
     max_folds: int = 3,
     progress: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, Any]:
     """Nested expanding-window walk-forward research.
 
     Each fold optimizes only on sessions before the fold's external test block.
-    The optimizer still keeps its own training/validation/holdout separation inside
-    that historical window. The selected rules are then frozen and run on the next
-    unseen sessions.
+    A configurable whole-session embargo is left completely unused immediately
+    before that external block. The optimizer still keeps its own
+    training/validation/holdout separation inside the earlier historical window.
+    The selected rules are then frozen and run on the next unseen sessions.
     """
     settings = backtest_settings or BacktestSettings()
     settings.validate()
@@ -274,28 +308,34 @@ def walk_forward_validate(
     sessions = list(dict.fromkeys(frame.get("session", pd.Series(dtype=str)).tolist()))
     minimum_history_sessions = max(5, int(minimum_history_sessions))
     test_sessions_per_fold = max(1, int(test_sessions_per_fold))
+    embargo_sessions = max(0, min(5, int(embargo_sessions)))
     max_folds = max(1, min(8, int(max_folds)))
 
-    if len(sessions) < minimum_history_sessions + test_sessions_per_fold:
+    required_sessions = (
+        minimum_history_sessions + embargo_sessions + test_sessions_per_fold
+    )
+    if len(sessions) < required_sessions:
         raise AppError(
             "Walk-forward testing needs more trading sessions. Increase the historical window "
-            f"to provide at least {minimum_history_sessions + test_sessions_per_fold} sessions."
+            f"to provide at least {required_sessions} sessions, including the "
+            f"{embargo_sessions}-session embargo."
         )
 
-    possible: list[tuple[int, list[str], list[str]]] = []
-    train_end = minimum_history_sessions
-    while train_end + test_sessions_per_fold <= len(sessions):
-        history_sessions = sessions[:train_end]
-        external_test = sessions[train_end : train_end + test_sessions_per_fold]
-        possible.append((train_end, history_sessions, external_test))
-        train_end += test_sessions_per_fold
-
+    possible = _walk_forward_session_splits(
+        sessions,
+        minimum_history_sessions=minimum_history_sessions,
+        test_sessions_per_fold=test_sessions_per_fold,
+        embargo_sessions=embargo_sessions,
+    )
     folds_to_run = possible[-max_folds:]
     folds: list[dict[str, Any]] = []
     all_external_trades: list[dict[str, Any]] = []
     total_steps = len(folds_to_run)
 
-    for fold_number, (_, history_sessions, external_test_sessions) in enumerate(folds_to_run, start=1):
+    for fold_number, split in enumerate(folds_to_run, start=1):
+        history_sessions = list(split.get("history_sessions") or [])
+        embargo_block = list(split.get("embargo_sessions") or [])
+        external_test_sessions = list(split.get("external_test_sessions") or [])
         if progress:
             progress(
                 fold_number - 1,
@@ -347,6 +387,9 @@ def walk_forward_validate(
                 "external_test_start": external_test_sessions[0],
                 "external_test_end": external_test_sessions[-1],
                 "history_session_count": len(history_sessions),
+                "embargo_session_count": len(embargo_block),
+                "embargo_start": embargo_block[0] if embargo_block else None,
+                "embargo_end": embargo_block[-1] if embargo_block else None,
                 "test_session_count": len(external_test_sessions),
                 "selected_strategy_id": source_id,
                 "selected_strategy_name": winner.get("strategy_name") or source.get("name"),
@@ -449,10 +492,12 @@ def walk_forward_validate(
             "median_fold_return_pct": round(median(returns), 3) if returns else 0.0,
             "average_fold_return_pct": round(mean(returns), 3) if returns else 0.0,
             "selected_strategy_counts": dict(strategy_counts),
+            "embargo_sessions": embargo_sessions,
         },
         "warnings": warnings,
         "note": (
-            "Each external fold is unseen by that fold's optimizer. Results remain historical simulations "
-            "and do not establish future profitability."
+            "Each external fold is unseen by that fold's optimizer, with "
+            f"{embargo_sessions} whole session(s) deliberately omitted immediately before the test block. "
+            "Results remain historical simulations and do not establish future profitability."
         ),
     }
