@@ -24,6 +24,11 @@ from predictive_ml_backfill import (
     merge_backfill_result_into_library,
     run_predictive_ml_backfill,
 )
+from profit_first_queue import (
+    active_profit_first_validation_job,
+    profit_first_candidate_dedupe_key,
+    profit_first_validation_candidates,
+)
 from stock_strategy_finder import (
     apply_historical_spread_integrity_guard,
     latest_finder_checkpoint,
@@ -440,6 +445,136 @@ def _target_strategy_ids(payload: dict[str, Any]) -> list[str]:
             if str(value or "").strip()
         )
     )
+
+
+def close_blocked_targeted_validation_jobs(
+    data: dict[str, Any],
+) -> tuple[dict[str, Any], int]:
+    """Close queued targeted jobs that can no longer pass the fidelity gate."""
+    result = dict(data or {})
+    queue: list[dict[str, Any]] = []
+    closed = 0
+    now_text = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    for raw in result.get("research_queue") or []:
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        target_ids = _target_strategy_ids(payload)
+        if (
+            str(item.get("type") or "") == "autonomous_validation"
+            and str(item.get("status") or "") in {"queued", "retry"}
+            and target_ids
+        ):
+            _, missing, blocked = _targeted_validation_strategies(result, target_ids)
+            if missing or blocked:
+                reasons = [
+                    *(f"missing strategy {strategy_id}" for strategy_id in missing),
+                    *(f"blocked strategy {reason}" for reason in blocked),
+                ]
+                item["status"] = "complete"
+                item["updated_at"] = now_text
+                item["completed_at"] = now_text
+                item["next_attempt_at"] = None
+                item["last_error"] = None
+                item["failure_step"] = None
+                item["worker_id"] = None
+                item["result_ref"] = "blocked-by-strategy-fidelity"
+                item["status_message"] = (
+                    "Targeted validation closed without spending compute because "
+                    + "; ".join(reasons)
+                )
+                closed += 1
+        queue.append(item)
+    result["research_queue"] = queue
+    return result, closed
+
+
+def ensure_automatic_profit_first_validation_job(
+    data: dict[str, Any],
+    *,
+    maximum_candidates: int = 2,
+) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any]]:
+    """Queue the strongest testable unproven candidates for strict validation."""
+    result = dict(data or {})
+    active = active_profit_first_validation_job(result)
+    ranking = profit_first_validation_candidates(
+        result,
+        maximum=max(1, min(3, int(maximum_candidates))),
+    )
+    if active is not None:
+        ranking = {
+            **ranking,
+            "queue_status": "active",
+            "active_job_id": active.get("id"),
+            "active_strategy_ids": _target_strategy_ids(
+                active.get("payload") if isinstance(active.get("payload"), dict) else {}
+            ),
+        }
+        return result, None, ranking
+
+    candidates = list(ranking.get("candidates") or [])
+    if not candidates:
+        ranking = {**ranking, "queue_status": "no-eligible-candidates"}
+        return result, None, ranking
+
+    # Do not recreate an identical terminal batch. New validation evidence changes
+    # the per-candidate dedupe component and makes a fresh batch eligible.
+    candidate_keys = [
+        profit_first_candidate_dedupe_key(candidate)
+        for candidate in candidates
+    ]
+    combined_key = "automatic-profit-first:" + hashlib.sha256(
+        "|".join(candidate_keys).encode("utf-8")
+    ).hexdigest()[:20]
+    for item in result.get("research_queue") or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("dedupe_key") or "") == combined_key:
+            ranking = {
+                **ranking,
+                "queue_status": "already-attempted",
+                "existing_job_id": item.get("id"),
+            }
+            return result, None, ranking
+
+    strategy_ids = [
+        str(candidate.get("strategy_id") or "")
+        for candidate in candidates
+        if str(candidate.get("strategy_id") or "").strip()
+    ]
+    result, job = enqueue_research_job(
+        result,
+        "autonomous_validation",
+        {
+            "origin": "automatic_profit_first_validation",
+            "strategy_ids": strategy_ids,
+            "validation_method_version": AUTONOMOUS_VALIDATION_METHOD_VERSION,
+            "profit_first_phase": ranking.get("phase"),
+            "candidate_ranking": candidates,
+        },
+        priority=99,
+        dedupe_key=combined_key,
+        max_attempts=2,
+    )
+    ranking = {
+        **ranking,
+        "queue_status": "queued" if job else "deduped",
+        "queued_job_id": (job or {}).get("id"),
+        "queued_strategy_ids": strategy_ids,
+    }
+    research_system = (
+        dict(result.get("research_system") or {})
+        if isinstance(result.get("research_system"), dict)
+        else {}
+    )
+    research_system["profit_first_validation_queue"] = {
+        **ranking,
+        "updated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "validation_method_version": AUTONOMOUS_VALIDATION_METHOD_VERSION,
+    }
+    result["research_system"] = research_system
+    return result, job, ranking
 
 
 def close_empty_autonomous_validation_jobs(
@@ -1119,6 +1254,16 @@ def main() -> int:
         )
         data = store.load_latest()
 
+    data, closed_blocked_targeted_jobs = close_blocked_targeted_validation_jobs(data)
+    if closed_blocked_targeted_jobs:
+        persist_store(store, data)
+        print(
+            f"Closed {closed_blocked_targeted_jobs} targeted validation job(s) blocked "
+            "by strategy fidelity.",
+            flush=True,
+        )
+        data = store.load_latest()
+
     data, closed_empty_validation_jobs = close_empty_autonomous_validation_jobs(data)
     if closed_empty_validation_jobs:
         persist_store(store, data)
@@ -1182,6 +1327,34 @@ def main() -> int:
                     f"{targeted_job.get('id')} for {', '.join(target_ids)}.",
                     flush=True,
                 )
+
+    data = store.load_latest()
+    data, profit_first_job, profit_first_status = ensure_automatic_profit_first_validation_job(
+        data,
+        maximum_candidates=int(env("PROFIT_FIRST_VALIDATION_BATCH_SIZE", "2") or 2),
+    )
+    if profit_first_job:
+        persist_store(store, data)
+        print(
+            "Queued automatic profit-first validation job "
+            f"{profit_first_job.get('id')} for "
+            + ", ".join(
+                str(value)
+                for value in profit_first_status.get("queued_strategy_ids") or []
+            )
+            + ".",
+            flush=True,
+        )
+    elif str(profit_first_status.get("queue_status") or "") in {
+        "no-eligible-candidates",
+        "already-attempted",
+    }:
+        print(
+            "Automatic profit-first validator: "
+            + str(profit_first_status.get("queue_status") or "idle")
+            + ".",
+            flush=True,
+        )
 
     # ML bootstrap/retraining has its own freshness clock so a deployment can
     # start it immediately even if today's web-research cycle was already seeded.
