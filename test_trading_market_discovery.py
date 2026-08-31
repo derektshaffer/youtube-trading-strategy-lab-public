@@ -36,6 +36,66 @@ class FakeMarket:
 
 
 class MarketDiscoveryTests(unittest.TestCase):
+    def test_strategy_live_timeframe_prefers_finder_winner_interval(self):
+        self.assertEqual(
+            discovery._strategy_live_timeframe({"_finder_timeframe": "15Min"}),
+            "15Min",
+        )
+        self.assertEqual(
+            discovery._strategy_live_timeframe(
+                {"last_validation": {"timeframe": "5Min"}}
+            ),
+            "5Min",
+        )
+
+    def test_strategy_extended_hours_matches_saved_backtest_setting(self):
+        self.assertFalse(
+            discovery._strategy_allows_extended_hours(
+                {"optimized_backtest_settings": {"allow_extended_hours": False}}
+            )
+        )
+        self.assertTrue(
+            discovery._strategy_allows_extended_hours(
+                {"optimized_backtest_settings": {"allow_extended_hours": True}}
+            )
+        )
+
+    def test_analyzer_market_features_use_finder_timeframe(self):
+        market = FakeMarket()
+        strategy = {
+            "id": "five-minute",
+            "name": "Five Minute",
+            "direction": "long",
+            "_finder_timeframe": "5Min",
+            "optimized_backtest_settings": {"allow_extended_hours": True},
+            "machine_rules": {"min_price": 1.0},
+        }
+        with (
+            patch.object(discovery, "effective_strategy_for_live", side_effect=lambda item: item),
+            patch.object(discovery, "average_completed_daily_volume", return_value=1_000_000),
+            patch.object(
+                discovery,
+                "snapshot_metrics",
+                return_value={
+                    "symbol": "AAA",
+                    "price": 10.0,
+                    "relative_volume": 1.5,
+                    "day_change_pct": 2.0,
+                    "spread_pct": 0.1,
+                },
+            ),
+            patch.object(
+                discovery,
+                "match_strategy",
+                return_value={"status": "WATCH", "score": 70.0, "unknown": 0, "checks": []},
+            ),
+        ):
+            result = discovery.analyze_stock_strategies(market, "AAA", [strategy])
+
+        self.assertEqual(result["timeframe"], "5Min")
+        self.assertEqual(result["market_features"]["features"]["bar_count"], 1)
+        self.assertEqual(result["comparisons"][0]["timeframe"], "5Min")
+
     def test_completed_daily_reference_supplies_prior_session_rules_without_today_leakage(self):
         rows = [
             {"t": "2026-08-25T04:00:00Z", "c": 10.0, "h": 10.5, "v": 100.0},
