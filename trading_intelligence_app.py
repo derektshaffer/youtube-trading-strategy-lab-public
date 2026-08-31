@@ -714,6 +714,7 @@ def persist_live_learning_cycle(
                     end=observed_at,
                     timeframe="1Min",
                     feed=market.live_feed,
+                    adjustment="raw",
                     max_pages=60,
                 )
                 existing, maturation_summary = mature_shadow_observations(
