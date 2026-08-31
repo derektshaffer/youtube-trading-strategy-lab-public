@@ -2219,6 +2219,11 @@ if module == "Stock Strategy Finder":
         )
 
     finder_profile = search_profile(finder_profile_name)
+    finder_profile_display = (
+        "Recent Behavior"
+        if str(finder_profile.name) == "Current Regime"
+        else str(finder_profile.name)
+    )
     finder_candidates, finder_skips = selected_strategies_for_profile(
         strategies,
         finder_symbol or "UNKNOWN",
@@ -2317,7 +2322,7 @@ if module == "Stock Strategy Finder":
             (
                 '<div class="til-finder-notice til-finder-checkpoint-note">'
                 '<div class="til-finder-notice-title">SAVED LOCAL CHECKPOINT</div>'
-                f'<div class="til-finder-notice-body">{html.escape(finder_symbol)} {html.escape(finder_profile.name)} '
+                f'<div class="til-finder-notice-body">{html.escape(finder_symbol)} {html.escape(finder_profile_display)} '
                 f'has {checkpoint_family_passes:,} completed strategy-family/timeframe passes. '
                 'Resume Locally will reuse them instead of starting those completed passes over.'
                 '</div></div>'
@@ -2332,7 +2337,7 @@ if module == "Stock Strategy Finder":
         )
     elif checkpoint_status in {"running", "interrupted"}:
         st.warning(
-            f"The previous {finder_symbol} {finder_profile.name} run did not finish before its first "
+            f"The previous {finder_symbol} {finder_profile_display} run did not finish before its first "
             "reusable optimizer checkpoint. The next Research click will restart that run from the beginning."
         )
     elif checkpoint_status == "failed":
@@ -2343,22 +2348,28 @@ if module == "Stock Strategy Finder":
         )
     elif saved_finder_result and not session_result_matches:
         st.info(
-            f"Loaded the last completed {finder_symbol} {finder_profile.name} research result from durable storage."
+            f"Loaded the last completed {finder_symbol} {finder_profile_display} research result from durable storage."
         )
     elif not finder_result:
         latest_profile_name = str(
             (latest_symbol_finder_result.get("profile") or {}).get("name")
             or ""
         ).strip()
+        latest_profile_display = (
+            "Recent Behavior"
+            if latest_profile_name == "Current Regime"
+            else latest_profile_name
+        )
         if latest_symbol_finder_result and latest_profile_name:
             st.info(
-                f"No completed {finder_symbol} {finder_profile.name} Finder result is saved yet. "
-                f"The latest saved {finder_symbol} result is **{latest_profile_name}**. "
-                "Use the Recent completed cloud research panel above to open it."
+                f"**No {finder_profile_display} result exists yet for {finder_symbol}.** "
+                f"Run this search below to create one. Your latest saved {finder_symbol} result "
+                f"is from **{latest_profile_display}**."
             )
         else:
-            st.caption(
-                f"No completed {finder_symbol} {finder_profile.name} Finder result is saved yet."
+            st.info(
+                f"**No {finder_profile_display} result exists yet for {finder_symbol}.** "
+                "Run this search below to create one."
             )
 
     active_cloud_finders = [
@@ -2386,8 +2397,8 @@ if module == "Stock Strategy Finder":
             (
                 '<div class="til-finder-notice til-finder-cloud-note">'
                 '<div class="til-finder-notice-title">☁ THIS SELECTION MATCHES THE ACTIVE CLOUD RUN</div>'
-                f'<div class="til-finder-notice-body">{html.escape(finder_symbol)} {html.escape(finder_profile.name)} '
-                'is the cloud research job shown in Active cloud research above. '
+                f'<div class="til-finder-notice-body">{html.escape(finder_symbol)} {html.escape(finder_profile_display)} '
+                'is already running in the cloud. '
                 'The controls below are locked while that job is active.'
                 '</div></div>'
             ),
@@ -2398,17 +2409,12 @@ if module == "Stock Strategy Finder":
         other_payload = dict(other.get("payload") or {})
         other_symbol = str(other_payload.get("symbol") or "Stock").upper()
         other_profile = str(other_payload.get("profile") or "Research")
-        st.markdown(
-            (
-                '<div class="til-finder-notice til-finder-checkpoint-note">'
-                '<div class="til-finder-notice-title">CURRENT CONTROLS ARE A SEPARATE RESEARCH REQUEST</div>'
-                f'<div class="til-finder-notice-body">You are viewing {html.escape(finder_symbol)} '
-                f'{html.escape(finder_profile.name)}, while {html.escape(other_symbol)} '
-                f'{html.escape(other_profile)} is already active in the cloud above. '
-                'That cloud run continues even if you change these controls or leave this page.'
-                '</div></div>'
-            ),
-            unsafe_allow_html=True,
+        other_profile_display = (
+            "Recent Behavior" if other_profile == "Current Regime" else other_profile
+        )
+        st.caption(
+            f"Other cloud research is running in the background: "
+            f"{other_symbol} — {other_profile_display}. It does not affect this {finder_symbol} search."
         )
     else:
         st.markdown(
@@ -2424,9 +2430,7 @@ if module == "Stock Strategy Finder":
         )
 
     if stock_cloud_ready:
-        st.success(
-            "Cloud configuration preflight: **READY**. System Health can run a live end-to-end smoke test before a long job."
-        )
+        st.caption("Cloud runner: ready.")
     else:
         st.warning(
             "Cloud configuration preflight: **NOT READY**. "
@@ -2437,7 +2441,7 @@ if module == "Stock Strategy Finder":
     cloud_col, local_col = st.columns([1.0, 1.35])
     with cloud_col:
         queue_cloud_finder = st.button(
-            f"☁ Queue Distributed {finder_symbol or 'Stock'} — {finder_profile.name}",
+            f"☁ Run {finder_symbol or 'Stock'} — {finder_profile_display} in cloud",
             width="stretch",
             disabled=(
                 not bool(finder_symbol)
@@ -2454,9 +2458,13 @@ if module == "Stock Strategy Finder":
         )
     with local_col:
         st.caption(
-            "Distributed cloud mode is recommended for Deep/Very Deep runs. It preserves the full search space "
-            "while splitting independent family/timeframe work across multiple cloud runners. "
-            "While cloud research is active, the status monitor refreshes about once per minute. When no cloud job is active, automatic refresh stops so the page stays still."
+            (
+                "Recent Behavior is short enough to run here in the browser. "
+                "Use cloud if you want to close the browser while it runs."
+                if finder_profile.name == "Current Regime"
+                else
+                "Cloud is recommended for Deep/Very Deep runs because it can continue after you close the browser."
+            )
         )
 
     if queue_cloud_finder and finder_symbol:
@@ -2509,13 +2517,13 @@ if module == "Stock Strategy Finder":
             )
             if launch_ok:
                 st.success(
-                    f"{finder_symbol} {finder_profile.name} was queued **and the cloud worker was launched immediately**. "
+                    f"{finder_symbol} {finder_profile_display} was queued **and the cloud worker was launched immediately**. "
                     "You can close your Mac or browser; the shards will run independently and the final result "
                     "will be saved back into the Finder when complete."
                 )
             else:
                 st.warning(
-                    f"{finder_symbol} {finder_profile.name} is safely queued, but instant launch was not available. "
+                    f"{finder_symbol} {finder_profile_display} is safely queued, but instant launch was not available. "
                     f"{launch_detail} The scheduled worker is only a fallback; do not assume compute started "
                     "until this job changes to STARTING/RUNNING or System Health confirms the worker path."
                 )
@@ -2524,9 +2532,9 @@ if module == "Stock Strategy Finder":
             st.info("That cloud Finder job is already queued or running.")
 
     finder_slot = st.empty()
-    finder_action = "Resume Locally" if checkpoint_resumable else "Research Locally"
+    finder_action = "Resume" if checkpoint_resumable else "Run"
     run_finder = finder_slot.button(
-        f"◆ {finder_action} {finder_symbol or 'Stock'} — {finder_profile.name}",
+        f"◆ {finder_action} {finder_symbol or 'Stock'} — {finder_profile_display} here",
         type="primary",
         width="stretch",
         disabled=(
