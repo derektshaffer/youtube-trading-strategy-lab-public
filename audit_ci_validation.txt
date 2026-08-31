@@ -1,0 +1,1 @@
+Temporary audit CI validation marker. No runtime behavior.
