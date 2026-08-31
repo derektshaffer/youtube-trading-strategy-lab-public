@@ -2459,12 +2459,16 @@ if module == "Stock Strategy Finder":
     with local_col:
         st.caption(
             (
-                "Recent Behavior is short enough to run here in the browser. "
-                "Use cloud if you want to close the browser while it runs."
+                (
+                    "Recent Behavior is short enough to run here in the browser. "
+                    "Use cloud if you want to close the browser while it runs."
+                )
                 if finder_profile.name == "Current Regime"
                 else
                 "Cloud is recommended for Deep/Very Deep runs because it can continue after you close the browser."
             )
+            + " While cloud research is active, status refreshes automatically; when no cloud job is active, "
+            "automatic refresh stops so the page stays still."
         )
 
     if queue_cloud_finder and finder_symbol:
