@@ -42,6 +42,7 @@ from youtube_strategy_engine import (
     normalize_machine_rules,
     parse_symbols,
     safe_float,
+    split_safe_raw_research_rows,
     utc_now,
 )
 
@@ -466,8 +467,25 @@ if run:
                 start=historical_start,
                 end=historical_end,
                 timeframe=timeframe,
+                adjustment="raw",
                 max_pages=30,
             ).get(ticker, [])
+            split_actions = market.split_actions(
+                [ticker],
+                start=historical_start,
+                end=historical_end,
+            )
+            bars, market_data_integrity = split_safe_raw_research_rows(
+                list(bars or []),
+                split_actions,
+                ticker,
+            )
+            if market_data_integrity.get("split_detected"):
+                st.write(
+                    "Corporate-action integrity guard: raw historical prices retained; "
+                    f"ML training restarted at {market_data_integrity.get('latest_split_date')} "
+                    "to avoid learning a stock split as a price/volume pattern."
+                )
             if len(bars) < 300:
                 raise AppError(
                     f"Only {len(bars)} bars were returned. Increase the historical range or use a smaller candle interval."
@@ -654,7 +672,9 @@ if run:
 
         st.markdown("### Important limitations")
         st.caption(
-            "The model is trained on one ticker and one saved strategy at a time. Labels use historical OHLC bars, "
+            "The model is trained on one ticker and one saved strategy at a time. Historical bars use actual raw prices "
+            "and restart at the latest split boundary so the model does not learn split-adjusted price/liquidity context. "
+            "Labels use historical OHLC bars, "
             "not exact bid/ask fills, queue position, halts, or news context. Random-forest probability scores are model "
             "scores rather than guaranteed or perfectly calibrated probabilities. Walk-forward results can still degrade "
             "in a different market regime, so this should remain a research/paper-trading filter until it proves itself "
