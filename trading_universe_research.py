@@ -6,7 +6,7 @@ from statistics import mean, median
 from typing import Any
 
 from trading_intelligence_core import effective_strategy_for_live
-from youtube_strategy_engine import BacktestSettings, AppError, run_backtest, safe_float
+from youtube_strategy_engine import BacktestSettings, AppError, normalize_machine_rules, run_backtest, safe_float
 
 
 def _pf_value(metrics: dict[str, Any]) -> float | None:
@@ -23,6 +23,13 @@ def cross_stock_generalization(
     chosen_settings = settings or BacktestSettings()
     chosen_settings.validate()
     effective = effective_strategy_for_live(strategy)
+    rules = normalize_machine_rules(effective.get("machine_rules"))
+    if rules.get("max_spread_pct") is not None:
+        raise AppError(
+            "Cross-stock generalization cannot validate max_spread_pct without "
+            "point-in-time historical bid/ask filtering. Fixed execution costs are "
+            "not accepted as a substitute for that entry rule."
+        )
 
     results: list[dict[str, Any]] = []
     for raw_symbol, rows in rows_by_symbol.items():
