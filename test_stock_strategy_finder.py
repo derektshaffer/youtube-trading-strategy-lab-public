@@ -441,6 +441,60 @@ class ParameterStabilityIntegrityTests(unittest.TestCase):
         self.assertIn("full pre-holdout causal warmup", result["note"])
 
 
+class HistoricalSpreadIntegrityTests(unittest.TestCase):
+    def test_under_modeled_real_spreads_revoke_paper_ready_verdict(self):
+        report = {
+            "verdict": {
+                "code": "ready_for_paper",
+                "label": "READY FOR PAPER TESTING",
+                "paper_ready": True,
+            },
+            "robustness": {
+                "score": 78.0,
+                "label": "PROMISING",
+                "independently_positive": True,
+                "reasons": [],
+            },
+            "optimization": {
+                "winner": {
+                    "status": "VALIDATED",
+                }
+            },
+        }
+        audit = {
+            "status": "UNDERMODELED",
+            "p90_observed_spread_bps": 35.0,
+            "tested_spread_ceiling_bps": 24.0,
+        }
+
+        guarded = finder.apply_historical_spread_integrity_guard(report, audit)
+
+        self.assertEqual(
+            guarded["optimization"]["winner"]["status"],
+            "HOLDOUT SPREAD UNDERMODELED",
+        )
+        self.assertFalse(guarded["robustness"]["independently_positive"])
+        self.assertLessEqual(guarded["robustness"]["score"], 49.0)
+        self.assertEqual(
+            guarded["verdict"]["code"],
+            "historical_spread_under_modeled",
+        )
+        self.assertFalse(guarded["verdict"]["paper_ready"])
+        self.assertEqual(guarded["historical_spread_audit"], audit)
+
+    def test_covered_real_spreads_do_not_change_verdict(self):
+        report = {
+            "verdict": {"code": "ready_for_paper", "paper_ready": True},
+            "robustness": {"score": 75.0, "independently_positive": True},
+            "optimization": {"winner": {"status": "VALIDATED"}},
+        }
+        audit = {"status": "COVERED"}
+        guarded = finder.apply_historical_spread_integrity_guard(report, audit)
+        self.assertEqual(guarded["optimization"]["winner"]["status"], "VALIDATED")
+        self.assertEqual(guarded["verdict"]["code"], "ready_for_paper")
+        self.assertTrue(guarded["robustness"]["independently_positive"])
+
+
 class HoldoutReuseIntegrityTests(unittest.TestCase):
     def _report(self):
         candidate = strategy("reuse-family", breakout_lookback_bars=10)
