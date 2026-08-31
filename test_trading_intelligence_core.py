@@ -1010,11 +1010,43 @@ class StrategyIntegrityTests(unittest.TestCase):
             "last_autonomous_research": {
                 "validation_method_version": 4,
                 "market_data_integrity_contract": "split_safe_raw_v1",
+                "holdout_reuse_audit": {
+                    "status": "PRISTINE",
+                    "pristine": True,
+                },
             },
         }
         upgraded = upgrade_native_strategy_rules(strategy)
         self.assertEqual(upgraded["validation_status"], "validated")
         self.assertIn("validated_rules", upgraded)
+
+    def test_validated_label_is_demoted_when_saved_holdout_audit_is_not_pristine(self):
+        strategy = {
+            "id": "reused-current",
+            "name": "Reused validated breakout",
+            "direction": "long",
+            "validation_status": "validated",
+            "optimization_status": "complete",
+            "machine_rules": {
+                "breakout_lookback_bars": 20,
+                "stop_loss_pct": 3,
+                "reward_risk": 2,
+            },
+            "validated_rules": {"breakout_lookback_bars": 20},
+            "last_validation": {
+                "market_data_integrity": {
+                    "mode": "raw_prices",
+                },
+                "holdout_reuse_audit": {
+                    "status": "REUSED",
+                    "pristine": False,
+                },
+            },
+        }
+        upgraded = upgrade_native_strategy_rules(strategy)
+        self.assertEqual(upgraded["validation_status"], "unvalidated")
+        self.assertEqual(upgraded["optimization_status"], "revalidation_required")
+        self.assertNotIn("validated_rules", upgraded)
 
     def test_scale_out_strategy_is_blocked_until_partial_exits_are_modeled(self):
         strategy = {
