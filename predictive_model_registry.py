@@ -9,6 +9,7 @@ from typing import Any, Iterable
 
 
 DEFAULT_MAX_SHADOW_MODELS = 6
+REQUIRED_TRAINING_DATA_INTEGRITY_CONTRACT = "split_safe_raw_v1"
 MIN_PROMOTION_DECISIONS = 50
 MIN_PROMOTION_SYMBOLS = 5
 MIN_PROMOTION_SESSIONS = 5
@@ -48,6 +49,19 @@ def ready_shadow_models(
     seen: set[str] = set()
     for run in runs or []:
         if not isinstance(run, dict):
+            continue
+        dataset_summary = (
+            run.get("dataset_summary")
+            if isinstance(run.get("dataset_summary"), dict)
+            else {}
+        )
+        if (
+            str(dataset_summary.get("market_data_integrity_contract") or "")
+            != REQUIRED_TRAINING_DATA_INTEGRITY_CONTRACT
+        ):
+            # Old models may have been trained on split-adjusted price/liquidity
+            # context. Keep them in history, but do not surface them as current
+            # shadow candidates after the raw/split-safe integrity contract changed.
             continue
         candidates = [
             item
