@@ -22,6 +22,7 @@ from youtube_strategy_engine import (
     evaluate_signal,
     normalize_machine_rules,
     safe_float,
+    split_safe_raw_research_rows,
     utc_now,
 )
 
@@ -290,8 +291,24 @@ def score_setup(
         end=historical_end,
         timeframe=timeframe,
         feed=market.live_feed,
+        adjustment="raw",
         max_pages=30,
     ).get(ticker, [])
+    if not hasattr(market, "split_actions"):
+        raise AppError(
+            "Historical ML scoring requires split metadata so price/liquidity "
+            "features cannot cross an unhandled split boundary."
+        )
+    split_actions = market.split_actions(
+        [ticker],
+        start=historical_start,
+        end=historical_end,
+    )
+    bars, market_data_integrity = split_safe_raw_research_rows(
+        list(bars or []),
+        split_actions,
+        ticker,
+    )
     if len(bars) < 300:
         raise AppError(
             f"Only {len(bars)} market bars were available for the historical pattern check."
@@ -358,6 +375,8 @@ def score_setup(
     )
 
     return {
+        "market_data_integrity_contract": "split_safe_raw_v1",
+        "market_data_integrity": market_data_integrity,
         "score": latest_probability,
         "threshold": float(threshold),
         "passes": latest_probability >= float(threshold),
