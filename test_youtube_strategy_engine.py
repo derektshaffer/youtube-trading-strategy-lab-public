@@ -1428,6 +1428,38 @@ class CloudDestinationBindingTests(unittest.TestCase):
             self.assertFalse(status["healthy"])
 
 
+class CloudBackupReadTests(unittest.TestCase):
+    def test_large_private_library_uses_raw_contents_download(self):
+        cloud = engine.GitHubCloudBackup(
+            "owner/private-backups",
+            "token",
+            branch="main",
+            path="trading-intelligence-lab/intelligence_library.json",
+        )
+        cloud._repository_checked = True
+        library = {
+            "version": 2,
+            "strategies": [{"id": "s1", "name": "Test"}],
+            "updated_at": "2026-08-31T00:00:00Z",
+        }
+        record = {
+            "type": "file",
+            "sha": "a" * 40,
+            "size": 75_000_000,
+            "encoding": "none",
+        }
+        with patch.object(cloud, "_request", return_value=record), patch.object(
+            cloud,
+            "_request_bytes",
+            return_value=json.dumps(library).encode("utf-8"),
+        ) as raw_request:
+            restored = cloud.read_library()
+
+        self.assertEqual(restored["library"], library)
+        self.assertEqual(restored["sha"], "a" * 40)
+        raw_request.assert_called_once_with(cloud._contents_url())
+
+
 class CloudBackupFirstWriteTests(unittest.TestCase):
     def test_large_library_git_push_round_trip_against_local_bare_repository(self):
         with tempfile.TemporaryDirectory() as directory:
