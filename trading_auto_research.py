@@ -1703,6 +1703,7 @@ def merge_autonomous_research_into_library(
                 "validation_metrics": winner.get("validation_metrics") or {},
                 "holdout_metrics": winner.get("holdout_metrics") or {},
                 "stress_metrics": winner.get("stress_metrics") or {},
+                "execution_sensitivity": winner.get("execution_sensitivity") or {},
                 "walk_forward_summary": walk.get("summary"),
                 "optimized_rules": winner.get("optimized_rules") or {},
                 "optimized_backtest_settings": winner.get("optimized_backtest_settings") or {},
