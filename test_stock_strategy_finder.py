@@ -86,6 +86,23 @@ class StockStrategyFinderPolicyTests(unittest.TestCase):
         self.assertIn("fidelity audit failed", skipped[0])
         self.assertIn("Scale-out", skipped[0])
 
+    def test_current_regime_search_uses_recent_history_without_family_cap(self):
+        profile = finder.search_profile("Current Regime")
+        self.assertEqual(profile.history_days, 35)
+        self.assertEqual(profile.timeframes, ("1Min", "5Min", "15Min"))
+        self.assertIsNone(profile.quick_family_limit)
+        candidates = [
+            strategy("recent-a", breakout_lookback_bars=10),
+            strategy("recent-b", min_relative_volume=2.0),
+        ]
+        selected, skipped = finder.selected_strategies_for_profile(
+            candidates,
+            "SDOT",
+            profile,
+        )
+        self.assertEqual({item["id"] for item in selected}, {"recent-a", "recent-b"})
+        self.assertFalse(skipped)
+
     def test_deep_search_estimate_is_large_for_many_families(self):
         work = finder.estimate_search_work(finder.search_profile("Deep"), 20)
         self.assertGreater(work["minimum_estimated_simulations"], 10_000)
