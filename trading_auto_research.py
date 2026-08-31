@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 from trading_catalyst_core import enrich_bars_with_point_in_time_catalysts, historical_news
 from trading_intelligence_core import effective_strategy_for_research, research_readiness
+from stock_strategy_finder import holdout_reuse_audit, record_holdout_exposure
 from trading_universe_research import cross_stock_generalization
 from trading_validation_core import validation_strength, walk_forward_validate
 from youtube_strategy_engine import (
@@ -44,7 +45,7 @@ AUTO_EVENT_WINDOW_BUFFER_DAYS = 30
 # choose symbols. This prevents end-of-day/event-window hindsight from deciding
 # which earlier intraday bars are allowed into the test sample.
 AUTO_VALIDATION_WINDOW_DAYS = 180
-AUTONOMOUS_VALIDATION_METHOD_VERSION = 3
+AUTONOMOUS_VALIDATION_METHOD_VERSION = 4
 AUTO_TIMEFRAME = "5Min"
 
 
@@ -1652,6 +1653,7 @@ def merge_autonomous_research_into_library(
 ) -> dict[str, Any]:
     """Persist autonomous research outcomes without requiring manual save clicks."""
     data = dict(library or {})
+    prior_exposure_library = dict(data)
     strategies = [dict(item) for item in data.get("strategies") or [] if isinstance(item, dict)]
     by_id = {str(item.get("id") or ""): item for item in strategies if item.get("id")}
 
@@ -1702,6 +1704,21 @@ def merge_autonomous_research_into_library(
         generalization = result.get("generalization") or {}
         walk = result.get("walk_forward") or {}
         status = str(result.get("validation_status") or "research_only")
+        holdout_audit = holdout_reuse_audit(
+            prior_exposure_library,
+            {
+                "symbol": result.get("anchor_symbol"),
+                "timeframe": report.get("timeframe"),
+                "optimization": optimization,
+                "generated_at": report.get("generated_at"),
+            },
+        )
+        gate_reasons = list(result.get("gate_reasons") or [])
+        if status == "validated" and not holdout_audit.get("pristine", True):
+            status = "research_only"
+            gate_reasons.append(
+                "Autonomous final holdout overlaps outcomes exposed by an earlier research cycle."
+            )
 
         item["validation_status"] = status
         item["optimization_status"] = str(winner.get("status") or "not_run").lower().replace(" ", "_")
@@ -1719,7 +1736,8 @@ def merge_autonomous_research_into_library(
             "generalization_score": (generalization.get("summary") or {}).get("score"),
             "generalization_label": (generalization.get("summary") or {}).get("label"),
             "validation_status": status,
-            "gate_reasons": result.get("gate_reasons") or [],
+            "gate_reasons": gate_reasons,
+            "holdout_reuse_audit": holdout_audit,
             "universe_source": (report.get("universe") or {}).get("source"),
         }
         if status == "validated":
@@ -1744,6 +1762,8 @@ def merge_autonomous_research_into_library(
                 "robustness": strength,
                 "optimizer_status": winner.get("status"),
                 "validation_status": status,
+                "holdout_reuse_audit": holdout_audit,
+                "holdout_sessions": list(optimization.get("holdout_sessions") or []),
                 "training_metrics": winner.get("training_metrics") or {},
                 "validation_metrics": winner.get("validation_metrics") or {},
                 "holdout_metrics": winner.get("holdout_metrics") or {},
@@ -1759,8 +1779,27 @@ def merge_autonomous_research_into_library(
                 ),
                 "global_score": result.get("global_score"),
                 "generalization_summary": generalization.get("summary") or {},
-                "gate_reasons": result.get("gate_reasons") or [],
+                "gate_reasons": gate_reasons,
             }
+        )
+
+    # Record exposures after all same-batch verdicts are decided. Strategies
+    # predeclared in one autonomous cycle therefore do not contaminate each other,
+    # while future cycles cannot reuse the same final dates as pristine evidence.
+    for result in report.get("results") or []:
+        if not isinstance(result, dict):
+            continue
+        optimization = result.get("optimization_report") or {}
+        data = record_holdout_exposure(
+            data,
+            {
+                "symbol": result.get("anchor_symbol"),
+                "timeframe": report.get("timeframe"),
+                "optimization": optimization,
+                "generated_at": report.get("generated_at"),
+            },
+            source="autonomous_research",
+            generated_at=str(report.get("generated_at") or ""),
         )
 
     data["strategies"] = strategies
