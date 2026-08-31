@@ -6,6 +6,7 @@ from collections import Counter
 import hashlib
 from copy import deepcopy
 import html
+import importlib
 import inspect
 import os
 import time
@@ -53,57 +54,109 @@ from live_learning import (
     merge_shadow_observations,
     pending_symbols,
 )
-from predictive_probability_model import (
-    build_portable_probability_model,
-    score_scan_result_probability,
-)
-from predictive_boosted_probability_model import score_boosted_probability_model
 from predictive_model_monitor import build_shadow_model_monitor
 from predictive_model_registry import (
     build_model_registry,
     ready_shadow_models,
 )
 from predictive_model_head_to_head import build_historical_model_head_to_head
-import predictive_ml_pipeline as _predictive_ml_pipeline
 
-archetype_transfer_walk_forward_logistic_baseline = (
-    _predictive_ml_pipeline.archetype_transfer_walk_forward_logistic_baseline
-)
-build_cross_stock_training_dataset = (
-    _predictive_ml_pipeline.build_cross_stock_training_dataset
-)
-leave_one_symbol_out_walk_forward_logistic_baseline = (
-    _predictive_ml_pipeline.leave_one_symbol_out_walk_forward_logistic_baseline
-)
-walk_forward_logistic_baseline = (
-    _predictive_ml_pipeline.walk_forward_logistic_baseline
-)
 
-try:
-    similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline = (
-        _predictive_ml_pipeline.similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline
-    )
-except AttributeError:
-    # During a Streamlit hot deploy the app page can update before the cached
-    # predictive_ml_pipeline module does. Load the current source under a private
-    # versioned alias rather than mutating the shared import cache in place.
-    _current_predictive_ml_pipeline = load_current_source_module(
-        "predictive_ml_pipeline"
-    )
-    similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline = (
-        _current_predictive_ml_pipeline.similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline
+def _lazy_module_call(module_name: str, function_name: str, *args: Any, **kwargs: Any) -> Any:
+    """Import heavy ML modules only when an ML/scoring action actually needs them."""
+    module = importlib.import_module(module_name)
+    function = getattr(module, function_name, None)
+    if function is None and module_name == "predictive_ml_pipeline":
+        # Preserve the existing hot-deploy protection without paying the normal
+        # pipeline import cost on Finder/Overview startup.
+        module = load_current_source_module(module_name)
+        function = getattr(module, function_name)
+    if function is None:
+        raise AttributeError(f"{module_name}.{function_name} is unavailable")
+    return function(*args, **kwargs)
+
+
+def build_portable_probability_model(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_module_call(
+        "predictive_probability_model",
+        "build_portable_probability_model",
+        *args,
+        **kwargs,
     )
 
-try:
-    ticker_specific_walk_forward_logistic_baseline = (
-        _predictive_ml_pipeline.ticker_specific_walk_forward_logistic_baseline
+
+def score_scan_result_probability(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_module_call(
+        "predictive_probability_model",
+        "score_scan_result_probability",
+        *args,
+        **kwargs,
     )
-except AttributeError:
-    _current_predictive_ml_pipeline_for_ticker = load_current_source_module(
-        "predictive_ml_pipeline"
+
+
+def score_boosted_probability_model(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_module_call(
+        "predictive_boosted_probability_model",
+        "score_boosted_probability_model",
+        *args,
+        **kwargs,
     )
-    ticker_specific_walk_forward_logistic_baseline = (
-        _current_predictive_ml_pipeline_for_ticker.ticker_specific_walk_forward_logistic_baseline
+
+
+def build_cross_stock_training_dataset(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_module_call(
+        "predictive_ml_pipeline",
+        "build_cross_stock_training_dataset",
+        *args,
+        **kwargs,
+    )
+
+
+def walk_forward_logistic_baseline(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_module_call(
+        "predictive_ml_pipeline",
+        "walk_forward_logistic_baseline",
+        *args,
+        **kwargs,
+    )
+
+
+def leave_one_symbol_out_walk_forward_logistic_baseline(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_module_call(
+        "predictive_ml_pipeline",
+        "leave_one_symbol_out_walk_forward_logistic_baseline",
+        *args,
+        **kwargs,
+    )
+
+
+def similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline(
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    return _lazy_module_call(
+        "predictive_ml_pipeline",
+        "similarity_weighted_leave_one_symbol_out_walk_forward_logistic_baseline",
+        *args,
+        **kwargs,
+    )
+
+
+def ticker_specific_walk_forward_logistic_baseline(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_module_call(
+        "predictive_ml_pipeline",
+        "ticker_specific_walk_forward_logistic_baseline",
+        *args,
+        **kwargs,
+    )
+
+
+def archetype_transfer_walk_forward_logistic_baseline(*args: Any, **kwargs: Any) -> Any:
+    return _lazy_module_call(
+        "predictive_ml_pipeline",
+        "archetype_transfer_walk_forward_logistic_baseline",
+        *args,
+        **kwargs,
     )
 from trading_app_runtime import market_client, setting
 from trading_glass_theme import inject_research_glass_theme
