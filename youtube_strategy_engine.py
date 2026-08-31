@@ -3517,6 +3517,7 @@ class AlpacaMarketData:
             return {
                 "symbol": ticker,
                 "timestamp": isoformat_utc(quote_time),
+                "feed": chosen_feed,
                 "bid": bid,
                 "ask": ask,
                 "midpoint": midpoint,
@@ -3643,6 +3644,7 @@ def historical_entry_spread_audit(
                 "quote_found": True,
                 "quote_fresh": fresh_quote,
                 "quote_timestamp": quote_timestamp,
+                "quote_feed": str(quote.get("feed") or "").strip().lower() or None,
                 "quote_age_seconds": (
                     round(quote_age_seconds, 3)
                     if math.isfinite(quote_age_seconds)
@@ -3663,6 +3665,13 @@ def historical_entry_spread_audit(
         and safe_float(item.get("spread_bps")) is not None
     )
     quote_count = len(spreads)
+    observed_quote_feeds = sorted(
+        {
+            str(item.get("quote_feed") or "").strip().lower()
+            for item in observations
+            if item.get("quote_found") and item.get("quote_fresh") and item.get("quote_feed")
+        }
+    )
     attempted = len(eligible)
     coverage_pct = quote_count / attempted * 100.0 if attempted else 0.0
 
@@ -3691,6 +3700,9 @@ def historical_entry_spread_audit(
     elif p90_spread is not None and p90_spread > tested_ceiling:
         status = "UNDERMODELED"
         label = "SPREAD STRESS RANGE TOO LOW"
+    elif observed_quote_feeds and observed_quote_feeds != ["sip"]:
+        status = "LIMITED_FEED"
+        label = "NON-CONSOLIDATED QUOTE FEED"
     elif p90_spread is not None and p90_spread <= modeled:
         status = "COVERED"
         label = "MODELED SPREAD CONSERVATIVE"
@@ -3705,6 +3717,8 @@ def historical_entry_spread_audit(
         "holdout_trade_count": holdout_trade_count,
         "sampled_entry_count": attempted,
         "quote_count": quote_count,
+        "quote_feeds": observed_quote_feeds,
+        "consolidated_sip_quotes": observed_quote_feeds == ["sip"],
         "coverage_pct": round(coverage_pct, 1),
         "maximum_quote_age_seconds": round(float(maximum_quote_age_seconds), 3),
         "modeled_spread_bps": round(modeled, 3),
@@ -3722,8 +3736,9 @@ def historical_entry_spread_audit(
         "post_selection_diagnostic": True,
         "note": (
             "Real historical quotes are sampled only at the frozen winner's untouched-holdout "
-            "entry moments, and stale quotes do not count toward coverage. This checks whether "
-            "the modeled spread stress range covered observed "
+            "entry moments, and stale quotes do not count toward coverage. SIP quotes are required "
+            "for a fully covered/conservative verdict; non-consolidated feeds remain limited evidence. "
+            "This checks whether the modeled spread stress range covered observed "
             "execution conditions; it does not make max_spread_pct an optimized historical rule."
         ),
     }
