@@ -89,26 +89,45 @@ from trading_glass_theme import inject_research_glass_theme
 # expose partially initialized modules to the file watcher and other pages.
 import stock_strategy_finder as _stock_strategy_finder
 
+# Streamlit Cloud can hot-deploy this page before Python invalidates the already
+# imported stock_strategy_finder module. If the page references a newly added
+# Finder helper while the cached module is still the prior version, startup
+# crashes with AttributeError. Detect that stale-module shape and load the
+# current source under a private versioned alias, just as we already do for the
+# predictive ML module above.
+_required_finder_attributes = (
+    "finder_evidence_verdict",
+    "apply_paper_fidelity_to_verdict",
+    "validated_status_ready",
+)
+_finder_module = _stock_strategy_finder
+_finder_profiles = getattr(_finder_module, "SEARCH_PROFILES", {}) or {}
+if (
+    any(not hasattr(_finder_module, name) for name in _required_finder_attributes)
+    or "Current Regime" not in _finder_profiles
+):
+    _finder_module = load_current_source_module("stock_strategy_finder")
+
 _finder_run_parameters = inspect.signature(
-    _stock_strategy_finder.run_stock_strategy_finder
+    _finder_module.run_stock_strategy_finder
 ).parameters
 _finder_supports_resume = {
     "resume_state",
     "checkpoint",
 }.issubset(_finder_run_parameters)
 
-SEARCH_PROFILES = _stock_strategy_finder.SEARCH_PROFILES
-estimate_search_work = _stock_strategy_finder.estimate_search_work
-latest_finder_checkpoint = _stock_strategy_finder.latest_finder_checkpoint
-merge_finder_checkpoint_into_library = _stock_strategy_finder.merge_finder_checkpoint_into_library
-merge_finder_report_into_library = _stock_strategy_finder.merge_finder_report_into_library
-finder_evidence_verdict = _stock_strategy_finder.finder_evidence_verdict
-apply_paper_fidelity_to_verdict = _stock_strategy_finder.apply_paper_fidelity_to_verdict
-parameter_stability_test = _stock_strategy_finder.parameter_stability_test
-validated_status_ready = _stock_strategy_finder.validated_status_ready
-run_stock_strategy_finder = _stock_strategy_finder.run_stock_strategy_finder
-search_profile = _stock_strategy_finder.search_profile
-selected_strategies_for_profile = _stock_strategy_finder.selected_strategies_for_profile
+SEARCH_PROFILES = _finder_module.SEARCH_PROFILES
+estimate_search_work = _finder_module.estimate_search_work
+latest_finder_checkpoint = _finder_module.latest_finder_checkpoint
+merge_finder_checkpoint_into_library = _finder_module.merge_finder_checkpoint_into_library
+merge_finder_report_into_library = _finder_module.merge_finder_report_into_library
+finder_evidence_verdict = _finder_module.finder_evidence_verdict
+apply_paper_fidelity_to_verdict = _finder_module.apply_paper_fidelity_to_verdict
+parameter_stability_test = _finder_module.parameter_stability_test
+validated_status_ready = _finder_module.validated_status_ready
+run_stock_strategy_finder = _finder_module.run_stock_strategy_finder
+search_profile = _finder_module.search_profile
+selected_strategies_for_profile = _finder_module.selected_strategies_for_profile
 from trading_catalyst_core import (
     catalyst_intelligence_summary,
     classify_catalyst,
