@@ -7,6 +7,8 @@ restricted to strategies the user explicitly approved in the main Trading Lab.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import os
+from pathlib import Path
 import re
 from typing import Any
 
@@ -79,6 +81,103 @@ def build_store() -> StrategyStore:
             path=setting("GITHUB_BACKUP_PATH", DEFAULT_GITHUB_BACKUP_PATH),
         )
     return StrategyStore(cloud_backup=cloud_backup)
+
+
+DEFAULT_PRIVATE_BACKUP_REPOSITORY = "derektshaffer/derektshaffer-youtube-trading-strategy-lab"
+OBSOLETE_PRIVATE_BACKUP_REPOSITORIES = {
+    "derektshaffer/youtube-trading-strategy-backups",
+}
+
+
+def _resolved_backup_repository() -> str:
+    repository = setting(
+        "GITHUB_BACKUP_REPOSITORY",
+        DEFAULT_PRIVATE_BACKUP_REPOSITORY,
+    )
+    if repository in OBSOLETE_PRIVATE_BACKUP_REPOSITORIES:
+        return DEFAULT_PRIVATE_BACKUP_REPOSITORY
+    return repository
+
+
+def _backup_token() -> str:
+    return (
+        setting("GITHUB_BACKUP_TOKEN")
+        or setting("GITHUB_TOKEN")
+        or setting("GH_TOKEN")
+    )
+
+
+def build_intelligence_store() -> StrategyStore:
+    """Use the same durable Intelligence Lab store as Stock Strategy Finder."""
+    repository = _resolved_backup_repository()
+    token = _backup_token()
+    cloud_backup = None
+    if repository and token:
+        cloud_backup = GitHubCloudBackup(
+            repository,
+            token,
+            branch=setting("GITHUB_BACKUP_BRANCH"),
+            path=setting(
+                "TRADING_INTELLIGENCE_BACKUP_PATH",
+                "trading-intelligence-lab/intelligence_library.json",
+            ),
+        )
+    directory = Path(
+        os.environ.get("TRADING_INTELLIGENCE_DATA_DIR")
+        or ".trading_intelligence_data"
+    )
+    return StrategyStore(directory=directory, cloud_backup=cloud_backup)
+
+
+def merge_runner_libraries(
+    legacy_library: dict[str, Any],
+    intelligence_library: dict[str, Any],
+) -> dict[str, Any]:
+    """Expose Finder children without moving or rewriting either durable store."""
+    merged = dict(legacy_library or {})
+    strategies: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for library in (intelligence_library, legacy_library):
+        for strategy in (library or {}).get("strategies") or []:
+            if not isinstance(strategy, dict):
+                continue
+            strategy_id = str(strategy.get("id") or "").strip()
+            if strategy_id and strategy_id in seen_ids:
+                continue
+            prepared = dict(strategy)
+            if (
+                str(prepared.get("source_type") or "").strip().casefold()
+                == "stock_specific_finder"
+            ):
+                # Finder children have distinct optimized rules. Fail closed for
+                # both new and legacy children until that exact child has its own
+                # explicit approval workflow.
+                prepared["approved"] = False
+            strategies.append(prepared)
+            if strategy_id:
+                seen_ids.add(strategy_id)
+    merged["strategies"] = strategies
+    return merged
+
+
+def load_runner_library() -> dict[str, Any]:
+    """Combine legacy strategies with the current durable Finder child library."""
+    legacy_library = build_store().load()
+    intelligence_library = build_intelligence_store().load_latest()
+    return merge_runner_libraries(legacy_library, intelligence_library)
+
+
+def requested_strategy_label(
+    options: dict[str, dict[str, Any]],
+    strategy_id: str,
+) -> str:
+    """Resolve a cross-page handoff by stable strategy ID."""
+    target = str(strategy_id or "").strip()
+    if target:
+        for label, strategy in options.items():
+            if str(strategy.get("id") or "") == target:
+                return label
+    return ""
 
 
 def paper_client() -> AlpacaPaperTrader:
@@ -387,8 +486,7 @@ def render() -> None:
     )
 
     try:
-        store = build_store()
-        library = store.load()
+        library = load_runner_library()
     except AppError as error:
         st.error(str(error))
         return
@@ -428,6 +526,13 @@ def render() -> None:
     summary_cols[2].metric("Live market data", "Connected" if market_ready else "Not connected")
 
     options = strategy_options(strategies)
+    requested_strategy_id = str(
+        st.session_state.pop("til_selected_strategy_id", "") or ""
+    )
+    requested_label = requested_strategy_label(options, requested_strategy_id)
+    if requested_label:
+        # Apply the cross-page request before the selectbox is instantiated.
+        st.session_state["runner_strategy_v2"] = requested_label
     selected_label = st.selectbox("Strategy to run", list(options), key="runner_strategy_v2")
     strategy = options[selected_label]
     approved = bool(strategy.get("approved"))

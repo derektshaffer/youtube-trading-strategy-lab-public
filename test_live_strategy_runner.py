@@ -223,6 +223,52 @@ class MarketDataFreshnessTests(unittest.TestCase):
         self.assertFalse(result["submitted"])
 
 
+class RunnerLibraryTests(unittest.TestCase):
+    def test_intelligence_finder_children_are_available_with_legacy_strategies(self):
+        legacy = {
+            "strategies": [
+                {"id": "legacy-family", "name": "Legacy family"},
+                {"id": "shared", "name": "Old shared record"},
+            ]
+        }
+        intelligence = {
+            "strategies": [
+                {
+                    "id": "finder-child",
+                    "name": "SDOT optimized",
+                    "source_type": "stock_specific_finder",
+                    "approved": True,
+                },
+                {"id": "shared", "name": "Current shared record"},
+            ]
+        }
+
+        merged = runner.merge_runner_libraries(legacy, intelligence)
+
+        self.assertEqual(
+            [item["id"] for item in merged["strategies"]],
+            ["finder-child", "shared", "legacy-family"],
+        )
+        self.assertEqual(merged["strategies"][1]["name"], "Current shared record")
+        self.assertFalse(merged["strategies"][0]["approved"])
+
+    def test_requested_child_strategy_is_selected_by_stable_id(self):
+        parent = {"id": "family-1", "name": "Family"}
+        child = {
+            "id": "stockfinder-child",
+            "name": "Family — SDOT optimized",
+            "optimized_for_symbol": "SDOT",
+        }
+        options = runner.strategy_options([parent, child])
+        label = runner.requested_strategy_label(options, child["id"])
+        self.assertTrue(label)
+        self.assertEqual(options[label]["id"], child["id"])
+
+    def test_unknown_handoff_does_not_change_runner_selection(self):
+        options = runner.strategy_options([{"id": "family-1", "name": "Family"}])
+        self.assertEqual(runner.requested_strategy_label(options, "missing"), "")
+
+
 class StrategyDirectionTests(unittest.TestCase):
     def test_both_direction_is_long_capable_for_paper_auto(self):
         self.assertTrue(runner.is_long_strategy(valid_strategy("both")))

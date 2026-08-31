@@ -178,6 +178,46 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
         self.assertIn("latest_symbol_finder_result", source)
         self.assertIn("Open {completed_symbol} {completed_profile} result", source)
 
+    def test_cloud_finder_queue_failures_stay_inside_the_page(self):
+        source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        self.assertIn('queue_error = ""', source)
+        self.assertIn("Cloud Finder could not confirm a durable queue update", source)
+        self.assertIn("No automatic retry was started", source)
+
+    def test_stock_specific_finder_children_are_available_only_to_downstream_workflows(self):
+        source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        self.assertIn("stock_specific_strategies", source)
+        self.assertIn(
+            "downstream_strategies = [*stock_specific_strategies, *managed_strategies]",
+            source,
+        )
+        self.assertIn(
+            "finder_family_strategies = stock_finder_strategy_families(strategies)",
+            source,
+        )
+        self.assertIn("finder_family_strategies,", source)
+
+    def test_live_runner_consumes_exact_finder_strategy_handoff_before_widget(self):
+        source = (ROOT / "live_strategy_runner_page.py").read_text(encoding="utf-8")
+        request_index = source.index(
+            'st.session_state.pop("til_selected_strategy_id", "")'
+        )
+        widget_index = source.index(
+            'st.selectbox("Strategy to run", list(options), key="runner_strategy_v2")'
+        )
+        self.assertLess(request_index, widget_index)
+        self.assertIn("build_intelligence_store().load_latest()", source)
+
+    def test_manual_lab_cannot_weaken_the_finder_validation_protocol(self):
+        source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        self.assertIn("stress_cost_multiplier=1.75", source)
+        self.assertIn("automatic_slippage=True", source)
+        self.assertIn('number_input("Walk-forward folds", 2, 6, 3, 1)', source)
+        self.assertIn(
+            '"Validation drawdown ceiling (%)",\n                1.0,\n                20.0,',
+            source,
+        )
+
     def test_streamlit_version_supports_locked_sidebar(self):
         requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
         self.assertIn("streamlit>=1.59,<2", requirements)

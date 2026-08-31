@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import unittest
 from zoneinfo import ZoneInfo
 
+from finder_report_persistence import newest_matching_finder_report
 import stock_strategy_finder as finder
 import youtube_strategy_engine as engine
 
@@ -42,6 +44,34 @@ def strategy(strategy_id: str, *, category: str = "momentum", **rules) -> dict:
 
 
 class StockStrategyFinderPolicyTests(unittest.TestCase):
+    def test_library_family_selection_excludes_prior_stock_specific_children(self):
+        source = strategy("source-family")
+        child = {
+            **source,
+            "id": "stock-child",
+            "source_type": "stock_specific_finder",
+            "parent_strategy_id": source["id"],
+            "optimized_for_symbol": "SDOT",
+        }
+        canonical = {
+            **strategy("canonical-family"),
+            "source_type": "canonical_family",
+        }
+
+        self.assertEqual(
+            [item["id"] for item in finder.stock_finder_strategy_families([source, child])],
+            [source["id"]],
+        )
+        self.assertEqual(
+            [
+                item["id"]
+                for item in finder.stock_finder_strategy_families(
+                    [source, child, canonical]
+                )
+            ],
+            [canonical["id"]],
+        )
+
     def test_deep_search_keeps_every_technically_eligible_family(self):
         strategies = [
             strategy("vwap", category="reclaim", above_vwap=True),
@@ -340,6 +370,7 @@ class FinderEvidenceTierTests(unittest.TestCase):
 class FinderPersistenceTests(unittest.TestCase):
     def test_merge_saves_loser_ledger_and_stock_specific_child(self):
         source = strategy("source-family", breakout_lookback_bars=20)
+        source["approved"] = True
         source["validation_status"] = "validated"
         source["validated_rules"] = {
             **source["machine_rules"],
@@ -469,6 +500,7 @@ class FinderPersistenceTests(unittest.TestCase):
         self.assertEqual(child["optimized_for_symbol"], "SDOT")
         self.assertEqual(child["paper_validation_status"], "ready")
         self.assertEqual(child["validation_status"], "validated")
+        self.assertFalse(child["approved"])
         self.assertEqual(child["validated_rules"], source["machine_rules"])
         self.assertNotEqual(child["validated_rules"], source["validated_rules"])
         self.assertEqual(
@@ -496,6 +528,65 @@ class FinderPersistenceTests(unittest.TestCase):
         completed_checkpoint = finder.latest_finder_checkpoint(merged, "SDOT", "Deep")
         self.assertEqual(completed_checkpoint["status"], "complete")
         self.assertEqual(completed_checkpoint["engine_state"], {})
+
+        failed_report = deepcopy(report)
+        failed_report["generated_at"] = "2026-08-28T06:00:00+00:00"
+        failed_report["verdict"] = {
+            "code": "historical_candidate",
+            "label": "HISTORICALLY PROFITABLE CANDIDATE — NOT VALIDATED",
+        }
+        failed = finder.merge_finder_report_into_library(merged, failed_report)
+        updated_child = next(
+            item
+            for item in failed["strategies"]
+            if str(item.get("id") or "") == child["id"]
+        )
+        self.assertEqual(updated_child["validation_status"], "research_only")
+        self.assertEqual(updated_child["paper_validation_status"], "not_ready")
+        self.assertFalse(updated_child["approved"])
+        self.assertNotIn("validated_rules", updated_child)
+        self.assertNotIn("validated_backtest_settings", updated_child)
+        self.assertNotIn("validated_at", updated_child)
+
+    def test_newer_durable_result_replaces_matching_stale_session_result(self):
+        session_report = {
+            "symbol": "SDOT",
+            "profile": {"name": "Deep"},
+            "generated_at": "2026-08-28T05:00:00+00:00",
+            "winner_strategy_name": "Old local winner",
+        }
+        saved_report = {
+            "symbol": "SDOT",
+            "profile": {"name": "Deep"},
+            "generated_at": "2026-08-28T06:00:00+00:00",
+            "winner_strategy_name": "New cloud winner",
+        }
+        chosen = newest_matching_finder_report(
+            session_report,
+            saved_report,
+            "SDOT",
+            "Deep",
+        )
+        self.assertEqual(chosen["winner_strategy_name"], "New cloud winner")
+
+    def test_durable_result_wins_an_exact_timestamp_tie(self):
+        session_report = {
+            "symbol": "SDOT",
+            "profile": {"name": "Current Regime"},
+            "generated_at": "2026-08-28T05:00:00Z",
+            "restored_from_library": False,
+        }
+        saved_report = {
+            **session_report,
+            "restored_from_library": True,
+        }
+        chosen = newest_matching_finder_report(
+            session_report,
+            saved_report,
+            "SDOT",
+            "Current Regime",
+        )
+        self.assertTrue(chosen["restored_from_library"])
 
 
 if __name__ == "__main__":
