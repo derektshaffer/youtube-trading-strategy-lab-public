@@ -1286,11 +1286,18 @@ def command_aggregate(run_id: str) -> int:
             [value for value in sensitivity_multipliers if value is not None]
             or [2.0]
         )
+        spread_audit_trades = list(winning_backtest_for_spread.get("trades") or [])
+        spread_audit_sessions = list(optimization_for_spread.get("holdout_sessions") or [])
+        spread_market = (
+            build_market()
+            if spread_audit_trades and spread_audit_sessions
+            else None
+        )
         spread_audit = historical_entry_spread_audit(
-            build_market(),
+            spread_market,
             symbol,
-            list(winning_backtest_for_spread.get("trades") or []),
-            list(optimization_for_spread.get("holdout_sessions") or []),
+            spread_audit_trades,
+            spread_audit_sessions,
             modeled_spread_bps=(
                 safe_float(optimized_settings_for_spread.get("spread_bps"), 12.0)
                 or 12.0
