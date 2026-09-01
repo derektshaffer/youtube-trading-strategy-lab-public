@@ -220,9 +220,36 @@ def validation_strength(
         penalties.append("Stress-test profit factor is too close to breakeven for a high robustness rating.")
 
     wf_profitable_pct = None
+    wf_fold_count = 0
+    wf_active_fold_count = 0
+    wf_profitable_fold_count = 0
+    wf_temporal_coverage_pct = None
+    wf_profitable_scheduled_pct = None
     if walk_forward_report:
         wf_summary = walk_forward_report.get("summary") or {}
         wf_profitable_pct = safe_float(wf_summary.get("profitable_fold_pct"), 0.0) or 0.0
+        wf_fold_count = int(safe_float(wf_summary.get("fold_count"), 0) or 0)
+        wf_active_fold_count = int(safe_float(wf_summary.get("active_fold_count"), 0) or 0)
+        wf_profitable_fold_count = int(safe_float(wf_summary.get("profitable_fold_count"), 0) or 0)
+        if wf_fold_count > 0:
+            wf_temporal_coverage_pct = wf_active_fold_count / wf_fold_count * 100.0
+            wf_profitable_scheduled_pct = wf_profitable_fold_count / wf_fold_count * 100.0
+            minimum_active_folds = min(2, wf_fold_count)
+            if wf_active_fold_count < minimum_active_folds:
+                score_cap = min(score_cap, 49.0)
+                penalties.append(
+                    "Too few scheduled walk-forward folds produced trades to establish temporal robustness."
+                )
+            elif wf_temporal_coverage_pct < 66.7:
+                score_cap = min(score_cap, 59.0)
+                penalties.append(
+                    "The frozen setup traded in fewer than two-thirds of scheduled walk-forward folds."
+                )
+            if wf_profitable_scheduled_pct < 50.0:
+                score_cap = min(score_cap, 49.0)
+                penalties.append(
+                    "Fewer than half of all scheduled walk-forward folds were profitable once inactive folds are counted."
+                )
         if wf_profitable_pct < 50.0:
             score_cap = min(score_cap, 49.0)
             penalties.append("Fewer than half of active walk-forward folds were profitable.")
@@ -254,6 +281,12 @@ def validation_strength(
     )
     if walk_forward_report:
         independently_positive = independently_positive and (wf_profitable_pct or 0.0) >= 50.0
+        if wf_fold_count > 0:
+            independently_positive = (
+                independently_positive
+                and wf_active_fold_count >= min(2, wf_fold_count)
+                and (wf_profitable_scheduled_pct or 0.0) >= 50.0
+            )
 
     return {
         "score": final_score,
@@ -261,6 +294,18 @@ def validation_strength(
         "score_cap": round(score_cap, 1),
         "base_score": round(base_score, 1),
         "walk_forward_score": round(walk_score, 1) if walk_score is not None else None,
+        "walk_forward_fold_count": wf_fold_count or None,
+        "walk_forward_active_fold_count": wf_active_fold_count if wf_fold_count else None,
+        "walk_forward_temporal_coverage_pct": (
+            round(wf_temporal_coverage_pct, 1)
+            if wf_temporal_coverage_pct is not None
+            else None
+        ),
+        "walk_forward_profitable_scheduled_pct": (
+            round(wf_profitable_scheduled_pct, 1)
+            if wf_profitable_scheduled_pct is not None
+            else None
+        ),
         "execution_sensitivity_score": (
             round(sensitivity_score, 1) if sensitivity_score is not None else None
         ),
@@ -274,9 +319,10 @@ def validation_strength(
         "note": (
             "Robustness summarizes anchor-stock historical validation. When available, "
             "execution-cost robustness is taken from the frozen winner's untouched holdout "
-            "curve rather than the development validation curve. Stability caps prevent "
-            "negative/unstable, undersized, or near-breakeven evidence from receiving a "
-            "misleading high rating; it is not a probability of profit."
+            "curve rather than the development validation curve. Walk-forward temporal coverage "
+            "also counts inactive scheduled folds so sparse activity cannot masquerade as broad "
+            "consistency. Stability caps prevent negative/unstable, undersized, or near-breakeven "
+            "evidence from receiving a misleading high rating; it is not a probability of profit."
         ),
     }
 
