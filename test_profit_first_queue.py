@@ -91,12 +91,12 @@ class ProfitFirstQueueTests(unittest.TestCase):
     def test_current_protocol_failure_is_not_requeued(self, readiness):
         readiness.side_effect = self.ready
         library = {
-            "strategies": [strategy("method4")],
+            "strategies": [strategy("method5")],
             "validation_runs": [
                 run(
-                    "method4",
+                    "method5",
                     generated_at="2026-08-31T07:24:05Z",
-                    version=4,
+                    version=queue.CURRENT_AUTONOMOUS_VALIDATION_METHOD_VERSION,
                     validation_pnl=0,
                     holdout_pnl=0,
                     stress_pnl=0,
@@ -116,7 +116,7 @@ class ProfitFirstQueueTests(unittest.TestCase):
                 run(
                     "legacy",
                     generated_at="2026-08-31T23:17:32Z",
-                    version=4,
+                    version=queue.CURRENT_AUTONOMOUS_VALIDATION_METHOD_VERSION,
                     validation_pnl=-1,
                     holdout_pnl=-1,
                     stress_pnl=-1,
