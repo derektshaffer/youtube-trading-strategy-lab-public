@@ -17,6 +17,7 @@ on:
       - "predictive_learning_router.py"
       - "trading_research_orchestrator.py"
       - "trading_auto_research.py"
+      - "trading_validation_core.py"
       - ".github/workflows/continuous-trading-research.yml"
 
 permissions:
