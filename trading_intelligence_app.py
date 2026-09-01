@@ -4018,12 +4018,12 @@ if module == "Stock Strategy Finder":
                     if rule_key.endswith("_ratio"):
                         return f"{numeric_value:g}×"
                     if "dollar_volume" in rule_key:
-                        return f"$\{numeric_value:,.0f}"
+                        return f"${numeric_value:,.0f}"
                     if rule_key.endswith("_price") or rule_key in {"min_price", "max_price"}:
-                        return f"$\{numeric_value:g}"
+                        return f"${numeric_value:g}"
                     if rule_key.endswith("_bars"):
-                        return f"\{numeric_value:g} bars"
-                    return f"\{numeric_value:g}"
+                        return f"{numeric_value:g} bars"
+                    return f"{numeric_value:g}"
                 return str(value)
 
             active_rule_rows = []
