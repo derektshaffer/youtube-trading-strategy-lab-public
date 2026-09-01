@@ -48,6 +48,15 @@ class ExplosiveStockIsolationTests(unittest.TestCase):
         self.assertIn('st.session_state["explosive_analysis_result"]', source)
         self.assertNotIn('st.session_state["til_stock_analysis"]', source)
 
+    def test_explosive_analyzer_keeps_interactive_chart_local_to_analyzer(self):
+        source = (self.root / "explosive_stock_page.py").read_text(encoding="utf-8")
+        self.assertIn("def _render_intraday_chart", source)
+        self.assertIn("go.Candlestick(", source)
+        self.assertIn("st.plotly_chart(", source)
+        self.assertIn("include_chart_data=True", source)
+        scanner_call = source.split('if view == "Scanner":', 1)[1].split("else:", 1)[0]
+        self.assertNotIn("include_chart_data=True", scanner_call)
+
     def test_ranked_candidates_open_analyzer_on_row_selection(self):
         source = (self.root / "explosive_stock_page.py").read_text(encoding="utf-8")
         self.assertIn('on_select="rerun"', source)
