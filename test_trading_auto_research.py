@@ -11,6 +11,7 @@ from trading_auto_research import (
     invalidate_legacy_autonomous_validations,
     autonomous_validation_boundaries,
     AUTONOMOUS_VALIDATION_METHOD_VERSION,
+    AUTO_INTRADAY_VALIDATION_BATCH_SIZE,
     _batched_bars,
     autonomous_research_baselines,
     _global_validation_gate,
@@ -89,6 +90,50 @@ class InvalidHistoricalSymbolTests(unittest.TestCase):
         self.assertTrue(any("D012219" in message for message in messages))
         self.assertEqual(market.calls[0], ["AAPL", "D012219", "MSFT"])
         self.assertEqual(market.calls[1], ["AAPL", "MSFT"])
+
+    def test_intraday_validation_prebatch_keeps_complete_window(self):
+        class FakeMarket:
+            def __init__(self):
+                self.calls = []
+
+            def bars(self, symbols, **kwargs):
+                self.calls.append(
+                    {
+                        "symbols": list(symbols),
+                        "start": kwargs.get("start"),
+                        "end": kwargs.get("end"),
+                        "timeframe": kwargs.get("timeframe"),
+                    }
+                )
+                return {
+                    symbol: [{"t": "2026-08-20T15:00:00Z", "c": 10, "v": 1000}]
+                    for symbol in symbols
+                }
+
+            def research_reset_actions(self, symbols, **kwargs):
+                return []
+
+        market = FakeMarket()
+        start = datetime(2026, 3, 1, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 28, tzinfo=timezone.utc)
+        rows = _batched_bars(
+            market,
+            ["AAA", "BBB", "CCC", "DDD", "EEE"],
+            start=start,
+            end=end,
+            timeframe="5Min",
+            batch_size=AUTO_INTRADAY_VALIDATION_BATCH_SIZE,
+            max_pages=64,
+        )
+
+        self.assertEqual(set(rows), {"AAA", "BBB", "CCC", "DDD", "EEE"})
+        self.assertEqual(
+            [call["symbols"] for call in market.calls],
+            [["AAA", "BBB"], ["CCC", "DDD"], ["EEE"]],
+        )
+        self.assertTrue(all(call["start"] == start for call in market.calls))
+        self.assertTrue(all(call["end"] == end for call in market.calls))
+        self.assertTrue(all(call["timeframe"] == "5Min" for call in market.calls))
 
     def test_oversized_historical_batch_is_split_without_shortening_the_window(self):
         class FakeMarket:
