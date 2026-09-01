@@ -775,6 +775,10 @@ def score_historical_opportunities(
     ] + structural_opportunity_rules + ema_proxy_rules
 
     events: list[dict[str, Any]] = []
+    # Discovery is a recall stage, not a validation gate. Keep a generic,
+    # point-in-time fallback pool so overly specific daily proxies cannot starve
+    # otherwise testable strategies before the real intraday optimizer sees them.
+    fallback_events: list[dict[str, Any]] = []
     outlier_events: list[dict[str, Any]] = []
     all_moves: list[float] = []
     all_rvol: list[float] = []
@@ -920,26 +924,35 @@ def score_historical_opportunities(
                     and fast_ema_distance_pct <= float(rules["max_fast_ema_distance_pct"])
                 )
 
+        # Build the generic discovery proxy for every strategy. It is only used
+        # when strict strategy-specific events do not fill the discovery slots.
+        # This uses same-day information available before the fixed validation
+        # cutoff and never uses future P/L or validation outcomes.
+        directional_move = (
+            abs(change)
+            if direction == "both"
+            else (-change if direction == "short" else change)
+        )
+        price_checks = []
+        if rules.get("min_price") is not None:
+            price_checks.append(close >= float(rules["min_price"]))
+        if rules.get("max_price") is not None:
+            price_checks.append(close <= float(rules["max_price"]))
+        fallback_qualifies = (
+            all(price_checks)
+            and directional_move >= 3.0
+            and rvol >= 1.5
+            and dollar_volume >= 1_000_000
+        )
+
         if explicit_opportunity_rules:
             qualifies = all(checks) if checks else False
         else:
-            # Price bounds alone are not an "opportunity." For intraday patterns whose defining
-            # trigger cannot be seen in daily bars, require a generic momentum/participation event
-            # while still honoring any source-derived price bounds.
-            directional_move = abs(change) if direction == "both" else (-change if direction == "short" else change)
-            price_checks = []
-            if rules.get("min_price") is not None:
-                price_checks.append(close >= float(rules["min_price"]))
-            if rules.get("max_price") is not None:
-                price_checks.append(close <= float(rules["max_price"]))
-            qualifies = (
-                all(price_checks)
-                and directional_move >= 3.0
-                and rvol >= 1.5
-                and dollar_volume >= 1_000_000
-            )
+            # Intraday patterns with no faithful daily trigger use the same
+            # generic proxy as their primary discovery rule.
+            qualifies = fallback_qualifies
 
-        if qualifies:
+        if qualifies or fallback_qualifies:
             event = {
                 "date": str(row["timestamp"])[:10],
                 "close": round(close, 4),
@@ -981,7 +994,10 @@ def score_historical_opportunities(
             if liquidity_regime_outlier:
                 outlier_events.append(event)
             else:
-                events.append(event)
+                if qualifies:
+                    events.append(event)
+                if fallback_qualifies:
+                    fallback_events.append(event)
 
     peak_move = max(
         [(-value if direction == "short" else abs(value) if direction == "both" else value) for value in all_moves]
@@ -997,9 +1013,22 @@ def score_historical_opportunities(
         + min(20.0, max(0.0, peak_rvol_for_ranking) * 4.0)
         + min(15.0, math.log10(max(1.0, median_dollar_volume)) * 2.0)
     )
+    fallback_score = (
+        len(fallback_events) * 20.0
+        + min(25.0, max(0.0, peak_move))
+        + min(20.0, max(0.0, peak_rvol_for_ranking) * 4.0)
+        + min(15.0, math.log10(max(1.0, median_dollar_volume)) * 2.0)
+    )
     return {
         "score": round(score, 2),
         "event_count": len(events),
+        "fallback_event_count": len(fallback_events),
+        "fallback_score": round(fallback_score, 2),
+        "fallback_events": sorted(
+            fallback_events,
+            key=lambda item: (item["relative_volume"], abs(item["day_change_pct"])),
+            reverse=True,
+        )[:24],
         "explicit_daily_rule_count": len(explicit_daily_rules),
         "explicit_opportunity_rule_count": len(explicit_opportunity_rules),
         "candidate_selection_mode": (
@@ -1033,23 +1062,64 @@ def rank_historical_opportunities(
     *,
     limit: int = AUTO_SYMBOLS_PER_STRATEGY,
 ) -> list[dict[str, Any]]:
-    ranked: list[dict[str, Any]] = []
+    """Rank strict discovery matches first, then fill unused slots with safe fallbacks.
+
+    The fallback is intentionally discovery-only. It broadens recall when a
+    strategy's exact intraday trigger has a poor daily proxy, but it does not
+    relax optimization, walk-forward, neighborhood, holdout, or generalization
+    validation.
+    """
+    strict_ranked: list[dict[str, Any]] = []
+    fallback_ranked: list[dict[str, Any]] = []
     for symbol, rows in rows_by_symbol.items():
         if len(rows or []) < 8:
             continue
         metrics = score_historical_opportunities(rows, strategy)
-        if metrics["event_count"] <= 0:
+        strict_event_count = int(metrics.get("event_count") or 0)
+        if strict_event_count > 0:
+            strict_ranked.append(
+                {
+                    "symbol": symbol,
+                    **metrics,
+                    "strict_event_count": strict_event_count,
+                    "discovery_fallback_used": False,
+                }
+            )
             continue
-        ranked.append({"symbol": symbol, **metrics})
-    ranked.sort(
-        key=lambda item: (
+
+        fallback_events = list(metrics.get("fallback_events") or [])
+        if not fallback_events:
+            continue
+        fallback_ranked.append(
+            {
+                "symbol": symbol,
+                **metrics,
+                "strict_event_count": 0,
+                "event_count": len(fallback_events),
+                "events": fallback_events,
+                "score": float(metrics.get("fallback_score") or 0.0),
+                "candidate_selection_mode": (
+                    "generic_directional_fallback_after_zero_strict_matches"
+                ),
+                "discovery_fallback_used": True,
+            }
+        )
+
+    def ranking_key(item: dict[str, Any]) -> tuple[int, float, float]:
+        return (
             int(item.get("event_count") or 0),
             float(item.get("score") or 0),
-            float(item.get("peak_relative_volume") or 0),
-        ),
-        reverse=True,
-    )
-    return ranked[: max(1, int(limit))]
+            float(item.get("peak_relative_volume_for_ranking") or 0),
+        )
+
+    strict_ranked.sort(key=ranking_key, reverse=True)
+    fallback_ranked.sort(key=ranking_key, reverse=True)
+
+    maximum = max(1, int(limit))
+    ranked = strict_ranked[:maximum]
+    if len(ranked) < maximum:
+        ranked.extend(fallback_ranked[: maximum - len(ranked)])
+    return ranked
 
 
 def _backtest_settings_from_dict(raw: dict[str, Any]) -> BacktestSettings:
