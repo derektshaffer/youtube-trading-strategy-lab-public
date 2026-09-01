@@ -53,7 +53,9 @@ class ExplosiveStockIsolationTests(unittest.TestCase):
         self.assertIn('on_select="rerun"', source)
         self.assertIn('selection_mode="single-row"', source)
         self.assertIn("table_event.selection.rows", source)
-        self.assertIn('st.session_state["explosive_stock_view"] = "Analyzer"', source)
+        self.assertIn('st.session_state["_explosive_pending_view"] = "Analyzer"', source)
+        self.assertIn('pending_view = st.session_state.pop("_explosive_pending_view", None)', source)
+        self.assertNotIn('st.session_state["explosive_stock_view"] = "Analyzer"\n                st.rerun()', source)
 
     def test_explosive_page_names_its_own_access_gate(self):
         source = (self.root / "explosive_stock_page.py").read_text(encoding="utf-8")
