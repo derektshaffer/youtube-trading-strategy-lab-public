@@ -45,7 +45,7 @@ AUTO_EVENT_WINDOW_BUFFER_DAYS = 30
 # choose symbols. This prevents end-of-day/event-window hindsight from deciding
 # which earlier intraday bars are allowed into the test sample.
 AUTO_VALIDATION_WINDOW_DAYS = 180
-AUTONOMOUS_VALIDATION_METHOD_VERSION = 5
+AUTONOMOUS_VALIDATION_METHOD_VERSION = 6
 AUTO_TIMEFRAME = "5Min"
 # Alpaca multi-symbol intraday pagination can effectively return far fewer than
 # 10,000 rows per page depending on feed/plan. Small deterministic batches keep
@@ -1457,6 +1457,7 @@ def run_autonomous_research(
                     minimum_history_sessions=8,
                     test_sessions_per_fold=2,
                     max_folds=3,
+                    compare_static_baseline=True,
                 )
             except AppError:
                 # The global gate fails closed when walk-forward is unavailable.

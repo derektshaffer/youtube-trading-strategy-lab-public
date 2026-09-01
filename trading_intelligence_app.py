@@ -4064,19 +4064,76 @@ if module == "Stock Strategy Finder":
                 f"median P/L **${safe_float(stability.get('median_net_pnl'), 0.0):,.2f}**"
             )
             st.caption(str(stability.get("note") or ""))
-            adaptive_walk = (finder_result.get("walk_forward") or {}).get("adaptive_learning") or {}
+            walk_forward_detail = finder_result.get("walk_forward") or {}
+            adaptive_walk = walk_forward_detail.get("adaptive_learning") or {}
             if adaptive_walk.get("enabled"):
                 adaptive_count = int(adaptive_walk.get("experience_count") or 0)
                 adaptive_profitable = int(adaptive_walk.get("profitable_experience_count") or 0)
+                broad_count = int(
+                    adaptive_walk.get("broad_profitable_neighborhood_fold_count")
+                    or walk.get("broad_profitable_neighborhood_fold_count")
+                    or 0
+                )
                 st.success(
-                    "Adaptive walk-forward learning is ON · after each unseen fold finishes, "
-                    "its outcome becomes learning evidence for the next unseen fold."
+                    "Adaptive walk-forward learning is ON · each unseen fold is frozen first, "
+                    "then its completed outcome can teach the next fold."
                 )
                 st.caption(
-                    f"Causal experience replay: {adaptive_count} completed unseen fold(s) learned from · "
-                    f"{adaptive_profitable} profitable experience(s) promoted as rule-search seeds. "
+                    f"Causal learning: {adaptive_count} completed unseen fold(s) learned from · "
+                    f"{adaptive_profitable} profitable fold(s) · "
+                    f"{broad_count} fold(s) confirmed a broad profitable settings neighborhood. "
                     "Future folds remain hidden until their turn."
                 )
+
+                neighborhood_rows = []
+                for experience in adaptive_walk.get("experience") or []:
+                    neighborhood = (
+                        experience.get("profitable_neighborhood") or {}
+                        if isinstance(experience, dict)
+                        else {}
+                    )
+                    if not neighborhood.get("broad_profitable"):
+                        continue
+                    rule_ranges = neighborhood.get("rule_ranges") or {}
+                    for field_name, value_range in rule_ranges.items():
+                        if not isinstance(value_range, dict):
+                            continue
+                        neighborhood_rows.append(
+                            {
+                                "Fold": int(experience.get("fold") or 0),
+                                "Setting": rule_labels.get(
+                                    str(field_name),
+                                    str(field_name).replace("_", " ").title(),
+                                ),
+                                "Profitable range": (
+                                    f"{safe_float(value_range.get('min'), 0.0):g} → "
+                                    f"{safe_float(value_range.get('max'), 0.0):g}"
+                                ),
+                            }
+                        )
+                if neighborhood_rows:
+                    st.dataframe(
+                        pd.DataFrame(neighborhood_rows),
+                        width="stretch",
+                        hide_index=True,
+                    )
+                    st.caption(
+                        "These ranges are not fitted after the fact: the nearby settings were "
+                        "chosen before the unseen block and only recorded as a profitable "
+                        "neighborhood after that block finished."
+                    )
+
+                comparison = walk_forward_detail.get("comparison") or {}
+                if comparison.get("enabled"):
+                    st.write(
+                        "Adaptive vs static on the exact same unseen folds: "
+                        f"**{comparison.get('verdict') or 'MIXED'}**"
+                    )
+                    st.caption(
+                        f"Adaptive score {safe_float(comparison.get('adaptive_score'), 0.0):.1f} vs "
+                        f"static {safe_float(comparison.get('static_score'), 0.0):.1f} · "
+                        f"P/L difference ${safe_float(comparison.get('external_net_pnl_delta'), 0.0):,.2f}."
+                    )
             else:
                 st.caption(
                     "This saved result predates adaptive walk-forward learning. A new validation run "
