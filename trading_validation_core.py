@@ -792,20 +792,23 @@ def walk_forward_validate(
     embargo_sessions: int = 1,
     max_folds: int = 3,
     adaptive_learning: bool = True,
+    compare_static_baseline: bool = False,
+    max_neighborhood_candidates: int = 4,
     progress: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, Any]:
-    """Nested expanding-window walk-forward research.
+    """Nested expanding-window walk-forward research with causal adaptation.
 
     Each fold optimizes only on sessions before the fold's external test block.
     A configurable whole-session embargo is left completely unused immediately
-    before that external block. The optimizer still keeps its own
+    before that external block. The optimizer keeps its own
     training/validation/holdout separation inside the earlier historical window.
-    The selected rules are then frozen and run on the next unseen sessions.
 
-    When adaptive_learning is enabled, a completed unseen fold becomes causal
-    experience for later folds only after its result is known. Profitable rule
-    values seed the next optimizer search, while all completed folds—including
-    losses—enter the expanding historical window. No future fold is exposed early.
+    The selected winner and a small set of nearby validation-profitable finalists
+    are frozen before the external test begins. Only after that unseen block ends
+    may its results influence later folds. This lets the learner carry forward a
+    genuinely profitable parameter neighborhood instead of memorizing one exact
+    setting. When compare_static_baseline is enabled, later folds also run a
+    counterfactual non-adaptive optimizer on the exact same history/test split.
     """
     settings = backtest_settings or BacktestSettings()
     settings.validate()
@@ -819,6 +822,10 @@ def walk_forward_validate(
     test_sessions_per_fold = max(1, int(test_sessions_per_fold))
     embargo_sessions = max(0, min(5, int(embargo_sessions)))
     max_folds = max(1, min(8, int(max_folds)))
+    max_neighborhood_candidates = max(
+        0,
+        min(12, int(max_neighborhood_candidates)),
+    )
 
     required_sessions = (
         minimum_history_sessions + embargo_sessions + test_sessions_per_fold
@@ -840,6 +847,8 @@ def walk_forward_validate(
     folds: list[dict[str, Any]] = []
     all_external_trades: list[dict[str, Any]] = []
     adaptive_experience: list[dict[str, Any]] = []
+    static_folds: list[dict[str, Any]] = []
+    static_external_trades: list[dict[str, Any]] = []
     total_steps = len(folds_to_run)
 
     for fold_number, split in enumerate(folds_to_run, start=1):
@@ -853,8 +862,12 @@ def walk_forward_validate(
                 f"Walk-forward fold {fold_number}/{total_steps}: optimizing prior sessions…",
             )
 
-        history_frame = frame[frame["session"].isin(history_sessions)].copy().reset_index(drop=True)
-        external_frame = frame[frame["session"].isin(external_test_sessions)].copy().reset_index(drop=True)
+        history_frame = frame[
+            frame["session"].isin(history_sessions)
+        ].copy().reset_index(drop=True)
+        external_frame = frame[
+            frame["session"].isin(external_test_sessions)
+        ].copy().reset_index(drop=True)
         history_rows = _frame_to_rows(history_frame)
         external_rows = _frame_to_rows(external_frame)
 
@@ -876,6 +889,15 @@ def walk_forward_validate(
             int(item.get("_adaptive_walk_forward_seeded_rule_values") or 0)
             for item in fold_strategies
         )
+        adaptive_neighborhood_seeded_rule_values = sum(
+            int(
+                item.get(
+                    "_adaptive_walk_forward_neighborhood_seeded_rule_values"
+                )
+                or 0
+            )
+            for item in fold_strategies
+        )
 
         fold_report = optimize_stock_strategies(
             history_rows,
@@ -887,17 +909,42 @@ def walk_forward_validate(
         )
         winner = fold_report.get("winner") or {}
         source_id = str(winner.get("source_strategy_id") or "")
-        source = next((item for item in strategies if str(item.get("id")) == source_id), None)
+        source = next(
+            (
+                item
+                for item in strategies
+                if str(item.get("id") or "") == source_id
+            ),
+            None,
+        )
         if source is None:
-            raise AppError("A walk-forward fold selected a strategy that is no longer available.")
+            raise AppError(
+                "A walk-forward fold selected a strategy that is no longer available."
+            )
 
         selected_settings = BacktestSettings(
-            **(winner.get("optimized_backtest_settings") or fold_report.get("backtest_settings") or {})
+            **(
+                winner.get("optimized_backtest_settings")
+                or fold_report.get("backtest_settings")
+                or {}
+            )
+        )
+        selected_rules = normalize_machine_rules(
+            winner.get("optimized_rules") or source.get("machine_rules")
         )
         selected_strategy = {
             **source,
-            "machine_rules": normalize_machine_rules(winner.get("optimized_rules") or source.get("machine_rules")),
+            "machine_rules": selected_rules,
         }
+
+        validation_neighbors = _validation_neighbor_candidates(
+            fold_report,
+            source_id,
+            selected_rules,
+            selected_settings,
+            max_neighbors=max_neighborhood_candidates,
+        )
+
         external_result = run_backtest(
             external_rows,
             selected_strategy,
@@ -908,24 +955,175 @@ def walk_forward_validate(
         external_trades = list(external_result.get("trades") or [])
         all_external_trades.extend(external_trades)
 
-        # Only now—after the fold was frozen and scored—may its outcome become
+        neighbor_results: list[dict[str, Any]] = []
+        for neighbor in validation_neighbors:
+            try:
+                neighbor_settings = BacktestSettings(
+                    **(neighbor.get("settings") or {})
+                )
+                neighbor_strategy = {
+                    **source,
+                    "machine_rules": normalize_machine_rules(
+                        neighbor.get("rules") or {}
+                    ),
+                }
+                neighbor_result = run_backtest(
+                    external_rows,
+                    neighbor_strategy,
+                    symbol,
+                    neighbor_settings,
+                )
+                neighbor_results.append(
+                    {
+                        "rules": normalize_machine_rules(
+                            neighbor.get("rules") or {}
+                        ),
+                        "settings": asdict(neighbor_settings),
+                        "distance": int(neighbor.get("distance") or 0),
+                        "internal_validation_metrics": dict(
+                            neighbor.get("validation_metrics") or {}
+                        ),
+                        "external_metrics": dict(
+                            neighbor_result.get("metrics") or {}
+                        ),
+                    }
+                )
+            except (AppError, TypeError, ValueError):
+                continue
+
+        profitable_neighborhood = _profitable_external_neighborhood(
+            selected_rules,
+            selected_settings,
+            external_metrics,
+            neighbor_results,
+        )
+
+        static_fold_record: dict[str, Any] | None = None
+        if compare_static_baseline:
+            static_reused_adaptive = (
+                not adaptive_learning or experience_count_before_fold == 0
+            )
+            if static_reused_adaptive:
+                static_winner = winner
+                static_source_id = source_id
+                static_source = source
+                static_settings = selected_settings
+                static_rules = selected_rules
+                static_metrics = dict(external_metrics)
+                static_trades = list(external_trades)
+            else:
+                static_report = optimize_stock_strategies(
+                    history_rows,
+                    [
+                        dict(item)
+                        for item in strategies
+                        if isinstance(item, dict)
+                    ],
+                    symbol,
+                    settings,
+                    optimizer,
+                    finalize_holdout=True,
+                )
+                static_winner = static_report.get("winner") or {}
+                static_source_id = str(
+                    static_winner.get("source_strategy_id") or ""
+                )
+                static_source = next(
+                    (
+                        item
+                        for item in strategies
+                        if str(item.get("id") or "") == static_source_id
+                    ),
+                    None,
+                )
+                if static_source is None:
+                    raise AppError(
+                        "The static walk-forward baseline selected a strategy "
+                        "that is no longer available."
+                    )
+                static_settings = BacktestSettings(
+                    **(
+                        static_winner.get("optimized_backtest_settings")
+                        or static_report.get("backtest_settings")
+                        or {}
+                    )
+                )
+                static_rules = normalize_machine_rules(
+                    static_winner.get("optimized_rules")
+                    or static_source.get("machine_rules")
+                )
+                static_result = run_backtest(
+                    external_rows,
+                    {
+                        **static_source,
+                        "machine_rules": static_rules,
+                    },
+                    symbol,
+                    static_settings,
+                )
+                static_metrics = dict(static_result.get("metrics") or {})
+                static_trades = list(static_result.get("trades") or [])
+
+            static_external_trades.extend(static_trades)
+            static_fold_record = {
+                "fold": fold_number,
+                "history_start": history_sessions[0],
+                "history_end": history_sessions[-1],
+                "external_test_start": external_test_sessions[0],
+                "external_test_end": external_test_sessions[-1],
+                "selected_strategy_id": static_source_id,
+                "selected_strategy_name": (
+                    static_winner.get("strategy_name")
+                    or static_source.get("name")
+                ),
+                "optimizer_status": static_winner.get("status"),
+                "external_metrics": static_metrics,
+                "optimized_rules": static_rules,
+                "optimized_backtest_settings": asdict(static_settings),
+                "reused_adaptive_first_fold": bool(static_reused_adaptive),
+            }
+            static_folds.append(static_fold_record)
+
+        # Only now—after the winner, nearby candidates, and optional static
+        # counterfactual were frozen and scored—may this external fold become
         # learning evidence for the next unseen fold.
         adaptive_feedback = {
             "fold": fold_number,
             "source_strategy_id": source_id,
-            "selected_strategy_name": winner.get("strategy_name") or source.get("name"),
+            "selected_strategy_name": (
+                winner.get("strategy_name") or source.get("name")
+            ),
             "external_test_start": external_test_sessions[0],
             "external_test_end": external_test_sessions[-1],
-            "trade_count": int(safe_float(external_metrics.get("trade_count"), 0) or 0),
-            "net_pnl": safe_float(external_metrics.get("net_pnl"), 0.0) or 0.0,
-            "return_pct": safe_float(external_metrics.get("return_pct"), 0.0) or 0.0,
+            "trade_count": int(
+                safe_float(external_metrics.get("trade_count"), 0) or 0
+            ),
+            "net_pnl": (
+                safe_float(external_metrics.get("net_pnl"), 0.0) or 0.0
+            ),
+            "return_pct": (
+                safe_float(external_metrics.get("return_pct"), 0.0) or 0.0
+            ),
             "profitable": (
-                int(safe_float(external_metrics.get("trade_count"), 0) or 0) > 0
-                and (safe_float(external_metrics.get("net_pnl"), 0.0) or 0.0) > 0
+                int(
+                    safe_float(
+                        external_metrics.get("trade_count"),
+                        0,
+                    )
+                    or 0
+                )
+                > 0
+                and (
+                    safe_float(
+                        external_metrics.get("net_pnl"),
+                        0.0,
+                    )
+                    or 0.0
+                )
+                > 0
             ),
-            "optimized_rules": normalize_machine_rules(
-                winner.get("optimized_rules") or {}
-            ),
+            "optimized_rules": selected_rules,
+            "profitable_neighborhood": profitable_neighborhood,
         }
         adaptive_experience.append(adaptive_feedback)
 
@@ -942,16 +1140,32 @@ def walk_forward_validate(
                 "embargo_end": embargo_block[-1] if embargo_block else None,
                 "test_session_count": len(external_test_sessions),
                 "selected_strategy_id": source_id,
-                "selected_strategy_name": winner.get("strategy_name") or source.get("name"),
+                "selected_strategy_name": (
+                    winner.get("strategy_name") or source.get("name")
+                ),
                 "optimizer_status": winner.get("status"),
                 "internal_holdout_metrics": winner.get("holdout_metrics") or {},
                 "external_metrics": external_metrics,
-                "optimized_rules": winner.get("optimized_rules") or {},
+                "optimized_rules": selected_rules,
                 "optimized_backtest_settings": asdict(selected_settings),
                 "adaptive_learning_enabled": bool(adaptive_learning),
-                "adaptive_experience_count_before_fold": experience_count_before_fold,
+                "adaptive_experience_count_before_fold": (
+                    experience_count_before_fold
+                ),
                 "adaptive_learning_cutoff": learning_cutoff,
                 "adaptive_seeded_rule_values": adaptive_seeded_rule_values,
+                "adaptive_neighborhood_seeded_rule_values": (
+                    adaptive_neighborhood_seeded_rule_values
+                ),
+                "validation_neighbor_candidate_count": len(
+                    validation_neighbors
+                ),
+                "profitable_neighborhood": profitable_neighborhood,
+                "static_baseline_external_metrics": (
+                    dict(static_fold_record.get("external_metrics") or {})
+                    if static_fold_record
+                    else None
+                ),
                 "adaptive_feedback": adaptive_feedback,
             }
         )
@@ -963,115 +1177,197 @@ def walk_forward_validate(
                 f"Walk-forward fold {fold_number}/{total_steps}: external test complete.",
             )
 
-    active_folds = [
-        fold for fold in folds
-        if int(safe_float((fold.get("external_metrics") or {}).get("trade_count"), 0) or 0) > 0
-    ]
-    profitable_folds = [
-        fold for fold in active_folds
-        if (safe_float((fold.get("external_metrics") or {}).get("net_pnl"), 0.0) or 0.0) > 0
-    ]
-    returns = [
-        safe_float((fold.get("external_metrics") or {}).get("return_pct"), 0.0) or 0.0
-        for fold in active_folds
-    ]
-    combined = summarize_trades(all_external_trades, settings.starting_cash)
-    combined_pf = _profit_factor(combined)
-    max_drawdown = max(
-        [safe_float((fold.get("external_metrics") or {}).get("max_drawdown_pct"), 0.0) or 0.0 for fold in active_folds]
-        or [0.0]
+    summary = _walk_forward_fold_summary(
+        folds,
+        all_external_trades,
+        settings,
+        optimizer,
     )
-    profitable_pct = len(profitable_folds) / len(active_folds) * 100.0 if active_folds else 0.0
-    coverage = min(
-        1.0,
-        int(safe_float(combined.get("trade_count"), 0) or 0) / max(6.0, len(folds) * 2.0),
-    )
-    profitability_score = profitable_pct / 100.0
-    pf_score = min(1.0, combined_pf / 1.5)
-    drawdown_score = max(
-        0.0,
-        min(1.0, 1.0 - max_drawdown / max(0.5, optimizer.maximum_drawdown_pct)),
-    )
-    consistency_score = 0.0
-    if returns and mean(returns) > 0:
-        dispersion = pstdev(returns) if len(returns) > 1 else 0.0
-        consistency_score = max(0.0, min(1.0, 1.0 - dispersion / max(abs(mean(returns)), 1.0)))
-
-    score = round(
-        40.0 * profitability_score
-        + 20.0 * coverage
-        + 20.0 * pf_score
-        + 10.0 * drawdown_score
-        + 10.0 * consistency_score,
-        1,
-    )
-    if score >= 80:
-        label = "STRONG"
-    elif score >= 65:
-        label = "PROMISING"
-    elif score >= 50:
-        label = "MIXED"
-    else:
-        label = "WEAK"
-
-    strategy_counts = Counter(str(fold.get("selected_strategy_name") or "Unnamed") for fold in folds)
-    warnings: list[str] = []
-    no_trade_folds = len(folds) - len(active_folds)
-    if no_trade_folds:
-        warnings.append(
-            f"{no_trade_folds} walk-forward fold(s) produced no trades in the external test block."
+    broad_neighborhood_fold_count = sum(
+        1
+        for fold in folds
+        if bool(
+            (fold.get("profitable_neighborhood") or {}).get(
+                "broad_profitable"
+            )
         )
-    if len(strategy_counts) > 1:
-        warnings.append(
-            "Different strategy families won different folds. That can be useful regime evidence, "
-            "but it also means there is no single consistently dominant setup."
-        )
-    if profitable_pct < 50.0:
-        warnings.append("Fewer than half of the active walk-forward folds were profitable.")
-
-    return {
-        "symbol": symbol,
-        "folds": folds,
-        "summary": {
-            "score": score,
-            "label": label,
-            "fold_count": len(folds),
-            "active_fold_count": len(active_folds),
-            "profitable_fold_count": len(profitable_folds),
-            "profitable_fold_pct": round(profitable_pct, 1),
-            "external_trade_count": int(safe_float(combined.get("trade_count"), 0) or 0),
-            "external_net_pnl": safe_float(combined.get("net_pnl"), 0.0) or 0.0,
-            "external_return_pct": safe_float(combined.get("return_pct"), 0.0) or 0.0,
-            "external_profit_factor": combined.get("profit_factor"),
-            "max_fold_drawdown_pct": round(max_drawdown, 2),
-            "median_fold_return_pct": round(median(returns), 3) if returns else 0.0,
-            "average_fold_return_pct": round(mean(returns), 3) if returns else 0.0,
-            "selected_strategy_counts": dict(strategy_counts),
+    )
+    summary.update(
+        {
             "embargo_sessions": embargo_sessions,
             "adaptive_learning_enabled": bool(adaptive_learning),
             "adaptive_experience_count": len(adaptive_experience),
             "adaptive_profitable_experience_count": sum(
-                1 for item in adaptive_experience if item.get("profitable")
+                1
+                for item in adaptive_experience
+                if item.get("profitable")
             ),
-        },
+            "broad_profitable_neighborhood_fold_count": (
+                broad_neighborhood_fold_count
+            ),
+        }
+    )
+
+    static_summary: dict[str, Any] = {}
+    comparison: dict[str, Any] = {
+        "enabled": bool(compare_static_baseline),
+        "verdict": "NOT RUN",
+        "adaptive_added_value": None,
+    }
+    if compare_static_baseline:
+        static_summary = _walk_forward_fold_summary(
+            static_folds,
+            static_external_trades,
+            settings,
+            optimizer,
+        )
+        static_summary["embargo_sessions"] = embargo_sessions
+        score_delta = (
+            safe_float(summary.get("score"), 0.0) or 0.0
+        ) - (
+            safe_float(static_summary.get("score"), 0.0) or 0.0
+        )
+        pnl_delta = (
+            safe_float(summary.get("external_net_pnl"), 0.0) or 0.0
+        ) - (
+            safe_float(
+                static_summary.get("external_net_pnl"),
+                0.0,
+            )
+            or 0.0
+        )
+        profitable_fold_delta = (
+            safe_float(summary.get("profitable_fold_pct"), 0.0) or 0.0
+        ) - (
+            safe_float(
+                static_summary.get("profitable_fold_pct"),
+                0.0,
+            )
+            or 0.0
+        )
+        if score_delta > 0 and pnl_delta > 0:
+            comparison_verdict = "ADAPTIVE BETTER"
+        elif score_delta < 0 and pnl_delta < 0:
+            comparison_verdict = "STATIC BETTER"
+        elif abs(score_delta) < 0.05 and abs(pnl_delta) < 0.01:
+            comparison_verdict = "TIE"
+        else:
+            comparison_verdict = "MIXED"
+        comparison = {
+            "enabled": True,
+            "verdict": comparison_verdict,
+            "adaptive_added_value": (
+                comparison_verdict == "ADAPTIVE BETTER"
+            ),
+            "adaptive_score": summary.get("score"),
+            "static_score": static_summary.get("score"),
+            "score_delta": round(score_delta, 2),
+            "adaptive_external_net_pnl": summary.get(
+                "external_net_pnl"
+            ),
+            "static_external_net_pnl": static_summary.get(
+                "external_net_pnl"
+            ),
+            "external_net_pnl_delta": round(pnl_delta, 2),
+            "adaptive_profitable_fold_pct": summary.get(
+                "profitable_fold_pct"
+            ),
+            "static_profitable_fold_pct": static_summary.get(
+                "profitable_fold_pct"
+            ),
+            "profitable_fold_pct_delta": round(
+                profitable_fold_delta,
+                1,
+            ),
+            "note": (
+                "Both modes use the same expanding history, embargo, and unseen "
+                "test blocks. The static baseline never receives completed-fold "
+                "rule seeds; the first fold is reused because neither mode has "
+                "prior unseen experience yet."
+            ),
+        }
+
+    warnings: list[str] = []
+    no_trade_folds = int(summary.get("fold_count") or 0) - int(
+        summary.get("active_fold_count") or 0
+    )
+    if no_trade_folds:
+        warnings.append(
+            f"{no_trade_folds} walk-forward fold(s) produced no trades "
+            "in the external test block."
+        )
+    strategy_counts = dict(summary.get("selected_strategy_counts") or {})
+    if len(strategy_counts) > 1:
+        warnings.append(
+            "Different strategy families won different folds. That can be useful "
+            "regime evidence, but it also means there is no single consistently "
+            "dominant setup."
+        )
+    if (
+        safe_float(summary.get("profitable_fold_pct"), 0.0) or 0.0
+    ) < 50.0:
+        warnings.append(
+            "Fewer than half of the active walk-forward folds were profitable."
+        )
+    if adaptive_learning and broad_neighborhood_fold_count <= 0:
+        warnings.append(
+            "No unseen fold established a broad profitable parameter neighborhood; "
+            "adaptation is still relying mainly on exact completed-fold winners."
+        )
+    if (
+        compare_static_baseline
+        and comparison.get("verdict") == "STATIC BETTER"
+    ):
+        warnings.append(
+            "The non-adaptive static baseline outperformed the adaptive learner "
+            "across these unseen folds. Do not promote the adaptive layer from "
+            "this sample."
+        )
+
+    return {
+        "symbol": symbol,
+        "folds": folds,
+        "summary": summary,
         "adaptive_learning": {
             "enabled": bool(adaptive_learning),
-            "mode": "causal_experience_replay",
+            "mode": "causal_neighborhood_replay",
             "experience_count": len(adaptive_experience),
             "profitable_experience_count": sum(
-                1 for item in adaptive_experience if item.get("profitable")
+                1
+                for item in adaptive_experience
+                if item.get("profitable")
+            ),
+            "broad_profitable_neighborhood_fold_count": (
+                broad_neighborhood_fold_count
             ),
             "experience": adaptive_experience,
             "note": (
-                "Each unseen fold is frozen before scoring. Only after that fold ends may its "
-                "outcome seed rule options for the next fold. Losing folds still enter the "
-                "expanding historical window; future folds are never visible early."
+                "Each unseen fold is frozen before scoring. Only after that fold "
+                "ends may its exact winner and externally confirmed profitable "
+                "neighborhood seed the next optimizer search. Losing folds still "
+                "enter the expanding historical window; future folds are never "
+                "visible early."
             ),
         },
+        "static_baseline": {
+            "enabled": bool(compare_static_baseline),
+            "folds": static_folds,
+            "summary": static_summary,
+            "note": (
+                "Static comparison uses the same fold boundaries without carrying "
+                "forward completed-fold rule seeds."
+                if compare_static_baseline
+                else "Static comparison was not requested for this run."
+            ),
+        },
+        "comparison": comparison,
         "warnings": warnings,
         "note": (
             "Each external fold is unseen by that fold's optimizer, with "
-            f"{embargo_sessions} whole session(s) deliberately omitted immediately before the test block. "
-            "Results remain historical simulations and do not establish future profitability."
+            f"{embargo_sessions} whole session(s) deliberately omitted immediately "
+            "before the test block. Nearby parameter candidates are also frozen "
+            "before external scoring. Results remain historical simulations and "
+            "do not establish future profitability."
         ),
     }
+
