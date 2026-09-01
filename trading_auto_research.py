@@ -255,8 +255,10 @@ def _load_bar_batch_resilient(
         )
     except AppError as exc:
         message = str(exc)
+        lowered_message = message.casefold()
         invalid = _invalid_symbol_from_error(exc)
-        symbol_error = "invalid symbol" in message.casefold()
+        symbol_error = "invalid symbol" in lowered_message
+        range_error = "requested historical range is too large" in lowered_message
 
         if invalid and invalid in batch:
             _notify(
@@ -273,6 +275,36 @@ def _load_bar_batch_resilient(
                 progress=progress,
             )
             return recovered, [invalid, *skipped]
+
+        if range_error and len(batch) > 1:
+            # Dense intraday requests can legitimately exceed the provider-safe pagination cap
+            # even when the requested time window is correct. Split by symbol so the complete,
+            # untouched date range is preserved instead of shortening or coarsening validation.
+            _notify(
+                progress,
+                f"Historical {timeframe} request exceeded the safe page cap; "
+                f"splitting {len(batch)} symbols into smaller batches…",
+            )
+            midpoint = max(1, len(batch) // 2)
+            left, left_skipped = _load_bar_batch_resilient(
+                market,
+                batch[:midpoint],
+                start=start,
+                end=end,
+                timeframe=timeframe,
+                max_pages=max_pages,
+                progress=progress,
+            )
+            right, right_skipped = _load_bar_batch_resilient(
+                market,
+                batch[midpoint:],
+                start=start,
+                end=end,
+                timeframe=timeframe,
+                max_pages=max_pages,
+                progress=progress,
+            )
+            return {**left, **right}, [*left_skipped, *right_skipped]
 
         if symbol_error and len(batch) > 1:
             # Alpaca occasionally returns a symbol-related 400 without naming the offender.
