@@ -61,6 +61,22 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
         self.assertIn('st.query_params.get("workspace")', source)
         self.assertIn('st.query_params["workspace"] = module', source)
 
+    def test_strategy_lab_results_are_durable_across_reconnects(self):
+        source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
+        persistence = (ROOT / "strategy_lab_persistence.py").read_text(encoding="utf-8")
+        for marker in (
+            "build_strategy_lab_checkpoint_store",
+            "save_strategy_lab_checkpoint(",
+            "load_latest_strategy_lab_checkpoint(",
+            "Restored the last completed Strategy Lab result from durable storage",
+            'last_status == "running"',
+            "Results are visible below, but the reconnect-safe copy could not be saved",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, source)
+        self.assertIn("MAX_STRATEGY_LAB_CHECKPOINTS = 5", persistence)
+        self.assertIn("A completed Strategy Lab checkpoint requires a result.", persistence)
+
     def test_market_discovery_scans_all_strategies_automatically(self):
         source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")
         market_source = (ROOT / "trading_market_discovery.py").read_text(encoding="utf-8")
