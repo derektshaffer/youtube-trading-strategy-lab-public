@@ -409,6 +409,57 @@ class EmaOpportunityDiscoveryTests(unittest.TestCase):
         self.assertTrue(result["outlier_events"][0]["liquidity_regime_outlier"])
 
 
+class DiscoveryFallbackTests(unittest.TestCase):
+    def test_fallback_unblocks_strategy_when_strict_daily_proxy_has_zero_matches(self):
+        rows = daily_bars(days=30, start=10.0, event_every=5)
+        strategy = {
+            "direction": "long",
+            "machine_rules": {"min_relative_volume": 50.0},
+        }
+
+        scored = score_historical_opportunities(rows, strategy)
+        self.assertEqual(scored["event_count"], 0)
+        self.assertGreater(scored["fallback_event_count"], 0)
+
+        ranked = rank_historical_opportunities(
+            {"TEST": rows},
+            strategy,
+            limit=3,
+        )
+        self.assertEqual(len(ranked), 1)
+        self.assertTrue(ranked[0]["discovery_fallback_used"])
+        self.assertEqual(ranked[0]["strict_event_count"], 0)
+        self.assertGreater(ranked[0]["event_count"], 0)
+        self.assertEqual(
+            ranked[0]["candidate_selection_mode"],
+            "generic_directional_fallback_after_zero_strict_matches",
+        )
+
+    def test_strict_candidates_rank_before_fallback_fillers(self):
+        strict_rows = daily_bars(days=30, start=10.0, event_every=5)
+        fallback_rows = [
+            {
+                **row,
+                "v": 180_000 if float(row.get("v") or 0) >= 500_000 else row.get("v"),
+            }
+            for row in daily_bars(days=30, start=10.0, event_every=5)
+        ]
+        strategy = {
+            "direction": "long",
+            "machine_rules": {"min_relative_volume": 3.0},
+        }
+
+        ranked = rank_historical_opportunities(
+            {"STRICT": strict_rows, "FALLBACK": fallback_rows},
+            strategy,
+            limit=2,
+        )
+
+        self.assertEqual([item["symbol"] for item in ranked], ["STRICT", "FALLBACK"])
+        self.assertFalse(ranked[0]["discovery_fallback_used"])
+        self.assertTrue(ranked[1]["discovery_fallback_used"])
+
+
 class AutonomousResearchTests(unittest.TestCase):
     def test_broad_sample_keeps_priority_and_is_deterministic(self):
         symbols = [f"S{index:04d}" for index in range(1000)]
