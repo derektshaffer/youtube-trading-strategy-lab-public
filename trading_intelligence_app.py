@@ -308,6 +308,10 @@ from trading_intelligence_core import (
     strategy_integrity_report,
     upgrade_native_strategy_rules,
 )
+from strategy_lab_persistence import (
+    load_latest_strategy_lab_checkpoint,
+    save_strategy_lab_checkpoint,
+)
 from trading_universe_research import cross_stock_generalization
 from trading_validation_core import validation_strength, walk_forward_validate
 from youtube_strategy_engine import (
@@ -634,6 +638,32 @@ def build_live_learning_outbox_store() -> StrategyStore:
     directory = Path(
         os.environ.get("TRADING_INTELLIGENCE_LIVE_LEARNING_OUTBOX_DIR")
         or ".trading_intelligence_live_learning_outbox"
+    )
+    return StrategyStore(directory=directory, cloud_backup=cloud)
+
+
+DEFAULT_STRATEGY_LAB_CHECKPOINT_PATH = "trading-intelligence-lab/strategy_lab_latest.json"
+
+
+def build_strategy_lab_checkpoint_store() -> StrategyStore:
+    """Small durable store for Strategy Lab status/results across reconnects."""
+
+    repository = resolved_backup_repository()
+    token = backup_token()
+    cloud = None
+    if repository and token:
+        cloud = GitHubCloudBackup(
+            repository,
+            token,
+            branch=setting("GITHUB_BACKUP_BRANCH"),
+            path=setting(
+                "TRADING_INTELLIGENCE_STRATEGY_LAB_CHECKPOINT_PATH",
+                DEFAULT_STRATEGY_LAB_CHECKPOINT_PATH,
+            ),
+        )
+    directory = Path(
+        os.environ.get("TRADING_INTELLIGENCE_STRATEGY_LAB_CHECKPOINT_DIR")
+        or ".trading_intelligence_strategy_lab_checkpoint"
     )
     return StrategyStore(directory=directory, cloud_backup=cloud)
 
@@ -7894,6 +7924,48 @@ elif module == "AI Research Autopilot":
 
 
 elif module == "Strategy Lab":
+    durable_restore_notice = ""
+    durable_restore_error = ""
+    if not st.session_state.get("_til_strategy_lab_checkpoint_loaded"):
+        try:
+            durable_checkpoint = load_latest_strategy_lab_checkpoint(
+                build_strategy_lab_checkpoint_store()
+            )
+            if durable_checkpoint:
+                durable_status = str(durable_checkpoint.get("status") or "")
+                durable_message = str(durable_checkpoint.get("message") or "")
+                durable_ticker = str(durable_checkpoint.get("ticker") or "")
+                durable_run_id = str(durable_checkpoint.get("id") or "")
+                st.session_state["til_strategy_lab_last_run"] = {
+                    "status": durable_status,
+                    "ticker": durable_ticker,
+                    "message": durable_message,
+                }
+                st.session_state["til_strategy_lab_last_run_id"] = durable_run_id
+                durable_result = durable_checkpoint.get("result")
+                if durable_status == "complete" and isinstance(durable_result, dict):
+                    st.session_state["til_strategy_lab_result"] = deepcopy(durable_result)
+                    durable_restore_notice = (
+                        "Restored the last completed Strategy Lab result from durable storage "
+                        "after a reconnect or reload."
+                    )
+                elif durable_status == "running":
+                    durable_restore_notice = (
+                        f"A Strategy Lab run for {durable_ticker or 'this stock'} was started "
+                        "but no completion result has been saved yet."
+                    )
+        except AppError as exc:
+            durable_restore_error = str(exc)
+        st.session_state["_til_strategy_lab_checkpoint_loaded"] = True
+
+    if durable_restore_notice:
+        st.info(durable_restore_notice)
+    if durable_restore_error:
+        st.warning(
+            "Strategy Lab durable result recovery is temporarily unavailable: "
+            + durable_restore_error
+        )
+
     guided_validation_mode = bool(st.session_state.get("til_guided_validation_mode"))
     if guided_validation_mode:
         st.success(
@@ -8092,11 +8164,32 @@ elif module == "Strategy Lab":
             # A new run must never silently fall back to a blank Strategy Lab page.
             # Clear stale output, then retain an explicit status through the run.
             st.session_state.pop("til_strategy_lab_result", None)
+            run_started_at = utc_now().isoformat()
+            strategy_lab_run_id = "strategy-lab-" + hashlib.sha1(
+                (
+                    f"{ticker}|{run_started_at}|"
+                    f"{str(selected_strategy.get('id') or '')}"
+                ).encode("utf-8")
+            ).hexdigest()[:16]
+            st.session_state["til_strategy_lab_last_run_id"] = strategy_lab_run_id
             st.session_state["til_strategy_lab_last_run"] = {
                 "status": "running",
                 "ticker": ticker,
                 "message": "Optimization is running.",
             }
+            try:
+                save_strategy_lab_checkpoint(
+                    build_strategy_lab_checkpoint_store(),
+                    run_id=strategy_lab_run_id,
+                    status="running",
+                    ticker=ticker,
+                    message="Optimization is running.",
+                )
+            except AppError as exc:
+                st.warning(
+                    "Optimization started, but its reconnect checkpoint could not be saved: "
+                    + str(exc)
+                )
             strategy_lab_slot.button(
                 "🧪 Optimizing…",
                 type="primary",
@@ -8414,11 +8507,26 @@ elif module == "Strategy Lab":
                     "compared_all": compare_all,
                     "catalyst_summary": catalyst_summary,
                 }
+                completed_lab_result = st.session_state["til_strategy_lab_result"]
                 st.session_state["til_strategy_lab_last_run"] = {
                     "status": "complete",
                     "ticker": ticker,
                     "message": "Optimization + validation complete.",
                 }
+                try:
+                    save_strategy_lab_checkpoint(
+                        build_strategy_lab_checkpoint_store(),
+                        run_id=strategy_lab_run_id,
+                        status="complete",
+                        ticker=ticker,
+                        message="Optimization + validation complete.",
+                        result=completed_lab_result,
+                    )
+                except AppError as exc:
+                    st.warning(
+                        "Results are visible below, but the reconnect-safe copy could not be saved: "
+                        + str(exc)
+                    )
                 complete_task_bar(task_bar, lab_monitor, "Optimization + validation complete")
                 # Do not force a rerun here. Rendering the freshly computed result in
                 # this same pass avoids losing output if Streamlit reconnects after a
@@ -8431,6 +8539,16 @@ elif module == "Strategy Lab":
                     "ticker": ticker,
                     "message": message,
                 }
+                try:
+                    save_strategy_lab_checkpoint(
+                        build_strategy_lab_checkpoint_store(),
+                        run_id=strategy_lab_run_id,
+                        status="failed",
+                        ticker=ticker,
+                        message=message,
+                    )
+                except AppError:
+                    pass
                 st.error(message)
             except Exception as exc:
                 message = f"Strategy Lab run failed: {exc}"
@@ -8439,6 +8557,16 @@ elif module == "Strategy Lab":
                     "ticker": ticker,
                     "message": message,
                 }
+                try:
+                    save_strategy_lab_checkpoint(
+                        build_strategy_lab_checkpoint_store(),
+                        run_id=strategy_lab_run_id,
+                        status="failed",
+                        ticker=ticker,
+                        message=message,
+                    )
+                except AppError:
+                    pass
                 st.error(message)
 
         lab_result = st.session_state.get("til_strategy_lab_result") or {}
@@ -8448,6 +8576,12 @@ elif module == "Strategy Lab":
             last_message = str(last_lab_run.get("message") or "")
             if last_status == "failed":
                 st.error(f"Last Strategy Lab run failed: {last_message}")
+            elif last_status == "running":
+                st.warning(
+                    "The last Strategy Lab run started but no completed result is available yet. "
+                    "If it was interrupted by a reconnect or app restart, run it again; the app "
+                    "will keep the next completion in durable storage."
+                )
             elif last_status == "complete":
                 st.error(
                     "The last Strategy Lab run completed but its result was not retained. "
