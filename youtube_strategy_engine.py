@@ -7890,6 +7890,25 @@ def optimize_stock_strategies(
             validated.append({**candidate, "validation_metrics": validation_metrics, "validation_score": validation_score})
             notify(f"Checking unseen validation sessions for {name}")
         best = max(validated, key=lambda item: (item["validation_score"], -item["variant_index"], -item["execution_index"]))
+        validation_neighborhood = [
+            {
+                "rules": normalize_machine_rules(item.get("rules") or {}),
+                "settings": asdict(item["settings"]),
+                "metrics": dict(item.get("validation_metrics") or {}),
+                "validation_score": round(float(item.get("validation_score") or 0.0), 4),
+                "variant_index": int(item.get("variant_index") or 0),
+                "execution_index": int(item.get("execution_index") or 0),
+            }
+            for item in sorted(
+                validated,
+                key=lambda item: (
+                    item["validation_score"],
+                    -item["variant_index"],
+                    -item["execution_index"],
+                ),
+                reverse=True,
+            )
+        ]
         chosen_settings = best["settings"]
         training_metrics = best["training_metrics"]
         validation_metrics = best["validation_metrics"]
@@ -8006,6 +8025,7 @@ def optimize_stock_strategies(
                 "execution_variants_tested": len(rule_finalists) * (len(execution_variants) - 1) + adaptive_final_execution_tests,
                 "adaptive_refinement_tests": adaptive_refinement_tests,
                 "finalists_tested": len(validated),
+                "validation_neighborhood": validation_neighborhood,
                 "training_metrics": training_metrics,
                 "validation_metrics": validation_metrics,
                 "stress_metrics": stress_metrics,
