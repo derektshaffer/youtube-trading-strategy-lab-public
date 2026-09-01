@@ -3692,13 +3692,24 @@ if module == "Stock Strategy Finder":
             st.error(f"Stock Strategy Finder failed: {exc}")
 
     if finder_result and str(finder_result.get("symbol") or "").upper() == finder_symbol:
-        verdict = finder_result.get("verdict") or {}
+        # Recompute the display verdict from the saved evidence using the current
+        # classifier. Older Finder reports can carry a stale label even though
+        # their underlying validation/holdout evidence still supports a useful
+        # historical candidate.
+        stored_verdict = finder_result.get("verdict") or {}
         robustness = finder_result.get("robustness") or {}
         stability = finder_result.get("parameter_stability") or {}
-        walk = (finder_result.get("walk_forward") or {}).get("summary") or {}
+        walk_forward_result = finder_result.get("walk_forward") or {}
+        walk = walk_forward_result.get("summary") or {}
         optimization = finder_result.get("optimization") or {}
         winner = optimization.get("winner") or {}
         holdout = winner.get("holdout_metrics") or {}
+        verdict = finder_evidence_verdict(
+            robustness,
+            stability,
+            walk_forward_result,
+            optimization,
+        )
 
         if int(finder_result.get("strategy_fidelity_engine_version") or 0) < 1:
             st.warning(
@@ -3967,8 +3978,81 @@ if module == "Stock Strategy Finder":
                 )
                 st.rerun()
 
-        with st.expander("Winning optimized rules", expanded=False):
-            st.json(winner.get("optimized_rules") or {})
+        with st.expander("Winning strategy rules", expanded=False):
+            optimized_rules = winner.get("optimized_rules") or {}
+            rule_labels = {
+                "min_price": "Minimum stock price",
+                "max_price": "Maximum stock price",
+                "min_day_change_pct": "Minimum daily move",
+                "min_relative_volume": "Minimum relative volume",
+                "min_dollar_volume": "Minimum dollar volume",
+                "previous_day_high_breakout": "Break above previous-day high",
+                "min_previous_day_volume_ratio": "Minimum previous-day volume ratio",
+                "min_previous_day_change_pct": "Minimum previous-day move",
+                "max_spread_pct": "Maximum bid/ask spread",
+                "above_vwap": "Price above VWAP",
+                "vwap_reclaim": "VWAP reclaim",
+                "max_vwap_distance_pct": "Maximum distance from VWAP",
+                "minimum_vwap_hold_bars": "Minimum bars holding VWAP",
+                "require_vwap_reclaim_hold": "VWAP reclaim must hold",
+                "avoid_vwap_rejection": "Avoid VWAP rejection",
+                "require_vwap_retest_held": "VWAP retest must hold",
+                "avoid_vwap_retest_failed": "Avoid failed VWAP retest",
+                "min_volume_acceleration_ratio": "Minimum volume acceleration",
+                "require_volume_accelerating": "Volume must be accelerating",
+                "min_atr_pct": "Minimum volatility (ATR)",
+                "max_atr_pct": "Maximum volatility (ATR)",
+                "require_uptrend_structure": "Uptrend structure required",
+                "require_breakout_above_confirmed_swing_high": "Break confirmed swing high",
+                "avoid_failed_breakout": "Avoid failed breakout",
+                "minimum_breakout_hold_bars": "Minimum breakout hold",
+            }
+
+            def _friendly_rule_setting(rule_key: str, value: Any) -> str:
+                if isinstance(value, bool):
+                    return "Required" if value else "Not required"
+                numeric_value = safe_float(value)
+                if numeric_value is not None:
+                    if rule_key.endswith("_pct"):
+                        return f"{numeric_value:g}%"
+                    if rule_key.endswith("_ratio"):
+                        return f"{numeric_value:g}×"
+                    if "dollar_volume" in rule_key:
+                        return f"$\{numeric_value:,.0f}"
+                    if rule_key.endswith("_price") or rule_key in {"min_price", "max_price"}:
+                        return f"$\{numeric_value:g}"
+                    if rule_key.endswith("_bars"):
+                        return f"\{numeric_value:g} bars"
+                    return f"\{numeric_value:g}"
+                return str(value)
+
+            active_rule_rows = []
+            for rule_key, rule_value in optimized_rules.items():
+                # NULL and false flags are disabled optimizer dimensions, not
+                # instructions the trader needs to read.
+                if rule_value is None or rule_value is False:
+                    continue
+                active_rule_rows.append(
+                    {
+                        "Condition": rule_labels.get(
+                            str(rule_key),
+                            str(rule_key).replace("_", " ").title(),
+                        ),
+                        "Setting": _friendly_rule_setting(str(rule_key), rule_value),
+                    }
+                )
+
+            if active_rule_rows:
+                st.caption(
+                    "Only rules that are actually enabled are shown. Unused optimizer settings are hidden."
+                )
+                st.dataframe(
+                    pd.DataFrame(active_rule_rows),
+                    width="stretch",
+                    hide_index=True,
+                )
+            else:
+                st.caption("No active optimized rule constraints were saved for this candidate.")
         with st.expander("Walk-forward + parameter-stability details", expanded=False):
             st.write(
                 f"Walk-forward score: **{safe_float(walk.get('score'), 0.0):.1f}/100** · "
