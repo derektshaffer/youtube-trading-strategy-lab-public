@@ -425,6 +425,9 @@ class AutonomousResearchTests(unittest.TestCase):
             },
             walk_forward={
                 "summary": {
+                    "fold_count": 3,
+                    "active_fold_count": 3,
+                    "profitable_fold_count": 3,
                     "profitable_fold_pct": 100,
                     "external_trade_count": 10,
                 }
@@ -640,6 +643,63 @@ class ValidationIntegrityRegressionTests(unittest.TestCase):
         )
         self.assertEqual(status, "research_only")
         self.assertTrue(any("walk-forward" in reason.lower() for reason in reasons))
+
+    def test_sparse_walk_forward_temporal_coverage_fails_closed(self):
+        status, reasons = _global_validation_gate(
+            anchor_report={"winner": {"status": "VALIDATED"}},
+            strength={"independently_positive": True, "score": 90},
+            generalization={
+                "summary": {
+                    "score": 90,
+                    "active_symbols": 4,
+                    "profitable_symbol_pct": 75,
+                    "total_trades": 40,
+                }
+            },
+            walk_forward={
+                "summary": {
+                    "fold_count": 3,
+                    "active_fold_count": 1,
+                    "profitable_fold_count": 1,
+                    "profitable_fold_pct": 100,
+                    "external_trade_count": 8,
+                }
+            },
+            broad_universe=True,
+        )
+        self.assertEqual(status, "research_only")
+        self.assertTrue(
+            any("two-thirds" in reason.lower() for reason in reasons)
+        )
+        self.assertTrue(
+            any("scheduled walk-forward folds" in reason.lower() for reason in reasons)
+        )
+
+    def test_three_fold_walk_forward_with_broad_temporal_evidence_can_pass(self):
+        status, reasons = _global_validation_gate(
+            anchor_report={"winner": {"status": "VALIDATED"}},
+            strength={"independently_positive": True, "score": 90},
+            generalization={
+                "summary": {
+                    "score": 90,
+                    "active_symbols": 4,
+                    "profitable_symbol_pct": 75,
+                    "total_trades": 40,
+                }
+            },
+            walk_forward={
+                "summary": {
+                    "fold_count": 3,
+                    "active_fold_count": 3,
+                    "profitable_fold_count": 2,
+                    "profitable_fold_pct": 66.7,
+                    "external_trade_count": 9,
+                }
+            },
+            broad_universe=True,
+        )
+        self.assertEqual(status, "validated")
+        self.assertEqual(reasons, [])
 
     def test_discovery_cutoff_is_strictly_before_untouched_validation_period(self):
         end = datetime(2026, 8, 30, 20, 0, tzinfo=timezone.utc)
