@@ -5,10 +5,12 @@ from unittest.mock import patch
 
 from trading_validation_core import (
     _adaptive_walk_forward_strategies,
+    _profitable_external_neighborhood,
     _walk_forward_session_splits,
     validation_strength,
     walk_forward_validate,
 )
+from youtube_strategy_engine import BacktestSettings
 
 
 class WalkForwardSplitTests(unittest.TestCase):
@@ -174,6 +176,202 @@ class AdaptiveWalkForwardTests(unittest.TestCase):
         self.assertEqual(folds[2]["adaptive_experience_count_before_fold"], 2)
         self.assertTrue(report["adaptive_learning"]["enabled"])
         self.assertEqual(report["adaptive_learning"]["experience_count"], 3)
+
+    def test_profitable_external_neighborhood_requires_multiple_unseen_neighbors(self):
+        winner_metrics = {
+            "trade_count": 3,
+            "net_pnl": 120.0,
+            "return_pct": 6.0,
+            "profit_factor": 1.8,
+            "max_drawdown_pct": 2.0,
+        }
+        neighbors = [
+            {
+                "rules": {"min_relative_volume": 1.4},
+                "settings": {},
+                "external_metrics": {
+                    "trade_count": 2,
+                    "net_pnl": 60.0,
+                    "return_pct": 3.0,
+                },
+            },
+            {
+                "rules": {"min_relative_volume": 1.6},
+                "settings": {},
+                "external_metrics": {
+                    "trade_count": 2,
+                    "net_pnl": 45.0,
+                    "return_pct": 2.25,
+                },
+            },
+            {
+                "rules": {"min_relative_volume": 1.8},
+                "settings": {},
+                "external_metrics": {
+                    "trade_count": 2,
+                    "net_pnl": -20.0,
+                    "return_pct": -1.0,
+                },
+            },
+        ]
+
+        neighborhood = _profitable_external_neighborhood(
+            {"min_relative_volume": 1.5},
+            BacktestSettings(),
+            winner_metrics,
+            neighbors,
+        )
+
+        self.assertTrue(neighborhood["broad_profitable"])
+        self.assertEqual(neighborhood["tested_neighbor_count"], 3)
+        self.assertEqual(neighborhood["profitable_neighbor_count"], 2)
+        self.assertEqual(neighborhood["profitable_neighbor_pct"], 66.7)
+        self.assertEqual(
+            neighborhood["rule_ranges"]["min_relative_volume"],
+            {"min": 1.4, "max": 1.6},
+        )
+
+    def test_broad_profitable_neighborhood_seeds_multiple_rule_values(self):
+        strategies = [
+            {
+                "id": "s1",
+                "name": "VWAP reclaim",
+                "direction": "long",
+                "machine_rules": {"min_relative_volume": 1.5},
+            }
+        ]
+        experience = [
+            {
+                "source_strategy_id": "s1",
+                "trade_count": 3,
+                "net_pnl": 120.0,
+                "optimized_rules": {"min_relative_volume": 2.0},
+                "profitable_neighborhood": {
+                    "broad_profitable": True,
+                    "rule_values": {
+                        "min_relative_volume": [1.75, 2.0, 2.25],
+                    },
+                },
+            }
+        ]
+
+        adapted = _adaptive_walk_forward_strategies(
+            strategies,
+            experience,
+        )
+        options = adapted[0]["candidate_rule_options"][
+            "min_relative_volume"
+        ]
+
+        self.assertIn(1.75, options)
+        self.assertIn(2.0, options)
+        self.assertIn(2.25, options)
+        self.assertEqual(
+            adapted[0][
+                "_adaptive_walk_forward_neighborhood_fold_count"
+            ],
+            1,
+        )
+        self.assertGreaterEqual(
+            adapted[0][
+                "_adaptive_walk_forward_neighborhood_seeded_rule_values"
+            ],
+            2,
+        )
+
+    def test_static_baseline_uses_same_folds_without_adaptive_seeds(self):
+        rows = []
+        for day in range(1, 9):
+            rows.append(
+                {
+                    "timestamp": f"2026-08-{day:02d}T14:30:00Z",
+                    "open": 10.0,
+                    "high": 10.5,
+                    "low": 9.8,
+                    "close": 10.2,
+                    "volume": 100000,
+                }
+            )
+        strategies = [
+            {
+                "id": "s1",
+                "name": "Adaptive test",
+                "direction": "long",
+                "machine_rules": {"min_relative_volume": 1.0},
+            }
+        ]
+        optimizer_calls = []
+
+        def fake_optimize(
+            history_rows,
+            fold_strategies,
+            symbol,
+            settings,
+            optimizer,
+            **kwargs,
+        ):
+            optimizer_calls.append(fold_strategies)
+            return {
+                "winner": {
+                    "source_strategy_id": "s1",
+                    "strategy_name": "Adaptive test",
+                    "optimized_rules": {
+                        "min_relative_volume": 1.5
+                    },
+                    "optimized_backtest_settings": {},
+                    "status": "VALIDATED",
+                    "holdout_metrics": {},
+                }
+            }
+
+        def fake_backtest(*args, **kwargs):
+            return {
+                "metrics": {
+                    "trade_count": 1,
+                    "net_pnl": 25.0,
+                    "return_pct": 1.0,
+                    "profit_factor": 1.5,
+                    "max_drawdown_pct": 1.0,
+                },
+                "trades": [],
+            }
+
+        with patch(
+            "trading_validation_core.optimize_stock_strategies",
+            side_effect=fake_optimize,
+        ), patch(
+            "trading_validation_core.run_backtest",
+            side_effect=fake_backtest,
+        ):
+            report = walk_forward_validate(
+                rows,
+                strategies,
+                "TEST",
+                minimum_history_sessions=5,
+                test_sessions_per_fold=1,
+                embargo_sessions=0,
+                max_folds=3,
+                adaptive_learning=True,
+                compare_static_baseline=True,
+            )
+
+        # First fold is identical and reused. Each later fold runs both the
+        # adaptive optimizer and a clean static counterfactual.
+        self.assertEqual(len(optimizer_calls), 5)
+        self.assertTrue(report["static_baseline"]["enabled"])
+        self.assertEqual(len(report["static_baseline"]["folds"]), 3)
+        self.assertTrue(
+            report["static_baseline"]["folds"][0][
+                "reused_adaptive_first_fold"
+            ]
+        )
+        self.assertFalse(
+            report["static_baseline"]["folds"][1][
+                "reused_adaptive_first_fold"
+            ]
+        )
+        self.assertTrue(report["comparison"]["enabled"])
+        self.assertEqual(report["comparison"]["verdict"], "TIE")
 
 
 class ValidationStrengthTests(unittest.TestCase):
