@@ -77,7 +77,11 @@ class AnalyzerSpeedIntegrityTests(unittest.TestCase):
         """A future history cache must never make current-session reasoning stale."""
         market = engine.AlpacaMarketData("key", "secret", live_feed="iex", historical_feed="sip")
         end = engine.utc_now()
-        start = end - timedelta(hours=2)
+        # Keep this fixture wholly inside the current New York calendar day.
+        # Around midnight ET, "last two hours" can legitimately straddle the
+        # historical-cache boundary and make one historical + one live request.
+        cutoff = market._history_cache_cutoff_utc(end)
+        start = max(end - timedelta(hours=2), cutoff + timedelta(minutes=1))
         response = {"bars": {"TEST": []}, "next_page_token": None}
         with patch.object(market, "_get", return_value=response) as mocked:
             market.bars(
