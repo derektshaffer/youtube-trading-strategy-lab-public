@@ -48,6 +48,30 @@ class ExplosiveStockIsolationTests(unittest.TestCase):
         self.assertIn('st.session_state["explosive_analysis_result"]', source)
         self.assertNotIn('st.session_state["til_stock_analysis"]', source)
 
+    def test_chart_indicators_can_be_toggled_independently(self):
+        source = (self.root / "explosive_stock_page.py").read_text(encoding="utf-8")
+        self.assertIn('st.multiselect(', source)
+        self.assertIn('"Chart indicators"', source)
+        for label in (
+            "VWAP",
+            "EMA 9",
+            "EMA 20",
+            "Volume",
+            "Swing levels",
+            "Breakout labels",
+            "VWAP events",
+            "Session high/low",
+        ):
+            self.assertIn(f'"{label}"', source)
+        self.assertIn('if "VWAP" in enabled_indicators:', source)
+        self.assertIn('if "EMA 9" in enabled_indicators:', source)
+        self.assertIn('if "EMA 20" in enabled_indicators:', source)
+        self.assertIn('show_volume = "Volume" in enabled_indicators', source)
+        self.assertIn('if "Swing levels" in enabled_indicators:', source)
+        self.assertIn('if "Breakout labels" in enabled_indicators:', source)
+        self.assertIn('if "VWAP events" in enabled_indicators:', source)
+        self.assertIn('if "Session high/low" in enabled_indicators:', source)
+
     def test_explosive_analyzer_keeps_interactive_chart_local_to_analyzer(self):
         source = (self.root / "explosive_stock_page.py").read_text(encoding="utf-8")
         self.assertIn("def _render_intraday_chart", source)
