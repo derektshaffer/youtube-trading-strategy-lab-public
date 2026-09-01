@@ -241,7 +241,7 @@ def _render_intraday_chart(item: dict[str, Any]) -> None:
         "VWAP events",
         "Session high/low",
     ]
-    with st.popover("Indicators", width="stretch"):
+    with st.popover("Chart indicators", width="stretch"):
         st.caption("Turn chart overlays and labels on or off.")
         enabled_indicators = set(
             st.multiselect(
