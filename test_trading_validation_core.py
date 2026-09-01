@@ -196,6 +196,48 @@ class ValidationStrengthTests(unittest.TestCase):
             any("at least 15 validation trades" in reason for reason in result["reasons"])
         )
 
+    def test_sparse_walk_forward_activity_caps_robustness(self):
+        report = self._report(True)
+        result = validation_strength(
+            report,
+            {
+                "summary": {
+                    "score": 96.0,
+                    "fold_count": 3,
+                    "active_fold_count": 1,
+                    "profitable_fold_count": 1,
+                    "profitable_fold_pct": 100.0,
+                    "external_trade_count": 8,
+                }
+            },
+        )
+        self.assertLessEqual(result["score"], 49.0)
+        self.assertFalse(result["independently_positive"])
+        self.assertEqual(result["walk_forward_temporal_coverage_pct"], 33.3)
+        self.assertEqual(result["walk_forward_profitable_scheduled_pct"], 33.3)
+        self.assertTrue(
+            any("scheduled walk-forward folds" in reason.lower() for reason in result["reasons"])
+        )
+
+    def test_broad_walk_forward_activity_can_remain_independently_positive(self):
+        report = self._report(True)
+        result = validation_strength(
+            report,
+            {
+                "summary": {
+                    "score": 82.0,
+                    "fold_count": 3,
+                    "active_fold_count": 3,
+                    "profitable_fold_count": 2,
+                    "profitable_fold_pct": 66.7,
+                    "external_trade_count": 12,
+                }
+            },
+        )
+        self.assertTrue(result["independently_positive"])
+        self.assertEqual(result["walk_forward_temporal_coverage_pct"], 100.0)
+        self.assertEqual(result["walk_forward_profitable_scheduled_pct"], 66.7)
+
     def test_walk_forward_score_is_blended_not_treated_as_probability(self):
         base = self._report(True)
         result = validation_strength(
