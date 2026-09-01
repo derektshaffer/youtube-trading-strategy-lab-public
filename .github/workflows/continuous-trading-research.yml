@@ -16,6 +16,7 @@ on:
       - "predictive_model_head_to_head.py"
       - "predictive_learning_router.py"
       - "trading_research_orchestrator.py"
+      - "trading_auto_research.py"
       - ".github/workflows/continuous-trading-research.yml"
 
 permissions:
