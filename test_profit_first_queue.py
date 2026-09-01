@@ -198,6 +198,69 @@ class ProfitFirstQueueTests(unittest.TestCase):
             "job",
         )
 
+    @patch.object(queue, "research_readiness")
+    def test_shared_batch_builds_exact_automatic_validation_request(self, readiness):
+        readiness.side_effect = self.ready
+        library = {"strategies": [strategy("fresh")], "research_queue": []}
+
+        batch = queue.profit_first_validation_batch(library)
+
+        self.assertEqual(batch["queue_status"], "ready")
+        self.assertEqual(batch["strategy_ids"], ["fresh"])
+        self.assertTrue(batch["dedupe_key"].startswith("automatic-profit-first:"))
+        self.assertEqual(
+            batch["payload"]["origin"],
+            "automatic_profit_first_validation",
+        )
+        self.assertEqual(
+            batch["payload"]["validation_method_version"],
+            queue.CURRENT_AUTONOMOUS_VALIDATION_METHOD_VERSION,
+        )
+
+    @patch.object(queue, "research_readiness")
+    def test_shared_batch_does_not_recreate_terminal_batch(self, readiness):
+        readiness.side_effect = self.ready
+        base = {"strategies": [strategy("fresh")], "research_queue": []}
+        first = queue.profit_first_validation_batch(base)
+        library = {
+            **base,
+            "research_queue": [
+                {
+                    "id": "finished",
+                    "status": "complete",
+                    "dedupe_key": first["dedupe_key"],
+                }
+            ],
+        }
+
+        repeated = queue.profit_first_validation_batch(library)
+
+        self.assertEqual(repeated["queue_status"], "already-attempted")
+        self.assertEqual(repeated["existing_job_id"], "finished")
+
+    @patch.object(queue, "research_readiness")
+    def test_shared_batch_reports_existing_active_search(self, readiness):
+        readiness.side_effect = self.ready
+        library = {
+            "strategies": [strategy("fresh")],
+            "research_queue": [
+                {
+                    "id": "active",
+                    "type": "autonomous_validation",
+                    "status": "running",
+                    "payload": {
+                        "origin": "automatic_profit_first_validation",
+                        "strategy_ids": ["fresh"],
+                    },
+                }
+            ],
+        }
+
+        batch = queue.profit_first_validation_batch(library)
+
+        self.assertEqual(batch["queue_status"], "active")
+        self.assertEqual(batch["active_strategy_ids"], ["fresh"])
+
 
 if __name__ == "__main__":
     unittest.main()
