@@ -48,6 +48,19 @@ class ExplosiveStockIsolationTests(unittest.TestCase):
         self.assertIn('st.session_state["explosive_analysis_result"]', source)
         self.assertNotIn('st.session_state["til_stock_analysis"]', source)
 
+    def test_chart_has_simple_timeframe_and_axis_controls(self):
+        source = (self.root / "explosive_stock_page.py").read_text(encoding="utf-8")
+        self.assertIn('st.segmented_control(', source)
+        for label in ("1m", "5m", "15m", "1h"):
+            self.assertIn(f'"{label}"', source)
+        for label in ("30m", "1h", "2h", "4h", "All"):
+            self.assertIn(f'"{label}"', source)
+        self.assertIn('"Price zoom"', source)
+        self.assertIn('"displayModeBar": False', source)
+        self.assertIn('"scrollZoom": True', source)
+        self.assertIn('dragmode="pan"', source)
+        self.assertIn('def _resample_chart_frame', source)
+
     def test_chart_indicators_can_be_toggled_independently(self):
         source = (self.root / "explosive_stock_page.py").read_text(encoding="utf-8")
         self.assertIn('st.multiselect(', source)
