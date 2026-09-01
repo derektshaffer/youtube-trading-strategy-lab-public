@@ -90,6 +90,57 @@ class InvalidHistoricalSymbolTests(unittest.TestCase):
         self.assertEqual(market.calls[0], ["AAPL", "D012219", "MSFT"])
         self.assertEqual(market.calls[1], ["AAPL", "MSFT"])
 
+    def test_oversized_historical_batch_is_split_without_shortening_the_window(self):
+        class FakeMarket:
+            def __init__(self):
+                self.calls = []
+
+            def bars(self, symbols, **kwargs):
+                self.calls.append(
+                    {
+                        "symbols": list(symbols),
+                        "start": kwargs.get("start"),
+                        "end": kwargs.get("end"),
+                        "timeframe": kwargs.get("timeframe"),
+                    }
+                )
+                if len(symbols) > 2:
+                    raise AppError(
+                        "The requested historical range is too large for one run. "
+                        "Use fewer tickers, a shorter period, or a larger candle interval."
+                    )
+                return {
+                    symbol: [{"t": "2026-08-20T15:00:00Z", "c": 10, "v": 1000}]
+                    for symbol in symbols
+                }
+
+            def research_reset_actions(self, symbols, **kwargs):
+                return []
+
+        market = FakeMarket()
+        messages = []
+        start = datetime(2026, 3, 1, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 28, tzinfo=timezone.utc)
+        rows = _batched_bars(
+            market,
+            ["AAA", "BBB", "CCC", "DDD"],
+            start=start,
+            end=end,
+            timeframe="5Min",
+            batch_size=25,
+            max_pages=64,
+            progress=messages.append,
+        )
+
+        self.assertEqual(set(rows), {"AAA", "BBB", "CCC", "DDD"})
+        self.assertEqual(market.calls[0]["symbols"], ["AAA", "BBB", "CCC", "DDD"])
+        self.assertEqual(market.calls[1]["symbols"], ["AAA", "BBB"])
+        self.assertEqual(market.calls[2]["symbols"], ["CCC", "DDD"])
+        self.assertTrue(all(call["start"] == start for call in market.calls))
+        self.assertTrue(all(call["end"] == end for call in market.calls))
+        self.assertTrue(all(call["timeframe"] == "5Min" for call in market.calls))
+        self.assertTrue(any("splitting 4 symbols" in message for message in messages))
+
     def test_batched_bars_trims_pre_split_history_and_records_integrity(self):
         class FakeMarket:
             def bars(self, symbols, **kwargs):
