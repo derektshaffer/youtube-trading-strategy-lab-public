@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 from app_access import require_app_access
@@ -135,6 +137,252 @@ def _result_rows(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
+def _render_intraday_chart(item: dict[str, Any]) -> None:
+    rows = [
+        row
+        for row in item.get("chart_intraday_rows") or []
+        if isinstance(row, dict)
+    ]
+    if not rows:
+        st.caption(
+            "No completed intraday candles are attached to this analysis yet. "
+            "Run Analyze explosive potential again to load the interactive chart."
+        )
+        return
+
+    frame = pd.DataFrame(rows)
+    required = {"t", "o", "h", "l", "c", "v"}
+    if frame.empty or not required.issubset(frame.columns):
+        st.caption("Intraday candles were unavailable for charting.")
+        return
+
+    frame["timestamp"] = pd.to_datetime(frame["t"], utc=True, errors="coerce")
+    for column in ("o", "h", "l", "c", "v"):
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    frame = (
+        frame.dropna(subset=["timestamp", "o", "h", "l", "c"])
+        .sort_values("timestamp")
+        .reset_index(drop=True)
+    )
+    if frame.empty:
+        st.caption("Intraday candles were unavailable for charting.")
+        return
+
+    frame["timestamp"] = frame["timestamp"].dt.tz_convert("America/New_York")
+    frame["ema9"] = frame["c"].ewm(span=9, adjust=False).mean()
+    frame["ema20"] = frame["c"].ewm(span=20, adjust=False).mean()
+    typical_price = (frame["h"] + frame["l"] + frame["c"]) / 3.0
+    cumulative_volume = frame["v"].fillna(0.0).cumsum()
+    frame["vwap"] = (
+        (typical_price * frame["v"].fillna(0.0)).cumsum()
+        / cumulative_volume.where(cumulative_volume > 0)
+    )
+
+    symbol = str(item.get("symbol") or "").upper()
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.035,
+        row_heights=[0.78, 0.22],
+    )
+    fig.add_trace(
+        go.Candlestick(
+            x=frame["timestamp"],
+            open=frame["o"],
+            high=frame["h"],
+            low=frame["l"],
+            close=frame["c"],
+            name="Price",
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=frame["timestamp"],
+            y=frame["vwap"],
+            mode="lines",
+            name="VWAP",
+            line={"width": 2.2},
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=frame["timestamp"],
+            y=frame["ema9"],
+            mode="lines",
+            name="EMA 9",
+            line={"width": 1.5},
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=frame["timestamp"],
+            y=frame["ema20"],
+            mode="lines",
+            name="EMA 20",
+            line={"width": 1.5, "dash": "dot"},
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Bar(
+            x=frame["timestamp"],
+            y=frame["v"].fillna(0.0),
+            name="Volume",
+            opacity=0.6,
+        ),
+        row=2,
+        col=1,
+    )
+
+    feature_snapshot = item.get("market_features") or {}
+    features = feature_snapshot.get("features") or {}
+    evidence = feature_snapshot.get("evidence") or {}
+    structure = evidence.get("market_structure") or {}
+    swing_highs = list(structure.get("last_two_swing_highs") or [])
+    swing_lows = list(structure.get("last_two_swing_lows") or [])
+
+    if swing_highs:
+        swing_high = safe_float(swing_highs[-1].get("price"))
+        if swing_high is not None:
+            label = str(features.get("last_swing_high_structure") or "swing high")
+            fig.add_hline(
+                y=swing_high,
+                line_dash="dot",
+                line_width=1,
+                annotation_text=f"Confirmed swing high · {label}",
+                annotation_position="top left",
+                row=1,
+                col=1,
+            )
+    if swing_lows:
+        swing_low = safe_float(swing_lows[-1].get("price"))
+        if swing_low is not None:
+            label = str(features.get("last_swing_low_structure") or "swing low")
+            fig.add_hline(
+                y=swing_low,
+                line_dash="dot",
+                line_width=1,
+                annotation_text=f"Confirmed swing low · {label}",
+                annotation_position="bottom left",
+                row=1,
+                col=1,
+            )
+
+    breakout = evidence.get("breakout") or {}
+    breakout_index = breakout.get("first_breakout_index")
+    if isinstance(breakout_index, int) and 0 <= breakout_index < len(frame):
+        row = frame.iloc[breakout_index]
+        fig.add_trace(
+            go.Scatter(
+                x=[row["timestamp"]],
+                y=[row["h"]],
+                mode="markers+text",
+                name="Breakout",
+                text=["Breakout"],
+                textposition="top center",
+                marker={"size": 10, "symbol": "triangle-up"},
+            ),
+            row=1,
+            col=1,
+        )
+
+    vwap_evidence = evidence.get("vwap_retest") or {}
+    reclaim_index = vwap_evidence.get("reclaim_index")
+    if isinstance(reclaim_index, int) and 0 <= reclaim_index < len(frame):
+        row = frame.iloc[reclaim_index]
+        fig.add_trace(
+            go.Scatter(
+                x=[row["timestamp"]],
+                y=[row["c"]],
+                mode="markers+text",
+                name="VWAP reclaim",
+                text=["VWAP reclaim"],
+                textposition="bottom center",
+                marker={"size": 9, "symbol": "circle"},
+            ),
+            row=1,
+            col=1,
+        )
+    retest_index = vwap_evidence.get("retest_index")
+    if isinstance(retest_index, int) and 0 <= retest_index < len(frame):
+        row = frame.iloc[retest_index]
+        held = bool(features.get("vwap_retest_held"))
+        fig.add_trace(
+            go.Scatter(
+                x=[row["timestamp"]],
+                y=[row["l"]],
+                mode="markers+text",
+                name="VWAP retest",
+                text=["VWAP retest held" if held else "VWAP retest"],
+                textposition="bottom center",
+                marker={"size": 9, "symbol": "diamond"},
+            ),
+            row=1,
+            col=1,
+        )
+
+    session_high_index = int(frame["h"].idxmax())
+    session_low_index = int(frame["l"].idxmin())
+    session_high_row = frame.loc[session_high_index]
+    session_low_row = frame.loc[session_low_index]
+    fig.add_annotation(
+        x=session_high_row["timestamp"],
+        y=session_high_row["h"],
+        text="Session high",
+        showarrow=True,
+        arrowhead=2,
+        yshift=12,
+        row=1,
+        col=1,
+    )
+    fig.add_annotation(
+        x=session_low_row["timestamp"],
+        y=session_low_row["l"],
+        text="Session low",
+        showarrow=True,
+        arrowhead=2,
+        yshift=-12,
+        row=1,
+        col=1,
+    )
+
+    fig.update_layout(
+        title=f"{symbol} · Completed 1-minute candles",
+        template="plotly_dark",
+        height=660,
+        margin={"l": 12, "r": 12, "t": 56, "b": 10},
+        hovermode="x",
+        legend={"orientation": "h", "y": 1.02, "x": 0},
+        xaxis_rangeslider_visible=False,
+    )
+    fig.update_yaxes(title_text="Price", row=1, col=1)
+    fig.update_yaxes(title_text="Volume", row=2, col=1, rangemode="tozero")
+    fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor")
+    st.plotly_chart(
+        fig,
+        width="stretch",
+        config={
+            "displaylogo": False,
+            "scrollZoom": True,
+            "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+        },
+        key=f"explosive_chart_{symbol}",
+    )
+    st.caption(
+        "Hover for candle values; drag to zoom; double-click to reset. "
+        "VWAP, EMA 9, EMA 20, volume, confirmed swing structure, and detected "
+        "VWAP/breakout events use completed candles only."
+    )
+
+
 def _render_candidate(item: dict[str, Any], *, detailed: bool) -> None:
     metrics = item.get("metrics") or {}
     daily = item.get("daily_profile") or {}
@@ -159,6 +407,10 @@ def _render_candidate(item: dict[str, Any], *, detailed: bool) -> None:
         st.info("Potential is beginning to activate, but the move is not yet classified as fully active.")
     elif item.get("activation_state") == "EXTENDED / CHASE RISK":
         st.warning("The stock may be explosive, but current price extension makes chasing especially risky.")
+
+    if detailed:
+        st.markdown("#### Interactive price chart")
+        _render_intraday_chart(item)
 
     component_rows = [
         {"Component": name.replace("_", " ").title(), "Points": value}
@@ -423,6 +675,7 @@ else:
                 history_days=180,
                 news_hours=168,
                 sec_items_by_symbol={symbol: sec_items},
+                include_chart_data=True,
             )
             if not results:
                 raise AppError("No usable market snapshot was returned for that ticker.")
