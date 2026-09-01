@@ -684,6 +684,7 @@ def build_explosive_candidate(
     *,
     sec_items: list[dict[str, Any]] | None = None,
     now: datetime | None = None,
+    include_chart_data: bool = False,
 ) -> dict[str, Any] | None:
     average_volume = average_completed_daily_volume(daily_rows)
     metrics = snapshot_metrics(
@@ -705,7 +706,7 @@ def build_explosive_candidate(
     missing = list(market_features.get("missing_data") or [])
     # These inputs are intentionally not fabricated from price data.
     missing.extend(["float", "market_cap"])
-    return {
+    result = {
         "symbol": symbol,
         "metrics": metrics,
         "daily_profile": daily,
@@ -719,6 +720,23 @@ def build_explosive_candidate(
         "missing_data": sorted(set(missing)),
         **scoring,
     }
+    if include_chart_data:
+        # Analyzer-only visualization payload. Keep it causal by using the same
+        # completed candles supplied to build_market_features, never a live
+        # still-forming bar or future candle.
+        result["chart_intraday_rows"] = [
+            {
+                "t": row.get("t"),
+                "o": safe_float(row.get("o")),
+                "h": safe_float(row.get("h")),
+                "l": safe_float(row.get("l")),
+                "c": safe_float(row.get("c")),
+                "v": safe_float(row.get("v"), 0.0) or 0.0,
+            }
+            for row in completed_intraday[-900:]
+            if isinstance(row, dict)
+        ]
+    return result
 
 
 def scan_explosive_candidates(
@@ -730,6 +748,7 @@ def scan_explosive_candidates(
     news_hours: int = DEFAULT_NEWS_HOURS,
     sec_items_by_symbol: dict[str, list[dict[str, Any]]] | None = None,
     now: datetime | None = None,
+    include_chart_data: bool = False,
 ) -> list[dict[str, Any]]:
     """Scan a bounded candidate universe with shared snapshot/history/news calls."""
     clean = parse_symbols(symbols)
@@ -792,6 +811,7 @@ def scan_explosive_candidates(
             news.get(symbol, []),
             sec_items=sec_lookup.get(symbol, []),
             now=reference,
+            include_chart_data=include_chart_data,
         )
         if candidate is not None:
             results.append(candidate)
