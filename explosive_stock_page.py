@@ -137,6 +137,38 @@ def _result_rows(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
+def _resample_chart_frame(frame: pd.DataFrame, interval: str) -> pd.DataFrame:
+    rules = {
+        "1m": "1min",
+        "5m": "5min",
+        "15m": "15min",
+        "1h": "1h",
+    }
+    rule = rules.get(interval, "1min")
+    if interval == "1m":
+        return frame.copy().reset_index(drop=True)
+
+    data = frame.set_index("timestamp").sort_index()
+    sampled = data.resample(
+        rule,
+        origin="start_day",
+        label="left",
+        closed="left",
+    ).agg(
+        {
+            "o": "first",
+            "h": "max",
+            "l": "min",
+            "c": "last",
+            "v": "sum",
+        }
+    )
+    return (
+        sampled.dropna(subset=["o", "h", "l", "c"])
+        .reset_index()
+    )
+
+
 def _render_intraday_chart(item: dict[str, Any]) -> None:
     rows = [
         row
@@ -150,35 +182,55 @@ def _render_intraday_chart(item: dict[str, Any]) -> None:
         )
         return
 
-    frame = pd.DataFrame(rows)
+    base_frame = pd.DataFrame(rows)
     required = {"t", "o", "h", "l", "c", "v"}
-    if frame.empty or not required.issubset(frame.columns):
+    if base_frame.empty or not required.issubset(base_frame.columns):
         st.caption("Intraday candles were unavailable for charting.")
         return
 
-    frame["timestamp"] = pd.to_datetime(frame["t"], utc=True, errors="coerce")
+    base_frame["timestamp"] = pd.to_datetime(base_frame["t"], utc=True, errors="coerce")
     for column in ("o", "h", "l", "c", "v"):
-        frame[column] = pd.to_numeric(frame[column], errors="coerce")
-    frame = (
-        frame.dropna(subset=["timestamp", "o", "h", "l", "c"])
+        base_frame[column] = pd.to_numeric(base_frame[column], errors="coerce")
+    base_frame = (
+        base_frame.dropna(subset=["timestamp", "o", "h", "l", "c"])
         .sort_values("timestamp")
         .reset_index(drop=True)
     )
-    if frame.empty:
+    if base_frame.empty:
         st.caption("Intraday candles were unavailable for charting.")
         return
 
-    frame["timestamp"] = frame["timestamp"].dt.tz_convert("America/New_York")
-    frame["ema9"] = frame["c"].ewm(span=9, adjust=False).mean()
-    frame["ema20"] = frame["c"].ewm(span=20, adjust=False).mean()
-    typical_price = (frame["h"] + frame["l"] + frame["c"]) / 3.0
-    cumulative_volume = frame["v"].fillna(0.0).cumsum()
-    frame["vwap"] = (
-        (typical_price * frame["v"].fillna(0.0)).cumsum()
-        / cumulative_volume.where(cumulative_volume > 0)
-    )
-
+    base_frame["timestamp"] = base_frame["timestamp"].dt.tz_convert("America/New_York")
     symbol = str(item.get("symbol") or "").upper()
+
+    control_left, control_mid, control_right = st.columns([1.35, 1.55, 1.1])
+    with control_left:
+        candle_interval = st.segmented_control(
+            "Candle size",
+            ["1m", "5m", "15m", "1h"],
+            default="1m",
+            selection_mode="single",
+            key=f"explosive_candle_interval_{symbol}",
+        ) or "1m"
+    with control_mid:
+        time_window = st.segmented_control(
+            "Time shown",
+            ["30m", "1h", "2h", "4h", "All"],
+            default="4h",
+            selection_mode="single",
+            key=f"explosive_time_window_{symbol}",
+        ) or "4h"
+    with control_right:
+        price_zoom = st.slider(
+            "Price zoom",
+            min_value=0.5,
+            max_value=4.0,
+            value=1.0,
+            step=0.25,
+            key=f"explosive_price_zoom_{symbol}",
+            help="Lower values compress the price scale. Higher values magnify price movement.",
+        )
+
     indicator_options = [
         "VWAP",
         "EMA 9",
@@ -189,24 +241,60 @@ def _render_intraday_chart(item: dict[str, Any]) -> None:
         "VWAP events",
         "Session high/low",
     ]
-    enabled_indicators = set(
-        st.multiselect(
-            "Chart indicators",
-            indicator_options,
-            default=indicator_options,
-            key=f"explosive_chart_indicators_{symbol}",
-            help="Candlesticks always stay visible. Turn any overlay, label, or volume panel on or off here.",
+    with st.popover("Indicators", width="stretch"):
+        st.caption("Turn chart overlays and labels on or off.")
+        enabled_indicators = set(
+            st.multiselect(
+                "Visible indicators",
+                indicator_options,
+                default=indicator_options,
+                key=f"explosive_chart_indicators_{symbol}",
+                label_visibility="collapsed",
+            )
         )
-    )
-    show_volume = "Volume" in enabled_indicators
 
+    frame = _resample_chart_frame(base_frame, candle_interval)
+    if frame.empty:
+        st.caption("No completed candles were available at that candle size.")
+        return
+
+    frame["ema9"] = frame["c"].ewm(span=9, adjust=False).mean()
+    frame["ema20"] = frame["c"].ewm(span=20, adjust=False).mean()
+    typical_price = (frame["h"] + frame["l"] + frame["c"]) / 3.0
+    cumulative_volume = frame["v"].fillna(0.0).cumsum()
+    frame["vwap"] = (
+        (typical_price * frame["v"].fillna(0.0)).cumsum()
+        / cumulative_volume.where(cumulative_volume > 0)
+    )
+
+    window_minutes = {
+        "30m": 30,
+        "1h": 60,
+        "2h": 120,
+        "4h": 240,
+        "All": None,
+    }.get(time_window)
+    last_timestamp = frame["timestamp"].iloc[-1]
+    visible_start = None
+    if window_minutes is not None:
+        visible_start = last_timestamp - pd.Timedelta(minutes=window_minutes)
+
+    visible_frame = (
+        frame[frame["timestamp"] >= visible_start]
+        if visible_start is not None
+        else frame
+    )
+    if visible_frame.empty:
+        visible_frame = frame.tail(1)
+
+    show_volume = "Volume" in enabled_indicators
     if show_volume:
         fig = make_subplots(
             rows=2,
             cols=1,
             shared_xaxes=True,
-            vertical_spacing=0.035,
-            row_heights=[0.78, 0.22],
+            vertical_spacing=0.025,
+            row_heights=[0.80, 0.20],
         )
     else:
         fig = make_subplots(rows=1, cols=1)
@@ -232,6 +320,7 @@ def _render_intraday_chart(item: dict[str, Any]) -> None:
                 mode="lines",
                 name="VWAP",
                 line={"width": 2.2},
+                hovertemplate="VWAP %{y:.4f}<extra></extra>",
             ),
             row=1,
             col=1,
@@ -244,6 +333,7 @@ def _render_intraday_chart(item: dict[str, Any]) -> None:
                 mode="lines",
                 name="EMA 9",
                 line={"width": 1.5},
+                hovertemplate="EMA 9 %{y:.4f}<extra></extra>",
             ),
             row=1,
             col=1,
@@ -256,6 +346,7 @@ def _render_intraday_chart(item: dict[str, Any]) -> None:
                 mode="lines",
                 name="EMA 20",
                 line={"width": 1.5, "dash": "dot"},
+                hovertemplate="EMA 20 %{y:.4f}<extra></extra>",
             ),
             row=1,
             col=1,
@@ -266,7 +357,8 @@ def _render_intraday_chart(item: dict[str, Any]) -> None:
                 x=frame["timestamp"],
                 y=frame["v"].fillna(0.0),
                 name="Volume",
-                opacity=0.6,
+                opacity=0.55,
+                hovertemplate="Volume %{y:,.0f}<extra></extra>",
             ),
             row=2,
             col=1,
@@ -280,7 +372,6 @@ def _render_intraday_chart(item: dict[str, Any]) -> None:
         structure = evidence.get("market_structure") or {}
         swing_highs = list(structure.get("last_two_swing_highs") or [])
         swing_lows = list(structure.get("last_two_swing_lows") or [])
-
         if swing_highs:
             swing_high = safe_float(swing_highs[-1].get("price"))
             if swing_high is not None:
@@ -289,7 +380,7 @@ def _render_intraday_chart(item: dict[str, Any]) -> None:
                     y=swing_high,
                     line_dash="dot",
                     line_width=1,
-                    annotation_text=f"Confirmed swing high · {label}",
+                    annotation_text=f"Swing high · {label}",
                     annotation_position="top left",
                     row=1,
                     col=1,
@@ -302,17 +393,25 @@ def _render_intraday_chart(item: dict[str, Any]) -> None:
                     y=swing_low,
                     line_dash="dot",
                     line_width=1,
-                    annotation_text=f"Confirmed swing low · {label}",
+                    annotation_text=f"Swing low · {label}",
                     annotation_position="bottom left",
                     row=1,
                     col=1,
                 )
 
+    def event_row_from_base(index_value: Any) -> pd.Series | None:
+        if not isinstance(index_value, int) or not (0 <= index_value < len(base_frame)):
+            return None
+        event_time = base_frame.iloc[index_value]["timestamp"]
+        matching = frame[frame["timestamp"] <= event_time]
+        if matching.empty:
+            return None
+        return matching.iloc[-1]
+
     if "Breakout labels" in enabled_indicators:
         breakout = evidence.get("breakout") or {}
-        breakout_index = breakout.get("first_breakout_index")
-        if isinstance(breakout_index, int) and 0 <= breakout_index < len(frame):
-            row = frame.iloc[breakout_index]
+        row = event_row_from_base(breakout.get("first_breakout_index"))
+        if row is not None:
             fig.add_trace(
                 go.Scatter(
                     x=[row["timestamp"]],
@@ -322,6 +421,7 @@ def _render_intraday_chart(item: dict[str, Any]) -> None:
                     text=["Breakout"],
                     textposition="top center",
                     marker={"size": 10, "symbol": "triangle-up"},
+                    hoverinfo="skip",
                 ),
                 row=1,
                 col=1,
@@ -329,45 +429,43 @@ def _render_intraday_chart(item: dict[str, Any]) -> None:
 
     if "VWAP events" in enabled_indicators:
         vwap_evidence = evidence.get("vwap_retest") or {}
-        reclaim_index = vwap_evidence.get("reclaim_index")
-        if isinstance(reclaim_index, int) and 0 <= reclaim_index < len(frame):
-            row = frame.iloc[reclaim_index]
+        reclaim_row = event_row_from_base(vwap_evidence.get("reclaim_index"))
+        if reclaim_row is not None:
             fig.add_trace(
                 go.Scatter(
-                    x=[row["timestamp"]],
-                    y=[row["c"]],
+                    x=[reclaim_row["timestamp"]],
+                    y=[reclaim_row["c"]],
                     mode="markers+text",
                     name="VWAP reclaim",
                     text=["VWAP reclaim"],
                     textposition="bottom center",
                     marker={"size": 9, "symbol": "circle"},
+                    hoverinfo="skip",
                 ),
                 row=1,
                 col=1,
             )
-        retest_index = vwap_evidence.get("retest_index")
-        if isinstance(retest_index, int) and 0 <= retest_index < len(frame):
-            row = frame.iloc[retest_index]
+        retest_row = event_row_from_base(vwap_evidence.get("retest_index"))
+        if retest_row is not None:
             held = bool(features.get("vwap_retest_held"))
             fig.add_trace(
                 go.Scatter(
-                    x=[row["timestamp"]],
-                    y=[row["l"]],
+                    x=[retest_row["timestamp"]],
+                    y=[retest_row["l"]],
                     mode="markers+text",
                     name="VWAP retest",
                     text=["VWAP retest held" if held else "VWAP retest"],
                     textposition="bottom center",
                     marker={"size": 9, "symbol": "diamond"},
+                    hoverinfo="skip",
                 ),
                 row=1,
                 col=1,
             )
 
     if "Session high/low" in enabled_indicators:
-        session_high_index = int(frame["h"].idxmax())
-        session_low_index = int(frame["l"].idxmin())
-        session_high_row = frame.loc[session_high_index]
-        session_low_row = frame.loc[session_low_index]
+        session_high_row = frame.loc[int(frame["h"].idxmax())]
+        session_low_row = frame.loc[int(frame["l"].idxmin())]
         fig.add_annotation(
             x=session_high_row["timestamp"],
             y=session_high_row["h"],
@@ -389,33 +487,75 @@ def _render_intraday_chart(item: dict[str, Any]) -> None:
             col=1,
         )
 
+    low = float(visible_frame["l"].min())
+    high = float(visible_frame["h"].max())
+    center = (high + low) / 2.0
+    base_half_range = max((high - low) / 2.0, max(abs(center), 1.0) * 0.0025)
+    half_range = base_half_range * 1.12 / max(float(price_zoom), 0.1)
+    price_range = [center - half_range, center + half_range]
+
+    interval_delta = {
+        "1m": pd.Timedelta(minutes=1),
+        "5m": pd.Timedelta(minutes=5),
+        "15m": pd.Timedelta(minutes=15),
+        "1h": pd.Timedelta(hours=1),
+    }[candle_interval]
+    right_padding = last_timestamp + interval_delta
+
     fig.update_layout(
-        title=f"{symbol} · Completed 1-minute candles",
+        title=f"{symbol} · {candle_interval} candles",
         template="plotly_dark",
-        height=660 if show_volume else 560,
-        margin={"l": 12, "r": 12, "t": 56, "b": 10},
-        hovermode="x",
+        height=650 if show_volume else 560,
+        margin={"l": 8, "r": 8, "t": 50, "b": 8},
+        hovermode="x unified",
+        dragmode="pan",
         legend={"orientation": "h", "y": 1.02, "x": 0},
         xaxis_rangeslider_visible=False,
+        uirevision=f"{symbol}-{candle_interval}-{time_window}-{price_zoom}-{show_volume}",
     )
-    fig.update_yaxes(title_text="Price", row=1, col=1)
+    if visible_start is not None:
+        fig.update_xaxes(range=[visible_start, right_padding])
+    else:
+        fig.update_xaxes(range=[frame["timestamp"].iloc[0], right_padding])
+    fig.update_yaxes(
+        title_text="Price",
+        range=price_range,
+        fixedrange=False,
+        row=1,
+        col=1,
+    )
     if show_volume:
-        fig.update_yaxes(title_text="Volume", row=2, col=1, rangemode="tozero")
-    fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor")
+        fig.update_yaxes(
+            title_text="Volume",
+            rangemode="tozero",
+            fixedrange=False,
+            row=2,
+            col=1,
+        )
+    fig.update_xaxes(
+        fixedrange=False,
+        showspikes=True,
+        spikemode="across",
+        spikesnap="cursor",
+        showgrid=False,
+    )
+
     st.plotly_chart(
         fig,
         width="stretch",
         config={
             "displaylogo": False,
+            "displayModeBar": False,
             "scrollZoom": True,
-            "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+            "doubleClick": "reset",
+            "responsive": True,
         },
-        key=f"explosive_chart_{symbol}",
+        key=f"explosive_chart_{symbol}_{candle_interval}",
     )
     st.caption(
-        "Candlesticks always stay visible. Use Chart indicators above to show or hide "
-        "VWAP, EMAs, volume, structural levels, and event labels. All chart evidence "
-        "uses completed candles only."
+        "Drag the chart to pan · scroll/trackpad to zoom · double-click to reset. "
+        "Use Candle size for 1m/5m/15m/1h bars, Time shown to compress or expand "
+        "the horizontal view, and Price zoom to compress or magnify the price scale."
     )
 
 
