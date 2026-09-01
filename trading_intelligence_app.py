@@ -254,6 +254,10 @@ from trading_progress_ui import (
     format_eta_range,
     session_task_profiles,
 )
+from profit_first_queue import (
+    CURRENT_AUTONOMOUS_VALIDATION_METHOD_VERSION,
+    profit_first_validation_batch,
+)
 from trading_auto_research import (
     merge_autonomous_research_into_library,
     run_autonomous_research,
@@ -1689,15 +1693,24 @@ def profit_first_run_snapshot(run: dict[str, Any]) -> dict[str, Any]:
     validation_method_version = int(
         safe_float(run.get("validation_method_version"), 0) or 0
     )
-    # Autonomous method v4 is the current strict point-in-time validator.
+    # The exported autonomous method version is the current strict point-in-time validator.
     # Current manual Strategy-Lab saves carry an evidence verdict. Older manual
     # records lack that field and must be revalidated before Profit First trusts them.
     current_protocol = bool(
-        (autonomous and validation_method_version >= 4)
+        (
+            autonomous
+            and validation_method_version
+            >= CURRENT_AUTONOMOUS_VALIDATION_METHOD_VERSION
+        )
         or (not autonomous and bool(verdict_code))
     )
     historical_gate_pass = bool(
-        (autonomous and validation_method_version >= 4 and validation_status == "validated")
+        (
+            autonomous
+            and validation_method_version
+            >= CURRENT_AUTONOMOUS_VALIDATION_METHOD_VERSION
+            and validation_status == "validated"
+        )
         or verdict_code in robust_verdict_codes
     )
     requires_revalidation = not current_protocol
@@ -4250,6 +4263,130 @@ elif module == "Profit First":
         "it made money in the separate validation period, untouched holdout, and higher-cost stress test. "
         "A current stock match by itself never qualifies a strategy here."
     )
+
+    profit_first_batch = profit_first_validation_batch(
+        library,
+        maximum_candidates=2,
+    )
+    profit_first_queue_state = str(
+        profit_first_batch.get("queue_status") or ""
+    )
+    profit_first_search_active = profit_first_queue_state == "active"
+    profit_first_start_slot = st.empty()
+    profit_first_start_clicked = profit_first_start_slot.button(
+        (
+            "⏳ PROFITABLE STRATEGY SEARCH IN PROGRESS"
+            if profit_first_search_active
+            else "🔎 FIND ME A PROFITABLE VALIDATED STRATEGY"
+        ),
+        type="primary",
+        width="stretch",
+        disabled=profit_first_search_active,
+        key="til_profit_first_one_click_search",
+        help=(
+            "Automatically selects the strongest testable candidates and runs optimization, "
+            "adaptive walk-forward, profitable-neighborhood, untouched holdout, and execution-stress checks."
+        ),
+    )
+    st.caption(
+        "One action runs the full path: candidate discovery → optimization → adaptive walk-forward → "
+        "profitable-neighborhood test → untouched holdout → execution stress → PASS or continue searching."
+    )
+    if profit_first_search_active:
+        active_ids = list(profit_first_batch.get("active_strategy_ids") or [])
+        st.info(
+            "**Search is running.** "
+            + (
+                f"The Lab is strictly validating {len(active_ids)} candidate"
+                f"{'s' if len(active_ids) != 1 else ''}. "
+                if active_ids
+                else "The Lab is selecting and strictly validating the next candidate. "
+            )
+            + "You do not need to open Strategy Lab or manually turn on walk-forward. "
+            "A passing result is saved automatically; a failure stays research-only and the search advances."
+        )
+
+    if profit_first_start_clicked:
+        profit_first_start_slot.button(
+            "⏳ STARTING FULL VALIDATION SEARCH…",
+            type="primary",
+            width="stretch",
+            disabled=True,
+            key="til_profit_first_one_click_search_busy",
+        )
+        try:
+            fresh_profit_library = load_library(
+                force_cloud_refresh=True,
+                mutable=True,
+            )
+            fresh_batch = profit_first_validation_batch(
+                fresh_profit_library,
+                maximum_candidates=2,
+            )
+            fresh_state = str(fresh_batch.get("queue_status") or "")
+            queued_profit_job = None
+            seeded_profit_research = 0
+
+            if fresh_state == "ready":
+                fresh_profit_library, queued_profit_job = enqueue_research_job(
+                    fresh_profit_library,
+                    "autonomous_validation",
+                    dict(fresh_batch.get("payload") or {}),
+                    priority=100,
+                    dedupe_key=str(fresh_batch.get("dedupe_key") or ""),
+                    max_attempts=2,
+                )
+            elif fresh_state in {
+                "no-eligible-candidates",
+                "already-attempted",
+            }:
+                # There is no candidate worth retesting right now. Expand the
+                # research queue instead; the worker will validate each new
+                # faithfully modeled finalist automatically when it is ready.
+                fresh_profit_library, seeded_profit_research = (
+                    seed_continuous_research_cycle(
+                        fresh_profit_library,
+                        maximum_topics=10,
+                    )
+                )
+
+            if queued_profit_job is not None or seeded_profit_research:
+                intelligence_store().save(fresh_profit_library)
+
+            launch_ok, launch_detail = dispatch_github_workflow(
+                actions_repository_setting,
+                actions_token_setting,
+                workflow="continuous-trading-research.yml",
+                ref=actions_ref_setting,
+            )
+            if launch_ok:
+                if queued_profit_job is not None:
+                    queued_count = len(fresh_batch.get("strategy_ids") or [])
+                    st.success(
+                        "**Full validation search started.** "
+                        f"The Lab queued {queued_count} strongest testable candidate"
+                        f"{'s' if queued_count != 1 else ''} and will automatically save only a strict PASS. "
+                        "If they fail, the search continues to the next eligible evidence."
+                    )
+                else:
+                    st.success(
+                        "**Search expanded automatically.** No existing candidate was worth repeating, "
+                        "so the Lab started/continued research for new candidates. Each testable finalist "
+                        "will enter the full validation pipeline automatically."
+                    )
+            elif queued_profit_job is not None or seeded_profit_research:
+                st.warning(
+                    "The search is safely saved in the durable queue, but the immediate cloud-worker "
+                    "launch was unavailable. "
+                    + str(launch_detail)
+                )
+            else:
+                st.error(
+                    "The cloud validation worker could not be started. "
+                    + str(launch_detail)
+                )
+        except AppError as exc:
+            st.error("Could not start the full Profit First search: " + str(exc))
 
     profit_cols = st.columns(4)
     profit_cols[0].metric("Strict profit-first edges", len(profit_edges))

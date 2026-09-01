@@ -59,6 +59,28 @@ class ProfitFirstWorkflowTests(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, self.source)
 
+    def test_profit_first_has_one_obvious_full_validation_action(self):
+        for marker in (
+            "FIND ME A PROFITABLE VALIDATED STRATEGY",
+            "PROFITABLE STRATEGY SEARCH IN PROGRESS",
+            "candidate discovery → optimization → adaptive walk-forward",
+            "profitable-neighborhood test → untouched holdout → execution stress",
+            "You do not need to open Strategy Lab or manually turn on walk-forward.",
+            'workflow="continuous-trading-research.yml"',
+            "Search expanded automatically.",
+            "If they fail, the search continues",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, self.source)
+
+    def test_profit_first_ui_and_worker_share_candidate_batch_decision(self):
+        self.assertIn("profit_first_validation_batch(", self.source)
+        self.assertIn("profit_first_validation_batch(", self.worker_source)
+        self.assertIn(
+            "CURRENT_AUTONOMOUS_VALIDATION_METHOD_VERSION",
+            self.source,
+        )
+
     def test_profit_first_rechecks_before_every_worker_slot(self):
         loop_source = self.worker_source.split(
             "for _ in range(jobs_per_run):",

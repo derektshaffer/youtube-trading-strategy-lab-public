@@ -7,6 +7,7 @@ candidate deserves scarce validation compute next.
 
 from __future__ import annotations
 
+import hashlib
 from math import isfinite
 from typing import Any
 
@@ -241,3 +242,73 @@ def profit_first_candidate_dedupe_key(candidate: dict[str, Any]) -> str:
         f"v{CURRENT_AUTONOMOUS_VALIDATION_METHOD_VERSION}:"
         f"{strategy_id}:{safe_stamp}"
     )
+
+
+def profit_first_validation_batch(
+    library: dict[str, Any],
+    *,
+    maximum_candidates: int = 2,
+) -> dict[str, Any]:
+    """Describe the next strict Profit First batch without mutating the library.
+
+    Streamlit and the cloud worker both use this decision so the prominent UI
+    action cannot select a different batch than the autonomous worker.  A
+    terminal batch is not recreated unless new validation evidence changes its
+    candidate key.
+    """
+    ranking = profit_first_validation_candidates(
+        library,
+        maximum=max(1, min(3, int(maximum_candidates))),
+    )
+    active = active_profit_first_validation_job(library)
+    if active is not None:
+        payload = active.get("payload") if isinstance(active.get("payload"), dict) else {}
+        return {
+            **ranking,
+            "queue_status": "active",
+            "active_job_id": active.get("id"),
+            "active_strategy_ids": [
+                str(value or "").strip()
+                for value in payload.get("strategy_ids") or []
+                if str(value or "").strip()
+            ],
+        }
+
+    candidates = list(ranking.get("candidates") or [])
+    if not candidates:
+        return {**ranking, "queue_status": "no-eligible-candidates"}
+
+    candidate_keys = [
+        profit_first_candidate_dedupe_key(candidate)
+        for candidate in candidates
+    ]
+    dedupe_key = "automatic-profit-first:" + hashlib.sha256(
+        "|".join(candidate_keys).encode("utf-8")
+    ).hexdigest()[:20]
+    for item in library.get("research_queue") or []:
+        if isinstance(item, dict) and str(item.get("dedupe_key") or "") == dedupe_key:
+            return {
+                **ranking,
+                "queue_status": "already-attempted",
+                "existing_job_id": item.get("id"),
+                "dedupe_key": dedupe_key,
+            }
+
+    strategy_ids = [
+        str(candidate.get("strategy_id") or "").strip()
+        for candidate in candidates
+        if str(candidate.get("strategy_id") or "").strip()
+    ]
+    return {
+        **ranking,
+        "queue_status": "ready",
+        "strategy_ids": strategy_ids,
+        "dedupe_key": dedupe_key,
+        "payload": {
+            "origin": "automatic_profit_first_validation",
+            "strategy_ids": strategy_ids,
+            "validation_method_version": CURRENT_AUTONOMOUS_VALIDATION_METHOD_VERSION,
+            "profit_first_phase": ranking.get("phase"),
+            "candidate_ranking": candidates,
+        },
+    }

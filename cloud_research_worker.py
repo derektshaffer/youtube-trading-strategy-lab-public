@@ -27,9 +27,7 @@ from predictive_ml_backfill import (
     run_predictive_ml_backfill,
 )
 from profit_first_queue import (
-    active_profit_first_validation_job,
-    profit_first_candidate_dedupe_key,
-    profit_first_validation_candidates,
+    profit_first_validation_batch,
 )
 from stock_strategy_finder import (
     apply_historical_spread_integrity_guard,
@@ -575,67 +573,30 @@ def ensure_automatic_profit_first_validation_job(
 ) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any]]:
     """Queue the strongest testable unproven candidates for strict validation."""
     result = dict(data or {})
-    active = active_profit_first_validation_job(result)
-    ranking = profit_first_validation_candidates(
+    ranking = profit_first_validation_batch(
         result,
-        maximum=max(1, min(3, int(maximum_candidates))),
+        maximum_candidates=maximum_candidates,
     )
-    if active is not None:
-        ranking = {
-            **ranking,
-            "queue_status": "active",
-            "active_job_id": active.get("id"),
-            "active_strategy_ids": _target_strategy_ids(
-                active.get("payload") if isinstance(active.get("payload"), dict) else {}
-            ),
-        }
+    queue_status = str(ranking.get("queue_status") or "")
+    if queue_status == "active":
         result = _set_profit_first_queue_status(result, ranking)
         return result, None, ranking
 
-    candidates = list(ranking.get("candidates") or [])
-    if not candidates:
-        ranking = {**ranking, "queue_status": "no-eligible-candidates"}
+    if queue_status == "no-eligible-candidates":
         result = _set_profit_first_queue_status(result, ranking)
         return result, None, ranking
 
-    # Do not recreate an identical terminal batch. New validation evidence changes
-    # the per-candidate dedupe component and makes a fresh batch eligible.
-    candidate_keys = [
-        profit_first_candidate_dedupe_key(candidate)
-        for candidate in candidates
-    ]
-    combined_key = "automatic-profit-first:" + hashlib.sha256(
-        "|".join(candidate_keys).encode("utf-8")
-    ).hexdigest()[:20]
-    for item in result.get("research_queue") or []:
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("dedupe_key") or "") == combined_key:
-            ranking = {
-                **ranking,
-                "queue_status": "already-attempted",
-                "existing_job_id": item.get("id"),
-            }
-            result = _set_profit_first_queue_status(result, ranking)
-            return result, None, ranking
+    if queue_status == "already-attempted":
+        result = _set_profit_first_queue_status(result, ranking)
+        return result, None, ranking
 
-    strategy_ids = [
-        str(candidate.get("strategy_id") or "")
-        for candidate in candidates
-        if str(candidate.get("strategy_id") or "").strip()
-    ]
+    strategy_ids = list(ranking.get("strategy_ids") or [])
     result, job = enqueue_research_job(
         result,
         "autonomous_validation",
-        {
-            "origin": "automatic_profit_first_validation",
-            "strategy_ids": strategy_ids,
-            "validation_method_version": AUTONOMOUS_VALIDATION_METHOD_VERSION,
-            "profit_first_phase": ranking.get("phase"),
-            "candidate_ranking": candidates,
-        },
+        dict(ranking.get("payload") or {}),
         priority=99,
-        dedupe_key=combined_key,
+        dedupe_key=str(ranking.get("dedupe_key") or ""),
         max_attempts=2,
     )
     ranking = {
