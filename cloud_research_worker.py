@@ -14,6 +14,8 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 from typing import Any
 
+# Keep worker invalidation/requeue behavior pinned to the current autonomous
+# validation protocol exported by trading_auto_research.
 from trading_auto_research import (
     AUTONOMOUS_VALIDATION_METHOD_VERSION,
     invalidate_legacy_autonomous_validations,
