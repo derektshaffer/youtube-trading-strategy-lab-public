@@ -733,7 +733,7 @@ def build_explosive_candidate(
                 "c": safe_float(row.get("c")),
                 "v": safe_float(row.get("v"), 0.0) or 0.0,
             }
-            for row in completed_intraday[-900:]
+            for row in completed_intraday[-1200:]
             if isinstance(row, dict)
         ]
     return result
