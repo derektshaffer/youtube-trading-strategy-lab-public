@@ -45,7 +45,7 @@ AUTO_EVENT_WINDOW_BUFFER_DAYS = 30
 # choose symbols. This prevents end-of-day/event-window hindsight from deciding
 # which earlier intraday bars are allowed into the test sample.
 AUTO_VALIDATION_WINDOW_DAYS = 180
-AUTONOMOUS_VALIDATION_METHOD_VERSION = 4
+AUTONOMOUS_VALIDATION_METHOD_VERSION = 5
 AUTO_TIMEFRAME = "5Min"
 
 
@@ -1092,10 +1092,39 @@ def _global_validation_gate(
         reasons.append("Walk-forward validation is missing or failed; validation fails closed.")
     else:
         wf = walk_forward.get("summary") or {}
+        fold_count = int(wf.get("fold_count") or 0)
+        active_fold_count = int(wf.get("active_fold_count") or 0)
+        profitable_fold_count = int(wf.get("profitable_fold_count") or 0)
+        active_fold_pct = (
+            active_fold_count / fold_count * 100.0
+            if fold_count > 0
+            else 0.0
+        )
+        profitable_scheduled_fold_pct = (
+            profitable_fold_count / fold_count * 100.0
+            if fold_count > 0
+            else 0.0
+        )
+        if fold_count < 3:
+            reasons.append(
+                "Fewer than three rolling walk-forward folds were available; temporal validation is too thin."
+            )
+        if active_fold_count < 2:
+            reasons.append(
+                "Fewer than two walk-forward folds produced trades with the frozen setup."
+            )
+        if active_fold_pct < 66.7:
+            reasons.append(
+                "The frozen setup traded in fewer than two-thirds of scheduled walk-forward folds."
+            )
         if (safe_float(wf.get("profitable_fold_pct"), 0.0) or 0.0) < 50.0:
-            reasons.append("Fewer than half of rolling walk-forward folds were profitable.")
-        if int(wf.get("external_trade_count") or 0) < 4:
-            reasons.append("Walk-forward unseen periods contain fewer than four trades.")
+            reasons.append("Fewer than half of active rolling walk-forward folds were profitable.")
+        if profitable_scheduled_fold_pct < 50.0:
+            reasons.append(
+                "Fewer than half of all scheduled walk-forward folds were profitable once inactive folds are counted."
+            )
+        if int(wf.get("external_trade_count") or 0) < 6:
+            reasons.append("Walk-forward unseen periods contain fewer than six trades.")
 
     return ("validated" if not reasons else "research_only"), reasons
 
@@ -1391,7 +1420,7 @@ def run_autonomous_research(
                     optimizer,
                     minimum_history_sessions=8,
                     test_sessions_per_fold=2,
-                    max_folds=2,
+                    max_folds=3,
                 )
             except AppError:
                 # The global gate fails closed when walk-forward is unavailable.
