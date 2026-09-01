@@ -179,13 +179,38 @@ def _render_intraday_chart(item: dict[str, Any]) -> None:
     )
 
     symbol = str(item.get("symbol") or "").upper()
-    fig = make_subplots(
-        rows=2,
-        cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.035,
-        row_heights=[0.78, 0.22],
+    indicator_options = [
+        "VWAP",
+        "EMA 9",
+        "EMA 20",
+        "Volume",
+        "Swing levels",
+        "Breakout labels",
+        "VWAP events",
+        "Session high/low",
+    ]
+    enabled_indicators = set(
+        st.multiselect(
+            "Chart indicators",
+            indicator_options,
+            default=indicator_options,
+            key=f"explosive_chart_indicators_{symbol}",
+            help="Candlesticks always stay visible. Turn any overlay, label, or volume panel on or off here.",
+        )
     )
+    show_volume = "Volume" in enabled_indicators
+
+    if show_volume:
+        fig = make_subplots(
+            rows=2,
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.035,
+            row_heights=[0.78, 0.22],
+        )
+    else:
+        fig = make_subplots(rows=1, cols=1)
+
     fig.add_trace(
         go.Candlestick(
             x=frame["timestamp"],
@@ -198,173 +223,184 @@ def _render_intraday_chart(item: dict[str, Any]) -> None:
         row=1,
         col=1,
     )
-    fig.add_trace(
-        go.Scatter(
-            x=frame["timestamp"],
-            y=frame["vwap"],
-            mode="lines",
-            name="VWAP",
-            line={"width": 2.2},
-        ),
-        row=1,
-        col=1,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=frame["timestamp"],
-            y=frame["ema9"],
-            mode="lines",
-            name="EMA 9",
-            line={"width": 1.5},
-        ),
-        row=1,
-        col=1,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=frame["timestamp"],
-            y=frame["ema20"],
-            mode="lines",
-            name="EMA 20",
-            line={"width": 1.5, "dash": "dot"},
-        ),
-        row=1,
-        col=1,
-    )
-    fig.add_trace(
-        go.Bar(
-            x=frame["timestamp"],
-            y=frame["v"].fillna(0.0),
-            name="Volume",
-            opacity=0.6,
-        ),
-        row=2,
-        col=1,
-    )
+
+    if "VWAP" in enabled_indicators:
+        fig.add_trace(
+            go.Scatter(
+                x=frame["timestamp"],
+                y=frame["vwap"],
+                mode="lines",
+                name="VWAP",
+                line={"width": 2.2},
+            ),
+            row=1,
+            col=1,
+        )
+    if "EMA 9" in enabled_indicators:
+        fig.add_trace(
+            go.Scatter(
+                x=frame["timestamp"],
+                y=frame["ema9"],
+                mode="lines",
+                name="EMA 9",
+                line={"width": 1.5},
+            ),
+            row=1,
+            col=1,
+        )
+    if "EMA 20" in enabled_indicators:
+        fig.add_trace(
+            go.Scatter(
+                x=frame["timestamp"],
+                y=frame["ema20"],
+                mode="lines",
+                name="EMA 20",
+                line={"width": 1.5, "dash": "dot"},
+            ),
+            row=1,
+            col=1,
+        )
+    if show_volume:
+        fig.add_trace(
+            go.Bar(
+                x=frame["timestamp"],
+                y=frame["v"].fillna(0.0),
+                name="Volume",
+                opacity=0.6,
+            ),
+            row=2,
+            col=1,
+        )
 
     feature_snapshot = item.get("market_features") or {}
     features = feature_snapshot.get("features") or {}
     evidence = feature_snapshot.get("evidence") or {}
-    structure = evidence.get("market_structure") or {}
-    swing_highs = list(structure.get("last_two_swing_highs") or [])
-    swing_lows = list(structure.get("last_two_swing_lows") or [])
 
-    if swing_highs:
-        swing_high = safe_float(swing_highs[-1].get("price"))
-        if swing_high is not None:
-            label = str(features.get("last_swing_high_structure") or "swing high")
-            fig.add_hline(
-                y=swing_high,
-                line_dash="dot",
-                line_width=1,
-                annotation_text=f"Confirmed swing high · {label}",
-                annotation_position="top left",
+    if "Swing levels" in enabled_indicators:
+        structure = evidence.get("market_structure") or {}
+        swing_highs = list(structure.get("last_two_swing_highs") or [])
+        swing_lows = list(structure.get("last_two_swing_lows") or [])
+
+        if swing_highs:
+            swing_high = safe_float(swing_highs[-1].get("price"))
+            if swing_high is not None:
+                label = str(features.get("last_swing_high_structure") or "swing high")
+                fig.add_hline(
+                    y=swing_high,
+                    line_dash="dot",
+                    line_width=1,
+                    annotation_text=f"Confirmed swing high · {label}",
+                    annotation_position="top left",
+                    row=1,
+                    col=1,
+                )
+        if swing_lows:
+            swing_low = safe_float(swing_lows[-1].get("price"))
+            if swing_low is not None:
+                label = str(features.get("last_swing_low_structure") or "swing low")
+                fig.add_hline(
+                    y=swing_low,
+                    line_dash="dot",
+                    line_width=1,
+                    annotation_text=f"Confirmed swing low · {label}",
+                    annotation_position="bottom left",
+                    row=1,
+                    col=1,
+                )
+
+    if "Breakout labels" in enabled_indicators:
+        breakout = evidence.get("breakout") or {}
+        breakout_index = breakout.get("first_breakout_index")
+        if isinstance(breakout_index, int) and 0 <= breakout_index < len(frame):
+            row = frame.iloc[breakout_index]
+            fig.add_trace(
+                go.Scatter(
+                    x=[row["timestamp"]],
+                    y=[row["h"]],
+                    mode="markers+text",
+                    name="Breakout",
+                    text=["Breakout"],
+                    textposition="top center",
+                    marker={"size": 10, "symbol": "triangle-up"},
+                ),
                 row=1,
                 col=1,
             )
-    if swing_lows:
-        swing_low = safe_float(swing_lows[-1].get("price"))
-        if swing_low is not None:
-            label = str(features.get("last_swing_low_structure") or "swing low")
-            fig.add_hline(
-                y=swing_low,
-                line_dash="dot",
-                line_width=1,
-                annotation_text=f"Confirmed swing low · {label}",
-                annotation_position="bottom left",
+
+    if "VWAP events" in enabled_indicators:
+        vwap_evidence = evidence.get("vwap_retest") or {}
+        reclaim_index = vwap_evidence.get("reclaim_index")
+        if isinstance(reclaim_index, int) and 0 <= reclaim_index < len(frame):
+            row = frame.iloc[reclaim_index]
+            fig.add_trace(
+                go.Scatter(
+                    x=[row["timestamp"]],
+                    y=[row["c"]],
+                    mode="markers+text",
+                    name="VWAP reclaim",
+                    text=["VWAP reclaim"],
+                    textposition="bottom center",
+                    marker={"size": 9, "symbol": "circle"},
+                ),
+                row=1,
+                col=1,
+            )
+        retest_index = vwap_evidence.get("retest_index")
+        if isinstance(retest_index, int) and 0 <= retest_index < len(frame):
+            row = frame.iloc[retest_index]
+            held = bool(features.get("vwap_retest_held"))
+            fig.add_trace(
+                go.Scatter(
+                    x=[row["timestamp"]],
+                    y=[row["l"]],
+                    mode="markers+text",
+                    name="VWAP retest",
+                    text=["VWAP retest held" if held else "VWAP retest"],
+                    textposition="bottom center",
+                    marker={"size": 9, "symbol": "diamond"},
+                ),
                 row=1,
                 col=1,
             )
 
-    breakout = evidence.get("breakout") or {}
-    breakout_index = breakout.get("first_breakout_index")
-    if isinstance(breakout_index, int) and 0 <= breakout_index < len(frame):
-        row = frame.iloc[breakout_index]
-        fig.add_trace(
-            go.Scatter(
-                x=[row["timestamp"]],
-                y=[row["h"]],
-                mode="markers+text",
-                name="Breakout",
-                text=["Breakout"],
-                textposition="top center",
-                marker={"size": 10, "symbol": "triangle-up"},
-            ),
+    if "Session high/low" in enabled_indicators:
+        session_high_index = int(frame["h"].idxmax())
+        session_low_index = int(frame["l"].idxmin())
+        session_high_row = frame.loc[session_high_index]
+        session_low_row = frame.loc[session_low_index]
+        fig.add_annotation(
+            x=session_high_row["timestamp"],
+            y=session_high_row["h"],
+            text="Session high",
+            showarrow=True,
+            arrowhead=2,
+            yshift=12,
             row=1,
             col=1,
         )
-
-    vwap_evidence = evidence.get("vwap_retest") or {}
-    reclaim_index = vwap_evidence.get("reclaim_index")
-    if isinstance(reclaim_index, int) and 0 <= reclaim_index < len(frame):
-        row = frame.iloc[reclaim_index]
-        fig.add_trace(
-            go.Scatter(
-                x=[row["timestamp"]],
-                y=[row["c"]],
-                mode="markers+text",
-                name="VWAP reclaim",
-                text=["VWAP reclaim"],
-                textposition="bottom center",
-                marker={"size": 9, "symbol": "circle"},
-            ),
+        fig.add_annotation(
+            x=session_low_row["timestamp"],
+            y=session_low_row["l"],
+            text="Session low",
+            showarrow=True,
+            arrowhead=2,
+            yshift=-12,
             row=1,
             col=1,
         )
-    retest_index = vwap_evidence.get("retest_index")
-    if isinstance(retest_index, int) and 0 <= retest_index < len(frame):
-        row = frame.iloc[retest_index]
-        held = bool(features.get("vwap_retest_held"))
-        fig.add_trace(
-            go.Scatter(
-                x=[row["timestamp"]],
-                y=[row["l"]],
-                mode="markers+text",
-                name="VWAP retest",
-                text=["VWAP retest held" if held else "VWAP retest"],
-                textposition="bottom center",
-                marker={"size": 9, "symbol": "diamond"},
-            ),
-            row=1,
-            col=1,
-        )
-
-    session_high_index = int(frame["h"].idxmax())
-    session_low_index = int(frame["l"].idxmin())
-    session_high_row = frame.loc[session_high_index]
-    session_low_row = frame.loc[session_low_index]
-    fig.add_annotation(
-        x=session_high_row["timestamp"],
-        y=session_high_row["h"],
-        text="Session high",
-        showarrow=True,
-        arrowhead=2,
-        yshift=12,
-        row=1,
-        col=1,
-    )
-    fig.add_annotation(
-        x=session_low_row["timestamp"],
-        y=session_low_row["l"],
-        text="Session low",
-        showarrow=True,
-        arrowhead=2,
-        yshift=-12,
-        row=1,
-        col=1,
-    )
 
     fig.update_layout(
         title=f"{symbol} · Completed 1-minute candles",
         template="plotly_dark",
-        height=660,
+        height=660 if show_volume else 560,
         margin={"l": 12, "r": 12, "t": 56, "b": 10},
         hovermode="x",
         legend={"orientation": "h", "y": 1.02, "x": 0},
         xaxis_rangeslider_visible=False,
     )
     fig.update_yaxes(title_text="Price", row=1, col=1)
-    fig.update_yaxes(title_text="Volume", row=2, col=1, rangemode="tozero")
+    if show_volume:
+        fig.update_yaxes(title_text="Volume", row=2, col=1, rangemode="tozero")
     fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor")
     st.plotly_chart(
         fig,
@@ -377,9 +413,9 @@ def _render_intraday_chart(item: dict[str, Any]) -> None:
         key=f"explosive_chart_{symbol}",
     )
     st.caption(
-        "Hover for candle values; drag to zoom; double-click to reset. "
-        "VWAP, EMA 9, EMA 20, volume, confirmed swing structure, and detected "
-        "VWAP/breakout events use completed candles only."
+        "Candlesticks always stay visible. Use Chart indicators above to show or hide "
+        "VWAP, EMAs, volume, structural levels, and event labels. All chart evidence "
+        "uses completed candles only."
     )
 
 
