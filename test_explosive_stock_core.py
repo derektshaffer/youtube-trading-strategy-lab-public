@@ -166,6 +166,58 @@ class ExplosiveStockCoreTests(unittest.TestCase):
         self.assertLessEqual(len(ranked), 3)
         self.assertTrue(all(item.get("score_is_probability") is False for item in ranked))
 
+    def test_analyzer_chart_payload_uses_completed_candles_only(self):
+        now = datetime(2026, 8, 31, 18, 0, 30, tzinfo=timezone.utc)
+        snapshot = {
+            "latestTrade": {"p": 5.5, "t": now.isoformat()},
+            "latestQuote": {"bp": 5.48, "ap": 5.52, "t": now.isoformat()},
+            "dailyBar": {"c": 5.5, "h": 5.6, "v": 2_000_000, "vw": 5.2},
+            "prevDailyBar": {"c": 5.0},
+        }
+        rows = _intraday_rows(now)
+        rows.append(
+            {
+                "t": now.replace(second=0, microsecond=0).isoformat(),
+                "o": 5.5,
+                "h": 5.6,
+                "l": 5.4,
+                "c": 5.55,
+                "v": 99_999,
+            }
+        )
+        candidate = build_explosive_candidate(
+            "TEST",
+            snapshot,
+            _daily_rows(),
+            rows,
+            [],
+            now=now,
+            include_chart_data=True,
+        )
+        self.assertIsNotNone(candidate)
+        chart_rows = candidate.get("chart_intraday_rows") or []
+        self.assertTrue(chart_rows)
+        self.assertTrue(all("18:00:00" not in str(row.get("t")) for row in chart_rows))
+
+    def test_scanner_candidate_omits_chart_payload_by_default(self):
+        now = datetime(2026, 8, 31, 18, 0, 30, tzinfo=timezone.utc)
+        snapshot = {
+            "latestTrade": {"p": 5.5, "t": now.isoformat()},
+            "latestQuote": {"bp": 5.48, "ap": 5.52, "t": now.isoformat()},
+            "dailyBar": {"c": 5.5, "h": 5.6, "v": 2_000_000, "vw": 5.2},
+            "prevDailyBar": {"c": 5.0},
+        }
+        candidate = build_explosive_candidate(
+            "TEST",
+            snapshot,
+            _daily_rows(),
+            _intraday_rows(now),
+            [],
+            now=now,
+        )
+        self.assertIsNotNone(candidate)
+        self.assertNotIn("chart_intraday_rows", candidate)
+
     def test_candidate_does_not_fabricate_float_or_market_cap(self):
         now = datetime(2026, 8, 31, 18, 0, 30, tzinfo=timezone.utc)
         snapshot = {
