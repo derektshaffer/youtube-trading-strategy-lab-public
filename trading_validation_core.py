@@ -359,6 +359,72 @@ def _walk_forward_session_splits(
     return splits
 
 
+def _adaptive_walk_forward_strategies(
+    strategies: list[dict[str, Any]],
+    completed_experience: list[dict[str, Any]],
+    *,
+    max_values_per_rule: int = 4,
+) -> list[dict[str, Any]]:
+    """Seed the next fold with rules that already survived prior unseen folds.
+
+    This is causal experience replay: only *completed* external-fold outcomes are
+    accepted. Profitable out-of-sample rule values are added as search options for
+    the next fold; losing folds are still learned through the expanding historical
+    window, but their exact rule settings are not promoted as positive seeds.
+    """
+    max_values_per_rule = max(1, min(12, int(max_values_per_rule)))
+    adapted: list[dict[str, Any]] = []
+    for strategy in strategies:
+        if not isinstance(strategy, dict):
+            continue
+        clone = dict(strategy)
+        raw_options = strategy.get("candidate_rule_options")
+        candidate_options: dict[str, list[Any]] = {}
+        if isinstance(raw_options, dict):
+            for field_name, values in raw_options.items():
+                if isinstance(values, list):
+                    candidate_options[str(field_name)] = list(values)
+
+        strategy_id = str(strategy.get("id") or "")
+        relevant = [
+            item
+            for item in completed_experience
+            if str(item.get("source_strategy_id") or "") == strategy_id
+        ]
+        profitable = [
+            item
+            for item in relevant
+            if int(safe_float(item.get("trade_count"), 0) or 0) > 0
+            and (safe_float(item.get("net_pnl"), 0.0) or 0.0) > 0
+        ]
+        seeded_values = 0
+        # Prefer recent successful unseen experience while keeping a small memory
+        # of older winners so adaptation does not collapse into one exact setting.
+        for experience in profitable[-max_values_per_rule:]:
+            learned_rules = normalize_machine_rules(
+                experience.get("optimized_rules") or {}
+            )
+            for field_name, learned_value in learned_rules.items():
+                if learned_value is None:
+                    continue
+                values = candidate_options.setdefault(field_name, [])
+                if learned_value not in values:
+                    values.append(learned_value)
+                    seeded_values += 1
+                if len(values) > max_values_per_rule:
+                    del values[:-max_values_per_rule]
+
+        if candidate_options:
+            clone["candidate_rule_options"] = candidate_options
+        clone["_adaptive_walk_forward_completed_fold_count"] = len(
+            completed_experience
+        )
+        clone["_adaptive_walk_forward_profitable_fold_count"] = len(profitable)
+        clone["_adaptive_walk_forward_seeded_rule_values"] = seeded_values
+        adapted.append(clone)
+    return adapted
+
+
 def walk_forward_validate(
     rows: list[dict[str, Any]],
     strategies: list[dict[str, Any]],
@@ -370,6 +436,7 @@ def walk_forward_validate(
     test_sessions_per_fold: int = 2,
     embargo_sessions: int = 1,
     max_folds: int = 3,
+    adaptive_learning: bool = True,
     progress: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, Any]:
     """Nested expanding-window walk-forward research.
@@ -379,6 +446,11 @@ def walk_forward_validate(
     before that external block. The optimizer still keeps its own
     training/validation/holdout separation inside the earlier historical window.
     The selected rules are then frozen and run on the next unseen sessions.
+
+    When adaptive_learning is enabled, a completed unseen fold becomes causal
+    experience for later folds only after its result is known. Profitable rule
+    values seed the next optimizer search, while all completed folds—including
+    losses—enter the expanding historical window. No future fold is exposed early.
     """
     settings = backtest_settings or BacktestSettings()
     settings.validate()
@@ -412,6 +484,7 @@ def walk_forward_validate(
     folds_to_run = possible[-max_folds:]
     folds: list[dict[str, Any]] = []
     all_external_trades: list[dict[str, Any]] = []
+    adaptive_experience: list[dict[str, Any]] = []
     total_steps = len(folds_to_run)
 
     for fold_number, split in enumerate(folds_to_run, start=1):
@@ -430,9 +503,28 @@ def walk_forward_validate(
         history_rows = _frame_to_rows(history_frame)
         external_rows = _frame_to_rows(external_frame)
 
+        experience_count_before_fold = len(adaptive_experience)
+        learning_cutoff = (
+            adaptive_experience[-1].get("external_test_end")
+            if adaptive_experience
+            else None
+        )
+        fold_strategies = (
+            _adaptive_walk_forward_strategies(
+                strategies,
+                adaptive_experience,
+            )
+            if adaptive_learning
+            else [dict(item) for item in strategies if isinstance(item, dict)]
+        )
+        adaptive_seeded_rule_values = sum(
+            int(item.get("_adaptive_walk_forward_seeded_rule_values") or 0)
+            for item in fold_strategies
+        )
+
         fold_report = optimize_stock_strategies(
             history_rows,
-            strategies,
+            fold_strategies,
             symbol,
             settings,
             optimizer,
@@ -461,6 +553,27 @@ def walk_forward_validate(
         external_trades = list(external_result.get("trades") or [])
         all_external_trades.extend(external_trades)
 
+        # Only now—after the fold was frozen and scored—may its outcome become
+        # learning evidence for the next unseen fold.
+        adaptive_feedback = {
+            "fold": fold_number,
+            "source_strategy_id": source_id,
+            "selected_strategy_name": winner.get("strategy_name") or source.get("name"),
+            "external_test_start": external_test_sessions[0],
+            "external_test_end": external_test_sessions[-1],
+            "trade_count": int(safe_float(external_metrics.get("trade_count"), 0) or 0),
+            "net_pnl": safe_float(external_metrics.get("net_pnl"), 0.0) or 0.0,
+            "return_pct": safe_float(external_metrics.get("return_pct"), 0.0) or 0.0,
+            "profitable": (
+                int(safe_float(external_metrics.get("trade_count"), 0) or 0) > 0
+                and (safe_float(external_metrics.get("net_pnl"), 0.0) or 0.0) > 0
+            ),
+            "optimized_rules": normalize_machine_rules(
+                winner.get("optimized_rules") or {}
+            ),
+        }
+        adaptive_experience.append(adaptive_feedback)
+
         folds.append(
             {
                 "fold": fold_number,
@@ -480,6 +593,11 @@ def walk_forward_validate(
                 "external_metrics": external_metrics,
                 "optimized_rules": winner.get("optimized_rules") or {},
                 "optimized_backtest_settings": asdict(selected_settings),
+                "adaptive_learning_enabled": bool(adaptive_learning),
+                "adaptive_experience_count_before_fold": experience_count_before_fold,
+                "adaptive_learning_cutoff": learning_cutoff,
+                "adaptive_seeded_rule_values": adaptive_seeded_rule_values,
+                "adaptive_feedback": adaptive_feedback,
             }
         )
 
@@ -575,6 +693,25 @@ def walk_forward_validate(
             "average_fold_return_pct": round(mean(returns), 3) if returns else 0.0,
             "selected_strategy_counts": dict(strategy_counts),
             "embargo_sessions": embargo_sessions,
+            "adaptive_learning_enabled": bool(adaptive_learning),
+            "adaptive_experience_count": len(adaptive_experience),
+            "adaptive_profitable_experience_count": sum(
+                1 for item in adaptive_experience if item.get("profitable")
+            ),
+        },
+        "adaptive_learning": {
+            "enabled": bool(adaptive_learning),
+            "mode": "causal_experience_replay",
+            "experience_count": len(adaptive_experience),
+            "profitable_experience_count": sum(
+                1 for item in adaptive_experience if item.get("profitable")
+            ),
+            "experience": adaptive_experience,
+            "note": (
+                "Each unseen fold is frozen before scoring. Only after that fold ends may its "
+                "outcome seed rule options for the next fold. Losing folds still enter the "
+                "expanding historical window; future folds are never visible early."
+            ),
         },
         "warnings": warnings,
         "note": (
