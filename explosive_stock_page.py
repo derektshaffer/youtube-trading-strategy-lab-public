@@ -262,33 +262,38 @@ if view == "Scanner":
             "The interactive scan then adds live price/volume, intraday structure, and catalyst evidence."
         )
     elif cloud_prescreen.get("error"):
-        st.caption("Cloud latent prescreen unavailable: " + str(cloud_prescreen.get("error")))
+        st.caption("Early Opportunity Watchlist unavailable: " + str(cloud_prescreen.get("error")))
     else:
         st.caption(
-            "No saved whole-market latent prescreen is available yet. "
-            "You can still use the live market-attention universe or a manual ticker list."
+            "The Early Opportunity Watchlist is not available yet. "
+            "You can still scan Stocks Moving Right Now or enter your own tickers."
         )
 
-    universe_options = [
-        "Cloud latent-candidate shortlist",
-        "Automatic market-attention universe",
-        "Manual ticker list",
+    scan_source_options = [
+        "Early Opportunity Watchlist",
+        "Stocks Moving Right Now",
+        "Enter My Own Tickers",
     ]
-    universe_mode = st.radio(
-        "Candidate universe",
-        universe_options,
+    scan_source = st.radio(
+        "Stocks to scan",
+        scan_source_options,
         index=0 if cloud_candidates else 1,
         horizontal=True,
     )
+    st.caption(
+        "**Early Opportunity Watchlist** = background scan found potentially interesting names before "
+        "they necessarily become obvious movers.  "
+        "**Stocks Moving Right Now** = current gainers and most-active stocks already attracting attention."
+    )
     scan_limit = st.slider(
-        "Maximum candidates",
+        "How many stocks to scan",
         min_value=10,
         max_value=min(80, MAX_EXPLOSIVE_SCAN_SYMBOLS),
         value=40,
         step=10,
     )
     manual_symbols = ""
-    if universe_mode == "Manual ticker list":
+    if scan_source == "Enter My Own Tickers":
         manual_symbols = st.text_area(
             "Tickers",
             placeholder="WETO, SDOT, LUCY, ...",
@@ -296,13 +301,13 @@ if view == "Scanner":
         )
 
     if st.button("⚡ Scan for explosive candidates", type="primary", width="stretch"):
-        status = st.status("Building explosive-stock candidate universe…", expanded=True)
+        status = st.status("Building the stock list to scan…", expanded=True)
         try:
             market = market_client()
             latent_lookup: dict[str, dict[str, Any]] = {}
-            if universe_mode == "Manual ticker list":
+            if scan_source == "Enter My Own Tickers":
                 symbols = parse_symbols(manual_symbols)
-            elif universe_mode == "Cloud latent-candidate shortlist":
+            elif scan_source == "Early Opportunity Watchlist":
                 latent_lookup = {
                     str(item.get("symbol") or "").strip().upper(): dict(item)
                     for item in cloud_candidates
@@ -313,14 +318,14 @@ if view == "Scanner":
                 ]
                 if not symbols:
                     raise AppError(
-                        "The cloud latent shortlist is not populated yet. "
-                        "Use the market-attention universe for now."
+                        "The Early Opportunity Watchlist is not populated yet. "
+                        "Use Stocks Moving Right Now for now."
                     )
                 status.write(
-                    f"Loaded {len(symbols)} whole-market latent candidates from the isolated cloud prescreen…"
+                    f"Loaded {len(symbols)} stocks from the Early Opportunity Watchlist…"
                 )
             else:
-                status.write("Loading current gainers and most-active stocks…")
+                status.write("Loading stocks moving right now from current gainers and most-active lists…")
                 gainers = market.movers(top=min(50, scan_limit))
                 active = market.most_active(top=min(100, scan_limit * 2))
                 symbols = merge_momentum_candidate_universe(
