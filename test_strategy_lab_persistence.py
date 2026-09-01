@@ -46,6 +46,61 @@ class StrategyLabPersistenceTests(unittest.TestCase):
         self.assertEqual(latest["ticker"], "SLS")
         self.assertEqual(latest["result"]["report"]["variants_tested"], 160)
 
+    def test_running_checkpoint_retains_resumable_job_and_optimizer_state(self):
+        store = MemoryStore()
+        save_strategy_lab_checkpoint(
+            store,
+            run_id="run-deep",
+            status="running",
+            ticker="sls",
+            message="Queued.",
+            progress=0.01,
+            stage="queued",
+            job={"search_depth": 160, "candidates": [{"id": "one"}]},
+            attempt=1,
+        )
+        save_strategy_lab_checkpoint(
+            store,
+            run_id="run-deep",
+            status="running",
+            ticker="sls",
+            message="One family saved.",
+            progress=0.52,
+            stage="optimization",
+            optimizer_state={"completed_strategy_ids": ["one"]},
+            attempt=1,
+        )
+
+        latest = load_latest_strategy_lab_checkpoint(store)
+        self.assertEqual(latest["job"]["search_depth"], 160)
+        self.assertEqual(latest["optimizer_state"]["completed_strategy_ids"], ["one"])
+        self.assertEqual(latest["progress"], 0.52)
+        self.assertEqual(latest["stage"], "optimization")
+
+    def test_terminal_checkpoint_drops_restart_payload(self):
+        store = MemoryStore()
+        save_strategy_lab_checkpoint(
+            store,
+            run_id="run-deep",
+            status="running",
+            ticker="sls",
+            job={"search_depth": 160},
+            optimizer_state={"completed_strategy_ids": ["one"]},
+        )
+        save_strategy_lab_checkpoint(
+            store,
+            run_id="run-deep",
+            status="complete",
+            ticker="sls",
+            result={"ticker": "SLS", "report": {"variants_tested": 160}},
+        )
+
+        latest = load_latest_strategy_lab_checkpoint(store)
+        self.assertNotIn("job", latest)
+        self.assertNotIn("optimizer_state", latest)
+        self.assertEqual(latest["progress"], 1.0)
+        self.assertEqual(latest["stage"], "complete")
+
     def test_checkpoint_history_is_bounded(self):
         store = MemoryStore()
         for index in range(MAX_STRATEGY_LAB_CHECKPOINTS + 3):

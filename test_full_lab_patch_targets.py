@@ -71,11 +71,35 @@ class ApplicationEntrypointStructureTests(unittest.TestCase):
             "Restored the last completed Strategy Lab result from durable storage",
             'last_status == "running"',
             "Results are visible below, but the reconnect-safe copy could not be saved",
+            "strategy_lab_runs_in_background(search_depth)",
+            "submit_strategy_lab_checkpoint_job",
+            "render_strategy_lab_background_status",
+            "reconnecting does not cancel it",
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, source)
         self.assertIn("MAX_STRATEGY_LAB_CHECKPOINTS = 5", persistence)
         self.assertIn("A completed Strategy Lab checkpoint requires a result.", persistence)
+
+        jobs = (ROOT / "strategy_lab_jobs.py").read_text(encoding="utf-8")
+        execution = (ROOT / "strategy_lab_execution.py").read_text(encoding="utf-8")
+        self.assertIn("ThreadPoolExecutor(max_workers=1", jobs)
+        self.assertIn("MAX_AUTOMATIC_ATTEMPTS = 3", jobs)
+        self.assertIn("optimizer_resume_state=resume_state", jobs)
+        self.assertIn("checkpoint=optimizer_checkpoint", execution)
+        execution_tree = ast.parse(execution)
+        imported_modules = {
+            node.module
+            for node in ast.walk(execution_tree)
+            if isinstance(node, ast.ImportFrom)
+        }
+        imported_modules.update(
+            alias.name
+            for node in ast.walk(execution_tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        )
+        self.assertNotIn("streamlit", imported_modules)
 
     def test_market_discovery_scans_all_strategies_automatically(self):
         source = (ROOT / "trading_intelligence_app.py").read_text(encoding="utf-8")

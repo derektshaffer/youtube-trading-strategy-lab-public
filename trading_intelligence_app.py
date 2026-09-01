@@ -316,6 +316,12 @@ from strategy_lab_persistence import (
     load_latest_strategy_lab_checkpoint,
     save_strategy_lab_checkpoint,
 )
+from strategy_lab_jobs import (
+    strategy_lab_job_active,
+    strategy_lab_job_outcome,
+    strategy_lab_runs_in_background,
+    submit_strategy_lab_job,
+)
 from trading_universe_research import cross_stock_generalization
 from trading_validation_core import validation_strength, walk_forward_validate
 from youtube_strategy_engine import (
@@ -1409,6 +1415,107 @@ def complete_task_bar(
 ) -> None:
     monitor.finish(st.session_state)
     bar.progress(1.0, text=f"{message} · 100%")
+
+
+def submit_strategy_lab_checkpoint_job(checkpoint: dict[str, Any]) -> bool:
+    """Start or attach to a durable Very Deep job from the Streamlit UI thread."""
+
+    run_id = str(checkpoint.get("id") or "").strip()
+    job = checkpoint.get("job")
+    if not run_id or not isinstance(job, dict):
+        return False
+    return submit_strategy_lab_job(
+        run_id=run_id,
+        job=job,
+        checkpoint_store=build_strategy_lab_checkpoint_store(),
+        market=market_client(),
+        main_store=intelligence_store(),
+    )
+
+
+_strategy_lab_fragment = getattr(st, "fragment", None)
+_strategy_lab_fragment_decorator = (
+    _strategy_lab_fragment(run_every="3s")
+    if callable(_strategy_lab_fragment)
+    else (lambda function: function)
+)
+
+
+@_strategy_lab_fragment_decorator
+def render_strategy_lab_background_status(run_id: str) -> None:
+    """Poll the small local checkpoint without rerunning the full application."""
+
+    try:
+        checkpoint = load_latest_strategy_lab_checkpoint(
+            build_strategy_lab_checkpoint_store(),
+            reconcile_cloud=False,
+        )
+    except AppError as exc:
+        st.error(f"Very Deep status could not be read: {exc}")
+        return
+    outcome = strategy_lab_job_outcome(run_id)
+    if str(checkpoint.get("id") or "") != str(run_id or ""):
+        checkpoint = {}
+
+    status = str(checkpoint.get("status") or outcome.get("status") or "running")
+    progress_value = max(0.01, min(1.0, float(checkpoint.get("progress") or 0.01)))
+    stage = str(checkpoint.get("stage") or "preparing").replace("_", " ").title()
+    message = str(
+        checkpoint.get("message")
+        or outcome.get("message")
+        or "Very Deep optimization is running."
+    )
+
+    if status == "running":
+        st.progress(
+            min(0.999, progress_value),
+            text=f"Very Deep · {stage} · {progress_value * 100:.0f}%",
+        )
+        st.info(message)
+        attempt = int(checkpoint.get("attempt") or 1)
+        if attempt > 1:
+            st.caption(
+                f"Automatically resumed from durable optimizer state · process attempt {attempt}/3."
+            )
+        else:
+            st.caption(
+                "This work now belongs to the app process, not the browser session. "
+                "You can reconnect or navigate away and return later."
+            )
+        return
+
+    if status == "failed":
+        st.error(f"Very Deep run aborted: {message}")
+        st.session_state["til_strategy_lab_last_run"] = {
+            "status": "failed",
+            "ticker": str(checkpoint.get("ticker") or ""),
+            "message": message,
+        }
+        return
+
+    result = checkpoint.get("result")
+    if not isinstance(result, dict):
+        result = outcome.get("result")
+    if status == "complete" and isinstance(result, dict):
+        st.success("Very Deep optimization + validation complete — results are saved.")
+        warning = str(outcome.get("warning") or "")
+        if warning:
+            st.warning(warning)
+        if st.session_state.get("_til_strategy_lab_rendered_run_id") != run_id:
+            st.session_state["til_strategy_lab_result"] = deepcopy(result)
+            st.session_state["til_strategy_lab_last_run"] = {
+                "status": "complete",
+                "ticker": str(result.get("ticker") or checkpoint.get("ticker") or ""),
+                "message": "Optimization + validation complete.",
+            }
+            st.session_state["_til_strategy_lab_rendered_run_id"] = run_id
+            st.rerun()
+        return
+
+    st.error(
+        "Very Deep stopped without a readable result. Start a new run; the failure "
+        "stage will remain visible if it aborts again."
+    )
 
 
 RULE_FRIENDLY_LABELS = {
@@ -8063,6 +8170,7 @@ elif module == "AI Research Autopilot":
 elif module == "Strategy Lab":
     durable_restore_notice = ""
     durable_restore_error = ""
+    durable_checkpoint: dict[str, Any] = {}
     if not st.session_state.get("_til_strategy_lab_checkpoint_loaded"):
         try:
             durable_checkpoint = load_latest_strategy_lab_checkpoint(
@@ -8087,10 +8195,40 @@ elif module == "Strategy Lab":
                         "after a reconnect or reload."
                     )
                 elif durable_status == "running":
-                    durable_restore_notice = (
-                        f"A Strategy Lab run for {durable_ticker or 'this stock'} was started "
-                        "but no completion result has been saved yet."
-                    )
+                    durable_job = durable_checkpoint.get("job")
+                    if (
+                        isinstance(durable_job, dict)
+                        and strategy_lab_runs_in_background(
+                            int(durable_job.get("search_depth") or 0)
+                        )
+                    ):
+                        submit_strategy_lab_checkpoint_job(durable_checkpoint)
+                        durable_restore_notice = (
+                            f"Reconnected to the {durable_ticker or 'stock'} Very Deep run. "
+                            "The app will resume from the last completed optimizer-family checkpoint "
+                            "if its process restarted."
+                        )
+                    else:
+                        durable_message = (
+                            "The previous run was interrupted before this version could save a "
+                            "resumable job specification. Start it again; Very Deep now continues "
+                            "outside the browser session and records its abort stage explicitly."
+                        )
+                        save_strategy_lab_checkpoint(
+                            build_strategy_lab_checkpoint_store(),
+                            run_id=durable_run_id,
+                            status="failed",
+                            ticker=durable_ticker,
+                            message=durable_message,
+                            progress=float(durable_checkpoint.get("progress") or 0.0),
+                            stage="interrupted_legacy_run",
+                        )
+                        durable_status = "failed"
+                        st.session_state["til_strategy_lab_last_run"] = {
+                            "status": "failed",
+                            "ticker": durable_ticker,
+                            "message": durable_message,
+                        }
         except AppError as exc:
             durable_restore_error = str(exc)
         st.session_state["_til_strategy_lab_checkpoint_loaded"] = True
@@ -8289,13 +8427,27 @@ elif module == "Strategy Lab":
             st.error("Training + validation must leave at least 10% of sessions untouched for final holdout.")
 
         strategy_lab_slot = st.empty()
-        run_lab = strategy_lab_slot.button(
-            "🧪 Optimize + validate strategy",
-            type="primary",
-            width="stretch",
-            disabled=not ticker or not split_ok or (entry_rule_count == 0 and not compare_all),
-            key="til_optimize_validate_strategy",
+        current_strategy_lab_run_id = str(
+            st.session_state.get("til_strategy_lab_last_run_id") or ""
         )
+        background_job_running = strategy_lab_job_active(current_strategy_lab_run_id)
+        if background_job_running:
+            strategy_lab_slot.button(
+                "🧪 Very Deep running in background…",
+                type="primary",
+                width="stretch",
+                disabled=True,
+                key="til_optimize_validate_strategy_background_busy",
+            )
+            run_lab = False
+        else:
+            run_lab = strategy_lab_slot.button(
+                "🧪 Optimize + validate strategy",
+                type="primary",
+                width="stretch",
+                disabled=not ticker or not split_ok or (entry_rule_count == 0 and not compare_all),
+                key="til_optimize_validate_strategy",
+            )
 
         if run_lab:
             # A new run must never silently fall back to a blank Strategy Lab page.
@@ -8314,6 +8466,31 @@ elif module == "Strategy Lab":
                 "ticker": ticker,
                 "message": "Optimization is running.",
             }
+            run_in_background = strategy_lab_runs_in_background(search_depth)
+            strategy_lab_job = {
+                "version": 1,
+                "run_id": strategy_lab_run_id,
+                "started_at": run_started_at,
+                "research_end": run_started_at,
+                "ticker": ticker,
+                "timeframe": timeframe,
+                "history_days": int(history_days),
+                "search_depth": int(search_depth),
+                "starting_cash": starting_cash,
+                "risk_per_trade": risk_per_trade,
+                "max_position": max_position,
+                "max_drawdown": max_drawdown,
+                "training_fraction": training_fraction,
+                "validation_fraction": validation_fraction,
+                "minimum_training_trades": int(minimum_training_trades),
+                "minimum_validation_trades": int(minimum_validation_trades),
+                "run_walk_forward": bool(run_walk_forward),
+                "wf_history_sessions": int(wf_history_sessions),
+                "wf_test_sessions": int(wf_test_sessions),
+                "wf_folds": int(wf_folds),
+                "compared_all": bool(compare_all),
+                "candidates": deepcopy(candidates),
+            }
             try:
                 save_strategy_lab_checkpoint(
                     build_strategy_lab_checkpoint_store(),
@@ -8321,12 +8498,46 @@ elif module == "Strategy Lab":
                     status="running",
                     ticker=ticker,
                     message="Optimization is running.",
+                    progress=0.01,
+                    stage="queued" if run_in_background else "preparing",
+                    job=strategy_lab_job if run_in_background else None,
+                    attempt=0,
+                    started_at=run_started_at,
                 )
             except AppError as exc:
                 st.warning(
                     "Optimization started, but its reconnect checkpoint could not be saved: "
                     + str(exc)
                 )
+            if run_in_background:
+                try:
+                    submit_strategy_lab_checkpoint_job(
+                        {
+                            "id": strategy_lab_run_id,
+                            "job": strategy_lab_job,
+                        }
+                    )
+                except AppError as exc:
+                    message = f"Very Deep could not start in the background: {exc}"
+                    st.session_state["til_strategy_lab_last_run"] = {
+                        "status": "failed",
+                        "ticker": ticker,
+                        "message": message,
+                    }
+                    try:
+                        save_strategy_lab_checkpoint(
+                            build_strategy_lab_checkpoint_store(),
+                            run_id=strategy_lab_run_id,
+                            status="failed",
+                            ticker=ticker,
+                            message=message,
+                            progress=0.01,
+                            stage="launch_failed",
+                            started_at=run_started_at,
+                        )
+                    except AppError:
+                        pass
+                st.rerun()
             strategy_lab_slot.button(
                 "🧪 Optimizing…",
                 type="primary",
@@ -8706,6 +8917,19 @@ elif module == "Strategy Lab":
                     pass
                 st.error(message)
 
+        tracked_strategy_lab_run_id = str(
+            st.session_state.get("til_strategy_lab_last_run_id") or ""
+        )
+        tracked_strategy_lab_status = str(
+            (st.session_state.get("til_strategy_lab_last_run") or {}).get("status")
+            or ""
+        )
+        if (
+            tracked_strategy_lab_run_id
+            and tracked_strategy_lab_status == "running"
+        ):
+            render_strategy_lab_background_status(tracked_strategy_lab_run_id)
+
         lab_result = st.session_state.get("til_strategy_lab_result") or {}
         last_lab_run = st.session_state.get("til_strategy_lab_last_run") or {}
         if not run_lab and not lab_result and last_lab_run:
@@ -8714,10 +8938,9 @@ elif module == "Strategy Lab":
             if last_status == "failed":
                 st.error(f"Last Strategy Lab run failed: {last_message}")
             elif last_status == "running":
-                st.warning(
-                    "The last Strategy Lab run started but no completed result is available yet. "
-                    "If it was interrupted by a reconnect or app restart, run it again; the app "
-                    "will keep the next completion in durable storage."
+                st.info(
+                    "The Very Deep run is still active. Its current stage and saved progress "
+                    "appear above; reconnecting does not cancel it."
                 )
             elif last_status == "complete":
                 st.error(
