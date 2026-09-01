@@ -62,6 +62,10 @@ st.warning(
     "historical +30%, +50%, +100%, and +200% outcome models."
 )
 
+pending_view = st.session_state.pop("_explosive_pending_view", None)
+if pending_view in {"Scanner", "Analyzer"}:
+    st.session_state["explosive_stock_view"] = pending_view
+
 view = st.sidebar.radio(
     "Explosive Stock Lab",
     ["Scanner", "Analyzer"],
@@ -370,7 +374,7 @@ if view == "Scanner":
                 st.session_state["explosive_analyzer_symbol"] = str(
                     selected.get("symbol") or ""
                 )
-                st.session_state["explosive_stock_view"] = "Analyzer"
+                st.session_state["_explosive_pending_view"] = "Analyzer"
                 st.rerun()
 
 else:
