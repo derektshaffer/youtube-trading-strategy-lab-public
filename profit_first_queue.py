@@ -13,7 +13,7 @@ from typing import Any
 from trading_intelligence_core import research_readiness
 
 
-CURRENT_AUTONOMOUS_VALIDATION_METHOD_VERSION = 4
+CURRENT_AUTONOMOUS_VALIDATION_METHOD_VERSION = 5
 
 
 def _number(value: Any, default: float = 0.0) -> float:
