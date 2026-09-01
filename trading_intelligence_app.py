@@ -4064,6 +4064,24 @@ if module == "Stock Strategy Finder":
                 f"median P/L **${safe_float(stability.get('median_net_pnl'), 0.0):,.2f}**"
             )
             st.caption(str(stability.get("note") or ""))
+            adaptive_walk = (finder_result.get("walk_forward") or {}).get("adaptive_learning") or {}
+            if adaptive_walk.get("enabled"):
+                adaptive_count = int(adaptive_walk.get("experience_count") or 0)
+                adaptive_profitable = int(adaptive_walk.get("profitable_experience_count") or 0)
+                st.success(
+                    "Adaptive walk-forward learning is ON · after each unseen fold finishes, "
+                    "its outcome becomes learning evidence for the next unseen fold."
+                )
+                st.caption(
+                    f"Causal experience replay: {adaptive_count} completed unseen fold(s) learned from · "
+                    f"{adaptive_profitable} profitable experience(s) promoted as rule-search seeds. "
+                    "Future folds remain hidden until their turn."
+                )
+            else:
+                st.caption(
+                    "This saved result predates adaptive walk-forward learning. A new validation run "
+                    "will use completed unseen periods to adapt before each later unseen period."
+                )
 
         stage_timings = dict(finder_result.get("stage_timings_seconds") or {})
         if stage_timings:
