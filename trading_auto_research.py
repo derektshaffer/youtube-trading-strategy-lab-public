@@ -47,6 +47,10 @@ AUTO_EVENT_WINDOW_BUFFER_DAYS = 30
 AUTO_VALIDATION_WINDOW_DAYS = 180
 AUTONOMOUS_VALIDATION_METHOD_VERSION = 5
 AUTO_TIMEFRAME = "5Min"
+# Alpaca multi-symbol intraday pagination can effectively return far fewer than
+# 10,000 rows per page depending on feed/plan. Small deterministic batches keep
+# the full untouched window while avoiding expensive page-cap exhaustion first.
+AUTO_INTRADAY_VALIDATION_BATCH_SIZE = 2
 
 
 def autonomous_validation_boundaries(
@@ -1315,7 +1319,7 @@ def run_autonomous_research(
         start=validation_start,
         end=validation_end,
         timeframe=AUTO_TIMEFRAME,
-        batch_size=25,
+        batch_size=AUTO_INTRADAY_VALIDATION_BATCH_SIZE,
         max_pages=64,
         progress=progress,
         integrity_by_symbol=validation_integrity_by_symbol,
