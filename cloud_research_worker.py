@@ -365,6 +365,7 @@ def build_market() -> AlpacaMarketData:
 
 def _pending_web_strategies(data: dict[str, Any], maximum: int = 3) -> list[dict[str, Any]]:
     candidates = []
+    now = datetime.now(timezone.utc)
     for item in data.get("strategies") or []:
         if not isinstance(item, dict):
             continue
@@ -376,6 +377,17 @@ def _pending_web_strategies(data: dict[str, Any], maximum: int = 3) -> list[dict
             continue
         last = item.get("last_autonomous_research")
         if isinstance(last, dict):
+            if bool(last.get("retryable")) and last.get("retry_after"):
+                try:
+                    retry_after = datetime.fromisoformat(
+                        str(last.get("retry_after") or "").replace("Z", "+00:00")
+                    )
+                    if retry_after.tzinfo is None:
+                        retry_after = retry_after.replace(tzinfo=timezone.utc)
+                except ValueError:
+                    retry_after = None
+                if retry_after is not None and retry_after > now:
+                    continue
             last_status = str(last.get("validation_status") or "")
             terminal = {
                 "validated",

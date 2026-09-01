@@ -2,7 +2,7 @@
 
 import threading
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from youtube_strategy_engine import AppError
 
@@ -14,6 +14,8 @@ from trading_auto_research import (
     AUTO_INTRADAY_VALIDATION_BATCH_SIZE,
     _batched_bars,
     autonomous_research_baselines,
+    build_research_universe,
+    completed_research_session_cutoff,
     _global_validation_gate,
     _invalid_symbol_from_error,
     deterministic_catalog_sample,
@@ -23,6 +25,8 @@ from trading_auto_research import (
     rank_historical_opportunities,
     score_historical_opportunities,
     select_event_research_window,
+    validation_data_quality,
+    validation_sessions_for_rows,
 )
 
 
@@ -47,12 +51,113 @@ def daily_bars(days=30, start=10.0, event_every=5):
     return rows
 
 
-class InvalidHistoricalSymbolTests(unittest.TestCase):
+class InvalidSymbolParsingTests(unittest.TestCase):
     def test_invalid_symbol_is_parsed_from_alpaca_error(self):
         self.assertEqual(
             _invalid_symbol_from_error("Provider request failed (400): invalid symbol: D012219"),
             "D012219",
         )
+
+
+class HistoricalDataAndUniverseIntegrityTests(unittest.TestCase):
+    def test_catalog_sample_never_uses_post_cutoff_current_screeners(self):
+        class FakeMarket:
+            def equity_catalog(self):
+                return [
+                    {
+                        "symbol": "AAA",
+                        "status": "active",
+                        "exchange": "NYSE",
+                        "tradable": True,
+                    },
+                    {
+                        "symbol": "BBB",
+                        "status": "active",
+                        "exchange": "NASDAQ",
+                        "tradable": True,
+                    },
+                    {
+                        "symbol": "OLD",
+                        "status": "inactive",
+                        "exchange": "NYSE",
+                        "tradable": False,
+                    },
+                ]
+
+            def movers(self, **kwargs):
+                raise AssertionError("post-cutoff movers must not be requested")
+
+            def most_active(self, **kwargs):
+                raise AssertionError("post-cutoff activity must not be requested")
+
+        universe = build_research_universe(FakeMarket(), maximum=3)
+
+        self.assertTrue(universe["point_in_time_capable"])
+        self.assertFalse(universe["current_screener_used"])
+        self.assertEqual(universe["current_screener_call_count"], 0)
+        self.assertIn("OLD", universe["symbols"])
+
+    def test_current_screener_is_labeled_research_only_when_catalog_fails(self):
+        class FakeMarket:
+            def equity_catalog(self):
+                raise AppError("catalog unavailable")
+
+            def movers(self, **kwargs):
+                return ["AAA"]
+
+            def most_active(self, **kwargs):
+                return ["BBB"]
+
+        universe = build_research_universe(FakeMarket(), maximum=2)
+
+        self.assertFalse(universe["point_in_time_capable"])
+        self.assertTrue(universe["current_screener_used"])
+        self.assertEqual(universe["symbols"], ["AAA", "BBB"])
+
+    def test_current_partial_new_york_session_is_excluded(self):
+        midday = datetime(2026, 8, 31, 16, 15, tzinfo=timezone.utc)
+        after_hours = datetime(2026, 9, 1, 0, 30, tzinfo=timezone.utc)
+
+        expected = datetime(2026, 8, 31, 4, 0, tzinfo=timezone.utc)
+        self.assertEqual(completed_research_session_cutoff(midday), expected)
+        self.assertEqual(completed_research_session_cutoff(after_hours), expected)
+
+    def test_stale_active_data_is_explicit_but_old_inactive_history_is_allowed(self):
+        validation_end = datetime(2026, 8, 31, 4, 0, tzinfo=timezone.utc)
+        recent = (validation_end - timedelta(days=1)).isoformat()
+        stale = (validation_end - timedelta(days=20)).isoformat()
+        quality = validation_data_quality(
+            ["GOOD", "STALE", "DELISTED", "MISSING"],
+            {
+                "GOOD": [{"t": recent}],
+                "STALE": [{"t": stale}],
+                "DELISTED": [{"t": stale}],
+            },
+            asset_metadata={
+                "GOOD": {"status": "active"},
+                "STALE": {"status": "active"},
+                "DELISTED": {"status": "inactive"},
+                "MISSING": {"status": "active"},
+            },
+            validation_end=validation_end,
+        )
+
+        self.assertTrue(quality["by_symbol"]["GOOD"]["complete"])
+        self.assertFalse(quality["by_symbol"]["STALE"]["complete"])
+        self.assertTrue(quality["by_symbol"]["DELISTED"]["complete"])
+        self.assertEqual(quality["by_symbol"]["MISSING"]["status"], "missing")
+        self.assertFalse(quality["complete"])
+
+    def test_validation_exposure_sessions_use_new_york_market_dates(self):
+        sessions = validation_sessions_for_rows(
+            [
+                {"t": "2026-08-31T23:30:00Z"},
+                # 00:30 UTC is still the prior New York market date.
+                {"t": "2026-09-01T00:30:00Z"},
+                {"t": "2026-09-01T14:30:00Z"},
+            ]
+        )
+        self.assertEqual(sessions, ["2026-08-31", "2026-09-01"])
 
     def test_bad_symbol_is_skipped_and_remaining_batch_continues(self):
         class FakeMarket:
@@ -740,6 +845,84 @@ class AutonomousResearchTests(unittest.TestCase):
         # The current run is still recorded as an exposure for future cycles.
         self.assertGreaterEqual(len(merged["holdout_exposure_ledger"]), 2)
 
+    def test_prior_cross_stock_exposure_revokes_fresh_validation(self):
+        library = {
+            "strategies": [
+                {
+                    "id": "s-cross",
+                    "name": "Cross-stock reuse",
+                    "validation_status": "unvalidated",
+                }
+            ],
+            "validation_runs": [],
+            "research_runs": [],
+            "holdout_exposure_ledger": [
+                {
+                    "id": "old-cross-exposure",
+                    "source": "autonomous_research_validation_evidence",
+                    "symbol": "BBB",
+                    "timeframe": "5Min",
+                    "generated_at": "2026-08-29T20:00:00Z",
+                    "holdout_sessions": ["2026-08-25"],
+                }
+            ],
+        }
+        report = {
+            "generated_at": "2026-08-30T20:00:00Z",
+            "validation_method_version": AUTONOMOUS_VALIDATION_METHOD_VERSION,
+            "timeframe": "5Min",
+            "intraday_lookback_days": 180,
+            "universe": {"source": "point_in_time"},
+            "results": [
+                {
+                    "strategy_id": "s-cross",
+                    "strategy_name": "Cross-stock reuse",
+                    "anchor_symbol": "AAA",
+                    "candidate_symbols": ["AAA", "BBB"],
+                    "validation_sessions_by_symbol": {
+                        "AAA": ["2026-08-25", "2026-08-26"],
+                        "BBB": ["2026-08-25", "2026-08-26"],
+                    },
+                    "global_score": 84,
+                    "validation_status": "validated",
+                    "gate_reasons": [],
+                    "strength": {"score": 82, "label": "STRONG"},
+                    "generalization": {
+                        "summary": {"score": 86, "label": "BROAD"}
+                    },
+                    "walk_forward": {"summary": {"profitable_fold_pct": 75}},
+                    "optimization_report": {
+                        "holdout_sessions": ["2026-08-26"],
+                        "winner": {
+                            "status": "VALIDATED",
+                            "optimized_rules": {"min_relative_volume": 2.5},
+                            "optimized_backtest_settings": {},
+                        },
+                    },
+                }
+            ],
+        }
+
+        merged = merge_autonomous_research_into_library(library, report)
+        strategy = merged["strategies"][0]
+
+        self.assertEqual(strategy["validation_status"], "research_only")
+        self.assertTrue(
+            any(
+                "BBB" in reason
+                for reason in strategy["last_autonomous_research"]["gate_reasons"]
+            )
+        )
+        self.assertFalse(
+            strategy["last_autonomous_research"]
+            ["validation_evidence_reuse_audits"]["BBB"]["pristine"]
+        )
+        sources = {
+            item.get("source")
+            for item in merged.get("holdout_exposure_ledger") or []
+        }
+        self.assertIn("autonomous_research_validation_evidence", sources)
+
 
 class ParallelValidationRegressionTests(unittest.TestCase):
     def test_independent_finalists_can_run_in_parallel_without_changing_results(self):
@@ -790,6 +973,56 @@ class ValidationIntegrityRegressionTests(unittest.TestCase):
         )
         self.assertEqual(status, "research_only")
         self.assertTrue(any("walk-forward" in reason.lower() for reason in reasons))
+
+    def test_walk_forward_failure_keeps_upstream_detail(self):
+        status, reasons = _global_validation_gate(
+            anchor_report={"winner": {"status": "VALIDATED"}},
+            strength={"independently_positive": True, "score": 90},
+            generalization={
+                "summary": {
+                    "score": 90,
+                    "active_symbols": 4,
+                    "profitable_symbol_pct": 75,
+                    "total_trades": 40,
+                }
+            },
+            walk_forward=None,
+            walk_forward_error="historical provider timeout",
+            broad_universe=True,
+        )
+        self.assertEqual(status, "research_only")
+        self.assertTrue(any("provider timeout" in reason for reason in reasons))
+
+    def test_missing_or_stale_fixed_candidate_data_fails_closed_explicitly(self):
+        status, reasons = _global_validation_gate(
+            anchor_report={"winner": {"status": "VALIDATED"}},
+            strength={"independently_positive": True, "score": 90},
+            generalization={
+                "summary": {
+                    "score": 90,
+                    "active_symbols": 4,
+                    "profitable_symbol_pct": 75,
+                    "total_trades": 40,
+                }
+            },
+            walk_forward={
+                "summary": {
+                    "fold_count": 3,
+                    "active_fold_count": 3,
+                    "profitable_fold_count": 2,
+                    "profitable_fold_pct": 66.7,
+                    "external_trade_count": 9,
+                }
+            },
+            broad_universe=True,
+            data_integrity_issues=[
+                "STALE: latest bar is 20.0 days before the validation cutoff",
+                "MISSING: no post-cutoff bars were returned",
+            ],
+        )
+        self.assertEqual(status, "research_only")
+        self.assertTrue(any("STALE" in reason for reason in reasons))
+        self.assertTrue(any("MISSING" in reason for reason in reasons))
 
     def test_sparse_walk_forward_temporal_coverage_fails_closed(self):
         status, reasons = _global_validation_gate(
@@ -896,6 +1129,44 @@ class ValidationIntegrityRegressionTests(unittest.TestCase):
         )
         self.assertFalse(strategy["last_autonomous_research"]["retryable"])
 
+    def test_retryable_provider_failure_records_stage_and_cooldown(self):
+        library = {
+            "strategies": [
+                {
+                    "id": "s-provider",
+                    "source_type": "autonomous_web_research",
+                    "validation_status": "unvalidated",
+                }
+            ],
+            "validation_runs": [],
+            "research_runs": [],
+        }
+        report = {
+            "generated_at": "2026-08-30T20:00:00Z",
+            "validation_method_version": AUTONOMOUS_VALIDATION_METHOD_VERSION,
+            "universe": {"source": "point_in_time"},
+            "failed_finalists": [
+                {
+                    "strategy_id": "s-provider",
+                    "strategy_name": "Provider failure",
+                    "failure_stage": "walk_forward",
+                    "error": "Historical data provider timeout during walk-forward.",
+                }
+            ],
+            "results": [],
+        }
+
+        merged = merge_autonomous_research_into_library(library, report)
+        last = merged["strategies"][0]["last_autonomous_research"]
+
+        self.assertTrue(last["retryable"])
+        self.assertEqual(last["failure_stage"], "walk_forward")
+        self.assertIsNotNone(last["retry_after"])
+        self.assertEqual(
+            merged["strategies"][0]["optimization_status"],
+            "validation_incomplete",
+        )
+
     def test_legacy_hindsight_validation_is_demoted_for_revalidation(self):
         library = {
             "strategies": [
@@ -926,6 +1197,35 @@ class ValidationIntegrityRegressionTests(unittest.TestCase):
         self.assertEqual(
             updated["research_hypotheses"][0]["status"],
             "queued_for_validation",
+        )
+
+    def test_pre_audit_v6_result_is_demoted_under_corrected_contract(self):
+        library = {
+            "strategies": [
+                {
+                    "id": "pre-audit-v6",
+                    "validation_status": "validated",
+                    "validated_rules": {"min_relative_volume": 2.0},
+                    "last_autonomous_research": {
+                        "validation_status": "validated",
+                        "validation_method_version": 6,
+                    },
+                }
+            ]
+        }
+
+        updated, changed = invalidate_legacy_autonomous_validations(library)
+
+        self.assertEqual(AUTONOMOUS_VALIDATION_METHOD_VERSION, 7)
+        self.assertEqual(changed, 1)
+        self.assertEqual(
+            updated["strategies"][0]["validation_status"],
+            "research_only",
+        )
+        self.assertEqual(
+            updated["strategies"][0]["last_autonomous_research"]
+            ["required_validation_method_version"],
+            7,
         )
 
     def test_manual_validation_without_autonomous_record_is_preserved(self):

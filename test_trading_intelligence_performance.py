@@ -84,6 +84,14 @@ class TradingIntelligenceRenderPerformanceTests(unittest.TestCase):
         self.assertIn("store.local_library_revision()", segment)
         self.assertIn("local_matches_remote", segment)
 
+    def test_autonomous_ui_preserves_backend_phase_timings(self):
+        self.assertIn(
+            'backend_timing = dict(report.get("timing_profile") or {})',
+            self.source,
+        )
+        self.assertIn('"backend_total_seconds": backend_timing.get("total_seconds")', self.source)
+        self.assertIn('"samples": progress_timing.get("samples") or []', self.source)
+
 
 if __name__ == "__main__":
     unittest.main()

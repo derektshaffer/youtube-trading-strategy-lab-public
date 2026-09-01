@@ -1,11 +1,15 @@
 """Focused tests for Trading Intelligence validation scoring."""
 
 import unittest
+from dataclasses import asdict
 from unittest.mock import patch
 
 from trading_validation_core import (
+    _adaptive_static_comparison,
     _adaptive_walk_forward_strategies,
+    _adaptive_walk_forward_settings,
     _profitable_external_neighborhood,
+    _validation_neighbor_candidates,
     _walk_forward_session_splits,
     validation_strength,
     walk_forward_validate,
@@ -36,8 +40,19 @@ class WalkForwardSplitTests(unittest.TestCase):
         )
 
         second = splits[1]
-        self.assertEqual(second["embargo_sessions"], [sessions[7]])
-        self.assertEqual(second["external_test_sessions"], sessions[8:10])
+        self.assertEqual(second["history_sessions"], sessions[:8])
+        self.assertEqual(second["embargo_sessions"], [sessions[8]])
+        self.assertEqual(second["external_test_sessions"], sessions[9:11])
+        self.assertTrue(
+            set(first["external_test_sessions"]).issubset(
+                second["history_sessions"]
+            )
+        )
+        self.assertTrue(
+            set(first["external_test_sessions"]).isdisjoint(
+                second["embargo_sessions"]
+            )
+        )
         self.assertLess(
             sessions.index(second["history_sessions"][-1]),
             sessions.index(second["embargo_sessions"][0]),
@@ -49,6 +64,124 @@ class WalkForwardSplitTests(unittest.TestCase):
 
 
 class AdaptiveWalkForwardTests(unittest.TestCase):
+    def test_only_complete_broad_profitable_neighborhood_seeds_execution_settings(self):
+        base = BacktestSettings(
+            risk_per_trade_pct=1.0,
+            max_position_pct=20.0,
+        )
+        experience = [
+            {
+                "profitable": True,
+                "optimized_backtest_settings": {
+                    **asdict(base),
+                    "risk_per_trade_pct": 1.5,
+                    "max_position_pct": 30.0,
+                },
+                "profitable_neighborhood": {
+                    "broad_profitable": True,
+                    "complete": True,
+                    "setting_values": {
+                        "risk_per_trade_pct": [1.25, 1.5, 1.75],
+                    },
+                },
+            }
+        ]
+
+        adapted, changed = _adaptive_walk_forward_settings(base, experience)
+
+        self.assertEqual(adapted.risk_per_trade_pct, 1.5)
+        self.assertEqual(adapted.max_position_pct, 30.0)
+        self.assertEqual(changed, 2)
+
+    def test_incomplete_or_isolated_execution_point_cannot_seed_later_fold(self):
+        base = BacktestSettings(risk_per_trade_pct=1.0)
+        experience = [
+            {
+                "profitable": True,
+                "optimized_backtest_settings": {
+                    **asdict(base),
+                    "risk_per_trade_pct": 4.0,
+                },
+                "profitable_neighborhood": {
+                    "broad_profitable": False,
+                    "complete": True,
+                },
+            },
+            {
+                "profitable": True,
+                "optimized_backtest_settings": {
+                    **asdict(base),
+                    "risk_per_trade_pct": 3.0,
+                },
+                "profitable_neighborhood": {
+                    "broad_profitable": True,
+                    "complete": False,
+                },
+            },
+        ]
+
+        adapted, changed = _adaptive_walk_forward_settings(base, experience)
+
+        self.assertEqual(adapted, base)
+        self.assertEqual(changed, 0)
+
+    def test_regime_adaptation_is_only_better_when_score_and_pnl_both_improve(self):
+        adaptive = {
+            "score": 78.0,
+            "external_net_pnl": 240.0,
+            "profitable_fold_pct": 75.0,
+            "profitable_scheduled_fold_pct": 75.0,
+        }
+        static = {
+            "score": 61.0,
+            "external_net_pnl": 80.0,
+            "profitable_fold_pct": 50.0,
+            "profitable_scheduled_fold_pct": 50.0,
+        }
+
+        comparison = _adaptive_static_comparison(adaptive, static)
+
+        self.assertEqual(comparison["verdict"], "ADAPTIVE BETTER")
+        self.assertTrue(comparison["adaptive_added_value"])
+
+    def test_harmful_regime_adaptation_reports_static_better(self):
+        adaptive = {
+            "score": 48.0,
+            "external_net_pnl": -40.0,
+            "profitable_fold_pct": 33.3,
+            "profitable_scheduled_fold_pct": 33.3,
+        }
+        static = {
+            "score": 70.0,
+            "external_net_pnl": 120.0,
+            "profitable_fold_pct": 66.7,
+            "profitable_scheduled_fold_pct": 66.7,
+        }
+
+        comparison = _adaptive_static_comparison(adaptive, static)
+
+        self.assertEqual(comparison["verdict"], "STATIC BETTER")
+        self.assertFalse(comparison["adaptive_added_value"])
+
+    def test_conflicting_regime_evidence_is_mixed_not_declared_a_win(self):
+        adaptive = {
+            "score": 75.0,
+            "external_net_pnl": 90.0,
+            "profitable_fold_pct": 75.0,
+            "profitable_scheduled_fold_pct": 50.0,
+        }
+        static = {
+            "score": 65.0,
+            "external_net_pnl": 110.0,
+            "profitable_fold_pct": 50.0,
+            "profitable_scheduled_fold_pct": 50.0,
+        }
+
+        comparison = _adaptive_static_comparison(adaptive, static)
+
+        self.assertEqual(comparison["verdict"], "MIXED")
+        self.assertFalse(comparison["adaptive_added_value"])
+
     def test_only_completed_profitable_unseen_rules_are_promoted_as_positive_seeds(self):
         strategies = [
             {
@@ -231,6 +364,92 @@ class AdaptiveWalkForwardTests(unittest.TestCase):
             {"min": 1.4, "max": 1.6},
         )
 
+    def test_failed_neighbor_is_missing_evidence_not_broad_profitability(self):
+        positive = {
+            "trade_count": 3,
+            "net_pnl": 50.0,
+            "return_pct": 1.0,
+        }
+        neighborhood = _profitable_external_neighborhood(
+            {"min_relative_volume": 1.5},
+            BacktestSettings(),
+            positive,
+            [
+                {
+                    "rules": {"min_relative_volume": 1.4},
+                    "settings": {},
+                    "external_metrics": positive,
+                },
+                {
+                    "rules": {"min_relative_volume": 1.6},
+                    "settings": {},
+                    "external_metrics": positive,
+                },
+            ],
+            [{"error_type": "AppError", "error": "upstream data failed"}],
+        )
+
+        self.assertFalse(neighborhood["complete"])
+        self.assertEqual(neighborhood["failed_neighbor_count"], 1)
+        self.assertFalse(neighborhood["broad_profitable"])
+
+    def test_distant_finalists_are_not_mislabeled_as_local_neighbors(self):
+        settings = BacktestSettings()
+        winner_rules = {
+            "min_relative_volume": 1.5,
+            "min_day_change_pct": 4.0,
+            "max_price": 30.0,
+        }
+        positive = {
+            "trade_count": 3,
+            "net_pnl": 50.0,
+            "profit_factor": 1.5,
+            "max_drawdown_pct": 1.0,
+        }
+        report = {
+            "optimization_settings": {
+                "minimum_validation_trades": 2,
+                "maximum_drawdown_pct": 15.0,
+            },
+            "rankings": [
+                {
+                    "source_strategy_id": "s1",
+                    "validation_neighborhood": [
+                        {
+                            "rules": {
+                                **winner_rules,
+                                "min_relative_volume": 1.6,
+                            },
+                            "settings": asdict(settings),
+                            "metrics": positive,
+                            "validation_score": 10.0,
+                        },
+                        {
+                            "rules": {
+                                **winner_rules,
+                                "min_relative_volume": 8.0,
+                                "min_day_change_pct": 25.0,
+                                "max_price": 5.0,
+                            },
+                            "settings": asdict(settings),
+                            "metrics": positive,
+                            "validation_score": 20.0,
+                        },
+                    ],
+                }
+            ],
+        }
+
+        neighbors = _validation_neighbor_candidates(
+            report,
+            "s1",
+            winner_rules,
+            settings,
+        )
+
+        self.assertEqual(len(neighbors), 1)
+        self.assertEqual(neighbors[0]["rules"]["min_relative_volume"], 1.6)
+
     def test_broad_profitable_neighborhood_seeds_multiple_rule_values(self):
         strategies = [
             {
@@ -372,6 +591,82 @@ class AdaptiveWalkForwardTests(unittest.TestCase):
         )
         self.assertTrue(report["comparison"]["enabled"])
         self.assertEqual(report["comparison"]["verdict"], "TIE")
+
+    def test_static_baseline_reuses_identical_no_learning_folds(self):
+        rows = [
+            {
+                "timestamp": f"2026-08-{day:02d}T14:30:00Z",
+                "open": 10.0,
+                "high": 10.5,
+                "low": 9.8,
+                "close": 10.2,
+                "volume": 100000,
+            }
+            for day in range(1, 9)
+        ]
+        strategies = [
+            {
+                "id": "s1",
+                "name": "No-learning test",
+                "direction": "long",
+                "machine_rules": {"min_relative_volume": 1.0},
+            }
+        ]
+        optimizer_calls = []
+
+        def fake_optimize(*args, **kwargs):
+            optimizer_calls.append(args[1])
+            return {
+                "winner": {
+                    "source_strategy_id": "s1",
+                    "strategy_name": "No-learning test",
+                    "optimized_rules": {"min_relative_volume": 1.5},
+                    "optimized_backtest_settings": {},
+                    "status": "NO VALIDATED EDGE",
+                    "holdout_metrics": {},
+                }
+            }
+
+        def losing_backtest(*args, **kwargs):
+            return {
+                "metrics": {
+                    "trade_count": 1,
+                    "net_pnl": -10.0,
+                    "return_pct": -0.1,
+                    "profit_factor": 0.5,
+                    "max_drawdown_pct": 1.0,
+                },
+                "trades": [],
+            }
+
+        with patch(
+            "trading_validation_core.optimize_stock_strategies",
+            side_effect=fake_optimize,
+        ), patch(
+            "trading_validation_core.run_backtest",
+            side_effect=losing_backtest,
+        ):
+            report = walk_forward_validate(
+                rows,
+                strategies,
+                "TEST",
+                minimum_history_sessions=5,
+                test_sessions_per_fold=1,
+                embargo_sessions=0,
+                max_folds=3,
+                adaptive_learning=True,
+                compare_static_baseline=True,
+            )
+
+        # Adaptive and static inputs are identical because losing folds seed no
+        # rule values. Reusing the adaptive result removes two full optimizations.
+        self.assertEqual(len(optimizer_calls), 3)
+        self.assertTrue(
+            all(
+                fold["reused_adaptive_result"]
+                for fold in report["static_baseline"]["folds"]
+            )
+        )
 
 
 class ValidationStrengthTests(unittest.TestCase):

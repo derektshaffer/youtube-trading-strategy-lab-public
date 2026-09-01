@@ -73,7 +73,7 @@ class LiveLearningOutboxTests(unittest.TestCase):
 
 
 class PendingValidationTests(unittest.TestCase):
-    def _strategy(self, status, *, retryable=False):
+    def _strategy(self, status, *, retryable=False, retry_after=None):
         return {
             "id": f"s-{status}-{retryable}",
             "name": "Test RVOL strategy",
@@ -94,6 +94,7 @@ class PendingValidationTests(unittest.TestCase):
             "last_autonomous_research": {
                 "validation_status": status,
                 "retryable": retryable,
+                "retry_after": retry_after,
             },
         }
 
@@ -108,6 +109,23 @@ class PendingValidationTests(unittest.TestCase):
 
     def test_transient_retryable_failure_can_be_selected_again(self):
         candidate = self._strategy("validation_failed", retryable=True)
+        selected = _pending_web_strategies({"strategies": [candidate]})
+        self.assertEqual([item["id"] for item in selected], [candidate["id"]])
+
+    def test_transient_failure_waits_until_retry_window_opens(self):
+        candidate = self._strategy(
+            "validation_failed",
+            retryable=True,
+            retry_after="2099-01-01T00:00:00Z",
+        )
+        self.assertEqual(_pending_web_strategies({"strategies": [candidate]}), [])
+
+    def test_transient_failure_is_eligible_after_retry_window(self):
+        candidate = self._strategy(
+            "validation_failed",
+            retryable=True,
+            retry_after="2000-01-01T00:00:00Z",
+        )
         selected = _pending_web_strategies({"strategies": [candidate]})
         self.assertEqual([item["id"] for item in selected], [candidate["id"]])
 

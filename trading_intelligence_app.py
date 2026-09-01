@@ -7629,7 +7629,8 @@ elif module == "AI Research Autopilot":
             update_auto_activity("Saving autonomous research results…")
             total_seconds = time.monotonic() - timing_started
             universe_info = report.get("universe") or {}
-            report["timing_profile"] = timing_recorder.finish(
+            backend_timing = dict(report.get("timing_profile") or {})
+            progress_timing = timing_recorder.finish(
                 total_seconds,
                 deep_strategies_attempted=int(report.get("deep_strategies_attempted") or 0),
                 universe_sample_size=int(
@@ -7639,6 +7640,21 @@ elif module == "AI Research Autopilot":
                     or 0
                 ),
             )
+            report["timing_profile"] = {
+                **backend_timing,
+                "version": 3,
+                "backend_total_seconds": backend_timing.get("total_seconds"),
+                # Preserve the established top-level fields consumed by the
+                # learned ETA estimator while retaining detailed backend phases.
+                "total_seconds": progress_timing.get("total_seconds"),
+                "deep_strategies_attempted": progress_timing.get(
+                    "deep_strategies_attempted"
+                ),
+                "universe_sample_size": progress_timing.get(
+                    "universe_sample_size"
+                ),
+                "samples": progress_timing.get("samples") or [],
+            }
             data = merge_autonomous_research_into_library(load_library(mutable=True), report)
             intelligence_store().save(data)
             st.session_state["til_auto_research_result"] = report

@@ -334,7 +334,12 @@ def _walk_forward_session_splits(
     test_sessions_per_fold: int,
     embargo_sessions: int,
 ) -> list[dict[str, Any]]:
-    """Build expanding session folds with an explicit unused embargo gap."""
+    """Build expanding session folds with an explicit unused embargo gap.
+
+    Test blocks never overlap the following fold's embargo. A completed test
+    block can therefore become causal history for a later fold without leaking
+    through a session that the later fold declares unused.
+    """
     minimum_history_sessions = max(1, int(minimum_history_sessions))
     test_sessions_per_fold = max(1, int(test_sessions_per_fold))
     embargo_sessions = max(0, int(embargo_sessions))
@@ -355,7 +360,7 @@ def _walk_forward_session_splits(
                     "external_test_sessions": external_test,
                 }
             )
-        test_start += test_sessions_per_fold
+        test_start += test_sessions_per_fold + embargo_sessions
     return splits
 
 
@@ -458,6 +463,94 @@ def _adaptive_walk_forward_strategies(
     return adapted
 
 
+def _adaptive_walk_forward_settings(
+    base_settings: BacktestSettings,
+    completed_experience: list[dict[str, Any]],
+) -> tuple[BacktestSettings, int]:
+    """Seed execution search only from a complete broad profitable neighborhood."""
+    seed_fields = (
+        "risk_per_trade_pct",
+        "max_position_pct",
+        "default_stop_pct",
+        "default_reward_risk",
+        "max_concurrent_positions",
+        "allow_extended_hours",
+        "extended_hours_position_scale",
+    )
+    eligible = [
+        item
+        for item in completed_experience
+        if isinstance(item, dict)
+        and bool(item.get("profitable"))
+        and bool(
+            (item.get("profitable_neighborhood") or {}).get(
+                "broad_profitable"
+            )
+        )
+        and bool(
+            (item.get("profitable_neighborhood") or {}).get(
+                "complete",
+                True,
+            )
+        )
+        and isinstance(item.get("optimized_backtest_settings"), dict)
+    ]
+    if not eligible:
+        return base_settings, 0
+
+    source = dict(eligible[-1].get("optimized_backtest_settings") or {})
+    payload = asdict(base_settings)
+    changed = 0
+    for field_name in seed_fields:
+        if field_name not in source or source.get(field_name) is None:
+            continue
+        if payload.get(field_name) != source.get(field_name):
+            payload[field_name] = source.get(field_name)
+            changed += 1
+    if not changed:
+        return base_settings, 0
+    try:
+        adapted = BacktestSettings(**payload)
+        adapted.validate()
+    except (TypeError, ValueError, AppError):
+        # Invalid learned settings are missing evidence, not permission to relax
+        # the configured execution contract.
+        return base_settings, 0
+    return adapted, changed
+
+
+def _configuration_value_distance(left: Any, right: Any) -> float:
+    """Return a scale-aware distance for one rule or execution value."""
+    if left == right:
+        return 0.0
+    if isinstance(left, bool) or isinstance(right, bool):
+        return 1.0
+
+    def clock_minutes(value: Any) -> int | None:
+        text = str(value or "").strip()
+        if not text or ":" not in text:
+            return None
+        try:
+            hour, minute = (int(part) for part in text.split(":", 1))
+        except (TypeError, ValueError):
+            return None
+        if hour not in range(24) or minute not in range(60):
+            return None
+        return hour * 60 + minute
+
+    left_clock = clock_minutes(left)
+    right_clock = clock_minutes(right)
+    if left_clock is not None and right_clock is not None:
+        return abs(left_clock - right_clock) / 390.0
+
+    left_number = safe_float(left)
+    right_number = safe_float(right)
+    if left_number is not None and right_number is not None:
+        scale = max(abs(left_number), abs(right_number), 1.0)
+        return abs(left_number - right_number) / scale
+    return 1.0
+
+
 def _validation_neighbor_candidates(
     optimization_report: dict[str, Any],
     source_strategy_id: str,
@@ -535,19 +628,40 @@ def _validation_neighbor_candidates(
             for field_name in important_setting_fields
             if winner_settings_payload.get(field_name) != settings_payload.get(field_name)
         )
+        changed_field_count = rule_distance + setting_distance
+        # "Neighborhood" must remain local. Widely different finalists can still
+        # be useful alternatives, but they are not evidence that the selected point
+        # is surrounded by profitable settings.
+        if changed_field_count > 2:
+            continue
+        normalized_distance = sum(
+            _configuration_value_distance(
+                normalized_winner_rules.get(field_name),
+                rules.get(field_name),
+            )
+            for field_name in rule_fields
+        ) + sum(
+            _configuration_value_distance(
+                winner_settings_payload.get(field_name),
+                settings_payload.get(field_name),
+            )
+            for field_name in important_setting_fields
+        )
         candidates.append(
             {
                 "rules": rules,
                 "settings": settings_payload,
                 "validation_metrics": dict(metrics),
                 "validation_score": safe_float(raw.get("validation_score"), 0.0) or 0.0,
-                "distance": rule_distance + setting_distance,
+                "distance": changed_field_count,
+                "normalized_distance": round(normalized_distance, 8),
             }
         )
 
     candidates.sort(
         key=lambda item: (
             int(item.get("distance") or 0),
+            safe_float(item.get("normalized_distance"), 0.0) or 0.0,
             -(safe_float((item.get("validation_metrics") or {}).get("profit_factor"), 0.0) or 0.0),
             -(safe_float((item.get("validation_metrics") or {}).get("net_pnl"), 0.0) or 0.0),
         )
@@ -560,8 +674,14 @@ def _profitable_external_neighborhood(
     winner_settings: BacktestSettings,
     winner_metrics: dict[str, Any],
     neighbor_results: list[dict[str, Any]],
+    neighbor_failures: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Summarize parameter values that were profitable in the same unseen fold."""
+    failures = [
+        dict(item)
+        for item in (neighbor_failures or [])
+        if isinstance(item, dict)
+    ]
     winner_profitable = (
         int(safe_float(winner_metrics.get("trade_count"), 0) or 0) > 0
         and (safe_float(winner_metrics.get("net_pnl"), 0.0) or 0.0) > 0
@@ -655,6 +775,7 @@ def _profitable_external_neighborhood(
 
     broad_profitable = bool(
         winner_profitable
+        and not failures
         and tested_neighbor_count >= 2
         and len(profitable_neighbors) >= 2
         and profitable_neighbor_pct >= 50.0
@@ -663,6 +784,9 @@ def _profitable_external_neighborhood(
     return {
         "winner_profitable": bool(winner_profitable),
         "tested_neighbor_count": tested_neighbor_count,
+        "attempted_neighbor_count": tested_neighbor_count + len(failures),
+        "failed_neighbor_count": len(failures),
+        "complete": not failures,
         "profitable_neighbor_count": len(profitable_neighbors),
         "profitable_neighbor_pct": round(profitable_neighbor_pct, 1),
         "profitable_configuration_count": len(profitable_configurations),
@@ -672,11 +796,13 @@ def _profitable_external_neighborhood(
         "setting_values": setting_values,
         "setting_ranges": numeric_ranges(setting_values),
         "neighbors": neighbor_results,
+        "failures": failures,
         "note": (
             "Nearby configurations are selected using only the fold's earlier internal "
             "validation data, frozen, then tested on the same unseen external block as the "
             "winner. A broad neighborhood requires at least two nearby configurations to "
-            "remain profitable out of sample."
+            "remain profitable out of sample, and every attempted neighbor must complete "
+            "so missing evidence cannot be mistaken for broad robustness."
         ),
     }
 
@@ -715,12 +841,25 @@ def _walk_forward_fold_summary(
         if active_folds
         else 0.0
     )
+    temporal_coverage_pct = (
+        len(active_folds) / len(folds) * 100.0
+        if folds
+        else 0.0
+    )
+    profitable_scheduled_pct = (
+        len(profitable_folds) / len(folds) * 100.0
+        if folds
+        else 0.0
+    )
     coverage = min(
         1.0,
         int(safe_float(combined.get("trade_count"), 0) or 0)
         / max(6.0, len(folds) * 2.0),
     )
-    profitability_score = profitable_pct / 100.0
+    # Inactive scheduled folds remain part of temporal evidence. Scoring only the
+    # folds that happened to trade lets one isolated winner masquerade as broad
+    # walk-forward consistency.
+    profitability_score = profitable_scheduled_pct / 100.0
     pf_score = min(1.0, combined_pf / 1.5)
     drawdown_score = max(
         0.0,
@@ -769,6 +908,8 @@ def _walk_forward_fold_summary(
         "active_fold_count": len(active_folds),
         "profitable_fold_count": len(profitable_folds),
         "profitable_fold_pct": round(profitable_pct, 1),
+        "temporal_coverage_pct": round(temporal_coverage_pct, 1),
+        "profitable_scheduled_fold_pct": round(profitable_scheduled_pct, 1),
         "external_trade_count": int(safe_float(combined.get("trade_count"), 0) or 0),
         "external_net_pnl": safe_float(combined.get("net_pnl"), 0.0) or 0.0,
         "external_return_pct": safe_float(combined.get("return_pct"), 0.0) or 0.0,
@@ -777,6 +918,83 @@ def _walk_forward_fold_summary(
         "median_fold_return_pct": round(median(returns), 3) if returns else 0.0,
         "average_fold_return_pct": round(mean(returns), 3) if returns else 0.0,
         "selected_strategy_counts": dict(strategy_counts),
+    }
+
+
+def _adaptive_static_comparison(
+    adaptive_summary: dict[str, Any],
+    static_summary: dict[str, Any],
+) -> dict[str, Any]:
+    """Compare causal counterfactuals without hiding inactive scheduled folds."""
+    score_delta = (
+        safe_float(adaptive_summary.get("score"), 0.0) or 0.0
+    ) - (
+        safe_float(static_summary.get("score"), 0.0) or 0.0
+    )
+    pnl_delta = (
+        safe_float(adaptive_summary.get("external_net_pnl"), 0.0) or 0.0
+    ) - (
+        safe_float(static_summary.get("external_net_pnl"), 0.0) or 0.0
+    )
+    profitable_fold_delta = (
+        safe_float(adaptive_summary.get("profitable_fold_pct"), 0.0) or 0.0
+    ) - (
+        safe_float(static_summary.get("profitable_fold_pct"), 0.0) or 0.0
+    )
+    profitable_scheduled_fold_delta = (
+        safe_float(
+            adaptive_summary.get("profitable_scheduled_fold_pct"),
+            0.0,
+        )
+        or 0.0
+    ) - (
+        safe_float(
+            static_summary.get("profitable_scheduled_fold_pct"),
+            0.0,
+        )
+        or 0.0
+    )
+    if score_delta > 0 and pnl_delta > 0:
+        verdict = "ADAPTIVE BETTER"
+    elif score_delta < 0 and pnl_delta < 0:
+        verdict = "STATIC BETTER"
+    elif abs(score_delta) < 0.05 and abs(pnl_delta) < 0.01:
+        verdict = "TIE"
+    else:
+        verdict = "MIXED"
+    return {
+        "enabled": True,
+        "verdict": verdict,
+        "adaptive_added_value": verdict == "ADAPTIVE BETTER",
+        "adaptive_score": adaptive_summary.get("score"),
+        "static_score": static_summary.get("score"),
+        "score_delta": round(score_delta, 2),
+        "adaptive_external_net_pnl": adaptive_summary.get("external_net_pnl"),
+        "static_external_net_pnl": static_summary.get("external_net_pnl"),
+        "external_net_pnl_delta": round(pnl_delta, 2),
+        "adaptive_profitable_fold_pct": adaptive_summary.get(
+            "profitable_fold_pct"
+        ),
+        "static_profitable_fold_pct": static_summary.get(
+            "profitable_fold_pct"
+        ),
+        "profitable_fold_pct_delta": round(profitable_fold_delta, 1),
+        "adaptive_profitable_scheduled_fold_pct": adaptive_summary.get(
+            "profitable_scheduled_fold_pct"
+        ),
+        "static_profitable_scheduled_fold_pct": static_summary.get(
+            "profitable_scheduled_fold_pct"
+        ),
+        "profitable_scheduled_fold_pct_delta": round(
+            profitable_scheduled_fold_delta,
+            1,
+        ),
+        "note": (
+            "Both modes use the same expanding history, embargo, and unseen "
+            "test blocks. The static baseline never receives completed-fold "
+            "rule seeds. Any fold with identical optimizer inputs reuses the "
+            "adaptive result instead of recomputing the same counterfactual."
+        ),
     }
 
 
@@ -877,6 +1095,18 @@ def walk_forward_validate(
             if adaptive_experience
             else None
         )
+        if learning_cutoff:
+            next_boundary = (
+                embargo_block[0]
+                if embargo_block
+                else external_test_sessions[0]
+            )
+            if str(learning_cutoff) >= str(next_boundary):
+                raise AppError(
+                    "Walk-forward fold scheduling would let completed-fold learning "
+                    "cross the next fold's embargo/test boundary. Validation stopped "
+                    "before using temporally invalid adaptive evidence."
+                )
         fold_strategies = (
             _adaptive_walk_forward_strategies(
                 strategies,
@@ -898,12 +1128,20 @@ def walk_forward_validate(
             )
             for item in fold_strategies
         )
+        adaptive_settings, adaptive_seeded_setting_values = (
+            _adaptive_walk_forward_settings(
+                settings,
+                adaptive_experience,
+            )
+            if adaptive_learning
+            else (settings, 0)
+        )
 
         fold_report = optimize_stock_strategies(
             history_rows,
             fold_strategies,
             symbol,
-            settings,
+            adaptive_settings,
             optimizer,
             finalize_holdout=True,
         )
@@ -956,6 +1194,7 @@ def walk_forward_validate(
         all_external_trades.extend(external_trades)
 
         neighbor_results: list[dict[str, Any]] = []
+        neighbor_failures: list[dict[str, Any]] = []
         for neighbor in validation_neighbors:
             try:
                 neighbor_settings = BacktestSettings(
@@ -980,6 +1219,13 @@ def walk_forward_validate(
                         ),
                         "settings": asdict(neighbor_settings),
                         "distance": int(neighbor.get("distance") or 0),
+                        "normalized_distance": (
+                            safe_float(
+                                neighbor.get("normalized_distance"),
+                                0.0,
+                            )
+                            or 0.0
+                        ),
                         "internal_validation_metrics": dict(
                             neighbor.get("validation_metrics") or {}
                         ),
@@ -988,20 +1234,35 @@ def walk_forward_validate(
                         ),
                     }
                 )
-            except (AppError, TypeError, ValueError):
-                continue
+            except (AppError, TypeError, ValueError) as exc:
+                neighbor_failures.append(
+                    {
+                        "rules": normalize_machine_rules(
+                            neighbor.get("rules") or {}
+                        ),
+                        "settings": dict(neighbor.get("settings") or {}),
+                        "distance": int(neighbor.get("distance") or 0),
+                        "error_type": type(exc).__name__,
+                        "error": str(exc)[:800],
+                    }
+                )
 
         profitable_neighborhood = _profitable_external_neighborhood(
             selected_rules,
             selected_settings,
             external_metrics,
             neighbor_results,
+            neighbor_failures,
         )
 
         static_fold_record: dict[str, Any] | None = None
         if compare_static_baseline:
             static_reused_adaptive = (
-                not adaptive_learning or experience_count_before_fold == 0
+                not adaptive_learning
+                or (
+                    adaptive_seeded_rule_values == 0
+                    and adaptive_seeded_setting_values == 0
+                )
             )
             if static_reused_adaptive:
                 static_winner = winner
@@ -1080,7 +1341,20 @@ def walk_forward_validate(
                 "external_metrics": static_metrics,
                 "optimized_rules": static_rules,
                 "optimized_backtest_settings": asdict(static_settings),
-                "reused_adaptive_first_fold": bool(static_reused_adaptive),
+                "reused_adaptive_first_fold": bool(
+                    static_reused_adaptive
+                    and experience_count_before_fold == 0
+                ),
+                "reused_adaptive_result": bool(static_reused_adaptive),
+                "adaptive_input_changed": bool(
+                    adaptive_seeded_rule_values > 0
+                    or adaptive_seeded_setting_values > 0
+                ),
+                "reuse_reason": (
+                    "identical_inputs_no_adaptive_seed"
+                    if static_reused_adaptive
+                    else None
+                ),
             }
             static_folds.append(static_fold_record)
 
@@ -1123,6 +1397,7 @@ def walk_forward_validate(
                 > 0
             ),
             "optimized_rules": selected_rules,
+            "optimized_backtest_settings": asdict(selected_settings),
             "profitable_neighborhood": profitable_neighborhood,
         }
         adaptive_experience.append(adaptive_feedback)
@@ -1157,8 +1432,14 @@ def walk_forward_validate(
                 "adaptive_neighborhood_seeded_rule_values": (
                     adaptive_neighborhood_seeded_rule_values
                 ),
+                "adaptive_seeded_setting_values": (
+                    adaptive_seeded_setting_values
+                ),
                 "validation_neighbor_candidate_count": len(
                     validation_neighbors
+                ),
+                "validation_neighbor_failure_count": len(
+                    neighbor_failures
                 ),
                 "profitable_neighborhood": profitable_neighborhood,
                 "static_baseline_external_metrics": (
@@ -1192,6 +1473,17 @@ def walk_forward_validate(
             )
         )
     )
+    incomplete_neighborhood_fold_count = sum(
+        1
+        for fold in folds
+        if int(
+            (fold.get("profitable_neighborhood") or {}).get(
+                "failed_neighbor_count"
+            )
+            or 0
+        )
+        > 0
+    )
     summary.update(
         {
             "embargo_sessions": embargo_sessions,
@@ -1204,6 +1496,9 @@ def walk_forward_validate(
             ),
             "broad_profitable_neighborhood_fold_count": (
                 broad_neighborhood_fold_count
+            ),
+            "incomplete_neighborhood_fold_count": (
+                incomplete_neighborhood_fold_count
             ),
         }
     )
@@ -1222,70 +1517,7 @@ def walk_forward_validate(
             optimizer,
         )
         static_summary["embargo_sessions"] = embargo_sessions
-        score_delta = (
-            safe_float(summary.get("score"), 0.0) or 0.0
-        ) - (
-            safe_float(static_summary.get("score"), 0.0) or 0.0
-        )
-        pnl_delta = (
-            safe_float(summary.get("external_net_pnl"), 0.0) or 0.0
-        ) - (
-            safe_float(
-                static_summary.get("external_net_pnl"),
-                0.0,
-            )
-            or 0.0
-        )
-        profitable_fold_delta = (
-            safe_float(summary.get("profitable_fold_pct"), 0.0) or 0.0
-        ) - (
-            safe_float(
-                static_summary.get("profitable_fold_pct"),
-                0.0,
-            )
-            or 0.0
-        )
-        if score_delta > 0 and pnl_delta > 0:
-            comparison_verdict = "ADAPTIVE BETTER"
-        elif score_delta < 0 and pnl_delta < 0:
-            comparison_verdict = "STATIC BETTER"
-        elif abs(score_delta) < 0.05 and abs(pnl_delta) < 0.01:
-            comparison_verdict = "TIE"
-        else:
-            comparison_verdict = "MIXED"
-        comparison = {
-            "enabled": True,
-            "verdict": comparison_verdict,
-            "adaptive_added_value": (
-                comparison_verdict == "ADAPTIVE BETTER"
-            ),
-            "adaptive_score": summary.get("score"),
-            "static_score": static_summary.get("score"),
-            "score_delta": round(score_delta, 2),
-            "adaptive_external_net_pnl": summary.get(
-                "external_net_pnl"
-            ),
-            "static_external_net_pnl": static_summary.get(
-                "external_net_pnl"
-            ),
-            "external_net_pnl_delta": round(pnl_delta, 2),
-            "adaptive_profitable_fold_pct": summary.get(
-                "profitable_fold_pct"
-            ),
-            "static_profitable_fold_pct": static_summary.get(
-                "profitable_fold_pct"
-            ),
-            "profitable_fold_pct_delta": round(
-                profitable_fold_delta,
-                1,
-            ),
-            "note": (
-                "Both modes use the same expanding history, embargo, and unseen "
-                "test blocks. The static baseline never receives completed-fold "
-                "rule seeds; the first fold is reused because neither mode has "
-                "prior unseen experience yet."
-            ),
-        }
+        comparison = _adaptive_static_comparison(summary, static_summary)
 
     warnings: list[str] = []
     no_trade_folds = int(summary.get("fold_count") or 0) - int(
@@ -1314,6 +1546,12 @@ def walk_forward_validate(
             "No unseen fold established a broad profitable parameter neighborhood; "
             "adaptation is still relying mainly on exact completed-fold winners."
         )
+    if incomplete_neighborhood_fold_count:
+        warnings.append(
+            f"{incomplete_neighborhood_fold_count} fold(s) could not complete every "
+            "planned neighboring-configuration backtest. Those folds cannot claim "
+            "a broad profitable neighborhood."
+        )
     if (
         compare_static_baseline
         and comparison.get("verdict") == "STATIC BETTER"
@@ -1339,6 +1577,9 @@ def walk_forward_validate(
             ),
             "broad_profitable_neighborhood_fold_count": (
                 broad_neighborhood_fold_count
+            ),
+            "incomplete_neighborhood_fold_count": (
+                incomplete_neighborhood_fold_count
             ),
             "experience": adaptive_experience,
             "note": (
@@ -1370,4 +1611,3 @@ def walk_forward_validate(
             "do not establish future profitability."
         ),
     }
-
