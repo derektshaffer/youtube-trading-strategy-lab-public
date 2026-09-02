@@ -20,7 +20,12 @@ import sys
 import tempfile
 from typing import Any
 
-from hybrid_runtime.build_identity import stamp_bundle_identity
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from hybrid_runtime.build_identity import read_build_identity, stamp_bundle_identity
 
 
 APP_NAME = "Trading Intelligence"
@@ -81,15 +86,15 @@ def update_bundle_version(
     clean = clean_version(version)
     short = bundle_short_version(clean)
     number = build_number(build)
-    identity = stamp_bundle_identity(
+    return stamp_bundle_identity(
         app,
         version_label=clean,
         channel="internal_beta",
         commit=commit,
         bundle_short_version=short,
         bundle_build=number,
+        display_name=APP_NAME,
     )
-    return identity
 
 
 def signature_metadata(app: Path) -> dict[str, Any]:
@@ -125,7 +130,6 @@ def signature_metadata(app: Path) -> dict[str, Any]:
         ),
         "",
     )
-    # Ad-hoc signatures have no Developer ID authority chain and no usable team.
     developer_id = any("Developer ID Application" in authority for authority in authorities)
     return {
         "codesign_valid": verification.returncode == 0,
@@ -169,12 +173,27 @@ def main(argv: list[str] | None = None) -> int:
     build = build_number(args.build_number)
     commit = str(args.commit or "").strip()
 
-    bundle_identity = update_bundle_version(
+    expected_identity = update_bundle_version(
         app,
         version,
         build,
         commit=commit,
     )
+    embedded_identity = read_build_identity(
+        info_plist=app / "Contents" / "Info.plist",
+        environment={},
+    )
+    for key, expected in (
+        ("version", expected_identity["version_label"]),
+        ("bundle_short_version", expected_identity["bundle_short_version"]),
+        ("build_number", expected_identity["build_number"]),
+        ("channel", expected_identity["channel"]),
+        ("commit", expected_identity["commit"]),
+    ):
+        if str(embedded_identity.get(key) or "") != str(expected or ""):
+            raise SystemExit(
+                f"The embedded beta build identity does not match the requested {key}."
+            )
     # Updating Info.plist invalidates the previous ad-hoc signature. Re-sign the
     # internal beta before verifying. A future Developer ID release workflow must
     # re-sign with its own identity after this packaging metadata is applied.
@@ -225,7 +244,7 @@ def main(argv: list[str] | None = None) -> int:
         "bundle_short_version": short_version,
         "build_number": build,
         "commit": commit,
-        "bundle_identity": bundle_identity,
+        "bundle_identity": embedded_identity,
         "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "architecture": "arm64",
         "app_bytes": directory_size(app),
