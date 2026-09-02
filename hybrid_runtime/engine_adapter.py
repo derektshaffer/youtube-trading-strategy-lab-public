@@ -225,6 +225,26 @@ def profit_first_plan_handler(
     return result
 
 
+def stock_analysis_handler(
+    payload: Mapping[str, Any],
+    progress: ProgressCallback,
+    cancelled: CancellationCheck,
+) -> Mapping[str, Any]:
+    """Run quick real-market analysis using the persistent desktop candle cache."""
+
+    from .market_cache import run_stock_analysis
+
+    data_dir = _desktop_data_dir()
+    if not data_dir:
+        raise RuntimeError("The desktop data directory is unavailable")
+    return run_stock_analysis(
+        payload,
+        data_dir=data_dir,
+        progress=progress,
+        cancelled=cancelled,
+    )
+
+
 def default_handlers() -> dict[str, JobHandler]:
     return {
         "system.health": system_health_handler,
@@ -232,4 +252,5 @@ def default_handlers() -> dict[str, JobHandler]:
         "library.configuration": library_configuration_handler,
         "library.summary": library_summary_handler,
         "strategy.profit_first_plan": profit_first_plan_handler,
+        "analysis.stock": stock_analysis_handler,
     }
