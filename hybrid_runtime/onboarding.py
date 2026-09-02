@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from .desktop_settings import (
@@ -22,10 +23,74 @@ from .onboarding_state import configuration_status
 UTC = timezone.utc
 ProgressCallback = Callable[[float, str, str], None]
 CancellationCheck = Callable[[], bool]
+CLOUD_ACTION_REPOSITORY = "derektshaffer/youtube-trading-strategy-lab-public"
+CLOUD_PERMISSION_WORKFLOW = "desktop-cloud-credential-smoke.yml"
+CLOUD_WORKFLOW_REF = "main"
 
 
 class OnboardingError(RuntimeError):
     pass
+
+
+def _workflow_dispatch_access(token: str) -> dict[str, Any]:
+    """Run one harmless no-secret Actions handshake to prove dispatch permission.
+
+    The desktop cloud bridge publishes real Finder/Strategy Lab queue items and
+    then dispatches GitHub Actions. Repository write permission alone is not
+    enough for fine-grained PATs; GitHub requires Actions: write for workflow
+    dispatch. This dedicated workflow only echoes a constant string on an Ubuntu
+    runner and cannot read secrets or mutate trading/research state.
+    """
+
+    workflow = quote(CLOUD_PERMISSION_WORKFLOW, safe="")
+    request = Request(
+        (
+            "https://api.github.com/repos/"
+            f"{CLOUD_ACTION_REPOSITORY}/actions/workflows/{workflow}/dispatches"
+        ),
+        data=json.dumps({"ref": CLOUD_WORKFLOW_REF}, separators=(",", ":")).encode("utf-8"),
+        headers={
+            "Authorization": "Bearer " + token,
+            "Accept": "application/vnd.github+json",
+            "Content-Type": "application/json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "Trading-Intelligence-Desktop-Onboarding",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=15) as response:
+            status = int(getattr(response, "status", 204) or 204)
+    except HTTPError as exc:
+        if exc.code in {401, 403}:
+            raise OnboardingError(
+                "The GitHub token can write the private library but cannot start cloud workflows. "
+                "For a fine-grained token, add Actions: read/write permission on the Trading Intelligence app repository."
+            ) from exc
+        if exc.code == 404:
+            raise OnboardingError(
+                "The cloud-dispatch verification workflow is unavailable to this GitHub token. "
+                "Make sure the token can access the Trading Intelligence app repository."
+            ) from exc
+        raise OnboardingError(
+            f"GitHub cloud-workflow dispatch check failed with HTTP {exc.code}."
+        ) from exc
+    except (URLError, TimeoutError, OSError) as exc:
+        raise OnboardingError(
+            "GitHub could not be reached for the cloud-workflow dispatch check."
+        ) from exc
+    # The 2022-11-28 API returns 204; newer GitHub API variants may return 200
+    # with run metadata. Accept either successful shape.
+    if status not in {200, 204}:
+        raise OnboardingError(
+            f"GitHub cloud-workflow dispatch check returned HTTP {status}."
+        )
+    return {
+        "ready": True,
+        "action_repository": CLOUD_ACTION_REPOSITORY,
+        "workflow": CLOUD_PERMISSION_WORKFLOW,
+        "message": "GitHub Actions cloud-dispatch permission verified.",
+    }
 
 
 def _github_access(settings: DesktopSettings, keychain: MacOSKeychain) -> dict[str, Any]:
@@ -81,13 +146,16 @@ def _github_access(settings: DesktopSettings, keychain: MacOSKeychain) -> dict[s
             "The GitHub token can see the repository but does not have write access. "
             "Cloud Finder and Strategy Lab need repository contents read/write permission."
         )
+    dispatch = _workflow_dispatch_access(token)
     return {
         "ready": True,
         "repository": settings.github_repository,
         "branch": settings.github_branch,
         "path": settings.github_path,
         "write_access": True,
-        "message": "Private GitHub/cloud read-write access verified.",
+        "workflow_dispatch": bool(dispatch.get("ready")),
+        "action_repository": dispatch.get("action_repository"),
+        "message": "Private GitHub queue write + cloud workflow dispatch verified.",
     }
 
 
@@ -200,7 +268,7 @@ def verify_setup(
 
     check_cancelled()
     if progress:
-        progress(0.48, "downloading_data", "Verifying private GitHub/cloud read-write access")
+        progress(0.48, "downloading_data", "Verifying private GitHub queue write and cloud dispatch")
     try:
         results["cloud"] = _github_access(settings, secrets)
     except Exception as exc:
