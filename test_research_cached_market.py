@@ -84,6 +84,21 @@ class CachedResearchMarketTests(unittest.TestCase):
             self.assertEqual(base.last_kwargs["feed"], "sip")
             self.assertEqual(market.research_cache_events, [])
 
+    def test_omitted_adjustment_delegates_to_provider_default(self):
+        base = FakeMarket()
+        with tempfile.TemporaryDirectory() as temporary:
+            market = CachedResearchMarket(base, data_dir=temporary)
+            market.bars(
+                ["SDOT"],
+                start=datetime(2026, 8, 30, tzinfo=UTC),
+                end=datetime(2026, 9, 1, tzinfo=UTC),
+                timeframe="1Min",
+                max_pages=30,
+            )
+            self.assertEqual(base.calls, 1)
+            self.assertNotIn("adjustment", base.last_kwargs)
+            self.assertEqual(market.research_cache_events, [])
+
     def test_batch_request_and_other_methods_delegate(self):
         base = FakeMarket()
         with tempfile.TemporaryDirectory() as temporary:
