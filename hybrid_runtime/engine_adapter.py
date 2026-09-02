@@ -205,8 +205,6 @@ def profit_first_plan_handler(
     loaded = load_library_for_job(payload, data_dir=_desktop_data_dir())
     _check_cancelled(cancelled)
     progress(0.55, "searching", "Ranking strict Profit First candidates")
-    # Lazy import keeps the hybrid core independent of Streamlit and heavy engine
-    # modules until this real Trading Lab operation is requested.
     from profit_first_queue import profit_first_validation_batch
 
     maximum = max(1, min(3, int(payload.get("maximum_candidates") or 2)))
@@ -232,12 +230,12 @@ def stock_analysis_handler(
 ) -> Mapping[str, Any]:
     """Run quick real-market analysis using the persistent desktop candle cache."""
 
-    from .market_cache import run_stock_analysis
+    from .market_job import run_bounded_stock_analysis
 
     data_dir = _desktop_data_dir()
     if not data_dir:
         raise RuntimeError("The desktop data directory is unavailable")
-    return run_stock_analysis(
+    return run_bounded_stock_analysis(
         payload,
         data_dir=data_dir,
         progress=progress,
