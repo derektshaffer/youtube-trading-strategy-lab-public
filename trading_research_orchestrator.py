@@ -60,6 +60,7 @@ SUPPORTED_RESEARCH_JOB_TYPES = frozenset(
         "autonomous_validation",
         "predictive_ml_backfill",
         "stock_finder",
+        "strategy_lab",
     }
 )
 

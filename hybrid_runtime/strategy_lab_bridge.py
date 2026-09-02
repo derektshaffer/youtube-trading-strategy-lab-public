@@ -247,6 +247,12 @@ def overlay_strategy_lab_checkpoint(
         result["status"] = "complete"
         result["progress"] = 1.0
         result["stage"] = "complete"
+        summary = strategy_lab_result_from_checkpoint(checkpoint)
+        if summary:
+            result["result"] = summary
+            result["result_ref"] = (
+                f"strategy-lab-checkpoint:{str(checkpoint.get('id') or '')}"
+            )
     elif checkpoint_status == "failed":
         result["status"] = "failed"
         result["stage"] = "failed"

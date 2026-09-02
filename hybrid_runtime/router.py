@@ -36,6 +36,7 @@ class RoutingPolicy:
             "strategy.very_deep",
             "strategy.profit_first_validation",
             "strategy.stock_finder",
+            "strategy.strategy_lab",
             "research.autonomous",
             "research.book_extract",
             "research.video_extract",
@@ -54,6 +55,7 @@ class RoutingPolicy:
             "library.configuration",
             "library.summary",
             "library.results_summary",
+            "library.strategy_lab_options",
             "strategy.profit_first_plan",
         }
     )

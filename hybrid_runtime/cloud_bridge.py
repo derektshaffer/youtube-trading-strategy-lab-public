@@ -37,7 +37,7 @@ from .security import redact_text
 from .service import HybridService
 
 
-SUPPORTED_CLOUD_JOB_TYPES = frozenset({"strategy.profit_first_validation", "strategy.stock_finder"})
+SUPPORTED_CLOUD_JOB_TYPES = frozenset({"strategy.profit_first_validation", "strategy.stock_finder", "strategy.strategy_lab"})
 DEFAULT_LIBRARY_PATH = "youtube-strategy-lab/strategy_library.json"
 DEFAULT_ACTION_REPOSITORY = "derektshaffer/youtube-trading-strategy-lab-public"
 DEFAULT_WORKFLOW_FILE = "continuous-trading-research.yml"
@@ -372,6 +372,12 @@ _STAGE_STATUS = {
     "validating": JobStatus.VALIDATING,
     "holdout": JobStatus.VALIDATING,
     "stress": JobStatus.VALIDATING,
+    "history": JobStatus.DOWNLOADING_DATA,
+    "integrity": JobStatus.PREPARING_FEATURES,
+    "catalysts": JobStatus.DOWNLOADING_DATA,
+    "optimization": JobStatus.OPTIMIZING,
+    "stability": JobStatus.VALIDATING,
+    "spread_audit": JobStatus.VALIDATING,
     "distributed_optimization": JobStatus.OPTIMIZING,
     "final_holdout": JobStatus.VALIDATING,
     "final_validation": JobStatus.VALIDATING,
@@ -466,6 +472,10 @@ class CloudBridgeWorker:
         job: JobRecord,
         library: dict[str, Any],
     ) -> tuple[dict[str, Any] | None, bool, dict[str, Any] | None]:
+        if job.job_type == "strategy.strategy_lab":
+            from .strategy_lab_bridge import prepare_strategy_lab_publication
+
+            return prepare_strategy_lab_publication(library, job)
         if job.job_type == "strategy.stock_finder":
             from .stock_finder_bridge import prepare_stock_finder_publication
 
@@ -571,7 +581,11 @@ class CloudBridgeWorker:
         dispatch_error: str = "",
     ) -> dict[str, Any]:
         metadata: dict[str, Any]
-        if job.job_type == "strategy.stock_finder":
+        if job.job_type == "strategy.strategy_lab":
+            from .strategy_lab_bridge import strategy_lab_link_metadata
+
+            metadata = strategy_lab_link_metadata(item, job)
+        elif job.job_type == "strategy.stock_finder":
             from .stock_finder_bridge import finder_link_metadata
 
             metadata = finder_link_metadata(item, job)
@@ -654,16 +668,15 @@ class CloudBridgeWorker:
 
         if status in {"failed", "error", "dead", "abandoned"}:
             current = self._ensure_claimed(job.id, "Cloud worker accepted the job")
-            default_message = (
-                "Cloud Stock Finder failed"
-                if job.job_type == "strategy.stock_finder"
-                else "Cloud validation failed"
-            )
-            default_type = (
-                "CloudStockFinderError"
-                if job.job_type == "strategy.stock_finder"
-                else "CloudValidationError"
-            )
+            if job.job_type == "strategy.strategy_lab":
+                default_message = "Cloud Strategy Lab failed"
+                default_type = "CloudStrategyLabError"
+            elif job.job_type == "strategy.stock_finder":
+                default_message = "Cloud Stock Finder failed"
+                default_type = "CloudStockFinderError"
+            else:
+                default_message = "Cloud validation failed"
+                default_type = "CloudValidationError"
             error_value = item.get("error") or item.get("last_error") or default_message
             if isinstance(error_value, Mapping):
                 error = dict(error_value)
@@ -687,6 +700,37 @@ class CloudBridgeWorker:
 
         if status in {"complete", "completed", "success", "succeeded", "done"}:
             current = self._ensure_claimed(job.id, "Cloud worker accepted the job")
+            if job.job_type == "strategy.strategy_lab":
+                remote_result = item.get("result") if isinstance(item.get("result"), Mapping) else {}
+                if not remote_result or str(remote_result.get("outcome") or "") != "strategy_lab_complete":
+                    self.service.store.transition_job(
+                        job.id,
+                        JobStatus.FAILED,
+                        stage="failed",
+                        progress=max(current.progress, progress),
+                        error={
+                            "type": "CloudStrategyLabResultMissing",
+                            "message": (
+                                "The cloud Strategy Lab job completed but its exact durable "
+                                "checkpoint result could not be reconciled."
+                            ),
+                        },
+                        worker_id=self.worker_id,
+                        message="Cloud Strategy Lab result was missing",
+                    )
+                    return
+                self.service.complete(
+                    job.id,
+                    {
+                        **dict(remote_result),
+                        "remote_job_id": str(item.get("id") or ""),
+                        "remote_dedupe_key": str(item.get("dedupe_key") or ""),
+                        "result_ref": str(item.get("result_ref") or ""),
+                        "research_library_revision": revision,
+                    },
+                    worker_id=self.worker_id,
+                )
+                return
             if job.job_type == "strategy.stock_finder":
                 from .stock_finder_bridge import finder_report_for_remote
 
@@ -781,7 +825,7 @@ class CloudBridgeWorker:
         if settings is None:
             self._record_waiting(
                 jobs,
-                "Configure a private GitHub research library before launching cloud validation.",
+                "Configure a private GitHub research library before launching cloud research.",
                 None,
             )
             return True
@@ -794,6 +838,20 @@ class CloudBridgeWorker:
             return True
 
         library = dict(remote.data)
+        strategy_lab_checkpoint_library: dict[str, Any] = {}
+        if any(job.job_type == "strategy.strategy_lab" for job in jobs):
+            try:
+                from .strategy_lab_bridge import strategy_lab_checkpoint_config
+
+                checkpoint_client = self.client_factory(
+                    strategy_lab_checkpoint_config(settings.github),
+                    token,
+                )
+                strategy_lab_checkpoint_library = dict(checkpoint_client.read().data)
+            except (ValueError, GitHubLibraryError):
+                # The checkpoint may not exist until the remote worker writes its
+                # first progress record. The durable main queue remains authoritative.
+                strategy_lab_checkpoint_library = {}
         published: list[tuple[JobRecord, dict[str, Any], dict[str, Any] | None]] = []
         attached: list[tuple[JobRecord, dict[str, Any], dict[str, Any] | None]] = []
         terminal_plans: list[tuple[JobRecord, dict[str, Any]]] = []
@@ -803,7 +861,16 @@ class CloudBridgeWorker:
             link = self.link_store.get(job.id)
             item = None
             if link:
-                if job.job_type == "strategy.stock_finder":
+                if job.job_type == "strategy.strategy_lab":
+                    from .strategy_lab_bridge import find_strategy_lab_remote_item
+
+                    item = find_strategy_lab_remote_item(
+                        library,
+                        local_job_id=job.id,
+                        remote_job_id=str(link.get("remote_job_id") or ""),
+                        dedupe_key=str(link.get("remote_dedupe_key") or ""),
+                    )
+                elif job.job_type == "strategy.stock_finder":
                     from .stock_finder_bridge import find_finder_remote_item
 
                     item = find_finder_remote_item(
@@ -866,7 +933,14 @@ class CloudBridgeWorker:
         dispatch_errors: dict[str, str] = {}
         for job, item, _plan in published:
             try:
-                if job.job_type == "strategy.stock_finder":
+                if job.job_type == "strategy.strategy_lab":
+                    from .strategy_lab_bridge import CLOUD_STRATEGY_LAB_WORKFLOW
+
+                    client.dispatch_workflow(
+                        {"job_id": str(item.get("id") or "")},
+                        workflow_file=CLOUD_STRATEGY_LAB_WORKFLOW,
+                    )
+                elif job.job_type == "strategy.stock_finder":
                     from .stock_finder_bridge import DISTRIBUTED_STOCK_FINDER_WORKFLOW
 
                     client.dispatch_workflow(
@@ -883,16 +957,30 @@ class CloudBridgeWorker:
                 dispatch_errors[job.id] = redact_text(exc)
 
         for job, item, _plan in published + attached:
+            effective_item = item
+            if job.job_type == "strategy.strategy_lab":
+                from .strategy_lab_bridge import (
+                    overlay_strategy_lab_checkpoint,
+                    strategy_lab_checkpoint_record,
+                )
+
+                payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
+                run_id = str(payload.get("run_id") or job.payload.get("run_id") or "")
+                checkpoint = strategy_lab_checkpoint_record(
+                    strategy_lab_checkpoint_library,
+                    run_id,
+                )
+                effective_item = overlay_strategy_lab_checkpoint(item, checkpoint)
             self._link(
                 job,
-                item,
+                effective_item,
                 settings,
                 revision=revision,
                 dispatch_error=dispatch_errors.get(job.id, ""),
             )
             self._advance_from_remote(
                 job,
-                item,
+                effective_item,
                 library,
                 settings,
                 revision,
@@ -900,6 +988,24 @@ class CloudBridgeWorker:
 
         for job, plan in terminal_plans:
             queue_status = str(plan.get("queue_status") or "invalid-plan")
+            if job.job_type == "strategy.strategy_lab":
+                current = self._ensure_claimed(job.id, "Cloud Strategy Lab request evaluated")
+                self.service.store.transition_job(
+                    job.id,
+                    JobStatus.FAILED,
+                    stage="failed",
+                    progress=current.progress,
+                    error={
+                        "type": "CloudStrategyLabPlanError",
+                        "message": str(
+                            plan.get("bridge_error")
+                            or "Strategy Lab cloud plan is not publishable."
+                        ),
+                    },
+                    worker_id=self.worker_id,
+                    message="Cloud Strategy Lab plan failed",
+                )
+                continue
             if job.job_type == "strategy.stock_finder":
                 current = self._ensure_claimed(job.id, "Cloud Finder request evaluated")
                 self.service.store.transition_job(

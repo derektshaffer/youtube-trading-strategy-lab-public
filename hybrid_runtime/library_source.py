@@ -272,3 +272,79 @@ def library_connection_summary(
 ) -> dict[str, Any]:
     loaded = load_library_for_job(payload, data_dir=data_dir)
     return dict(loaded.metadata)
+
+
+def load_strategy_lab_checkpoint_library(
+    *,
+    data_dir: str | Path | None = None,
+) -> LoadedLibrary:
+    """Load the small durable Strategy Lab checkpoint without touching job secrets."""
+
+    from .strategy_lab_bridge import STRATEGY_LAB_CHECKPOINT_PATH
+
+    root = _desktop_data_dir(data_dir)
+    settings = load_desktop_settings(root)
+    token, credential_source = _github_token(settings)
+    cache_directory = root / "strategy-lab-checkpoint-cache"
+    cache_path = cache_directory / "strategy_library.json"
+    if not token:
+        if cache_path.is_file():
+            return _loaded(
+                _read_json_object(cache_path),
+                source="strategy_lab_checkpoint_cache",
+                source_detail=str(cache_path),
+                cloud_refreshed=False,
+                warning="Strategy Lab checkpoint is from the last local cache.",
+            )
+        return _loaded(
+            {"validation_runs": []},
+            source="strategy_lab_checkpoint_unavailable",
+            source_detail=STRATEGY_LAB_CHECKPOINT_PATH,
+            cloud_refreshed=False,
+            warning="Strategy Lab checkpoint is unavailable until the GitHub connection is configured.",
+        )
+
+    from youtube_strategy_engine import GitHubCloudBackup, StrategyStore
+
+    cloud = GitHubCloudBackup(
+        settings.github_repository,
+        token,
+        branch=settings.github_branch,
+        path=STRATEGY_LAB_CHECKPOINT_PATH,
+    )
+    store = StrategyStore(directory=cache_directory, cloud_backup=cloud)
+    try:
+        library = store.load_latest()
+        return _loaded(
+            library,
+            source="private_strategy_lab_checkpoint",
+            source_detail=(
+                f"{settings.github_repository}@{settings.github_branch}:"
+                f"{STRATEGY_LAB_CHECKPOINT_PATH}"
+            ),
+            cloud_refreshed=True,
+            credential_source=credential_source,
+        )
+    except Exception as exc:
+        if store.path.is_file():
+            try:
+                cached = _read_json_object(store.path)
+            except LibrarySourceError:
+                cached = None
+            if cached is not None:
+                return _loaded(
+                    cached,
+                    source="strategy_lab_checkpoint_cache_after_cloud_error",
+                    source_detail=str(store.path),
+                    cloud_refreshed=False,
+                    warning=redact_text(exc, (token,))[:240],
+                    credential_source=credential_source,
+                )
+        return _loaded(
+            {"validation_runs": []},
+            source="strategy_lab_checkpoint_error",
+            source_detail=STRATEGY_LAB_CHECKPOINT_PATH,
+            cloud_refreshed=False,
+            warning=redact_text(exc, (token,))[:240],
+            credential_source=credential_source,
+        )
