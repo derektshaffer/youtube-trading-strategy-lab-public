@@ -1,0 +1,49 @@
+name: Fix Strategy Lab retry reconciliation
+
+on:
+  push:
+    branches:
+      - codex/desktop-strategy-lab-cloud-20260902
+    paths:
+      - ".codex/fix_strategy_lab_retry.py"
+      - ".github/workflows/codex-fix-strategy-lab-retry.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/desktop-strategy-lab-cloud-20260902
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Apply retry reconciliation fix
+        run: python .codex/fix_strategy_lab_retry.py
+      - name: Install dependencies
+        run: |
+          python -m pip install -r requirements-desktop.txt
+          python -m pip install "pytest>=8,<9"
+      - name: Run focused Strategy Lab cloud tests
+        run: |
+          python -m pytest -q test_strategy_lab_cloud_bridge.py test_hybrid_cloud_bridge.py test_hybrid_runtime.py
+          python -m py_compile hybrid_runtime/strategy_lab_bridge.py strategy_lab_jobs.py cloud_strategy_lab_worker.py
+          git diff --check
+      - name: Commit fix and remove temporary guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .codex/fix_strategy_lab_retry.py
+          rmdir .codex 2>/dev/null || true
+          rm -f .github/workflows/codex-fix-strategy-lab-retry.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Keep Strategy Lab retries reconnect-safe"
+          git push origin HEAD:codex/desktop-strategy-lab-cloud-20260902
