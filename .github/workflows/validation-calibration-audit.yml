@@ -10,6 +10,8 @@ on:
       - "test_validation_calibration_audit.py"
       - "validation_raw_engine_calibration.py"
       - "test_validation_raw_engine_calibration.py"
+      - "validation_scope_policy.py"
+      - "test_validation_scope_policy.py"
       - "trading_validation_core.py"
       - "trading_auto_research.py"
       - "youtube_strategy_engine.py"
@@ -20,6 +22,8 @@ on:
       - "test_validation_calibration_audit.py"
       - "validation_raw_engine_calibration.py"
       - "test_validation_raw_engine_calibration.py"
+      - "validation_scope_policy.py"
+      - "test_validation_scope_policy.py"
       - "trading_validation_core.py"
       - "trading_auto_research.py"
       - "youtube_strategy_engine.py"
@@ -47,6 +51,7 @@ jobs:
         run: |
           python -m unittest test_validation_calibration_audit -v
           python -m unittest test_validation_raw_engine_calibration -v
+          python -m unittest test_validation_scope_policy -v
 
       - name: Generate diagnostic gate report
         run: python validation_calibration_audit.py --json /tmp/validation_calibration_audit.json
