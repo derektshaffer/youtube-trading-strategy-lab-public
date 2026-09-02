@@ -49,7 +49,7 @@ class SystemHealthPage(QWidget):
         title = QLabel("Connections, caches, and durable job health")
         title.setObjectName("PageTitle")
         subtitle = QLabel(
-            "A read-only diagnostic view. It verifies the authenticated local service, data connections, credentials, caches, and recent durable failures without changing trading state."
+            "A read-only diagnostic view. It verifies the authenticated local service, data connections, credentials, caches, setup verification, and recent durable failures without changing trading state."
         )
         subtitle.setObjectName("Subtle")
         subtitle.setWordWrap(True)
@@ -131,15 +131,40 @@ class SystemHealthPage(QWidget):
     def render_health(self, result: dict[str, Any]) -> None:
         self.refresh.setEnabled(True)
         ready = result.get("status") == "ready"
+        setup = result.get("setup") if isinstance(result.get("setup"), dict) else {}
+        setup_verification = str(setup.get("verification") or "unavailable").replace("_", " ")
+        setup_capabilities = (
+            setup.get("capabilities")
+            if isinstance(setup.get("capabilities"), dict)
+            else {}
+        )
+        setup_pending = setup_verification == "pending"
+
         self.banner.setProperty("state", "ready" if ready else "error")
         self.banner.style().unpolish(self.banner)
         self.banner.style().polish(self.banner)
         self.status.setText("System health ready" if ready else "System health needs attention")
-        self.detail.setText(
-            "Required local runtime, library, and market-data configuration are available."
-            if ready
-            else "One or more required runtime, library, or market-data checks need attention. No trading state was changed."
-        )
+        if setup_pending:
+            missing = [
+                label
+                for key, label in (
+                    ("library", "library"),
+                    ("cloud", "cloud"),
+                    ("market", "market data"),
+                )
+                if not bool(setup_capabilities.get(key))
+            ]
+            self.detail.setText(
+                "Setup verification is pending. "
+                + ("Needs verification: " + ", ".join(missing) + ". " if missing else "")
+                + "Open Setup, correct the affected connection, and choose Save securely + verify."
+            )
+        else:
+            self.detail.setText(
+                "Required local runtime, library, and market-data configuration are available."
+                if ready
+                else "One or more required runtime, library, or market-data checks need attention. No trading state was changed."
+            )
 
         checks = result.get("checks") if isinstance(result.get("checks"), dict) else {}
         required_names = result.get("required_checks") if isinstance(result.get("required_checks"), list) else []
@@ -149,15 +174,23 @@ class SystemHealthPage(QWidget):
         failures = jobs.get("recent_failures") if isinstance(jobs.get("recent_failures"), list) else []
         storage = result.get("storage") if isinstance(result.get("storage"), dict) else {}
         market = storage.get("market") if isinstance(storage.get("market"), dict) else {}
-        self.required.value.setText(f"{passed}/{len(required_names)}")
+        required_text = f"{passed}/{len(required_names)}"
+        if setup_pending:
+            required_text += " · Setup pending"
+        self.required.value.setText(required_text)
         self.active_jobs.value.setText(f"{int(jobs.get('active') or 0):,}")
         self.failed_jobs.value.setText(f"{len(failures):,}")
         self.cache_size.value.setText(_bytes(market.get("bytes")))
 
         library = result.get("library") if isinstance(result.get("library"), dict) else {}
         connection = result.get("connection") if isinstance(result.get("connection"), dict) else {}
-        runtime = result.get("runtime") if isinstance(result.get("runtime"), dict) else {}
         github_required = bool(connection.get("github_required_for_library"))
+        capability_text = (
+            f"verification {setup_verification} · "
+            f"library {'yes' if setup_capabilities.get('library') else 'no'} · "
+            f"cloud {'yes' if setup_capabilities.get('cloud') else 'no'} · "
+            f"market {'yes' if setup_capabilities.get('market') else 'no'}"
+        )
         details = {
             "runtime_service": (
                 "Authenticated loopback sidecar answered /health"
@@ -183,6 +216,7 @@ class SystemHealthPage(QWidget):
                     else "Optional for this local-library setup; required for cloud research"
                 )
             ),
+            "setup_not_pending": capability_text,
             "market_cache_present": f"{int(market.get('files') or 0):,} cached files · {_bytes(market.get('bytes'))}",
         }
         labels = {
@@ -192,6 +226,7 @@ class SystemHealthPage(QWidget):
             "library_readable": "Research library readable",
             "alpaca_credentials": "Alpaca market data credentials",
             "github_library_credential": "Cloud research credential",
+            "setup_not_pending": "Setup verification",
             "market_cache_present": "Persistent market cache",
         }
         rows = list(labels)
@@ -199,7 +234,9 @@ class SystemHealthPage(QWidget):
         for row, name in enumerate(rows):
             is_required = name in required_names
             value = bool(checks.get(name))
-            if value:
+            if name == "setup_not_pending":
+                status = "OK" if value else "Attention"
+            elif value:
                 status = "OK"
             elif not is_required:
                 status = "Optional"
