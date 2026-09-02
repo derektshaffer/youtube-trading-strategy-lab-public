@@ -50,6 +50,8 @@ class RoutingPolicy:
             "chart.framework_fixture",
             "analysis.stock",
             "backtest.quick",
+            "library.configuration",
+            "library.summary",
             "strategy.profit_first_plan",
         }
     )
