@@ -300,14 +300,38 @@ class MainWindow(BaseMainWindow):
             self.analysis.set_error(clean_error(exc))
             self.refresh_jobs()
 
+    def _cloud_wait_detail(self, job_id: str) -> str:
+        try:
+            payload = self.runtime.request_json("GET", f"/v1/jobs/{job_id}/cloud-link")
+        except BaseException:
+            return ""
+        link = payload.get("link") if isinstance(payload.get("link"), dict) else {}
+        error = str(link.get("dispatch_error") or "").strip()
+        if not error:
+            return ""
+        metadata = link.get("metadata") if isinstance(link.get("metadata"), dict) else {}
+        prefix = (
+            "Cloud connection required: "
+            if bool(metadata.get("waiting_for_connection"))
+            else "Cloud queue note: "
+        )
+        return prefix + error
+
     def _poll_profit_first_validation(self) -> None:
         try:
-            job = self.runtime.request_json("GET", f"/v1/jobs/{self.active_job_id}")
+            job_id = self.active_job_id
+            job = self.runtime.request_json("GET", f"/v1/jobs/{job_id}")
             progress = float(job.get("progress") or 0.0)
             stage = str(job.get("stage") or "cloud_queued").replace("_", " ")
+            detail = self._cloud_wait_detail(job_id)
+            if not detail:
+                detail = (
+                    "Remote validation continues independently of this window. "
+                    "Progress is reconciled into this durable desktop job."
+                )
             self.profit_first.set_working(
                 f"Strict cloud validation · {stage}",
-                "Remote validation continues independently of this window. Progress is reconciled into this durable desktop job.",
+                detail,
                 progress,
             )
             if not bool(job.get("terminal")):
