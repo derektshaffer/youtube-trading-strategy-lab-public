@@ -18,12 +18,14 @@ def test_strategy_lab_cloud_sources_parse():
         "hybrid_runtime/strategy_lab_options.py",
         "desktop/trading_intelligence/strategy_lab_page.py",
         "desktop/trading_intelligence/strategy_lab_window.py",
+        "desktop/trading_intelligence/beta_recovery_window.py",
     ):
         ast.parse(read(path), filename=path)
 
 
 def test_production_ui_retains_strategy_lab_cloud_chain_under_later_wrappers():
     ui = read("desktop/trading_intelligence/ui.py")
+    recovery_window = read("desktop/trading_intelligence/beta_recovery_window.py")
     onboarding_window = read("desktop/trading_intelligence/onboarding_window.py")
     health_window = read("desktop/trading_intelligence/system_health_window.py")
     research_window = read("desktop/trading_intelligence/research_ml_window.py")
@@ -32,7 +34,9 @@ def test_production_ui_retains_strategy_lab_cloud_chain_under_later_wrappers():
     router = read("hybrid_runtime/router.py")
     adapter = read("hybrid_runtime/engine_adapter.py")
 
-    assert "from .onboarding_window import MainWindow" in ui
+    assert "from .beta_recovery_window import MainWindow" in ui
+    assert "from .onboarding_window import MainWindow as OnboardingMainWindow" in recovery_window
+    assert "class MainWindow(OnboardingMainWindow):" in recovery_window
     assert "from .system_health_window import MainWindow as SystemHealthMainWindow" in onboarding_window
     assert "class MainWindow(SystemHealthMainWindow):" in onboarding_window
     assert "from .research_ml_window import MainWindow as ResearchMLMainWindow" in health_window
@@ -46,6 +50,7 @@ def test_production_ui_retains_strategy_lab_cloud_chain_under_later_wrappers():
     assert "continue_after_app_exit" in window
     assert "strategy_lab_job_id" in window
     assert "_restore_background_cloud_jobs" in window
+    assert 'self._require_capabilities(("library", "cloud"), "Strategy Lab")' in recovery_window
     assert '"strategy.strategy_lab"' in router
     assert '"library.strategy_lab_options"' in router
     assert '"library.strategy_lab_options": strategy_lab_options_handler' in adapter
