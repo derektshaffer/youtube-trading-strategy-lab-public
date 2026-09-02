@@ -1,0 +1,39 @@
+name: Strategy Lab cloud regression
+
+on:
+  push:
+    branches:
+      - codex/desktop-strategy-lab-cloud-20260902
+    paths:
+      - "strategy_lab_jobs.py"
+      - "test_strategy_lab_cloud_bridge.py"
+      - ".github/workflows/codex-strategy-lab-regression.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install dependencies
+        run: |
+          python -m pip install -r requirements-desktop.txt
+          python -m pip install "pytest>=8,<9"
+      - name: Execute Strategy Lab cloud regressions
+        run: |
+          python -m pytest -q \
+            test_strategy_lab_cloud_bridge.py \
+            test_desktop_strategy_lab_cloud.py \
+            test_desktop_cloud_bridge_activation.py \
+            test_hybrid_cloud_bridge.py \
+            test_desktop_results_summary.py \
+            test_hybrid_runtime.py \
+            test_hybrid_runtime_hardening.py
+          python -m py_compile cloud_strategy_lab_worker.py strategy_lab_jobs.py hybrid_runtime/cloud_bridge.py
+          git diff --check
