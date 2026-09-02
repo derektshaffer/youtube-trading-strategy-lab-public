@@ -22,14 +22,17 @@ def test_strategy_lab_cloud_sources_parse():
         ast.parse(read(path), filename=path)
 
 
-def test_production_ui_uses_strategy_lab_enabled_window_and_real_cloud_job():
+def test_production_ui_retains_strategy_lab_cloud_chain_under_later_wrappers():
     ui = read("desktop/trading_intelligence/ui.py")
+    research_window = read("desktop/trading_intelligence/research_ml_window.py")
     page = read("desktop/trading_intelligence/strategy_lab_page.py")
     window = read("desktop/trading_intelligence/strategy_lab_window.py")
     router = read("hybrid_runtime/router.py")
     adapter = read("hybrid_runtime/engine_adapter.py")
 
-    assert "from .strategy_lab_window import MainWindow" in ui
+    assert "from .research_ml_window import MainWindow" in ui
+    assert "from .strategy_lab_window import MainWindow as StrategyLabMainWindow" in research_window
+    assert "class MainWindow(StrategyLabMainWindow):" in research_window
     assert "Run Strategy Lab in Cloud" in page
     assert "can continue after this app or your Mac closes" in page
     assert '"strategy.strategy_lab"' in window
