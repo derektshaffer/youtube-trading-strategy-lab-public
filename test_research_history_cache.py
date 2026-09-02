@@ -36,6 +36,38 @@ class FakeMarket:
         return {symbols[0]: [dict(item) for item in self.rows]}
 
 
+class FilteringMarket(FakeMarket):
+    def __init__(self, rows: list[dict]) -> None:
+        super().__init__()
+        self.rows = rows
+
+    def bars(self, symbols, **kwargs):
+        self.calls.append({"symbols": list(symbols), **kwargs})
+        start = kwargs["start"]
+        end = kwargs["end"]
+        selected = []
+        for item in self.rows:
+            stamp = datetime.fromisoformat(str(item["t"]).replace("Z", "+00:00"))
+            if start <= stamp <= end:
+                selected.append(dict(item))
+        if kwargs.get("progress"):
+            kwargs["progress"](1)
+        return {symbols[0]: selected}
+
+
+def minute_row(stamp: datetime, close: float) -> dict:
+    return {
+        "t": stamp.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        "o": close - 0.02,
+        "h": close + 0.04,
+        "l": close - 0.04,
+        "c": close,
+        "v": 1000,
+        "vw": close,
+        "n": 20,
+    }
+
+
 class ResearchHistoryCacheTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -64,14 +96,15 @@ class ResearchHistoryCacheTests(unittest.TestCase):
         first = self.request(observed_at=self.end + timedelta(minutes=2))
         self.assertTrue(first.metadata["finalized"])
         self.assertTrue(first.metadata["network_request"])
+        self.assertEqual(first.metadata["reuse_mode"], "network_full")
         self.assertEqual(len(self.market.calls), 1)
         path = Path(first.metadata["artifact_path"])
         self.assertTrue(path.is_file())
 
-        # A new cache call/process with the same exact evidence window is reusable.
         second = self.request(observed_at=self.end + timedelta(hours=1))
         self.assertTrue(second.metadata["cache_hit"])
         self.assertFalse(second.metadata["network_request"])
+        self.assertEqual(second.metadata["reuse_mode"], "exact_window")
         self.assertEqual(second.rows, first.rows)
         self.assertEqual(len(self.market.calls), 1)
 
@@ -128,6 +161,82 @@ class ResearchHistoryCacheTests(unittest.TestCase):
         self.assertIn("o", result.rows[0])
         self.assertIn("vw", result.rows[0])
         self.assertIn("n", result.rows[0])
+
+    def test_covering_finalized_window_can_serve_shorter_exact_window_without_network(self):
+        base = datetime(2026, 9, 1, 14, 0, tzinfo=UTC)
+        rows = [minute_row(base + timedelta(minutes=index), 20 + index * 0.01) for index in range(180)]
+        market = FilteringMarket(rows)
+        first = load_or_fetch_research_history(
+            market,
+            symbol="AAPL",
+            start=base,
+            end=base + timedelta(minutes=150),
+            timeframe="1Min",
+            adjustment="raw",
+            data_dir=self.root,
+            observed_at=base + timedelta(minutes=180),
+        )
+        self.assertEqual(len(market.calls), 1)
+        second = load_or_fetch_research_history(
+            market,
+            symbol="AAPL",
+            start=base + timedelta(minutes=30),
+            end=base + timedelta(minutes=120),
+            timeframe="1Min",
+            adjustment="raw",
+            data_dir=self.root,
+            observed_at=base + timedelta(minutes=180),
+        )
+        self.assertTrue(first.metadata["finalized"])
+        self.assertTrue(second.metadata["cache_hit"])
+        self.assertFalse(second.metadata["network_request"])
+        self.assertEqual(second.metadata["reuse_mode"], "covering_window")
+        self.assertEqual(len(market.calls), 1)
+        self.assertEqual(second.rows[0]["t"], rows[30]["t"])
+        self.assertEqual(second.rows[-1]["t"], rows[120]["t"])
+
+    def test_rolling_window_reuses_finalized_prefix_and_downloads_only_suffix_overlap(self):
+        base = datetime(2026, 9, 1, 14, 0, tzinfo=UTC)
+        rows = [minute_row(base + timedelta(minutes=index), 30 + index * 0.01) for index in range(300)]
+        market = FilteringMarket(rows)
+        first_end = base + timedelta(minutes=180)
+        first = load_or_fetch_research_history(
+            market,
+            symbol="MSFT",
+            start=base,
+            end=first_end,
+            timeframe="1Min",
+            adjustment="raw",
+            data_dir=self.root,
+            observed_at=first_end + timedelta(minutes=5),
+        )
+        self.assertTrue(first.metadata["finalized"])
+        self.assertEqual(len(market.calls), 1)
+
+        second_start = base + timedelta(minutes=60)
+        second_end = base + timedelta(minutes=240)
+        second = load_or_fetch_research_history(
+            market,
+            symbol="MSFT",
+            start=second_start,
+            end=second_end,
+            timeframe="1Min",
+            adjustment="raw",
+            data_dir=self.root,
+            observed_at=second_end + timedelta(minutes=5),
+        )
+        self.assertTrue(second.metadata["cache_hit"])
+        self.assertTrue(second.metadata["network_request"])
+        self.assertEqual(second.metadata["reuse_mode"], "incremental_prefix")
+        self.assertEqual(len(market.calls), 2)
+        self.assertEqual(
+            market.calls[-1]["start"],
+            first_end - timedelta(minutes=3),
+        )
+        self.assertGreater(second.metadata["reused_row_count"], 0)
+        self.assertLess(second.metadata["provider_row_count"], len(second.rows))
+        self.assertEqual(second.rows[0]["t"], rows[60]["t"])
+        self.assertEqual(second.rows[-1]["t"], rows[240]["t"])
 
 
 if __name__ == "__main__":
