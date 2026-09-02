@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from .desktop_settings import (
     ALPACA_API_KEY_ACCOUNT,
@@ -20,7 +20,8 @@ from .security import write_private_text_file
 
 UTC = timezone.utc
 VERIFICATION_FILENAME = "desktop-onboarding-verification.json"
-VERIFICATION_SCHEMA = 1
+VERIFICATION_SCHEMA = 2
+CAPABILITY_NAMES = ("library", "cloud", "market")
 
 
 def _secret_present(keychain: MacOSKeychain, account: str) -> bool:
@@ -65,7 +66,24 @@ def _load_verification(data_dir: str | Path) -> dict[str, Any]:
     return dict(decoded) if isinstance(decoded, dict) else {"status": "pending"}
 
 
-def _write_verification(data_dir: str | Path, status: str) -> Path:
+def _normalized_checks(checks: Mapping[str, Any] | None) -> dict[str, bool]:
+    source = checks if isinstance(checks, Mapping) else {}
+    normalized: dict[str, bool] = {}
+    for name in CAPABILITY_NAMES:
+        raw = source.get(name)
+        if isinstance(raw, Mapping):
+            normalized[name] = bool(raw.get("ready"))
+        else:
+            normalized[name] = bool(raw)
+    return normalized
+
+
+def _write_verification(
+    data_dir: str | Path,
+    status: str,
+    *,
+    checks: Mapping[str, Any] | None = None,
+) -> Path:
     clean_status = str(status or "pending").strip().lower()
     if clean_status not in {"pending", "verified"}:
         raise ValueError("setup verification status must be pending or verified")
@@ -73,6 +91,7 @@ def _write_verification(data_dir: str | Path, status: str) -> Path:
         "schema": VERIFICATION_SCHEMA,
         "status": clean_status,
         "configuration_fingerprint": _configuration_fingerprint(data_dir),
+        "checks": _normalized_checks(checks),
         "updated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }
     encoded = json.dumps(
@@ -90,10 +109,25 @@ def mark_setup_pending(data_dir: str | Path) -> Path:
     return _write_verification(data_dir, "pending")
 
 
-def mark_setup_verified(data_dir: str | Path) -> Path:
-    """Persist only a non-secret fingerprint after all live setup probes pass."""
+def mark_setup_probe_result(
+    data_dir: str | Path,
+    checks: Mapping[str, Any] | None,
+) -> Path:
+    """Persist only per-capability pass/fail state from the live setup probes."""
 
-    return _write_verification(data_dir, "verified")
+    normalized = _normalized_checks(checks)
+    status = "verified" if all(normalized.values()) else "pending"
+    return _write_verification(data_dir, status, checks=normalized)
+
+
+def mark_setup_verified(data_dir: str | Path) -> Path:
+    """Compatibility helper for callers that have already proven every capability."""
+
+    return _write_verification(
+        data_dir,
+        "verified",
+        checks={name: True for name in CAPABILITY_NAMES},
+    )
 
 
 def configuration_status(
@@ -101,7 +135,7 @@ def configuration_status(
     *,
     keychain: MacOSKeychain | None = None,
 ) -> dict[str, Any]:
-    """Return presence + verification readiness without importing trading engines."""
+    """Return presence + per-capability verification without importing trading engines."""
 
     root = Path(data_dir).expanduser().resolve()
     settings = load_desktop_settings(root)
@@ -144,9 +178,27 @@ def configuration_status(
     else:
         setup_verification = "missing"
 
-    launch_ready = bool(
-        full_configured and setup_verification in {"verified", "legacy"}
+    stored_checks = (
+        _normalized_checks(stored.get("checks"))
+        if fingerprint_matches
+        else {name: False for name in CAPABILITY_NAMES}
     )
+    if setup_verification == "legacy":
+        verified_checks = {
+            "library": library_configured,
+            "cloud": cloud_configured,
+            "market": market_configured,
+        }
+    elif setup_verification in {"verified", "pending"} and fingerprint_matches:
+        verified_checks = {
+            "library": bool(library_configured and stored_checks["library"]),
+            "cloud": bool(cloud_configured and stored_checks["cloud"]),
+            "market": bool(market_configured and stored_checks["market"]),
+        }
+    else:
+        verified_checks = {name: False for name in CAPABILITY_NAMES}
+
+    launch_ready = bool(full_configured and all(verified_checks.values()))
     return {
         "library_configured": library_configured,
         "cloud_configured": cloud_configured,
@@ -154,6 +206,10 @@ def configuration_status(
         "full_configured": full_configured,
         "launch_ready": launch_ready,
         "setup_verification": setup_verification,
+        "capabilities": verified_checks,
+        "library_verified": verified_checks["library"],
+        "cloud_verified": verified_checks["cloud"],
+        "market_verified": verified_checks["market"],
         "library_source": settings.library_source,
         "market_feed": settings.market_feed,
         "local_library_exists": local_ready,
