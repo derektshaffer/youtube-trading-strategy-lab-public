@@ -17,7 +17,7 @@ from hybrid_runtime.desktop_settings import (
     save_desktop_settings,
 )
 from hybrid_runtime.keychain import KeychainError, KeychainUnavailable, MacOSKeychain
-from hybrid_runtime.onboarding import configuration_status
+from hybrid_runtime.onboarding_state import configuration_status
 
 from .onboarding_page import OnboardingPage
 from .system_health_window import MainWindow as SystemHealthMainWindow, clean_error, write_metrics
