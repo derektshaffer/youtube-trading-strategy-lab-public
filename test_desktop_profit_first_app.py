@@ -33,6 +33,8 @@ def test_production_desktop_python_sources_parse():
         "desktop/trading_intelligence/research_ml_window.py",
         "desktop/trading_intelligence/system_health_page.py",
         "desktop/trading_intelligence/system_health_window.py",
+        "desktop/trading_intelligence/onboarding_page.py",
+        "desktop/trading_intelligence/onboarding_window.py",
         "hybrid_runtime/desktop_settings.py",
         "hybrid_runtime/library_source.py",
         "hybrid_runtime/market_cache.py",
@@ -44,6 +46,7 @@ def test_production_desktop_python_sources_parse():
         "hybrid_runtime/strategy_lab_options.py",
         "hybrid_runtime/research_ml_summary.py",
         "hybrid_runtime/system_health_summary.py",
+        "hybrid_runtime/onboarding.py",
         "hybrid_runtime/server.py",
         "scripts/build_trading_intelligence_desktop.py",
     ]
@@ -51,7 +54,7 @@ def test_production_desktop_python_sources_parse():
         ast.parse(read(path), filename=path)
 
 
-def test_production_shell_exposes_profit_first_finder_results_research_ml_health_jobs_and_secure_connection():
+def test_production_shell_exposes_setup_profit_first_finder_results_research_ml_health_jobs_and_secure_connection():
     ui = (
         read("desktop/trading_intelligence/pages.py")
         + read("desktop/trading_intelligence/window.py")
@@ -67,10 +70,16 @@ def test_production_shell_exposes_profit_first_finder_results_research_ml_health
         + read("desktop/trading_intelligence/research_ml_window.py")
         + read("desktop/trading_intelligence/system_health_page.py")
         + read("desktop/trading_intelligence/system_health_window.py")
+        + read("desktop/trading_intelligence/onboarding_page.py")
+        + read("desktop/trading_intelligence/onboarding_window.py")
     )
     settings = read("hybrid_runtime/desktop_settings.py")
     source = read("hybrid_runtime/library_source.py")
 
+    assert "FIRST-RUN SETUP" in ui
+    assert "Save securely + verify" in ui
+    assert "Start Trading Intelligence" in ui
+    assert "system.onboarding_probe" in ui
     assert "Profit First" in ui
     assert "Durable Jobs" in ui
     assert "Connection Settings" in ui
@@ -102,6 +111,8 @@ def test_production_shell_exposes_profit_first_finder_results_research_ml_health
     assert "profit_validation_job_id" in ui
     assert "strategy_lab_job_id" in ui
     assert "MacOSKeychain().set_secret" in ui
+    assert "ALPACA_API_KEY_ACCOUNT" in ui
+    assert "ALPACA_SECRET_KEY_ACCOUNT" in ui
     assert "ALPACA_API_KEY_ACCOUNT" in settings
     assert "ALPACA_SECRET_KEY_ACCOUNT" in settings
     assert "GITHUB_BACKUP_TOKEN_ACCOUNT" in settings
@@ -142,6 +153,7 @@ def test_production_build_keeps_trading_engines_in_sidecar():
     runtime = read("desktop/trading_intelligence/runtime.py")
     market_cache = read("hybrid_runtime/market_cache.py")
     adapter = read("hybrid_runtime/engine_adapter.py")
+    router = read("hybrid_runtime/router.py")
 
     assert 'APP_NAME = "Trading Intelligence"' in build
     assert '"--paths"' in build
@@ -150,6 +162,8 @@ def test_production_build_keeps_trading_engines_in_sidecar():
     assert '"profit_first_queue"' not in build
     assert '"youtube_strategy_engine"' not in build
     assert "from youtube_strategy_engine import AlpacaMarketData" in market_cache
+    assert '"system.onboarding_probe": onboarding_probe_handler' in adapter
+    assert '"system.onboarding_probe"' in router
     assert '"library.results_summary": results_summary_handler' in adapter
     assert '"library.strategy_lab_options": strategy_lab_options_handler' in adapter
     assert '"library.research_ml_summary": research_ml_summary_handler' in adapter
@@ -163,6 +177,7 @@ def test_market_cache_is_persistent_incremental_and_explicit_about_price_age():
     cache = read("hybrid_runtime/market_cache.py")
     analysis = read("desktop/trading_intelligence/analysis_page.py")
     ui = read("desktop/trading_intelligence/ui.py")
+    onboarding_window = read("desktop/trading_intelligence/onboarding_window.py")
     health_window = read("desktop/trading_intelligence/system_health_window.py")
 
     assert "CACHE_DIRECTORY = \"market-cache-v1\"" in cache
@@ -171,7 +186,8 @@ def test_market_cache_is_persistent_incremental_and_explicit_about_price_age():
     assert "data_age_seconds" in cache
     assert "Latest completed Alpaca candle close" in cache
     assert "macOS Keychain" in analysis or "persistent local cache" in analysis
-    assert "from .system_health_window import MainWindow" in ui
+    assert "from .onboarding_window import MainWindow" in ui
+    assert "from .system_health_window import MainWindow as SystemHealthMainWindow" in onboarding_window
     assert "from .research_ml_window import MainWindow as ResearchMLMainWindow" in health_window
 
 
@@ -235,6 +251,28 @@ def test_system_health_is_read_only_source_aware_and_live():
     assert "using_local_library" in summary
     assert "github_required_for_library" in summary
     assert '"affects_execution": False' in summary
+
+
+def test_onboarding_is_first_run_only_in_normal_gui_and_never_persists_secrets_to_jobs():
+    page = read("desktop/trading_intelligence/onboarding_page.py")
+    window = read("desktop/trading_intelligence/onboarding_window.py")
+    probe = read("hybrid_runtime/onboarding.py")
+
+    assert "if self.smoke:" in window
+    assert "super().wait_for_health()" in window
+    assert "configuration_status" in window
+    assert "MacOSKeychain" in window
+    assert "save_desktop_settings" in window
+    assert '"job_type": "system.onboarding_probe"' in window
+    assert '"payload": {}' in window
+    assert "_github_token" in page
+    assert "_alpaca_api_key" in page
+    assert "_alpaca_secret_key" in page
+    assert "save_and_verify_requested.emit(self.settings_payload())" in page
+    assert '"research_only": True' in probe
+    assert '"affects_execution": False' in probe
+    assert "Authorization" in probe
+    assert "provider.bars(" in probe
 
 
 def test_apple_silicon_workflow_launches_full_profit_first_gui():

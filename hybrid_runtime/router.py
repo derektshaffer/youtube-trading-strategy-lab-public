@@ -47,6 +47,7 @@ class RoutingPolicy:
     local_preferred_job_types: frozenset[str] = frozenset(
         {
             "system.health",
+            "system.onboarding_probe",
             "cache.inspect",
             "chart.refresh",
             "chart.framework_fixture",

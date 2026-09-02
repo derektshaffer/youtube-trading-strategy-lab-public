@@ -1,0 +1,337 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from urllib.error import HTTPError
+
+import pytest
+import hybrid_runtime.onboarding as onboarding
+import hybrid_runtime.onboarding_state as onboarding_state
+from hybrid_runtime.contracts import ExecutionTarget, JobRequest
+from hybrid_runtime.desktop_settings import DesktopSettings, save_desktop_settings
+from hybrid_runtime.router import RoutingPolicy
+
+
+ROOT = Path(__file__).resolve().parent
+
+
+class FakeKeychain:
+    def __init__(self, values: dict[str, str] | None = None) -> None:
+        self.values = dict(values or {})
+
+    def get_secret(self, account: str) -> str:
+        from hybrid_runtime.keychain import KeychainError
+
+        if account not in self.values:
+            raise KeychainError("missing")
+        return self.values[account]
+
+
+class FakeResponse:
+    def __init__(self, payload: dict | None = None, *, status: int = 200) -> None:
+        self.payload = dict(payload or {})
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self, _limit: int = -1) -> bytes:
+        return json.dumps(self.payload).encode("utf-8")
+
+
+def configured_fixture(tmp_path: Path) -> tuple[Path, Path, FakeKeychain]:
+    root = tmp_path / "desktop"
+    root.mkdir()
+    library = root / "library.json"
+    library.write_text("{}", encoding="utf-8")
+    save_desktop_settings(
+        DesktopSettings(
+            library_source="local_file",
+            local_library_path=str(library),
+            market_feed="iex",
+        ),
+        root,
+    )
+    keychain = FakeKeychain(
+        {
+            "github-backup-token": "github-secret",
+            "alpaca-api-key": "alpaca-key",
+            "alpaca-secret-key": "alpaca-secret",
+        }
+    )
+    return root, library, keychain
+
+
+def test_local_library_setup_distinguishes_local_readiness_from_full_hybrid_readiness(tmp_path):
+    root = tmp_path / "desktop"
+    root.mkdir()
+    library = root / "library.json"
+    library.write_text("{}", encoding="utf-8")
+    save_desktop_settings(
+        DesktopSettings(
+            library_source="local_file",
+            local_library_path=str(library),
+            market_feed="iex",
+        ),
+        root,
+    )
+    partial = onboarding_state.configuration_status(
+        root,
+        keychain=FakeKeychain(
+            {
+                "alpaca-api-key": "alpaca-key",
+                "alpaca-secret-key": "alpaca-secret",
+            }
+        ),
+    )
+    assert partial["library_configured"] is True
+    assert partial["market_configured"] is True
+    assert partial["cloud_configured"] is False
+    assert partial["full_configured"] is False
+    assert partial["launch_ready"] is False
+
+    complete = onboarding_state.configuration_status(
+        root,
+        keychain=FakeKeychain(
+            {
+                "github-backup-token": "github-secret",
+                "alpaca-api-key": "alpaca-key",
+                "alpaca-secret-key": "alpaca-secret",
+            }
+        ),
+    )
+    assert complete["full_configured"] is True
+    assert complete["market_feed"] == "iex"
+    assert complete["setup_verification"] == "legacy"
+    assert complete["launch_ready"] is True
+    assert "github-secret" not in str(complete)
+    assert "alpaca-secret" not in str(complete)
+
+
+def test_pending_and_verified_setup_state_survives_restart_and_invalidates_on_change(tmp_path):
+    root, library, keychain = configured_fixture(tmp_path)
+
+    onboarding_state.mark_setup_pending(root)
+    pending = onboarding_state.configuration_status(root, keychain=keychain)
+    assert pending["full_configured"] is True
+    assert pending["setup_verification"] == "pending"
+    assert pending["launch_ready"] is False
+
+    onboarding_state.mark_setup_verified(root)
+    verified = onboarding_state.configuration_status(root, keychain=keychain)
+    assert verified["setup_verification"] == "verified"
+    assert verified["launch_ready"] is True
+    state_path = onboarding_state.verification_path(root)
+    state_text = state_path.read_text(encoding="utf-8")
+    assert "github-secret" not in state_text
+    assert "alpaca-key" not in state_text
+    assert "alpaca-secret" not in state_text
+
+    # A non-secret connection change invalidates the prior verification fingerprint.
+    save_desktop_settings(
+        DesktopSettings(
+            library_source="local_file",
+            local_library_path=str(library),
+            market_feed="sip",
+        ),
+        root,
+    )
+    changed = onboarding_state.configuration_status(root, keychain=keychain)
+    assert changed["full_configured"] is True
+    assert changed["setup_verification"] == "pending"
+    assert changed["launch_ready"] is False
+
+
+def test_verify_setup_returns_bounded_readiness_without_secret_values(tmp_path, monkeypatch):
+    root = tmp_path / "desktop"
+    root.mkdir()
+    library = root / "library.json"
+    library.write_text("{}", encoding="utf-8")
+    save_desktop_settings(
+        DesktopSettings(
+            library_source="local_file",
+            local_library_path=str(library),
+        ),
+        root,
+    )
+    secrets = FakeKeychain(
+        {
+            "github-backup-token": "SUPER-GITHUB-SECRET",
+            "alpaca-api-key": "SUPER-ALPACA-KEY",
+            "alpaca-secret-key": "SUPER-ALPACA-SECRET",
+        }
+    )
+    monkeypatch.setattr(
+        onboarding,
+        "_library_access",
+        lambda settings, data_dir: {
+            "ready": True,
+            "source": "configured_local_file",
+            "strategies": 12,
+            "validation_runs": 4,
+            "message": "Library verified.",
+        },
+    )
+    monkeypatch.setattr(
+        onboarding,
+        "_github_access",
+        lambda settings, keychain: {
+            "ready": True,
+            "repository": settings.github_repository,
+            "message": "Cloud verified.",
+        },
+    )
+    monkeypatch.setattr(
+        onboarding,
+        "_market_access",
+        lambda settings, keychain: {
+            "ready": True,
+            "feed": settings.market_feed,
+            "probe_symbol": "AAPL",
+            "bars": 5,
+            "message": "Market verified.",
+        },
+    )
+    progress: list[tuple[float, str]] = []
+    result = onboarding.verify_setup(
+        root,
+        progress=lambda value, stage, _message: progress.append((value, stage)),
+        cancelled=lambda: False,
+        keychain=secrets,
+    )
+    assert result["ready"] is True
+    assert result["status"] == "ready"
+    assert result["checks"]["market"]["probe_symbol"] == "AAPL"
+    assert result["research_only"] is True
+    assert result["affects_execution"] is False
+    encoded = str(result)
+    assert "SUPER-GITHUB-SECRET" not in encoded
+    assert "SUPER-ALPACA-KEY" not in encoded
+    assert "SUPER-ALPACA-SECRET" not in encoded
+    assert progress[-1][1] == "saving"
+
+
+def test_github_probe_requires_queue_write_and_workflow_dispatch(monkeypatch):
+    settings = DesktopSettings(
+        github_repository="owner/private-repo",
+        github_branch="main",
+        github_path="trading-intelligence-lab/intelligence_library.json",
+    )
+    token = "SUPER-PRIVATE-GITHUB-TOKEN"
+    keychain = FakeKeychain({"github-backup-token": token})
+    captured: list[tuple[str, str]] = []
+
+    def writable_urlopen(request, timeout=0):
+        method = str(getattr(request, "method", "GET") or "GET")
+        url = str(getattr(request, "full_url", ""))
+        captured.append((method, url))
+        if method == "GET":
+            return FakeResponse(
+                {
+                    "full_name": "owner/private-repo",
+                    "permissions": {"pull": True, "push": True, "admin": False},
+                }
+            )
+        assert method == "POST"
+        assert onboarding.CLOUD_PERMISSION_WORKFLOW in url
+        return FakeResponse(status=204)
+
+    monkeypatch.setattr(onboarding, "urlopen", writable_urlopen)
+    result = onboarding._github_access(settings, keychain)
+    assert result["ready"] is True
+    assert result["write_access"] is True
+    assert result["workflow_dispatch"] is True
+    assert "queue write + cloud workflow dispatch" in result["message"]
+    assert token not in str(result)
+    assert [method for method, _url in captured] == ["GET", "POST"]
+
+    monkeypatch.setattr(
+        onboarding,
+        "urlopen",
+        lambda request, timeout=0: FakeResponse(
+            {
+                "full_name": "owner/private-repo",
+                "permissions": {"pull": True, "push": False, "maintain": False, "admin": False},
+            }
+        ),
+    )
+    with pytest.raises(onboarding.OnboardingError, match="does not have write access"):
+        onboarding._github_access(settings, keychain)
+
+
+def test_workflow_dispatch_probe_fails_closed_when_actions_write_is_missing(monkeypatch):
+    token = "SUPER-PRIVATE-GITHUB-TOKEN"
+
+    def denied(_request, timeout=0):
+        raise HTTPError(
+            url="https://api.github.com/fake",
+            code=403,
+            msg="Forbidden",
+            hdrs=None,
+            fp=None,
+        )
+
+    monkeypatch.setattr(onboarding, "urlopen", denied)
+    with pytest.raises(onboarding.OnboardingError, match="Actions: read/write"):
+        onboarding._workflow_dispatch_access(token)
+
+
+def test_onboarding_probe_is_always_local():
+    request = JobRequest.from_mapping(
+        {
+            "job_type": "system.onboarding_probe",
+            "payload": {},
+            "requested_target": "auto",
+        }
+    )
+    decision = RoutingPolicy().decide(request)
+    assert decision.target == ExecutionTarget.LOCAL
+
+
+def test_onboarding_ui_keeps_credentials_out_of_durable_job_payload():
+    page = (ROOT / "desktop/trading_intelligence/onboarding_page.py").read_text(encoding="utf-8")
+    window = (ROOT / "desktop/trading_intelligence/onboarding_window.py").read_text(encoding="utf-8")
+    probe = (ROOT / "hybrid_runtime/onboarding.py").read_text(encoding="utf-8")
+    handshake = (ROOT / ".github/workflows/desktop-cloud-credential-smoke.yml").read_text(encoding="utf-8")
+
+    assert '"_github_token"' in page
+    assert '"_alpaca_api_key"' in page
+    assert '"_alpaca_secret_key"' in page
+    assert 'payload.pop("_github_token"' in window
+    assert 'payload.pop("_alpaca_api_key"' in window
+    assert 'payload.pop("_alpaca_secret_key"' in window
+    assert '"job_type": "system.onboarding_probe"' in window
+    assert '"payload": {}' in window
+    assert "keychain.set_secret(settings.keychain_account" in window
+    assert "keychain.set_secret(ALPACA_API_KEY_ACCOUNT" in window
+    assert "keychain.set_secret(ALPACA_SECRET_KEY_ACCOUNT" in window
+    assert "mark_setup_pending" in window
+    assert "mark_setup_verified" in window
+    assert '"Authorization": "Bearer " + token' in probe
+    assert 'permissions.get("push")' in probe
+    assert "_workflow_dispatch_access(token)" in probe
+    assert 'provider.bars(' in probe
+    assert '["AAPL"]' in probe
+    assert "workflow_dispatch:" in handshake
+    assert "schedule:" not in handshake
+    assert "push:" not in handshake.split("permissions:", 1)[0]
+    assert "pull_request:" not in handshake.split("permissions:", 1)[0]
+    assert "secrets." not in handshake
+    assert "checkout" not in handshake.lower()
+
+
+def test_first_run_wrapper_skips_real_credentials_only_for_ci_smoke_and_stays_lightweight():
+    source = (ROOT / "desktop/trading_intelligence/onboarding_window.py").read_text(encoding="utf-8")
+    state = (ROOT / "hybrid_runtime/onboarding_state.py").read_text(encoding="utf-8")
+    assert "if self.smoke:" in source
+    assert "super().wait_for_health()" in source
+    assert 'configured.get("launch_ready")' in source
+    assert '"First-run setup · connect the library, cloud research, and market data"' in source
+    assert "configuration_status(self.runtime.data_dir)" in source
+    assert 'merged["market_feed"] = current.market_feed' in source
+    assert "from hybrid_runtime.onboarding_state import" in source
+    assert "youtube_strategy_engine" not in source
+    assert "youtube_strategy_engine" not in state
