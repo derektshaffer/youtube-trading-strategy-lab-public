@@ -1,8 +1,8 @@
 """Narrow market proxy that reuses exact finalized historical bar windows.
 
-Only single-symbol calls with explicit start/end/timeframe boundaries are eligible.
-Every other market-data method and ambiguous bar request delegates untouched to
-the authoritative provider.
+Only single-symbol calls with explicit start/end/timeframe/adjustment boundaries
+are eligible. Every other market-data method and ambiguous bar request delegates
+untouched to the authoritative provider.
 """
 
 from __future__ import annotations
@@ -36,7 +36,12 @@ class CachedResearchMarket:
         start = kwargs.get("start")
         end = kwargs.get("end")
         timeframe = str(kwargs.get("timeframe") or "").strip()
-        adjustment = str(kwargs.get("adjustment") or "raw").strip().lower()
+        # The authoritative provider owns its default adjustment semantics. Cache
+        # only research calls that declare the mode explicitly, so the proxy can
+        # never turn an omitted/default adjustment into `raw` by accident.
+        if "adjustment" not in kwargs:
+            return self._market.bars(symbols, **kwargs)
+        adjustment = str(kwargs.get("adjustment") or "").strip().lower()
         # Do not reinterpret batch/live/underspecified provider calls. This proxy
         # is deliberately narrow so scanner/live behavior remains provider-owned.
         if (
@@ -44,6 +49,7 @@ class CachedResearchMarket:
             or not isinstance(start, datetime)
             or not isinstance(end, datetime)
             or not timeframe
+            or not adjustment
         ):
             return self._market.bars(symbols, **kwargs)
 
