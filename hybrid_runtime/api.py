@@ -17,6 +17,7 @@ def create_app(service: HybridService, *, expected_token: str) -> Any:
 
     try:
         from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query
+        from fastapi.middleware.cors import CORSMiddleware
         from fastapi.responses import StreamingResponse
     except ImportError as exc:  # pragma: no cover - exercised in desktop environment
         raise RuntimeError(
@@ -29,6 +30,18 @@ def create_app(service: HybridService, *, expected_token: str) -> Any:
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+    )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "tauri://localhost",
+            "http://tauri.localhost",
+            "https://tauri.localhost",
+        ],
+        allow_credentials=False,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Authorization", "Content-Type"],
     )
 
     def require_token(authorization: str | None = Header(default=None)) -> None:

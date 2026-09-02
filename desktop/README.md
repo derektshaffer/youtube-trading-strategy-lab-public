@@ -17,3 +17,22 @@ The framework decision is made from measured results, not preference:
 `pyside6_spike/app.py` reuses Python directly. `tauri_spike/` exercises a Tauri
 2 webview and an external Python sidecar. Both submit `system.health` through
 `hybrid_runtime` and display the same route reason and durable job progress.
+
+## Run the spikes
+
+PySide6:
+
+```bash
+python -m pip install -r requirements-desktop-pyside.txt
+python desktop/pyside6_spike/app.py
+```
+
+Tauri:
+
+```bash
+python -m pip install -r requirements-desktop.txt
+python scripts/build_desktop_sidecar.py
+cd desktop/tauri_spike
+npm install
+npm run dev
+```

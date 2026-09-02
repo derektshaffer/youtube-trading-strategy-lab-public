@@ -24,7 +24,7 @@ class LocalWorker:
     ) -> None:
         self.service = service
         self.worker_id = str(worker_id or "local-worker").strip()
-        self.handlers = dict(handlers or default_handlers())
+        self.handlers = dict(default_handlers() if handlers is None else handlers)
         self.poll_seconds = max(0.05, float(poll_seconds))
 
     def run_once(self) -> bool:
@@ -92,7 +92,7 @@ class LocalWorker:
                     worker_id=self.worker_id,
                     message="Job cancelled",
                 )
-        except BaseException as exc:
+        except Exception as exc:
             current = self.service.get(job.id)
             self.service.store.transition_job(
                 job.id,

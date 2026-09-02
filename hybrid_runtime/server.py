@@ -19,7 +19,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Trading Intelligence local sidecar")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--token", default="", help=argparse.SUPPRESS)
     parser.add_argument(
         "--data-dir",
         default=os.environ.get(
@@ -37,12 +36,16 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("--port must be between 1 and 65535")
     data_dir = Path(args.data_dir).expanduser().resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
-    token = str(args.token or os.environ.get("TRADING_INTELLIGENCE_LOCAL_TOKEN") or generate_service_token()).strip()
+    environment_token = os.environ.pop("TRADING_INTELLIGENCE_LOCAL_TOKEN", "")
+    token = str(environment_token or generate_service_token()).strip()
     if len(token) < 32:
         raise SystemExit("The local service token must contain at least 32 characters")
     token_path = write_private_token_file(data_dir / "local-service.token", token)
 
     store = HybridStore(data_dir / "hybrid.sqlite3")
+    recovered_jobs = store.requeue_stale_jobs(stale_after_seconds=180)
+    if recovered_jobs:
+        print(f"Recovered {recovered_jobs} stale local job(s).", flush=True)
     service = HybridService(store)
     worker = LocalWorker(service, worker_id=f"{socket.gethostname()}:{os.getpid()}")
     stop_event = threading.Event()

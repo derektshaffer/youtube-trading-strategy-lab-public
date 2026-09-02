@@ -1,4 +1,6 @@
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import sqlite3
 from tempfile import TemporaryDirectory
 
 import pytest
@@ -64,3 +66,59 @@ def test_keychain_missing_entry_fails_closed(monkeypatch):
     monkeypatch.setattr(keychain, "_backend", lambda: EmptyBackend())
     with pytest.raises(KeychainError, match="No matching credential"):
         keychain.get_secret("missing")
+
+
+def test_stale_cancellation_is_terminalized_instead_of_requeued():
+    with TemporaryDirectory() as directory:
+        service = HybridService(HybridStore(Path(directory) / "hybrid.sqlite3"))
+        job, _ = service.submit(JobRequest("system.health", {}))
+        claimed = service.claim_local("dead-worker")
+        assert claimed is not None
+        service.cancel(job.id)
+        old = (
+            datetime.now(timezone.utc) - timedelta(hours=1)
+        ).isoformat().replace("+00:00", "Z")
+        connection = sqlite3.connect(service.store.path)
+        try:
+            connection.execute(
+                "UPDATE jobs SET heartbeat_at = ?, claimed_at = ?, updated_at = ? WHERE id = ?",
+                (old, old, old, job.id),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        assert service.store.requeue_stale_jobs(stale_after_seconds=60) == 1
+        recovered = service.get(job.id)
+        assert recovered.status.value == "cancelled"
+        assert recovered.stage == "cancelled_after_stale_lease"
+        assert recovered.completed_at
+
+
+def test_tauri_origin_is_allowed_but_untrusted_web_origin_is_not():
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+    from hybrid_runtime.api import create_app
+
+    with TemporaryDirectory() as directory:
+        service = HybridService(HybridStore(Path(directory) / "hybrid.sqlite3"))
+        client = TestClient(create_app(service, expected_token="x" * 48))
+        allowed = client.options(
+            "/health",
+            headers={
+                "Origin": "tauri://localhost",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "Authorization",
+            },
+        )
+        assert allowed.status_code == 200
+        assert allowed.headers["access-control-allow-origin"] == "tauri://localhost"
+        blocked = client.options(
+            "/health",
+            headers={
+                "Origin": "https://example.com",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "Authorization",
+            },
+        )
+        assert blocked.status_code == 400
+        assert "access-control-allow-origin" not in blocked.headers

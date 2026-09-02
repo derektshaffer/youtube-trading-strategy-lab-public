@@ -1,0 +1,2 @@
+-r requirements-desktop.txt
+PySide6>=6.9,<7

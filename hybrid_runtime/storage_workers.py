@@ -112,7 +112,7 @@ class WorkerStoreMixin:
     def requeue_stale_jobs(self, *, stale_after_seconds: int = 180) -> int:
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=max(1, int(stale_after_seconds)))
         cutoff_text = cutoff.isoformat().replace("+00:00", "Z")
-        active = (
+        recoverable = (
             JobStatus.CLAIMED,
             JobStatus.DOWNLOADING_DATA,
             JobStatus.PREPARING_FEATURES,
@@ -120,8 +120,9 @@ class WorkerStoreMixin:
             JobStatus.OPTIMIZING,
             JobStatus.VALIDATING,
             JobStatus.SAVING,
+            JobStatus.CANCELLING,
         )
-        values = tuple(status.value for status in active)
+        values = tuple(status.value for status in recoverable)
         placeholders = ",".join("?" for _ in values)
         now = utc_now_text()
         with self._transaction(immediate=True) as connection:
@@ -130,31 +131,43 @@ class WorkerStoreMixin:
                 SELECT * FROM jobs
                 WHERE status IN ({placeholders})
                   AND COALESCE(heartbeat_at, claimed_at, updated_at) < ?
-                  AND cancel_requested = 0
                 """,
                 (*values, cutoff_text),
             ).fetchall()
             for row in rows:
+                cancelling = bool(row["cancel_requested"]) or str(row["status"]) == JobStatus.CANCELLING.value
+                status = JobStatus.CANCELLED if cancelling else JobStatus.QUEUED
+                stage = (
+                    "cancelled_after_stale_lease"
+                    if cancelling
+                    else "requeued_after_stale_lease"
+                )
                 connection.execute(
                     """
                     UPDATE jobs SET status = ?, stage = ?, worker_id = NULL,
-                        heartbeat_at = NULL, claimed_at = NULL, updated_at = ?
+                        heartbeat_at = NULL, claimed_at = NULL, updated_at = ?,
+                        completed_at = ?
                     WHERE id = ?
                     """,
                     (
-                        JobStatus.QUEUED.value,
-                        "requeued_after_stale_lease",
+                        status.value,
+                        stage,
                         now,
+                        now if cancelling else None,
                         str(row["id"]),
                     ),
                 )
                 self._append_event(
                     connection,
                     job_id=str(row["id"]),
-                    status=JobStatus.QUEUED,
-                    stage="requeued_after_stale_lease",
+                    status=status,
+                    stage=stage,
                     progress=float(row["progress"]),
-                    message="Worker heartbeat expired; job safely requeued",
+                    message=(
+                        "Cancellation completed after the worker lease expired"
+                        if cancelling
+                        else "Worker heartbeat expired; job safely requeued"
+                    ),
                     created_at=now,
                 )
             return len(rows)
