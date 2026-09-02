@@ -34,7 +34,9 @@ jobs:
             echo "Payload already applied."
             exit 0
           fi
-          echo "da3fc7ef48dee9e88f8e100ea762be41a5383f27b99a944b57a868c790d39dc6  $archive" | sha256sum -c -
+          actual="$(sha256sum "$archive" | awk '{print $1}')"
+          echo "Stored payload SHA-256: $actual"
+          test "$actual" = "da3fc7ef48dee9e88f8e100ea762be41a5383f27b99a944b57a868c790d39dc6"
           python - <<'PY'
           from pathlib import Path, PurePosixPath
           import tarfile
