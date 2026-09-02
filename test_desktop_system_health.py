@@ -7,6 +7,9 @@ from hybrid_runtime.storage import HybridStore
 from hybrid_runtime.system_health_summary import build_system_health_summary
 
 
+ROOT = Path(__file__).resolve().parent
+
+
 class FakeKeychain:
     def __init__(self, values: dict[str, str] | None = None) -> None:
         self.values = dict(values or {})
@@ -144,3 +147,12 @@ def test_market_cache_is_informational_not_required(tmp_path):
     assert result["checks"]["market_cache_present"] is False
     assert "market_cache_present" not in result["required_checks"]
     assert result["status"] == "ready"
+
+
+def test_system_health_window_converts_library_failure_into_diagnostic_input():
+    source = (ROOT / "desktop/trading_intelligence/system_health_window.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"source": "error"' in source
+    assert 'runtime.request_json("GET", "/health")' in source
+    assert "A broken/missing library is precisely something System Health" in source
