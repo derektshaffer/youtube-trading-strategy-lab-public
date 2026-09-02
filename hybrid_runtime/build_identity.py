@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import plistlib
-import re
 import sys
 from typing import Any, Mapping
 
@@ -70,7 +69,11 @@ def stamp_bundle_identity(
 
     clean_version = _clean(version_label, limit=64) or DEFAULT_SOURCE_VERSION
     clean_channel = _clean(channel, limit=48) or DEFAULT_SOURCE_CHANNEL
-    clean_commit = _clean_commit(commit)
+    clean_commit = _clean_commit(
+        commit
+        or os.environ.get("TRADING_INTELLIGENCE_BUILD_COMMIT")
+        or os.environ.get("GITHUB_SHA")
+    )
     data[VERSION_LABEL_KEY] = clean_version
     data[CHANNEL_KEY] = clean_channel
     if clean_commit:
