@@ -88,6 +88,9 @@ class SystemHealthPage(QWidget):
         self.detail = QLabel("Refresh to verify the local runtime and current research-library connection.")
         self.detail.setObjectName("Subtle")
         self.detail.setWordWrap(True)
+        self.build_status = QLabel("Build identity will appear after Health refresh.")
+        self.build_status.setObjectName("Subtle")
+        self.build_status.setWordWrap(True)
         self.snapshot_status = QLabel(
             "Refresh Health before creating a support snapshot. Snapshots never include Keychain secret values or research/strategy payloads."
         )
@@ -95,6 +98,7 @@ class SystemHealthPage(QWidget):
         self.snapshot_status.setWordWrap(True)
         banner.addWidget(self.status)
         banner.addWidget(self.detail)
+        banner.addWidget(self.build_status)
         banner.addWidget(self.snapshot_status)
         root.addWidget(self.banner)
 
@@ -141,6 +145,7 @@ class SystemHealthPage(QWidget):
         self.banner.style().polish(self.banner)
         self.status.setText("Checking system health…")
         self.detail.setText(detail)
+        self.build_status.setText("Reading installed app build identity…")
         self.snapshot_status.setText("Support snapshot actions will be available after this health refresh finishes.")
 
     def set_error(self, message: str) -> None:
@@ -152,6 +157,7 @@ class SystemHealthPage(QWidget):
         self.banner.style().polish(self.banner)
         self.status.setText("System health needs attention")
         self.detail.setText(message)
+        self.build_status.setText("Build identity unavailable until Health refresh completes.")
         self.snapshot_status.setText("Refresh Health successfully before copying or saving a support snapshot.")
 
     def set_snapshot_status(self, message: str) -> None:
@@ -168,6 +174,17 @@ class SystemHealthPage(QWidget):
         self.snapshot_status.setText(
             "Redacted support snapshot ready. Copy it to paste into chat, or save an owner-only JSON file."
         )
+        build = result.get("build") if isinstance(result.get("build"), dict) else {}
+        version = str(build.get("version") or "unknown")
+        build_number = str(build.get("build_number") or "—")
+        channel = str(build.get("channel") or "unknown").replace("_", " ")
+        commit = str(build.get("commit_short") or "").strip()
+        identity_parts = [version, f"build {build_number}", channel]
+        if commit:
+            identity_parts.append(commit)
+        identity_parts.append("packaged app" if build.get("packaged") else "source/dev")
+        self.build_status.setText("Build · " + " · ".join(identity_parts))
+
         ready = result.get("status") == "ready"
         setup = result.get("setup") if isinstance(result.get("setup"), dict) else {}
         setup_verification = str(setup.get("verification") or "unavailable").replace("_", " ")
