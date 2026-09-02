@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from pathlib import Path
 import time
 from typing import Any
 
-from PySide6.QtWidgets import QPushButton
+from PySide6.QtWidgets import QApplication, QFileDialog, QPushButton
+
+from hybrid_runtime.security import write_private_text_file
+from hybrid_runtime.support_snapshot import build_support_snapshot, snapshot_json
 
 from .research_ml_window import MainWindow as ResearchMLMainWindow, clean_error, write_metrics
 from .system_health_page import SystemHealthPage
@@ -14,9 +19,12 @@ from .system_health_page import SystemHealthPage
 class MainWindow(ResearchMLMainWindow):
     def __init__(self, runtime: Any, *, smoke: bool = False, metrics_output: str = "") -> None:
         super().__init__(runtime, smoke=smoke, metrics_output=metrics_output)
+        self.last_system_health_result: dict[str, Any] = {}
         self.system_health = SystemHealthPage()
         self.stack.addWidget(self.system_health)
         self.system_health.refresh_requested.connect(self.refresh_system_health)
+        self.system_health.copy_snapshot_requested.connect(self.copy_support_snapshot)
+        self.system_health.save_snapshot_requested.connect(self.save_support_snapshot)
         self._install_system_health_navigation()
 
     def _install_system_health_navigation(self) -> None:
@@ -113,6 +121,7 @@ class MainWindow(ResearchMLMainWindow):
             )
             self.active_job_id = ""
             self.active_purpose = ""
+            self.last_system_health_result = dict(result)
             self.system_health.render_health(result)
             self.refresh_jobs()
             self.top_status.setText(
@@ -124,6 +133,52 @@ class MainWindow(ResearchMLMainWindow):
             self.active_purpose = ""
             self.system_health.set_error(clean_error(exc))
             self.refresh_jobs()
+
+    def _support_snapshot_text(self) -> str:
+        if not self.last_system_health_result:
+            raise RuntimeError("Refresh System Health before creating a support snapshot.")
+        snapshot = build_support_snapshot(self.last_system_health_result)
+        return snapshot_json(snapshot)
+
+    def copy_support_snapshot(self) -> None:
+        try:
+            text = self._support_snapshot_text()
+            clipboard = QApplication.clipboard()
+            if clipboard is None:
+                raise RuntimeError("The macOS clipboard is unavailable.")
+            clipboard.setText(text)
+            self.system_health.set_snapshot_status(
+                f"Copied redacted support snapshot to the clipboard ({len(text.encode('utf-8')):,} bytes). Paste it directly into chat."
+            )
+        except BaseException as exc:
+            self.system_health.set_snapshot_status(
+                "Support snapshot copy failed: " + clean_error(exc)
+            )
+
+    def save_support_snapshot(self) -> None:
+        try:
+            text = self._support_snapshot_text()
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+            desktop = Path.home() / "Desktop"
+            base = desktop if desktop.is_dir() else Path.home()
+            suggested = base / f"trading-intelligence-support-{stamp}.json"
+            destination, _selected_filter = QFileDialog.getSaveFileName(
+                self,
+                "Save redacted Trading Intelligence support snapshot",
+                str(suggested),
+                "JSON files (*.json);;All files (*)",
+            )
+            if not destination:
+                self.system_health.set_snapshot_status("Support snapshot save cancelled.")
+                return
+            path = write_private_text_file(destination, text)
+            self.system_health.set_snapshot_status(
+                f"Saved redacted support snapshot as {path.name} with owner-only permissions."
+            )
+        except BaseException as exc:
+            self.system_health.set_snapshot_status(
+                "Support snapshot save failed: " + clean_error(exc)
+            )
 
 
 __all__ = ["MainWindow", "clean_error", "write_metrics"]
