@@ -105,6 +105,55 @@ def terminate_pid(pid: int) -> None:
         pass
 
 
+def wait_for_tauri_ui(
+    base_url: str,
+    token: str,
+    *,
+    timeout_seconds: float = 45.0,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Require proof that frontend JavaScript rendered the chart and called Python."""
+
+    deadline = time.monotonic() + max(1.0, float(timeout_seconds))
+    latest_chart: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        response = request_json(base_url, token, "GET", "/v1/jobs?limit=50")
+        jobs = response.get("jobs")
+        jobs = jobs if isinstance(jobs, list) else []
+        for job in jobs:
+            if (
+                isinstance(job, dict)
+                and str(job.get("job_type") or "") == "chart.framework_fixture"
+            ):
+                latest_chart = job
+                break
+        for job in jobs:
+            if not isinstance(job, dict):
+                continue
+            key = str(job.get("idempotency_key") or "")
+            checks = (
+                (job.get("payload") or {}).get("checks")
+                if isinstance(job.get("payload"), dict)
+                else []
+            )
+            if key.startswith("tauri-ui-ready-") or (
+                isinstance(checks, list)
+                and "tauri-ui" in checks
+                and "chart-rendered" in checks
+            ):
+                if bool(job.get("terminal")):
+                    if job.get("status") != "complete":
+                        raise RuntimeError(
+                            "Tauri frontend-ready handshake ended as "
+                            + str(job.get("status") or "unknown")
+                        )
+                    return job, latest_chart
+        time.sleep(0.1)
+    raise RuntimeError(
+        "Tauri frontend never proved that its chart rendered and authenticated "
+        "against the embedded Python sidecar"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--app", required=True)
@@ -128,6 +177,7 @@ def main(argv: list[str] | None = None) -> int:
     metrics: dict[str, Any] = {
         "framework": "tauri",
         "status": "failed",
+        "full_gui": True,
         "platform": platform.platform(),
         "machine": platform.machine(),
         "app": str(app),
@@ -180,14 +230,33 @@ def main(argv: list[str] | None = None) -> int:
                     time.sleep(0.1)
             if not health or health.get("status") != "ok":
                 raise RuntimeError("Tauri packaged sidecar did not become healthy")
-            ready_at = time.perf_counter()
+            service_ready_at = time.perf_counter()
+
+            ui_ready, chart_job = wait_for_tauri_ui(
+                base_url,
+                token,
+                timeout_seconds=45.0,
+            )
+            ui_ready_at = time.perf_counter()
+            ui_result = (
+                ui_ready.get("result")
+                if isinstance(ui_ready.get("result"), dict)
+                else {}
+            )
+            client_metrics = (
+                ui_result.get("client_metrics")
+                if isinstance(ui_result.get("client_metrics"), dict)
+                else {}
+            )
+
             request = {
                 "job_type": "system.health",
-                "payload": {"checks": ["runtime", "sqlite", "tauri-app"]},
+                "payload": {"checks": ["runtime", "sqlite", "external-tauri-smoke"]},
                 "requested_target": "auto",
                 "idempotency_key": f"tauri-app-smoke-{os.getpid()}-{time.time_ns()}",
             }
             route = request_json(base_url, token, "POST", "/v1/route", request)
+            job_started = time.perf_counter()
             submitted = request_json(base_url, token, "POST", "/v1/jobs", request)
             job_id = str((submitted.get("job") or {}).get("id") or "")
             if not job_id:
@@ -205,10 +274,41 @@ def main(argv: list[str] | None = None) -> int:
             metrics.update(
                 {
                     "status": "passed",
+                    "health": health,
                     "route": route,
-                    "service_ready_seconds": round(ready_at - started, 4),
-                    "job_seconds": round(time.perf_counter() - ready_at, 4),
+                    "service_ready_seconds": round(service_ready_at - started, 4),
+                    "ui_ready_seconds": round(ui_ready_at - started, 4),
+                    "external_job_seconds": round(
+                        time.perf_counter() - job_started,
+                        4,
+                    ),
                     "total_seconds": round(time.perf_counter() - started, 4),
+                    "frontend_metrics": dict(client_metrics),
+                    "ui_ready_result": dict(ui_result),
+                    "chart_job_seconds": (
+                        None
+                        if not isinstance(chart_job, dict)
+                        else round(
+                            max(
+                                0.0,
+                                float(
+                                    (
+                                        chart_job.get("result") or {}
+                                    ).get("runtime_seconds")
+                                    or 0.0
+                                ),
+                            ),
+                            4,
+                        )
+                    ),
+                    "chart_route": (
+                        {}
+                        if not isinstance(chart_job, dict)
+                        else {
+                            "target": chart_job.get("execution_target"),
+                            "reason": chart_job.get("route_reason"),
+                        }
+                    ),
                     "result": terminal.get("result") or {},
                 }
             )
