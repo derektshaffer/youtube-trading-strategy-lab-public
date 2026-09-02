@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import hybrid_runtime.onboarding as onboarding
+import hybrid_runtime.onboarding_state as onboarding_state
 from hybrid_runtime.contracts import ExecutionTarget, JobRequest
 from hybrid_runtime.desktop_settings import DesktopSettings, save_desktop_settings
 from hybrid_runtime.router import RoutingPolicy
@@ -36,7 +37,7 @@ def test_local_library_setup_distinguishes_local_readiness_from_full_hybrid_read
         ),
         root,
     )
-    partial = onboarding.configuration_status(
+    partial = onboarding_state.configuration_status(
         root,
         keychain=FakeKeychain(
             {
@@ -50,7 +51,7 @@ def test_local_library_setup_distinguishes_local_readiness_from_full_hybrid_read
     assert partial["cloud_configured"] is False
     assert partial["full_configured"] is False
 
-    complete = onboarding.configuration_status(
+    complete = onboarding_state.configuration_status(
         root,
         keychain=FakeKeychain(
             {
@@ -168,10 +169,14 @@ def test_onboarding_ui_keeps_credentials_out_of_durable_job_payload():
     assert '["AAPL"]' in probe
 
 
-def test_first_run_wrapper_skips_real_credentials_only_for_ci_smoke():
+def test_first_run_wrapper_skips_real_credentials_only_for_ci_smoke_and_stays_lightweight():
     source = (ROOT / "desktop/trading_intelligence/onboarding_window.py").read_text(encoding="utf-8")
+    state = (ROOT / "hybrid_runtime/onboarding_state.py").read_text(encoding="utf-8")
     assert "if self.smoke:" in source
     assert "super().wait_for_health()" in source
     assert '"First-run setup · connect the library, cloud research, and market data"' in source
     assert "configuration_status(self.runtime.data_dir)" in source
     assert 'merged["market_feed"] = current.market_feed' in source
+    assert "from hybrid_runtime.onboarding_state import configuration_status" in source
+    assert "youtube_strategy_engine" not in source
+    assert "youtube_strategy_engine" not in state
