@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -42,8 +42,9 @@ class OnboardingPage(QWidget):
         title.setObjectName("PageTitle")
         subtitle = QLabel(
             "Your GitHub and Alpaca credentials are written only to macOS Keychain. "
-            "The verification step checks the real research library, private cloud repository, "
-            "and selected Alpaca data feed without placing trades."
+            "Verification loads the real research library, runs a tiny no-secret GitHub Actions "
+            "handshake to prove cloud dispatch works, and checks the selected Alpaca data feed. "
+            "It never places a trade or launches strategy research."
         )
         subtitle.setObjectName("Subtle")
         subtitle.setWordWrap(True)
@@ -115,6 +116,10 @@ class OnboardingPage(QWidget):
         self.github_token = QLineEdit()
         self.github_token.setEchoMode(QLineEdit.EchoMode.Password)
         self.github_token.setPlaceholderText("Leave blank to keep existing Keychain token")
+        self.github_token.setToolTip(
+            "Classic PAT: repo scope. Fine-grained PAT: Contents read/write on the private "
+            "backup repository and Actions read/write on the Trading Intelligence app repository."
+        )
         for row, (caption, widget) in enumerate(
             (
                 ("Repository", self.repository),
@@ -126,6 +131,13 @@ class OnboardingPage(QWidget):
         ):
             cloud.addWidget(QLabel(caption), row, 0)
             cloud.addWidget(widget, row, 1)
+        cloud_help = QLabel(
+            "The token must be able to write the private research queue and dispatch the app's "
+            "GitHub Actions workflows. Setup verifies both before showing Cloud as ready."
+        )
+        cloud_help.setObjectName("Subtle")
+        cloud_help.setWordWrap(True)
+        cloud.addWidget(cloud_help, 5, 0, 1, 2)
         cloud.setColumnStretch(1, 1)
         root.addWidget(cloud_card)
 
@@ -155,7 +167,8 @@ class OnboardingPage(QWidget):
         root.addWidget(market_card)
 
         self.check_detail = QLabel(
-            "Verification has not run yet. It uses AAPL daily bars only as a harmless market-data connectivity probe."
+            "Verification has not run yet. It uses one harmless GitHub Actions handshake plus "
+            "AAPL daily bars as connectivity probes; it does not run strategy research or place orders."
         )
         self.check_detail.setObjectName("Subtle")
         self.check_detail.setWordWrap(True)
