@@ -60,12 +60,7 @@ def chart_framework_fixture_handler(
     progress: ProgressCallback,
     cancelled: CancellationCheck,
 ) -> Mapping[str, Any]:
-    """Create deterministic OHLCV data for desktop-framework interaction tests.
-
-    This is intentionally synthetic and clearly labeled. It lets both desktop
-    candidates render exactly the same payload without spending provider quota
-    or confusing a framework benchmark with real trading evidence.
-    """
+    """Create deterministic OHLCV data for desktop-framework interaction tests."""
 
     symbol = str(payload.get("symbol") or "SDOT").strip().upper()[:12] or "SDOT"
     timeframe = str(payload.get("timeframe") or "5Min").strip()
@@ -228,8 +223,6 @@ def stock_analysis_handler(
     progress: ProgressCallback,
     cancelled: CancellationCheck,
 ) -> Mapping[str, Any]:
-    """Run quick real-market analysis using the persistent desktop candle cache."""
-
     from .market_job import run_bounded_stock_analysis
 
     data_dir = _desktop_data_dir()
@@ -243,6 +236,16 @@ def stock_analysis_handler(
     )
 
 
+def quick_finder_handler(
+    payload: Mapping[str, Any],
+    progress: ProgressCallback,
+    cancelled: CancellationCheck,
+) -> Mapping[str, Any]:
+    from .finder_job import run_quick_finder
+
+    return run_quick_finder(payload, progress, cancelled)
+
+
 def default_handlers() -> dict[str, JobHandler]:
     return {
         "system.health": system_health_handler,
@@ -251,4 +254,5 @@ def default_handlers() -> dict[str, JobHandler]:
         "library.summary": library_summary_handler,
         "strategy.profit_first_plan": profit_first_plan_handler,
         "analysis.stock": stock_analysis_handler,
+        "strategy.finder_quick": quick_finder_handler,
     }
