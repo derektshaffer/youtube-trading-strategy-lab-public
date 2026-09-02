@@ -13,13 +13,14 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import plistlib
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 from typing import Any
+
+from hybrid_runtime.build_identity import stamp_bundle_identity
 
 
 APP_NAME = "Trading Intelligence"
@@ -68,16 +69,27 @@ def build_number(raw: str) -> str:
     return (digits[-12:] if digits else "1") or "1"
 
 
-def update_bundle_version(app: Path, version: str, build: str) -> None:
-    info = app / "Contents" / "Info.plist"
-    with info.open("rb") as handle:
-        data = plistlib.load(handle)
-    data["CFBundleDisplayName"] = APP_NAME
-    data["CFBundleName"] = APP_NAME
-    data["CFBundleShortVersionString"] = bundle_short_version(version)
-    data["CFBundleVersion"] = build_number(build)
-    with info.open("wb") as handle:
-        plistlib.dump(data, handle, sort_keys=True)
+def update_bundle_version(
+    app: Path,
+    version: str,
+    build: str,
+    *,
+    commit: str = "",
+) -> dict[str, str]:
+    """Stamp both Apple's numeric fields and the exact internal-beta identity."""
+
+    clean = clean_version(version)
+    short = bundle_short_version(clean)
+    number = build_number(build)
+    identity = stamp_bundle_identity(
+        app,
+        version_label=clean,
+        channel="internal_beta",
+        commit=commit,
+        bundle_short_version=short,
+        bundle_build=number,
+    )
+    return identity
 
 
 def signature_metadata(app: Path) -> dict[str, Any]:
@@ -155,8 +167,14 @@ def main(argv: list[str] | None = None) -> int:
     version = clean_version(args.version)
     short_version = bundle_short_version(version)
     build = build_number(args.build_number)
+    commit = str(args.commit or "").strip()
 
-    update_bundle_version(app, short_version, build)
+    bundle_identity = update_bundle_version(
+        app,
+        version,
+        build,
+        commit=commit,
+    )
     # Updating Info.plist invalidates the previous ad-hoc signature. Re-sign the
     # internal beta before verifying. A future Developer ID release workflow must
     # re-sign with its own identity after this packaging metadata is applied.
@@ -206,7 +224,8 @@ def main(argv: list[str] | None = None) -> int:
         "version": version,
         "bundle_short_version": short_version,
         "build_number": build,
-        "commit": str(args.commit or "").strip(),
+        "commit": commit,
+        "bundle_identity": bundle_identity,
         "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "architecture": "arm64",
         "app_bytes": directory_size(app),
