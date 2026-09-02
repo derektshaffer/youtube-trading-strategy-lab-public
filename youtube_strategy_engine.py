@@ -4525,6 +4525,62 @@ def apply_strategy_specific_indicators(
     return data
 
 
+
+def strategy_indicator_signature(strategy: dict[str, Any]) -> tuple[Any, ...]:
+    """Return the effective rule inputs that can change prepared indicator values.
+
+    Execution/risk parameters such as stop size, reward/risk, and position sizing are
+    deliberately excluded. Keeping this signature centralized prevents optimizer caches
+    from silently reusing indicator frames when an EMA or Anchored-VWAP input changes.
+    """
+    rules = normalize_machine_rules(strategy.get("machine_rules"))
+    tolerance = safe_float(rules.get("pullback_touch_tolerance_pct"))
+    mode = str(rules.get("avwap_anchor_mode") or "").strip().casefold()
+    if mode not in SUPPORTED_AVWAP_ANCHOR_MODES:
+        mode = ""
+    avwap_confirm = None
+    avwap_anchor_minute = None
+    avwap_pullback_tolerance = None
+    if mode:
+        avwap_confirm = max(
+            1,
+            min(20, int(safe_float(rules.get("avwap_pivot_confirm_bars"), 2) or 2)),
+        )
+        avwap_anchor_minute = max(
+            0,
+            min(390, int(safe_float(rules.get("avwap_anchor_session_minute"), 0) or 0)),
+        )
+        avwap_pullback_tolerance = max(
+            0.01,
+            min(
+                20.0,
+                float(safe_float(rules.get("avwap_pullback_tolerance_pct"), 0.5) or 0.5),
+            ),
+        )
+    return (
+        int(rules.get("breakout_lookback_bars") or 20),
+        int(rules.get("opening_range_minutes") or 15),
+        int(rules["fast_ema_period"]) if rules.get("fast_ema_period") is not None else None,
+        int(rules["slow_ema_period"]) if rules.get("slow_ema_period") is not None else None,
+        int(rules["trend_ema_period"]) if rules.get("trend_ema_period") is not None else None,
+        None if tolerance is None else round(float(tolerance), 8),
+        mode,
+        avwap_confirm,
+        avwap_anchor_minute,
+        None if avwap_pullback_tolerance is None else round(avwap_pullback_tolerance, 8),
+    )
+
+
+def prepare_backtest_payload(
+    data: pd.DataFrame,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Materialize immutable-by-convention row/session data once for repeated trials."""
+    if data.empty:
+        return [], []
+    records = data.to_dict("records")
+    sessions = list(dict.fromkeys(data["session"].tolist())) if "session" in data.columns else []
+    return records, sessions
+
 def parse_clock_minutes(value: str | None) -> int | None:
     if not value:
         return None
@@ -5093,6 +5149,8 @@ def run_backtest(
     settings: BacktestSettings | None = None,
     *,
     prepared_indicators: pd.DataFrame | None = None,
+    prepared_records: list[dict[str, Any]] | None = None,
+    prepared_sessions: list[str] | None = None,
 ) -> dict[str, Any]:
     settings = settings or BacktestSettings()
     settings.validate()
@@ -5144,7 +5202,11 @@ def run_backtest(
         reward_risk = settings.default_reward_risk
     max_hold = rules.get("max_hold_minutes")
     scale_out_stages = configured_scale_out_stages(rules)
-    sessions = list(dict.fromkeys(data["session"].tolist()))
+    sessions = (
+        list(prepared_sessions)
+        if prepared_sessions is not None
+        else list(dict.fromkeys(data["session"].tolist()))
+    )
     split_index = max(1, min(len(sessions) - 1, int(len(sessions) * settings.train_fraction))) if len(sessions) > 1 else 1
     holdout_sessions = set(sessions[split_index:]) if len(sessions) > 1 else set()
     cash = settings.starting_cash
@@ -5152,7 +5214,11 @@ def run_backtest(
     trades: list[dict[str, Any]] = []
     curve: list[dict[str, Any]] = [{"timestamp": str(data.iloc[0]["timestamp"]), "equity": round(cash, 2)}]
     execution_friction = (settings.spread_bps / 2.0 + settings.slippage_bps) / 10_000.0
-    records = data.to_dict("records")
+    records = (
+        prepared_records
+        if prepared_records is not None
+        else data.to_dict("records")
+    )
     trade_sequence = 0
     pullback_required = (
         bool(settings.require_pullback_breakout_for_pullback_strategies)
@@ -6749,14 +6815,23 @@ def _optimize_stock_strategies_historical(
     for source_strategy, variants in search_plan:
         name = str(source_strategy.get("name") or "Unnamed strategy")
         original = normalize_machine_rules(source_strategy.get("machine_rules"))
-        indicator_cache: dict[tuple[bool, int, int], pd.DataFrame] = {}
+        frame_cache: dict[bool, pd.DataFrame] = {True: frame}
+        base_indicator_cache: dict[bool, pd.DataFrame] = {}
+        indicator_cache: dict[
+            tuple[bool, tuple[Any, ...]],
+            tuple[pd.DataFrame, list[dict[str, Any]], list[str]],
+        ] = {}
 
         def frame_for_settings(chosen_settings: BacktestSettings) -> pd.DataFrame:
-            if chosen_settings.allow_extended_hours:
-                return frame
-            if "is_regular_hours" in frame.columns:
-                return frame[frame["is_regular_hours"].fillna(False)].copy().reset_index(drop=True)
-            return frame
+            extended = bool(chosen_settings.allow_extended_hours)
+            if extended not in frame_cache:
+                if "is_regular_hours" in frame.columns:
+                    frame_cache[extended] = frame[
+                        frame["is_regular_hours"].fillna(False)
+                    ].copy().reset_index(drop=True)
+                else:
+                    frame_cache[extended] = frame
+            return frame_cache[extended]
 
         def effective_settings(candidate_rules: dict[str, Any], chosen_settings: BacktestSettings) -> BacktestSettings:
             return _automatic_slippage_settings(
@@ -6768,16 +6843,29 @@ def _optimize_stock_strategies_historical(
 
         def evaluate(candidate_rules: dict[str, Any], chosen_settings: BacktestSettings) -> dict[str, Any]:
             candidate_strategy = {**source_strategy, "machine_rules": candidate_rules}
-            key = (
-                bool(chosen_settings.allow_extended_hours),
-                int(candidate_rules.get("breakout_lookback_bars") or 20),
-                int(candidate_rules.get("opening_range_minutes") or 15),
-            )
+            extended = bool(chosen_settings.allow_extended_hours)
+            if extended not in base_indicator_cache:
+                base_indicator_cache[extended] = add_indicators(
+                    frame_for_settings(chosen_settings),
+                    {"machine_rules": {}},
+                )
+            key = (extended, strategy_indicator_signature(candidate_strategy))
             if key not in indicator_cache:
-                indicator_cache[key] = add_indicators(frame_for_settings(chosen_settings), candidate_strategy)
+                prepared = apply_strategy_specific_indicators(
+                    base_indicator_cache[extended],
+                    candidate_strategy,
+                )
+                records, prepared_sessions = prepare_backtest_payload(prepared)
+                indicator_cache[key] = (prepared, records, prepared_sessions)
+            prepared, records, prepared_sessions = indicator_cache[key]
             return run_backtest(
-                [], candidate_strategy, target_symbol, chosen_settings,
-                prepared_indicators=indicator_cache[key],
+                [],
+                candidate_strategy,
+                target_symbol,
+                chosen_settings,
+                prepared_indicators=prepared,
+                prepared_records=records,
+                prepared_sessions=prepared_sessions,
             )
 
         rule_candidates: list[dict[str, Any]] = []
@@ -7149,6 +7237,44 @@ def _screen_historical_strategies(
     ranking_minimum_historical_trades = (
         None if minimum_historical_trades is None else max(1, int(minimum_historical_trades))
     )
+    frame_cache: dict[bool, pd.DataFrame] = {True: frame}
+    base_indicator_cache: dict[bool, pd.DataFrame] = {}
+    indicator_cache: dict[
+        tuple[bool, tuple[Any, ...]],
+        tuple[pd.DataFrame, list[dict[str, Any]], list[str]],
+    ] = {}
+
+    def frame_for_mode(allow_extended_hours: bool) -> pd.DataFrame:
+        extended = bool(allow_extended_hours)
+        if extended not in frame_cache:
+            if "is_regular_hours" in frame.columns:
+                frame_cache[extended] = frame[
+                    frame["is_regular_hours"].fillna(False)
+                ].copy().reset_index(drop=True)
+            else:
+                frame_cache[extended] = frame
+        return frame_cache[extended]
+
+    def prepared_for(
+        candidate_strategy: dict[str, Any],
+        allow_extended_hours: bool,
+    ) -> tuple[pd.DataFrame, list[dict[str, Any]], list[str]]:
+        extended = bool(allow_extended_hours)
+        if extended not in base_indicator_cache:
+            base_indicator_cache[extended] = add_indicators(
+                frame_for_mode(extended),
+                {"machine_rules": {}},
+            )
+        key = (extended, strategy_indicator_signature(candidate_strategy))
+        if key not in indicator_cache:
+            prepared = apply_strategy_specific_indicators(
+                base_indicator_cache[extended],
+                candidate_strategy,
+            )
+            records, prepared_sessions = prepare_backtest_payload(prepared)
+            indicator_cache[key] = (prepared, records, prepared_sessions)
+        return indicator_cache[key]
+
     candidates: list[dict[str, Any]] = []
     stop_grid = [2.0, 4.0, 5.0, 7.5, 10.0]
     reward_grid = [1.0, 1.5, 2.0, 3.0]
@@ -7166,37 +7292,32 @@ def _screen_historical_strategies(
         stops = list(dict.fromkeys([round(float(baseline_stop), 4), *stop_grid]))
         rewards = list(dict.fromkeys([round(float(baseline_reward), 4), *reward_grid]))
         best: dict[str, Any] | None = None
-        indicator_cache: dict[tuple[int, int], pd.DataFrame] = {}
         for stop in stops:
             for reward in rewards:
                 rules = normalize_machine_rules({**original, "stop_loss_pct": stop, "reward_risk": reward})
                 candidate_strategy = {**strategy, "machine_rules": rules}
-                key = (
-                    int(rules.get("breakout_lookback_bars") or 20),
-                    int(rules.get("opening_range_minutes") or 15),
-                )
-                if key not in indicator_cache:
-                    indicator_cache[key] = add_indicators(frame, candidate_strategy)
                 base_settings = replace(
                     settings,
                     default_stop_pct=float(stop),
                     default_reward_risk=float(reward),
                 )
                 for behavior_settings in (base_settings, legacy_behavior_settings(base_settings)):
-                    behavior_frame = frame
-                    if not behavior_settings.allow_extended_hours and "is_regular_hours" in frame.columns:
-                        behavior_frame = frame[frame["is_regular_hours"].fillna(False)].copy().reset_index(drop=True)
+                    behavior_frame = frame_for_mode(behavior_settings.allow_extended_hours)
                     candidate_settings = _automatic_slippage_settings(
                         behavior_frame, rules, behavior_settings, automatic_slippage
                     )
-                    prepared = (
-                        indicator_cache[key]
-                        if candidate_settings.allow_extended_hours
-                        else add_indicators(behavior_frame, candidate_strategy)
+                    prepared, records, prepared_sessions = prepared_for(
+                        candidate_strategy,
+                        candidate_settings.allow_extended_hours,
                     )
                     result = run_backtest(
-                        [], candidate_strategy, symbol, candidate_settings,
+                        [],
+                        candidate_strategy,
+                        symbol,
+                        candidate_settings,
                         prepared_indicators=prepared,
+                        prepared_records=records,
+                        prepared_sessions=prepared_sessions,
                     )
                     metrics = result.get("metrics") or {}
                     record = {
@@ -7216,7 +7337,6 @@ def _screen_historical_strategies(
         reverse=True,
     )
     return candidates
-
 
 def _optimize_stock_timeframes_historical(
     one_minute_rows: list[dict[str, Any]],
@@ -7523,19 +7643,27 @@ def optimize_stock_strategies(
         for source_strategy, variants in search_plan
         if str(source_strategy.get("id") or "") in completed_strategy_ids
     )
+    frame_cache: dict[tuple[str, bool], pd.DataFrame] = {
+        (period, True): candidate_frame
+        for period, candidate_frame in frames.items()
+    }
     base_indicator_cache: dict[tuple[str, bool], pd.DataFrame] = {}
     indicator_cache: dict[
-        tuple[str, bool, int, int, int | None, int | None, int | None, float],
-        pd.DataFrame,
+        tuple[str, bool, tuple[Any, ...]],
+        tuple[pd.DataFrame, list[dict[str, Any]], list[str]],
     ] = {}
 
     def frame_for_settings(period: str, chosen_settings: BacktestSettings) -> pd.DataFrame:
-        candidate_frame = frames[period]
-        if chosen_settings.allow_extended_hours:
-            return candidate_frame
-        if "is_regular_hours" in candidate_frame.columns:
-            return candidate_frame[candidate_frame["is_regular_hours"].fillna(False)].copy().reset_index(drop=True)
-        return candidate_frame
+        key = (period, bool(chosen_settings.allow_extended_hours))
+        if key not in frame_cache:
+            candidate_frame = frames[period]
+            if "is_regular_hours" in candidate_frame.columns:
+                frame_cache[key] = candidate_frame[
+                    candidate_frame["is_regular_hours"].fillna(False)
+                ].copy().reset_index(drop=True)
+            else:
+                frame_cache[key] = candidate_frame
+        return frame_cache[key]
 
     def effective_settings(rules: dict[str, Any], chosen_settings: BacktestSettings) -> BacktestSettings:
         return _automatic_slippage_settings(
@@ -7546,7 +7674,6 @@ def optimize_stock_strategies(
         )
 
     def evaluate(candidate_strategy: dict[str, Any], period: str, chosen_settings: BacktestSettings) -> dict[str, Any]:
-        rules = normalize_machine_rules(candidate_strategy.get("machine_rules"))
         base_key = (period, bool(chosen_settings.allow_extended_hours))
         if base_key not in base_indicator_cache:
             base_indicator_cache[base_key] = add_indicators(
@@ -7556,24 +7683,24 @@ def optimize_stock_strategies(
         key = (
             period,
             bool(chosen_settings.allow_extended_hours),
-            int(rules.get("breakout_lookback_bars") or 20),
-            int(rules.get("opening_range_minutes") or 15),
-            int(rules["fast_ema_period"]) if rules.get("fast_ema_period") is not None else None,
-            int(rules["slow_ema_period"]) if rules.get("slow_ema_period") is not None else None,
-            int(rules["trend_ema_period"]) if rules.get("trend_ema_period") is not None else None,
-            round(float(safe_float(rules.get("pullback_touch_tolerance_pct"), 0.5) or 0.5), 8),
+            strategy_indicator_signature(candidate_strategy),
         )
         if key not in indicator_cache:
-            indicator_cache[key] = apply_strategy_specific_indicators(
+            prepared = apply_strategy_specific_indicators(
                 base_indicator_cache[base_key],
                 candidate_strategy,
             )
+            records, prepared_sessions = prepare_backtest_payload(prepared)
+            indicator_cache[key] = (prepared, records, prepared_sessions)
+        prepared, records, prepared_sessions = indicator_cache[key]
         return run_backtest(
             [],
             candidate_strategy,
             target_symbol,
             chosen_settings,
-            prepared_indicators=indicator_cache[key],
+            prepared_indicators=prepared,
+            prepared_records=records,
+            prepared_sessions=prepared_sessions,
         )
 
     def notify(message: str) -> None:
