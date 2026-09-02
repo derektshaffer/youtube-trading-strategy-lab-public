@@ -19,7 +19,10 @@ DEFAULT_PRIVATE_BACKUP_REPOSITORY = (
 DEFAULT_GITHUB_BRANCH = "main"
 DEFAULT_GITHUB_LIBRARY_PATH = "trading-intelligence-lab/intelligence_library.json"
 GITHUB_BACKUP_TOKEN_ACCOUNT = "github-backup-token"
+ALPACA_API_KEY_ACCOUNT = "alpaca-api-key"
+ALPACA_SECRET_KEY_ACCOUNT = "alpaca-secret-key"
 VALID_LIBRARY_SOURCES = frozenset({"auto", "local_file", "github_backup"})
+VALID_MARKET_FEEDS = frozenset({"sip", "iex"})
 _REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _BRANCH_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
 
@@ -85,6 +88,7 @@ class DesktopSettings:
     github_branch: str = DEFAULT_GITHUB_BRANCH
     github_path: str = DEFAULT_GITHUB_LIBRARY_PATH
     keychain_account: str = GITHUB_BACKUP_TOKEN_ACCOUNT
+    market_feed: str = "sip"
     refresh_on_launch: bool = True
 
     def __post_init__(self) -> None:
@@ -99,6 +103,9 @@ class DesktopSettings:
         )
         if not account:
             raise DesktopSettingsError("A macOS Keychain account name is required.")
+        market_feed = _clean_text(self.market_feed or "sip", maximum=20).lower()
+        if market_feed not in VALID_MARKET_FEEDS:
+            raise DesktopSettingsError("market_feed must be sip or iex.")
         object.__setattr__(self, "settings_version", SETTINGS_VERSION)
         object.__setattr__(self, "library_source", source)
         object.__setattr__(
@@ -118,6 +125,7 @@ class DesktopSettings:
         )
         object.__setattr__(self, "github_path", _clean_github_path(self.github_path))
         object.__setattr__(self, "keychain_account", account)
+        object.__setattr__(self, "market_feed", market_feed)
         object.__setattr__(self, "refresh_on_launch", bool(self.refresh_on_launch))
 
     @classmethod
@@ -135,6 +143,7 @@ class DesktopSettings:
             keychain_account=(
                 data.get("keychain_account") or GITHUB_BACKUP_TOKEN_ACCOUNT
             ),
+            market_feed=data.get("market_feed") or "sip",
             refresh_on_launch=(
                 True
                 if data.get("refresh_on_launch") is None
