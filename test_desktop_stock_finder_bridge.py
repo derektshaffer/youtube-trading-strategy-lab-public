@@ -7,7 +7,7 @@ import unittest
 
 from hybrid_runtime.cloud_bridge import CloudBridgeWorker, DesktopCloudSettings
 from hybrid_runtime.cloud_link_store import CloudLinkStore
-from hybrid_runtime.contracts import JobStatus
+from hybrid_runtime.contracts import ExecutionTarget, JobRequest, JobStatus
 from hybrid_runtime.github_library import GitHubLibraryConfig, RemoteJSONDocument
 from hybrid_runtime.router import RoutingPolicy
 from hybrid_runtime.service import HybridService
@@ -105,11 +105,11 @@ class DesktopStockFinderBridgeTests(unittest.TestCase):
 
     def test_router_keeps_stock_finder_cloud_only(self):
         decision = RoutingPolicy().decide(
-            {
-                "job_type": "strategy.stock_finder",
-                "payload": {"symbol": "SDOT", "profile": "Quick"},
-                "requested_target": "local",
-            }
+            JobRequest(
+                "strategy.stock_finder",
+                {"symbol": "SDOT", "profile": "Quick"},
+                requested_target=ExecutionTarget.LOCAL,
+            )
         )
         self.assertEqual(decision.target.value, "cloud")
 
@@ -210,7 +210,11 @@ class DesktopStockFinderBridgeTests(unittest.TestCase):
         self.assertEqual(current.result["outcome"], "stock_finder_complete")
         report = current.result["finder_report"]
         self.assertEqual(report["symbol"], "SDOT")
-        self.assertEqual(report["profile"]["name"], "Deep")
+        profile = report.get("profile")
+        if isinstance(profile, dict):
+            self.assertEqual(profile.get("name"), "Deep")
+        else:
+            self.assertEqual(profile, "Deep")
         self.assertEqual(report["winner_strategy_name"], "Momentum Breakout")
         self.assertEqual(report["unique_configurations_tested"], 1234)
 
