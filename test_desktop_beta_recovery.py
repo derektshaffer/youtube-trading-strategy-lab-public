@@ -8,6 +8,8 @@ from hybrid_runtime.onboarding_state import (
     mark_setup_pending,
     mark_setup_probe_result,
 )
+from hybrid_runtime.storage import HybridStore
+from hybrid_runtime.system_health_summary import build_system_health_summary
 
 
 ROOT = Path(__file__).resolve().parent
@@ -112,6 +114,29 @@ def test_mark_setup_pending_clears_partial_capability_proofs(tmp_path):
         "library": False,
         "cloud": False,
         "market": False,
+    }
+
+
+def test_system_health_flags_pending_setup_but_keeps_partial_capabilities_visible(tmp_path):
+    root, keychain = configured_root(tmp_path)
+    HybridStore(root / "hybrid.sqlite3").list_jobs(limit=10)
+    mark_setup_probe_result(
+        root,
+        {"library": True, "cloud": False, "market": True},
+    )
+    result = build_system_health_summary(
+        root,
+        library_summary={"source": "configured_local_file"},
+        runtime_health={"status": "ok"},
+        keychain=keychain,
+    )
+    assert result["status"] == "attention"
+    assert result["checks"]["setup_not_pending"] is False
+    assert result["setup"]["verification"] == "pending"
+    assert result["setup"]["capabilities"] == {
+        "library": True,
+        "cloud": False,
+        "market": True,
     }
 
 
