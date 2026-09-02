@@ -5,22 +5,115 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Trading Intelligence — Tauri spike</title>
   <style>
-    :root { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #eef6ff; background: #07101c; }
-    body { margin: 0; padding: 28px; }
-    .card { background: #111d2d; border: 1px solid #2d415d; border-radius: 16px; padding: 22px; max-width: 900px; }
-    button { border: 0; border-radius: 10px; padding: 11px 16px; font-weight: 750; cursor: pointer; }
-    progress { width: 100%; height: 18px; margin: 16px 0; }
-    pre { white-space: pre-wrap; color: #a9bdd1; }
+    :root {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #eef6ff;
+      background: #07101c;
+      color-scheme: dark;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 720px; background: radial-gradient(circle at 10% 0%, #12243a, #07101c 44%); }
+    button { font: inherit; }
+    .shell { padding: 22px; }
+    .topbar { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; }
+    .eyebrow { color: #70d7ff; font-size: 12px; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; }
+    h1 { margin: 4px 0 3px; font-size: 28px; letter-spacing: -.035em; }
+    .sub { margin: 0; color: #91a7bd; }
+    .badge { padding: 8px 11px; border-radius: 999px; border: 1px solid #2f536e; background: #0d2234; color: #bcecff; font-size: 12px; font-weight: 750; }
+    .grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; }
+    .card { background: rgba(13, 25, 41, .94); border: 1px solid #293e58; border-radius: 16px; box-shadow: 0 18px 55px rgba(0,0,0,.24); overflow: hidden; }
+    .card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 15px 16px 11px; }
+    .symbol { font-size: 21px; font-weight: 850; }
+    .quote { color: #62e4ab; font-weight: 780; }
+    .toolbar { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; padding: 0 16px 11px; }
+    .toolbar button {
+      border: 1px solid #2a425d; background: #101f32; color: #afc2d5;
+      border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 12px; font-weight: 750;
+    }
+    .toolbar button:hover { border-color: #4c7396; color: #ecf7ff; }
+    .toolbar button.active { color: #07101c; background: #75dcff; border-color: #75dcff; }
+    .spacer { flex: 1; }
+    label.toggle { display: inline-flex; align-items: center; gap: 5px; color: #aabed2; font-size: 12px; }
+    .chart-wrap { position: relative; height: 440px; border-top: 1px solid #1d3047; background: #08131f; touch-action: none; }
+    #chart { width: 100%; height: 100%; display: block; cursor: crosshair; }
+    .chart-note { position: absolute; left: 13px; bottom: 9px; color: #60768d; font-size: 10px; pointer-events: none; }
+    .side { display: flex; flex-direction: column; gap: 14px; }
+    .panel { padding: 16px; }
+    .panel h2 { margin: 0 0 10px; font-size: 15px; }
+    .status { color: #c8d8e7; line-height: 1.45; min-height: 42px; }
+    .route { color: #83cdeb; font-size: 12px; line-height: 1.45; min-height: 38px; }
+    progress { width: 100%; height: 16px; margin: 13px 0; accent-color: #56d9ad; }
+    .primary {
+      width: 100%; border: 0; border-radius: 10px; padding: 10px 13px;
+      background: #58d9ae; color: #06140f; font-weight: 850; cursor: pointer;
+    }
+    .primary:disabled { opacity: .45; cursor: default; }
+    pre { margin: 12px 0 0; max-height: 155px; overflow: auto; white-space: pre-wrap; color: #8298ad; font-size: 10px; }
+    .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .metric { padding: 10px; border-radius: 10px; background: #0a1725; border: 1px solid #20354c; }
+    .metric span { display: block; color: #71879c; font-size: 10px; text-transform: uppercase; letter-spacing: .09em; }
+    .metric strong { display: block; margin-top: 4px; font-size: 14px; }
+    .warning { color: #d9b86f; font-size: 11px; line-height: 1.4; margin-top: 10px; }
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; }
+      .side { display: grid; grid-template-columns: 1fr 1fr; }
+    }
   </style>
 </head>
 <body>
-  <main class="card">
-    <h1>Trading Intelligence</h1>
-    <p id="service">Starting local service…</p>
-    <p id="route">No route selected.</p>
-    <progress id="progress" max="1" value="0"></progress>
-    <button id="run">Run local health job</button>
-    <pre id="details"></pre>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">Desktop framework comparison</div>
+        <h1>Trading Intelligence</h1>
+        <p class="sub">Full-window startup, authenticated Python sidecar, durable jobs, and interactive chart.</p>
+      </div>
+      <div class="badge" id="framework-badge">Tauri · Apple Silicon</div>
+    </header>
+
+    <section class="grid">
+      <article class="card">
+        <div class="card-head">
+          <div><span class="symbol" id="symbol">SDOT</span> <span id="timeframe-label">5m</span></div>
+          <div class="quote" id="quote">Loading chart…</div>
+        </div>
+        <div class="toolbar">
+          <button data-timeframe="1Min">1m</button>
+          <button class="active" data-timeframe="5Min">5m</button>
+          <button data-timeframe="15Min">15m</button>
+          <button data-timeframe="1Hour">1h</button>
+          <button id="reset-chart">Reset</button>
+          <span class="spacer"></span>
+          <label class="toggle"><input id="show-vwap" type="checkbox" checked /> VWAP</label>
+          <label class="toggle"><input id="show-ema" type="checkbox" checked /> EMA 9</label>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="chart" aria-label="Interactive candlestick chart"></canvas>
+          <div class="chart-note">Scroll to zoom · drag to pan · move for crosshair</div>
+        </div>
+      </article>
+
+      <aside class="side">
+        <article class="card panel">
+          <h2>Local job service</h2>
+          <div class="status" id="service">Starting authenticated local service…</div>
+          <div class="route" id="route">Waiting for route decision.</div>
+          <progress id="progress" max="1" value="0"></progress>
+          <button class="primary" id="run" disabled>Run local health job</button>
+          <pre id="details"></pre>
+        </article>
+        <article class="card panel">
+          <h2>Framework measurements</h2>
+          <div class="metrics">
+            <div class="metric"><span>First chart</span><strong id="chart-ms">—</strong></div>
+            <div class="metric"><span>Visible bars</span><strong id="visible-bars">—</strong></div>
+            <div class="metric"><span>Data route</span><strong id="data-route">—</strong></div>
+            <div class="metric"><span>Sidecar</span><strong id="sidecar-state">Starting</strong></div>
+          </div>
+          <div class="warning">Synthetic comparison data only. This chart is not a trading signal.</div>
+        </article>
+      </aside>
+    </section>
   </main>
   <script type="module" src="./main.js"></script>
 </body>
