@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -23,6 +24,7 @@ from typing import Any
 
 APP_NAME = "Trading Intelligence"
 DEFAULT_VERSION = "0.1.0-beta"
+DEFAULT_BUNDLE_VERSION = "0.1.0"
 
 
 def run(arguments: list[str], *, capture: bool = False, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -51,6 +53,16 @@ def clean_version(raw: str) -> str:
     return value[:64] or DEFAULT_VERSION
 
 
+def bundle_short_version(raw: str) -> str:
+    """Return Apple's numeric CFBundleShortVersionString (major.minor.patch)."""
+
+    match = re.search(r"(?<!\d)(\d+)(?:\.(\d+))?(?:\.(\d+))?", str(raw or ""))
+    if not match:
+        return DEFAULT_BUNDLE_VERSION
+    parts = [match.group(1), match.group(2) or "0", match.group(3) or "0"]
+    return ".".join(str(max(0, int(part))) for part in parts)
+
+
 def build_number(raw: str) -> str:
     digits = "".join(character for character in str(raw or "") if character.isdigit())
     return (digits[-12:] if digits else "1") or "1"
@@ -62,7 +74,7 @@ def update_bundle_version(app: Path, version: str, build: str) -> None:
         data = plistlib.load(handle)
     data["CFBundleDisplayName"] = APP_NAME
     data["CFBundleName"] = APP_NAME
-    data["CFBundleShortVersionString"] = clean_version(version)
+    data["CFBundleShortVersionString"] = bundle_short_version(version)
     data["CFBundleVersion"] = build_number(build)
     with info.open("wb") as handle:
         plistlib.dump(data, handle, sort_keys=True)
@@ -141,9 +153,10 @@ def main(argv: list[str] | None = None) -> int:
     output = Path(args.output_dir).expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
     version = clean_version(args.version)
+    short_version = bundle_short_version(version)
     build = build_number(args.build_number)
 
-    update_bundle_version(app, version, build)
+    update_bundle_version(app, short_version, build)
     # Updating Info.plist invalidates the previous ad-hoc signature. Re-sign the
     # internal beta before verifying. A future Developer ID release workflow must
     # re-sign with its own identity after this packaging metadata is applied.
@@ -191,6 +204,7 @@ def main(argv: list[str] | None = None) -> int:
         "product": APP_NAME,
         "channel": "internal_beta",
         "version": version,
+        "bundle_short_version": short_version,
         "build_number": build,
         "commit": str(args.commit or "").strip(),
         "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
