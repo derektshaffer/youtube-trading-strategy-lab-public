@@ -1,0 +1,5 @@
+-r requirements.txt
+fastapi>=0.116,<1
+uvicorn[standard]>=0.35,<1
+pyinstaller>=6.15,<7
+keyring>=25.7,<26
