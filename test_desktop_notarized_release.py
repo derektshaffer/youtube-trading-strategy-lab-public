@@ -37,7 +37,7 @@ def test_distribution_helpers_parse_and_stamp_numeric_bundle_metadata(tmp_path):
     assert data["CFBundleVersion"] == "0042"
 
 
-def test_notarized_candidate_workflow_is_manual_only_and_never_publishes():
+def test_notarized_candidate_workflow_is_manual_only_never_publishes_and_scopes_secrets():
     workflow = read(".github/workflows/desktop-notarized-candidate.yml")
     assert workflow.startswith("name: Trading Intelligence Notarized Candidate\n")
     event_section = workflow.split("permissions:", 1)[0]
@@ -51,8 +51,16 @@ def test_notarized_candidate_workflow_is_manual_only_and_never_publishes():
     assert "APPLE_NOTARY_APPLE_ID" in workflow
     assert "APPLE_NOTARY_PASSWORD" in workflow
     assert "APPLE_TEAM_ID" in workflow
+    # Apple credentials must not be job-wide environment variables available to
+    # unrelated build/test steps; they are scoped to validation/sign/notary steps.
+    job_prefix = workflow.split("    steps:", 1)[0]
+    assert "APPLE_DEVELOPER_ID_P12_BASE64" not in job_prefix
+    assert "APPLE_NOTARY_PASSWORD" not in job_prefix
     assert "security create-keychain" in workflow
     assert "security delete-keychain" in workflow
+    assert 'rm -f "$RUNNER_TEMP/developer-id.p12"' in workflow
+    assert '*("$APPLE_TEAM_ID")*' not in workflow  # avoid a malformed shell pattern
+    assert '*"($APPLE_TEAM_ID)"*' in workflow
     assert "notarytool submit" in workflow
     assert "stapler staple" in workflow
     assert "--require-public-ready" in workflow
@@ -61,14 +69,25 @@ def test_notarized_candidate_workflow_is_manual_only_and_never_publishes():
     assert "create-release" not in workflow.lower()
 
 
-def test_distribution_signer_requires_developer_id_hardened_runtime_and_timestamp():
+def test_distribution_signer_requires_developer_id_hardened_runtime_and_secure_timestamp():
     source = read("scripts/sign_desktop_distribution.py")
     assert 'startswith("Developer ID Application:")' in source
     assert '"--options",\n            "runtime"' in source
     assert '"--timestamp"' in source
     assert '"--deep"' in source
     assert "Authority=Developer ID Application:" in source
-    assert '"runtime" not in text.lower()' in source
+    assert '"runtime" not in flags_line.casefold()' in source
+    assert 'timestamp.casefold() in {"none", "n/a", "not set", "-"}' in source
+
+
+def test_release_readiness_requires_runtime_timestamp_notary_and_gatekeeper():
+    source = read("scripts/check_desktop_release_readiness.py")
+    assert "hardened_runtime" in source
+    assert "secure_timestamp" in source
+    assert "and hardened_runtime" in source
+    assert "and secure_timestamp" in source
+    assert "stapler.returncode == 0" in source
+    assert "gatekeeper.returncode == 0" in source
 
 
 def test_signed_packager_never_mutates_or_resigns_app():
