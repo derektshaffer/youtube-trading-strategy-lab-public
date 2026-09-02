@@ -1,0 +1,118 @@
+name: Apply Codex cloud-bridge payload
+
+on:
+  push:
+    branches:
+      - codex/desktop-cloud-job-bridge-20260902
+    paths:
+      - ".codex/cloud_bridge_payload.tar.gz"
+      - ".github/workflows/codex-apply-cloud-bridge-payload.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: codex-apply-cloud-bridge-payload
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/desktop-cloud-job-bridge-20260902
+          fetch-depth: 0
+
+      - name: Apply verified payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive=".codex/cloud_bridge_payload.tar.gz"
+          if [ ! -f "$archive" ]; then
+            echo "Payload already applied."
+            exit 0
+          fi
+          actual="$(sha256sum "$archive" | awk '{print $1}')"
+          echo "Stored payload SHA-256: $actual"
+          test "$actual" = "238b6d1e62c326fb85f902c3fb3fd130092c80842372f077a0140ead64c03f0b"
+          python - <<'PY'
+          from hashlib import sha256
+          from pathlib import Path, PurePosixPath
+          import shutil
+          import tarfile
+          import tempfile
+
+          archive = Path('.codex/cloud_bridge_payload.tar.gz')
+          expected = {
+              'hybrid_runtime/bridge_status.py': '6fbeb7086d447c70f8163f44fa3d382e81f5580d7a07b99a88f33a7116d1b0ed',
+              'hybrid_runtime/github_actions.py': '76b26bff4c94ecd23f5d944823cbea524ea23ae70bdf759077e50ed84bf55580',
+              'hybrid_runtime/cloud_bridge.py': '355732ed570ef87154525f459e5fbe302c6d30da33bfe074dc1faba35adf3a5c',
+              'hybrid_runtime/bridge_ingest.py': '12a015175db9f80e7f1a09ab08f454e78116003ba9193048f4655ea6579b4426',
+              'desktop/trading_intelligence/cloud_window.py': '6190f4063f5b0bd8dbe96577b2d7c42d4e847e9454659d8a1616202cb00a8db5',
+              'desktop_cloud_bridge_ingest.py': 'd0188bfaa504daed76b3aab4a3387b2cabda63be4d3399ac60bda21b311e8c80',
+              'desktop_cloud_bridge_probe.py': '894e7f80af3398ec85a28cf9d753561591a5dd8217ce039a29eef6703ce95b88',
+              'desktop_cloud_research_worker.py': 'ffddfbf9f07d8227abd401d9b2f328c61532861addce46c44dc97ee6fdb6628b',
+              '.github/workflows/desktop-cloud-validation.yml': 'd1356e8d2006b8f7a4e7bce804fb4abc271f61a4b36e4ab1de475f4b3528c2ad',
+              'docs/DESKTOP_CLOUD_BRIDGE.md': '9be25d7c2a69200a700f686414a0e230f9988100ea41e9e0acc9a328b710b836',
+              'test_hybrid_cloud_bridge.py': 'a300e8718029c7a3eaaf615515bb45e3952d07e26652138800e5a427597ba7d9',
+              'hybrid_runtime/service.py': 'c2c7c430afaacff8a7af6205453f0e08942a8edc7137c82d95ea71f57fdaecd2',
+              'hybrid_runtime/server.py': 'fd941d8194fb809c35630f6eaa3c16e06aa1954e923623a1680b22d2489fe2a1',
+              'desktop/trading_intelligence/ui.py': 'e28fcf0ea7b1cb13fc7beb69a5c34c83250afeb7228cfa5d38fa08b34e97c631',
+              '.github/workflows/desktop-production.yml': 'd218898df441e857c11aead3a3d20400c8d4afea5e18808a31bd83516953cb5d',
+              'test_desktop_profit_first_app.py': 'bd0ce71506d45d490615cd9852374664fc03590f4f16b55f3cbe535a9307120a',
+              'HYBRID_DESKTOP_FOUNDATION.md': '23226190660361ca6bc70e8997060bf42fbfab2d2645af761c7188d92cfb3b11',
+          }
+
+          def clean_name(raw: str) -> str:
+              value = raw
+              while value.startswith('./'):
+                  value = value[2:]
+              return value
+
+          with tempfile.TemporaryDirectory(prefix='cloud-bridge-payload-') as temporary:
+              root = Path(temporary)
+              with tarfile.open(archive, 'r:gz') as bundle:
+                  files = set()
+                  for member in bundle.getmembers():
+                      name = clean_name(member.name)
+                      path = PurePosixPath(name or '.')
+                      if path.is_absolute() or '..' in path.parts:
+                          raise SystemExit(f'Unsafe archive path: {member.name}')
+                      if member.issym() or member.islnk() or member.isdev():
+                          raise SystemExit(f'Unsupported archive entry: {member.name}')
+                      if member.isfile():
+                          files.add(name)
+                  if files != set(expected):
+                      missing = sorted(set(expected) - files)
+                      extra = sorted(files - set(expected))
+                      raise SystemExit(f'Payload file set mismatch; missing={missing}, extra={extra}')
+                  bundle.extractall(root, filter='data')
+
+              for relative, digest in expected.items():
+                  source = root / relative
+                  actual_digest = sha256(source.read_bytes()).hexdigest()
+                  if actual_digest != digest:
+                      raise SystemExit(
+                          f'Payload file checksum mismatch for {relative}: {actual_digest}'
+                      )
+
+              for relative in expected:
+                  source = root / relative
+                  destination = Path(relative)
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copyfile(source, destination)
+          PY
+          rm -f "$archive"
+          rmdir .codex 2>/dev/null || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "No payload changes to commit."
+            exit 0
+          fi
+          git commit -m "Add durable desktop cloud validation bridge"
+          git push origin HEAD:codex/desktop-cloud-job-bridge-20260902
