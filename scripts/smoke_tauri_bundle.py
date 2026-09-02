@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import plistlib
 import shutil
 import signal
 import subprocess
@@ -32,17 +33,23 @@ def directory_size(path: Path) -> int:
 
 
 def main_executable(app: Path) -> Path:
-    directory = app / "Contents" / "MacOS"
-    candidates = [
-        item
-        for item in directory.iterdir()
-        if item.is_file() and os.access(item, os.X_OK)
-    ]
-    if len(candidates) != 1:
+    """Resolve the app executable from Info.plist, not by counting sidecars."""
+
+    plist_path = app / "Contents" / "Info.plist"
+    try:
+        with plist_path.open("rb") as handle:
+            metadata = plistlib.load(handle)
+    except (OSError, plistlib.InvalidFileException) as exc:
+        raise RuntimeError(f"Unable to read app metadata at {plist_path}: {exc}") from exc
+    executable_name = str(metadata.get("CFBundleExecutable") or "").strip()
+    if not executable_name:
+        raise RuntimeError(f"CFBundleExecutable is missing from {plist_path}")
+    executable = app / "Contents" / "MacOS" / executable_name
+    if not executable.is_file() or not os.access(executable, os.X_OK):
         raise RuntimeError(
-            f"Expected one executable in {directory}, found {len(candidates)}"
+            f"App metadata points to a missing or non-executable binary: {executable}"
         )
-    return candidates[0]
+    return executable
 
 
 def file_description(path: Path) -> str:
