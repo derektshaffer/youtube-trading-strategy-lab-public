@@ -35,6 +35,8 @@ def _bytes(value: Any) -> str:
 
 class SystemHealthPage(QWidget):
     refresh_requested = Signal()
+    copy_snapshot_requested = Signal()
+    save_snapshot_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -56,11 +58,27 @@ class SystemHealthPage(QWidget):
         copy.addWidget(eyebrow)
         copy.addWidget(title)
         copy.addWidget(subtitle)
+        actions = QHBoxLayout()
+        self.copy_snapshot = QPushButton("Copy Support Snapshot")
+        self.copy_snapshot.setEnabled(False)
+        self.copy_snapshot.setToolTip(
+            "Copies a small redacted diagnostic JSON snapshot for pasting into support/chat."
+        )
+        self.copy_snapshot.clicked.connect(self.copy_snapshot_requested.emit)
+        self.save_snapshot = QPushButton("Save Snapshot…")
+        self.save_snapshot.setEnabled(False)
+        self.save_snapshot.setToolTip(
+            "Saves the same redacted diagnostic JSON with owner-only file permissions."
+        )
+        self.save_snapshot.clicked.connect(self.save_snapshot_requested.emit)
         self.refresh = QPushButton("Refresh Health")
         self.refresh.setObjectName("Primary")
         self.refresh.clicked.connect(self.refresh_requested.emit)
+        actions.addWidget(self.copy_snapshot)
+        actions.addWidget(self.save_snapshot)
+        actions.addWidget(self.refresh)
         header.addLayout(copy, 1)
-        header.addWidget(self.refresh)
+        header.addLayout(actions)
         root.addLayout(header)
 
         self.banner = Card()
@@ -70,8 +88,14 @@ class SystemHealthPage(QWidget):
         self.detail = QLabel("Refresh to verify the local runtime and current research-library connection.")
         self.detail.setObjectName("Subtle")
         self.detail.setWordWrap(True)
+        self.snapshot_status = QLabel(
+            "Refresh Health before creating a support snapshot. Snapshots never include Keychain secret values or research/strategy payloads."
+        )
+        self.snapshot_status.setObjectName("Subtle")
+        self.snapshot_status.setWordWrap(True)
         banner.addWidget(self.status)
         banner.addWidget(self.detail)
+        banner.addWidget(self.snapshot_status)
         root.addWidget(self.banner)
 
         metrics = QGridLayout()
@@ -110,19 +134,28 @@ class SystemHealthPage(QWidget):
 
     def set_working(self, detail: str) -> None:
         self.refresh.setEnabled(False)
+        self.copy_snapshot.setEnabled(False)
+        self.save_snapshot.setEnabled(False)
         self.banner.setProperty("state", "working")
         self.banner.style().unpolish(self.banner)
         self.banner.style().polish(self.banner)
         self.status.setText("Checking system health…")
         self.detail.setText(detail)
+        self.snapshot_status.setText("Support snapshot actions will be available after this health refresh finishes.")
 
     def set_error(self, message: str) -> None:
         self.refresh.setEnabled(True)
+        self.copy_snapshot.setEnabled(False)
+        self.save_snapshot.setEnabled(False)
         self.banner.setProperty("state", "error")
         self.banner.style().unpolish(self.banner)
         self.banner.style().polish(self.banner)
         self.status.setText("System health needs attention")
         self.detail.setText(message)
+        self.snapshot_status.setText("Refresh Health successfully before copying or saving a support snapshot.")
+
+    def set_snapshot_status(self, message: str) -> None:
+        self.snapshot_status.setText(str(message or ""))
 
     @staticmethod
     def _item(value: Any) -> QTableWidgetItem:
@@ -130,6 +163,11 @@ class SystemHealthPage(QWidget):
 
     def render_health(self, result: dict[str, Any]) -> None:
         self.refresh.setEnabled(True)
+        self.copy_snapshot.setEnabled(True)
+        self.save_snapshot.setEnabled(True)
+        self.snapshot_status.setText(
+            "Redacted support snapshot ready. Copy it to paste into chat, or save an owner-only JSON file."
+        )
         ready = result.get("status") == "ready"
         setup = result.get("setup") if isinstance(result.get("setup"), dict) else {}
         setup_verification = str(setup.get("verification") or "unavailable").replace("_", " ")
