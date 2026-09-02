@@ -18,6 +18,7 @@ from hybrid_runtime.storage import HybridStore
 from hybrid_runtime.strategy_lab_bridge import (
     CLOUD_STRATEGY_LAB_WORKFLOW,
     STRATEGY_LAB_CHECKPOINT_PATH,
+    overlay_strategy_lab_checkpoint,
     prepare_strategy_lab_publication,
 )
 from strategy_lab_jobs import execute_strategy_lab_job_once
@@ -305,3 +306,28 @@ def test_cloud_worker_reapplies_fidelity_gate(integrity, effective):
 
     with pytest.raises(Exception, match="no longer fully modeled"):
         _resolve_candidates(library, {"strategy_ids": ["blocked"]})
+
+
+
+def test_failed_attempt_checkpoint_does_not_terminalize_durable_retry():
+    remote = {
+        "id": "remote-1",
+        "type": "strategy_lab",
+        "status": "retry",
+        "stage": "strategy_lab_execution_retry",
+        "progress": 0.63,
+        "payload": {"run_id": "strategy-lab-test-1"},
+    }
+    checkpoint = {
+        "id": "strategy-lab-test-1",
+        "record_type": "strategy_lab_checkpoint",
+        "status": "failed",
+        "progress": 0.63,
+        "stage": "failed",
+        "message": "Attempt 1 stopped; retry is queued.",
+    }
+    effective = overlay_strategy_lab_checkpoint(remote, checkpoint)
+    assert effective["status"] == "retry"
+    assert effective["stage"] == "cloud_queued"
+    assert effective["payload"]["strategy_lab_checkpoint_status"] == "failed"
+    assert "retry" in effective["payload"]["distributed_message"].lower()

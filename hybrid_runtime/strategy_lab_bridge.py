@@ -254,9 +254,17 @@ def overlay_strategy_lab_checkpoint(
                 f"strategy-lab-checkpoint:{str(checkpoint.get('id') or '')}"
             )
     elif checkpoint_status == "failed":
-        result["status"] = "failed"
-        result["stage"] = "failed"
-        result["last_error"] = message or "Strategy Lab cloud execution failed"
+        # A checkpoint describes one execution attempt, not the durable queue's
+        # final decision. The main queue may already have moved this job to
+        # `retry`, so never terminalize the desktop from checkpoint failure alone.
+        payload["strategy_lab_checkpoint_status"] = "failed"
+        if current_status in {"queued", "pending", "retry", "retry_wait"}:
+            result["stage"] = "cloud_queued"
+            payload["distributed_stage"] = "cloud_queued"
+            payload["distributed_message"] = (
+                message or "Strategy Lab attempt ended; waiting for durable cloud retry."
+            )
+        result["payload"] = payload
     elif checkpoint_status == "running" and current_status in {"queued", "pending", "retry"}:
         result["status"] = "running"
     return result
