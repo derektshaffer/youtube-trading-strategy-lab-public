@@ -74,6 +74,13 @@ def test_tauri_bundle_is_ad_hoc_signed_loopback_scoped_and_vanilla_safe():
     assert 'from "@tauri-apps/' not in javascript
 
 
+def test_tauri_icon_is_present_and_valid_png():
+    icon = ROOT / "desktop" / "tauri_spike" / "src-tauri" / "icons" / "icon.png"
+    data = icon.read_bytes()
+    assert data.startswith(b"\x89PNG\r\n\x1a\n")
+    assert len(data) > 256
+
+
 def test_desktop_build_and_smoke_scripts_parse():
     paths = [
         ROOT / "scripts" / "build_desktop_sidecar.py",
