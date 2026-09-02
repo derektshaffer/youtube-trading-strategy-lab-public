@@ -17,12 +17,16 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from threading import RLock
 from typing import Any, Callable, Mapping
 
 
 UTC = timezone.utc
 RESEARCH_HISTORY_CACHE_VERSION = 1
 RESEARCH_HISTORY_CACHE_DIRECTORY = "research-history-cache-v1"
+RESEARCH_HISTORY_CACHE_MAX_ARTIFACTS = 64
+RESEARCH_HISTORY_CACHE_MAX_BYTES = 320 * 1024 * 1024
+_CACHE_LOCK = RLock()
 _TIMEFRAME_SECONDS = {
     "1Min": 60,
     "5Min": 5 * 60,
@@ -162,6 +166,46 @@ def _rows_digest(rows: list[dict[str, Any]]) -> str:
     return hashlib.sha256(_canonical(rows).encode("utf-8")).hexdigest()
 
 
+def _touch(path: Path) -> None:
+    try:
+        os.utime(path, None)
+    except OSError:
+        pass
+
+
+def _prune_cache(directory: Path, *, keep: Path | None = None) -> None:
+    """Bound local cache growth without ever deleting the artifact just written."""
+
+    try:
+        records = []
+        for path in directory.glob("*.json.gz"):
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            records.append((path, int(stat.st_size), int(stat.st_mtime_ns)))
+    except OSError:
+        return
+    records.sort(key=lambda item: item[2], reverse=True)
+    keep_resolved = keep.resolve() if keep is not None else None
+    total = sum(item[1] for item in records)
+    for index, (path, size, _mtime) in enumerate(records):
+        over_count = len(records) - index > RESEARCH_HISTORY_CACHE_MAX_ARTIFACTS
+        over_bytes = total > RESEARCH_HISTORY_CACHE_MAX_BYTES
+        if not over_count and not over_bytes:
+            break
+        try:
+            if keep_resolved is not None and path.resolve() == keep_resolved:
+                continue
+        except OSError:
+            pass
+        try:
+            path.unlink()
+            total -= size
+        except OSError:
+            continue
+
+
 def _read_artifact(
     path: Path,
     identity: Mapping[str, Any],
@@ -185,6 +229,7 @@ def _read_artifact(
     if not expected_digest or _rows_digest(rows) != expected_digest:
         return None
     decoded["rows"] = [dict(item) for item in rows]
+    _touch(path)
     return decoded
 
 
@@ -206,6 +251,7 @@ def _write_artifact(path: Path, payload: Mapping[str, Any]) -> None:
         os.chmod(temporary, 0o600)
         os.replace(temporary, path)
         os.chmod(path, 0o600)
+        _prune_cache(path.parent, keep=path)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -238,7 +284,8 @@ def load_or_fetch_research_history(
     )
     directory = research_cache_directory(data_dir=data_dir, store=store)
     path = _artifact_path(directory, identity)
-    cached = None if force_refresh else _read_artifact(path, identity)
+    with _CACHE_LOCK:
+        cached = None if force_refresh else _read_artifact(path, identity)
     if cached is not None and bool(cached.get("finalized")):
         rows = [dict(item) for item in cached.get("rows") or []]
         return ResearchHistoryResult(
@@ -286,7 +333,8 @@ def load_or_fetch_research_history(
         "finalized": finalized,
         "rows": rows,
     }
-    _write_artifact(path, payload)
+    with _CACHE_LOCK:
+        _write_artifact(path, payload)
     return ResearchHistoryResult(
         rows=rows,
         metadata={
