@@ -1,0 +1,63 @@
+name: Apply Codex cloud-bridge payload
+
+on:
+  push:
+    branches:
+      - codex/desktop-cloud-job-bridge-20260902
+    paths:
+      - ".codex/cloud_bridge_payload.tar.gz"
+      - ".github/workflows/codex-apply-cloud-bridge-payload.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: codex-apply-cloud-bridge-payload
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/desktop-cloud-job-bridge-20260902
+          fetch-depth: 0
+
+      - name: Apply verified payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive=".codex/cloud_bridge_payload.tar.gz"
+          if [ ! -f "$archive" ]; then
+            echo "Payload already applied."
+            exit 0
+          fi
+          echo "da3fc7ef48dee9e88f8e100ea762be41a5383f27b99a944b57a868c790d39dc6  $archive" | sha256sum -c -
+          python - <<'PY'
+          from pathlib import Path, PurePosixPath
+          import tarfile
+
+          archive = Path('.codex/cloud_bridge_payload.tar.gz')
+          with tarfile.open(archive, 'r:gz') as bundle:
+              for member in bundle.getmembers():
+                  path = PurePosixPath(member.name)
+                  if path.is_absolute() or '..' in path.parts:
+                      raise SystemExit(f'Unsafe archive path: {member.name}')
+                  if member.issym() or member.islnk() or member.isdev():
+                      raise SystemExit(f'Unsupported archive entry: {member.name}')
+              bundle.extractall('.', filter='data')
+          PY
+          rm -f "$archive"
+          rmdir .codex 2>/dev/null || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "No payload changes to commit."
+            exit 0
+          fi
+          git commit -m "Add durable desktop cloud validation bridge"
+          git push origin HEAD:codex/desktop-cloud-job-bridge-20260902
