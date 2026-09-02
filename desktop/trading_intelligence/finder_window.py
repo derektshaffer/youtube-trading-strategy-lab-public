@@ -20,6 +20,9 @@ class MainWindow(EnhancedMainWindow):
         self.profit_validation_job_id = ""
         self.finder_route: dict[str, Any] = {}
         self.profit_validation_route: dict[str, Any] = {}
+        self._background_cloud_poll_seconds = 1.0
+        self._last_finder_poll_at = 0.0
+        self._last_profit_validation_poll_at = 0.0
         super().__init__(runtime, smoke=smoke, metrics_output=metrics_output)
         self.finder = StockFinderPage()
         self.stack.addWidget(self.finder)
@@ -102,6 +105,7 @@ class MainWindow(EnhancedMainWindow):
         finder_job = self._matching_active_job(jobs, "strategy.stock_finder")
         if finder_job is not None:
             self.finder_job_id = str(finder_job.get("id") or "")
+            self._last_finder_poll_at = 0.0
             payload = finder_job.get("payload") if isinstance(finder_job.get("payload"), dict) else {}
             symbol = str(payload.get("symbol") or "").strip().upper()
             profile = str(payload.get("profile") or "Deep")
@@ -120,6 +124,7 @@ class MainWindow(EnhancedMainWindow):
         )
         if validation_job is not None:
             self.profit_validation_job_id = str(validation_job.get("id") or "")
+            self._last_profit_validation_poll_at = 0.0
             self.profit_first.validation.setEnabled(False)
             self.profit_first.validation.setText("Validation running in cloud")
 
@@ -152,6 +157,7 @@ class MainWindow(EnhancedMainWindow):
             )
             if existing is not None:
                 self.finder_job_id = str(existing.get("id") or "")
+                self._last_finder_poll_at = 0.0
                 self.finder.set_working(
                     f"Attached to {symbol} · {profile}",
                     "The matching distributed cloud search was already active; no duplicate work was submitted.",
@@ -173,6 +179,7 @@ class MainWindow(EnhancedMainWindow):
                 "engine_version": "desktop-stock-finder-v1",
             }
             self.finder_job_id, self.finder_route = self._submit_background_cloud_job(request)
+            self._last_finder_poll_at = 0.0
             self.finder.set_working(
                 f"Queueing {symbol} · {profile}",
                 "The distributed Finder is being published to cloud workers. You can continue using Quick Analysis while it runs.",
@@ -204,6 +211,7 @@ class MainWindow(EnhancedMainWindow):
             )
             if existing is not None:
                 self.profit_validation_job_id = str(existing.get("id") or "")
+                self._last_profit_validation_poll_at = 0.0
                 self.profit_first.set_working(
                     "Attached to strict cloud validation",
                     "The same validation job was already active; no duplicate work was submitted.",
@@ -225,6 +233,7 @@ class MainWindow(EnhancedMainWindow):
             self.profit_validation_job_id, self.profit_validation_route = (
                 self._submit_background_cloud_job(request)
             )
+            self._last_profit_validation_poll_at = 0.0
             self.profit_first.set_working(
                 "Connecting to strict cloud validation",
                 "Remote validation can continue while you use other desktop pages or close the app.",
@@ -244,11 +253,21 @@ class MainWindow(EnhancedMainWindow):
             self.profit_first.validation.setEnabled(False)
 
     def poll_active_job(self) -> None:
-        # Background cloud research is polled independently so local analysis and
-        # library jobs remain usable at the same time.
-        if self.finder_job_id:
+        # The base foreground timer is intentionally fast for local UI jobs. Long
+        # cloud research changes much more slowly, so throttle those loopback API
+        # reads to avoid needless work while keeping Quick Analysis responsive.
+        now = time.monotonic()
+        if (
+            self.finder_job_id
+            and now - self._last_finder_poll_at >= self._background_cloud_poll_seconds
+        ):
+            self._last_finder_poll_at = now
             self._poll_stock_finder()
-        if self.profit_validation_job_id:
+        if (
+            self.profit_validation_job_id
+            and now - self._last_profit_validation_poll_at >= self._background_cloud_poll_seconds
+        ):
+            self._last_profit_validation_poll_at = now
             self._poll_background_profit_validation()
         super().poll_active_job()
 
