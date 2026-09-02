@@ -67,6 +67,8 @@ def test_release_readiness_requires_all_public_distribution_gates():
     source = read("scripts/check_desktop_release_readiness.py")
     assert "codesign.returncode == 0" in source
     assert "developer_id" in source
+    assert "hardened_runtime" in source
+    assert "secure_timestamp" in source
     assert "stapler.returncode == 0" in source
     assert "gatekeeper.returncode == 0" in source
     assert '"public_release_ready" if ready else "internal_beta_only"' in source
