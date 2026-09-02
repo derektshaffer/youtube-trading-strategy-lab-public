@@ -37,7 +37,7 @@ from .security import redact_text
 from .service import HybridService
 
 
-SUPPORTED_CLOUD_JOB_TYPES = frozenset({"strategy.profit_first_validation"})
+SUPPORTED_CLOUD_JOB_TYPES = frozenset({"strategy.profit_first_validation", "strategy.stock_finder"})
 DEFAULT_LIBRARY_PATH = "youtube-strategy-lab/strategy_library.json"
 DEFAULT_ACTION_REPOSITORY = "derektshaffer/youtube-trading-strategy-lab-public"
 DEFAULT_WORKFLOW_FILE = "continuous-trading-research.yml"
@@ -56,7 +56,12 @@ class CloudBridgeClient(Protocol):
         message: str,
     ) -> str: ...
 
-    def dispatch_workflow(self, inputs: Mapping[str, Any] | None = None) -> bool: ...
+    def dispatch_workflow(
+        self,
+        inputs: Mapping[str, Any] | None = None,
+        *,
+        workflow_file: str | None = None,
+    ) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,7 +269,10 @@ def _remote_identifier(dedupe_key: str) -> str:
 
 
 def _remote_progress(item: Mapping[str, Any]) -> float:
-    raw = item.get("progress")
+    payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
+    raw = payload.get("distributed_progress")
+    if raw is None:
+        raw = item.get("progress")
     if raw is None:
         raw = item.get("progress_fraction")
     if raw is None:
@@ -280,6 +288,10 @@ def _remote_progress(item: Mapping[str, Any]) -> float:
 
 
 def _remote_stage(item: Mapping[str, Any]) -> str:
+    payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
+    distributed = str(payload.get("distributed_stage") or "").strip().lower()
+    if distributed:
+        return distributed
     for name in ("stage", "progress_stage", "current_stage"):
         value = str(item.get(name) or "").strip().lower()
         if value:
@@ -289,6 +301,14 @@ def _remote_stage(item: Mapping[str, Any]) -> str:
 
 def _remote_status(item: Mapping[str, Any]) -> str:
     return str(item.get("status") or "queued").strip().lower().replace("-", "_")
+
+
+def _remote_message(item: Mapping[str, Any]) -> str:
+    payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
+    distributed = " ".join(str(payload.get("distributed_message") or "").split())[:500]
+    if distributed:
+        return distributed
+    return ""
 
 
 def _strategy_ids(item: Mapping[str, Any], local_job: JobRecord) -> list[str]:
@@ -352,6 +372,13 @@ _STAGE_STATUS = {
     "validating": JobStatus.VALIDATING,
     "holdout": JobStatus.VALIDATING,
     "stress": JobStatus.VALIDATING,
+    "distributed_optimization": JobStatus.OPTIMIZING,
+    "final_holdout": JobStatus.VALIDATING,
+    "final_validation": JobStatus.VALIDATING,
+    "parameter_stability": JobStatus.VALIDATING,
+    "historical_spread_audit": JobStatus.VALIDATING,
+    "saving_completed_report": JobStatus.SAVING,
+    "finalization_retry": JobStatus.VALIDATING,
     "saving": JobStatus.SAVING,
 }
 
@@ -439,6 +466,11 @@ class CloudBridgeWorker:
         job: JobRecord,
         library: dict[str, Any],
     ) -> tuple[dict[str, Any] | None, bool, dict[str, Any] | None]:
+        if job.job_type == "strategy.stock_finder":
+            from .stock_finder_bridge import prepare_stock_finder_publication
+
+            return prepare_stock_finder_publication(library, job)
+
         from profit_first_queue import profit_first_validation_batch
 
         maximum = max(1, min(3, int(job.payload.get("maximum_candidates") or 2)))
@@ -538,6 +570,16 @@ class CloudBridgeWorker:
         revision: str,
         dispatch_error: str = "",
     ) -> dict[str, Any]:
+        metadata: dict[str, Any]
+        if job.job_type == "strategy.stock_finder":
+            from .stock_finder_bridge import finder_link_metadata
+
+            metadata = finder_link_metadata(item, job)
+        else:
+            metadata = {
+                "strategy_ids": _strategy_ids(item, job),
+                "job_type": job.job_type,
+            }
         return self.link_store.upsert(
             local_job_id=job.id,
             remote_job_id=str(item.get("id") or ""),
@@ -552,10 +594,7 @@ class CloudBridgeWorker:
             dispatch_attempted_at=utc_now_text(),
             dispatch_error=dispatch_error,
             last_sync_at=utc_now_text(),
-            metadata={
-                "strategy_ids": _strategy_ids(item, job),
-                "job_type": job.job_type,
-            },
+            metadata=metadata,
         )
 
     def _cancel_remote_if_requested(
@@ -615,14 +654,24 @@ class CloudBridgeWorker:
 
         if status in {"failed", "error", "dead", "abandoned"}:
             current = self._ensure_claimed(job.id, "Cloud worker accepted the job")
-            error_value = item.get("error") or item.get("last_error") or "Cloud validation failed"
+            default_message = (
+                "Cloud Stock Finder failed"
+                if job.job_type == "strategy.stock_finder"
+                else "Cloud validation failed"
+            )
+            default_type = (
+                "CloudStockFinderError"
+                if job.job_type == "strategy.stock_finder"
+                else "CloudValidationError"
+            )
+            error_value = item.get("error") or item.get("last_error") or default_message
             if isinstance(error_value, Mapping):
                 error = dict(error_value)
-                error.setdefault("type", "CloudValidationError")
-                error.setdefault("message", "Cloud validation failed")
+                error.setdefault("type", default_type)
+                error.setdefault("message", default_message)
             else:
                 error = {
-                    "type": "CloudValidationError",
+                    "type": default_type,
                     "message": redact_text(error_value),
                 }
             self.service.store.transition_job(
@@ -632,12 +681,49 @@ class CloudBridgeWorker:
                 progress=max(current.progress, progress),
                 error=error,
                 worker_id=self.worker_id,
-                message="Cloud validation failed",
+                message=default_message,
             )
             return
 
         if status in {"complete", "completed", "success", "succeeded", "done"}:
             current = self._ensure_claimed(job.id, "Cloud worker accepted the job")
+            if job.job_type == "strategy.stock_finder":
+                from .stock_finder_bridge import finder_report_for_remote
+
+                report = finder_report_for_remote(library, item, job)
+                if not report:
+                    self.service.store.transition_job(
+                        job.id,
+                        JobStatus.FAILED,
+                        stage="failed",
+                        progress=max(current.progress, progress),
+                        error={
+                            "type": "CloudStockFinderResultMissing",
+                            "message": (
+                                "The cloud Finder job completed but its exact durable report "
+                                "could not be reconciled from the research library."
+                            ),
+                        },
+                        worker_id=self.worker_id,
+                        message="Cloud Stock Finder result was missing",
+                    )
+                    return
+                payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
+                self.service.complete(
+                    job.id,
+                    {
+                        "outcome": "stock_finder_complete",
+                        "remote_job_id": str(item.get("id") or ""),
+                        "remote_dedupe_key": str(item.get("dedupe_key") or ""),
+                        "result_ref": str(item.get("result_ref") or ""),
+                        "symbol": str(payload.get("symbol") or job.payload.get("symbol") or "").upper(),
+                        "profile": str(payload.get("profile") or job.payload.get("profile") or ""),
+                        "finder_report": report,
+                        "research_library_revision": revision,
+                    },
+                    worker_id=self.worker_id,
+                )
+                return
             strategy_ids = _strategy_ids(item, job)
             evidence_cutoff = str(
                 item.get("created_at")
@@ -671,11 +757,13 @@ class CloudBridgeWorker:
         if current.status in _ACTIVE_RANK and desired in _ACTIVE_RANK:
             if _ACTIVE_RANK[desired] < _ACTIVE_RANK[current.status]:
                 desired = current.status
-        message = (
-            "Waiting in the cloud research queue"
-            if desired == JobStatus.CLAIMED
-            else f"Cloud research: {stage.replace('_', ' ')}"
-        )
+        message = _remote_message(item)
+        if not message:
+            message = (
+                "Waiting in the cloud research queue"
+                if desired == JobStatus.CLAIMED
+                else f"Cloud research: {stage.replace('_', ' ')}"
+            )
         self.service.store.transition_job(
             job.id,
             desired,
@@ -715,11 +803,21 @@ class CloudBridgeWorker:
             link = self.link_store.get(job.id)
             item = None
             if link:
-                item = _find_remote_item(
-                    library,
-                    remote_job_id=str(link.get("remote_job_id") or ""),
-                    dedupe_key=str(link.get("remote_dedupe_key") or ""),
-                )
+                if job.job_type == "strategy.stock_finder":
+                    from .stock_finder_bridge import find_finder_remote_item
+
+                    item = find_finder_remote_item(
+                        library,
+                        local_job_id=job.id,
+                        remote_job_id=str(link.get("remote_job_id") or ""),
+                        dedupe_key=str(link.get("remote_dedupe_key") or ""),
+                    )
+                else:
+                    item = _find_remote_item(
+                        library,
+                        remote_job_id=str(link.get("remote_job_id") or ""),
+                        dedupe_key=str(link.get("remote_dedupe_key") or ""),
+                    )
             plan: dict[str, Any] | None = None
             if item is None:
                 try:
@@ -756,7 +854,7 @@ class CloudBridgeWorker:
                 revision = client.write(
                     library,
                     expected_revision=remote.revision,
-                    message="Queue Trading Intelligence desktop cloud validation",
+                    message="Queue Trading Intelligence desktop cloud research",
                 )
             except GitHubLibraryConflict as exc:
                 self._record_waiting(jobs, str(exc), settings)
@@ -765,18 +863,24 @@ class CloudBridgeWorker:
                 self._record_waiting(jobs, str(exc), settings)
                 return True
 
-        dispatch_error = ""
-        if published:
+        dispatch_errors: dict[str, str] = {}
+        for job, item, _plan in published:
             try:
-                client.dispatch_workflow(
-                    {
-                        "origin": "trading_intelligence_desktop",
-                    }
-                )
+                if job.job_type == "strategy.stock_finder":
+                    from .stock_finder_bridge import DISTRIBUTED_STOCK_FINDER_WORKFLOW
+
+                    client.dispatch_workflow(
+                        {"job_id": str(item.get("id") or "")},
+                        workflow_file=DISTRIBUTED_STOCK_FINDER_WORKFLOW,
+                    )
+                else:
+                    client.dispatch_workflow(
+                        {"origin": "trading_intelligence_desktop"}
+                    )
             except GitHubLibraryError as exc:
-                # Queue publication is already durable. A scheduled worker can
-                # still claim it even when this token lacks Actions permission.
-                dispatch_error = redact_text(exc)
+                # Queue publication is already durable. Scheduled workers can still
+                # claim it even when this token lacks Actions permission.
+                dispatch_errors[job.id] = redact_text(exc)
 
         for job, item, _plan in published + attached:
             self._link(
@@ -784,7 +888,7 @@ class CloudBridgeWorker:
                 item,
                 settings,
                 revision=revision,
-                dispatch_error=dispatch_error,
+                dispatch_error=dispatch_errors.get(job.id, ""),
             )
             self._advance_from_remote(
                 job,
@@ -796,6 +900,24 @@ class CloudBridgeWorker:
 
         for job, plan in terminal_plans:
             queue_status = str(plan.get("queue_status") or "invalid-plan")
+            if job.job_type == "strategy.stock_finder":
+                current = self._ensure_claimed(job.id, "Cloud Finder request evaluated")
+                self.service.store.transition_job(
+                    job.id,
+                    JobStatus.FAILED,
+                    stage="failed",
+                    progress=current.progress,
+                    error={
+                        "type": "CloudStockFinderPlanError",
+                        "message": str(
+                            plan.get("bridge_error")
+                            or "Stock Finder cloud plan is not publishable."
+                        ),
+                    },
+                    worker_id=self.worker_id,
+                    message="Cloud Stock Finder plan failed",
+                )
+                continue
             if queue_status == "no-eligible-candidates":
                 self._complete_without_remote_validation(
                     job,

@@ -35,6 +35,7 @@ class RoutingPolicy:
         {
             "strategy.very_deep",
             "strategy.profit_first_validation",
+            "strategy.stock_finder",
             "research.autonomous",
             "research.book_extract",
             "research.video_extract",
