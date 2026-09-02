@@ -8,15 +8,21 @@ on:
     paths:
       - "validation_calibration_audit.py"
       - "test_validation_calibration_audit.py"
+      - "validation_raw_engine_calibration.py"
+      - "test_validation_raw_engine_calibration.py"
       - "trading_validation_core.py"
       - "trading_auto_research.py"
+      - "youtube_strategy_engine.py"
       - ".github/workflows/validation-calibration-audit.yml"
   pull_request:
     paths:
       - "validation_calibration_audit.py"
       - "test_validation_calibration_audit.py"
+      - "validation_raw_engine_calibration.py"
+      - "test_validation_raw_engine_calibration.py"
       - "trading_validation_core.py"
       - "trading_auto_research.py"
+      - "youtube_strategy_engine.py"
       - ".github/workflows/validation-calibration-audit.yml"
 
 permissions:
@@ -37,16 +43,30 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
 
-      - name: Run hard calibration regressions
-        run: python -m unittest test_validation_calibration_audit -v
+      - name: Run calibration regressions
+        run: |
+          python -m unittest test_validation_calibration_audit -v
+          python -m unittest test_validation_raw_engine_calibration -v
 
-      - name: Generate diagnostic calibration report
+      - name: Generate diagnostic gate report
         run: python validation_calibration_audit.py --json /tmp/validation_calibration_audit.json
 
-      - name: Upload calibration report
+      - name: Generate raw-engine report
+        run: |
+          python - <<'PY'
+          import json
+          from validation_raw_engine_calibration import run_raw_engine_calibration
+          with open('/tmp/validation_raw_engine_calibration.json', 'w', encoding='utf-8') as handle:
+              json.dump(run_raw_engine_calibration(), handle, indent=2, sort_keys=True)
+              handle.write('\n')
+          PY
+
+      - name: Upload calibration reports
         uses: actions/upload-artifact@v4
         with:
           name: validation-calibration-audit
-          path: /tmp/validation_calibration_audit.json
+          path: |
+            /tmp/validation_calibration_audit.json
+            /tmp/validation_raw_engine_calibration.json
           if-no-files-found: error
           retention-days: 30
