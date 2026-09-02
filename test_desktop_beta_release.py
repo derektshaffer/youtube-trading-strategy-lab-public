@@ -3,8 +3,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-import yaml
-
 from scripts.package_desktop_beta import build_number, bundle_short_version, clean_version
 
 
@@ -30,11 +28,12 @@ def test_beta_packaging_sources_parse_and_version_helpers_are_bounded():
     assert build_number("") == "1"
 
 
-def test_internal_beta_workflow_is_valid_and_never_publishes_a_release():
+def test_internal_beta_workflow_is_structurally_gated_and_never_publishes_a_release():
     workflow = read(".github/workflows/desktop-beta-package.yml")
-    parsed = yaml.safe_load(workflow)
-    assert isinstance(parsed, dict)
-    assert "jobs" in parsed
+    # Keep this regression dependency-free because the normal repository test
+    # environment intentionally installs requirements.txt rather than PyYAML.
+    assert workflow.startswith("name: Trading Intelligence Desktop Beta Package\n")
+    assert "jobs:\n  internal-beta:" in workflow
     assert "runs-on: macos-14" in workflow
     assert "package_desktop_beta.py" in workflow
     assert "check_desktop_release_readiness.py" in workflow
