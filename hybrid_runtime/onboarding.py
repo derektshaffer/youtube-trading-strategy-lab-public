@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
@@ -47,10 +48,11 @@ def _github_access(settings: DesktopSettings, keychain: MacOSKeychain) -> dict[s
     try:
         with urlopen(request, timeout=15) as response:
             status = int(getattr(response, "status", 200) or 200)
+            raw = response.read(1_000_000)
     except HTTPError as exc:
         if exc.code in {401, 403}:
             raise OnboardingError(
-                "GitHub rejected the token. Use a token that can read the private Trading Intelligence backup repository."
+                "GitHub rejected the token. Use a token with read/write access to the private Trading Intelligence backup repository."
             ) from exc
         if exc.code == 404:
             raise OnboardingError(
@@ -61,12 +63,31 @@ def _github_access(settings: DesktopSettings, keychain: MacOSKeychain) -> dict[s
         raise OnboardingError("GitHub could not be reached for the cloud-access check.") from exc
     if status < 200 or status >= 300:
         raise OnboardingError(f"GitHub access check returned HTTP {status}.")
+    try:
+        decoded = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise OnboardingError("GitHub returned an unreadable repository-access response.") from exc
+    permissions = decoded.get("permissions") if isinstance(decoded, dict) else None
+    can_write = bool(
+        isinstance(permissions, dict)
+        and (
+            permissions.get("push")
+            or permissions.get("maintain")
+            or permissions.get("admin")
+        )
+    )
+    if not can_write:
+        raise OnboardingError(
+            "The GitHub token can see the repository but does not have write access. "
+            "Cloud Finder and Strategy Lab need repository contents read/write permission."
+        )
     return {
         "ready": True,
         "repository": settings.github_repository,
         "branch": settings.github_branch,
         "path": settings.github_path,
-        "message": "Private GitHub/cloud access verified.",
+        "write_access": True,
+        "message": "Private GitHub/cloud read-write access verified.",
     }
 
 
@@ -179,7 +200,7 @@ def verify_setup(
 
     check_cancelled()
     if progress:
-        progress(0.48, "downloading_data", "Verifying private GitHub/cloud access")
+        progress(0.48, "downloading_data", "Verifying private GitHub/cloud read-write access")
     try:
         results["cloud"] = _github_access(settings, secrets)
     except Exception as exc:
