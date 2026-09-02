@@ -25,12 +25,15 @@ def test_production_desktop_python_sources_parse():
         "desktop/trading_intelligence/chart.py",
         "desktop/trading_intelligence/finder_page.py",
         "desktop/trading_intelligence/finder_window.py",
+        "desktop/trading_intelligence/results_page.py",
+        "desktop/trading_intelligence/results_window.py",
         "hybrid_runtime/desktop_settings.py",
         "hybrid_runtime/library_source.py",
         "hybrid_runtime/market_cache.py",
         "hybrid_runtime/cloud_bridge.py",
         "hybrid_runtime/cloud_link_store.py",
         "hybrid_runtime/stock_finder_bridge.py",
+        "hybrid_runtime/results_summary.py",
         "hybrid_runtime/server.py",
         "scripts/build_trading_intelligence_desktop.py",
     ]
@@ -38,7 +41,7 @@ def test_production_desktop_python_sources_parse():
         ast.parse(read(path), filename=path)
 
 
-def test_production_shell_exposes_profit_first_finder_jobs_and_secure_connection():
+def test_production_shell_exposes_profit_first_finder_results_jobs_and_secure_connection():
     ui = (
         read("desktop/trading_intelligence/pages.py")
         + read("desktop/trading_intelligence/window.py")
@@ -46,6 +49,8 @@ def test_production_shell_exposes_profit_first_finder_jobs_and_secure_connection
         + read("desktop/trading_intelligence/analysis_page.py")
         + read("desktop/trading_intelligence/finder_page.py")
         + read("desktop/trading_intelligence/finder_window.py")
+        + read("desktop/trading_intelligence/results_page.py")
+        + read("desktop/trading_intelligence/results_window.py")
     )
     settings = read("hybrid_runtime/desktop_settings.py")
     source = read("hybrid_runtime/library_source.py")
@@ -56,6 +61,9 @@ def test_production_shell_exposes_profit_first_finder_jobs_and_secure_connection
     assert "Quick Analysis" in ui
     assert "Stock Strategy Finder" in ui
     assert "Run Finder in Cloud" in ui
+    assert "Results" in ui
+    assert "Refresh Results" in ui
+    assert "library.results_summary" in ui
     assert "strategy.profit_first_plan" in ui
     assert "strategy.profit_first_validation" in ui
     assert "strategy.stock_finder" in ui
@@ -103,6 +111,7 @@ def test_production_build_keeps_trading_engines_in_sidecar():
     build = read("scripts/build_trading_intelligence_desktop.py")
     runtime = read("desktop/trading_intelligence/runtime.py")
     market_cache = read("hybrid_runtime/market_cache.py")
+    adapter = read("hybrid_runtime/engine_adapter.py")
 
     assert 'APP_NAME = "Trading Intelligence"' in build
     assert '"--paths"' in build
@@ -111,6 +120,7 @@ def test_production_build_keeps_trading_engines_in_sidecar():
     assert '"profit_first_queue"' not in build
     assert '"youtube_strategy_engine"' not in build
     assert "from youtube_strategy_engine import AlpacaMarketData" in market_cache
+    assert '"library.results_summary": results_summary_handler' in adapter
     app = read("desktop/trading_intelligence/app.py")
     assert "from desktop.trading_intelligence.runtime" in app
     assert "TRADING_INTELLIGENCE_LOCAL_TOKEN" in runtime
@@ -128,7 +138,7 @@ def test_market_cache_is_persistent_incremental_and_explicit_about_price_age():
     assert "data_age_seconds" in cache
     assert "Latest completed Alpaca candle close" in cache
     assert "macOS Keychain" in analysis or "persistent local cache" in analysis
-    assert "from .finder_window import MainWindow" in ui
+    assert "from .results_window import MainWindow" in ui
 
 
 def test_finder_cloud_jobs_are_background_and_reconnect_safe():
@@ -142,6 +152,22 @@ def test_finder_cloud_jobs_are_background_and_reconnect_safe():
     assert "_poll_background_profit_validation" in window
     assert "You can continue using Quick Analysis while it runs" in window
     assert "Cloud cancellation is available before the remote worker starts" in window
+
+
+def test_results_are_bounded_read_only_and_keep_cloud_jobs_reconciling():
+    page = read("desktop/trading_intelligence/results_page.py")
+    window = read("desktop/trading_intelligence/results_window.py")
+    summary = read("hybrid_runtime/results_summary.py")
+    router = read("hybrid_runtime/router.py")
+
+    assert "full evidence remains in durable storage" in page
+    assert "Only explicit validated status" in page
+    assert "library.results_summary" in window
+    assert "_poll_stock_finder" in window
+    assert "_poll_background_profit_validation" in window
+    assert '"bounded": True' in summary
+    assert '"validated_strategies"' in summary
+    assert '"library.results_summary"' in router
 
 
 def test_apple_silicon_workflow_launches_full_profit_first_gui():

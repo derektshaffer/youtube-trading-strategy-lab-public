@@ -53,6 +53,7 @@ class RoutingPolicy:
             "backtest.quick",
             "library.configuration",
             "library.summary",
+            "library.results_summary",
             "strategy.profit_first_plan",
         }
     )
