@@ -77,6 +77,7 @@ jobs:
           python -m pytest -q
           test_hybrid_runtime.py
           test_hybrid_runtime_hardening.py
+          test_hybrid_runtime_chart.py
           test_desktop_build_workflow.py
 
       - name: Install stable Rust toolchain
@@ -106,7 +107,7 @@ jobs:
         working-directory: desktop/tauri_spike
         run: npm run build -- --bundles app
 
-      - name: Verify and launch Tauri app bundle
+      - name: Verify and launch full Tauri GUI bundle
         run: |
           APP="desktop/tauri_spike/src-tauri/target/release/bundle/macos/Trading Intelligence Tauri Spike.app"
           test -d "$APP"
@@ -171,6 +172,7 @@ jobs:
           python -m pytest -q
           test_hybrid_runtime.py
           test_hybrid_runtime_hardening.py
+          test_hybrid_runtime_chart.py
           test_desktop_build_workflow.py
 
       - name: Build and smoke packaged Python sidecar
@@ -188,7 +190,7 @@ jobs:
       - name: Build ad-hoc-signed PySide6 app
         run: python scripts/build_pyside_spike.py
 
-      - name: Verify and launch PySide6 app bundle
+      - name: Verify and launch full PySide6 GUI bundle
         run: |
           APP=".desktop_build/pyside/dist/Trading Intelligence PySide Spike.app"
           test -d "$APP"
@@ -199,7 +201,7 @@ jobs:
           codesign --verify --deep --strict --verbose=4 "$APP"
           rm -rf "$RUNNER_TEMP/pyside-app-data"
           TRADING_INTELLIGENCE_SPIKE_DATA_DIR="$RUNNER_TEMP/pyside-app-data" \
-            "$APP_EXE" --headless-smoke \
+            "$APP_EXE" --gui-smoke \
             --metrics-output "$RUNNER_TEMP/pyside-app-metrics.json"
           ditto -c -k --sequesterRsrc --keepParent \
             "$APP" "$RUNNER_TEMP/trading-intelligence-pyside-apple-silicon.zip"
