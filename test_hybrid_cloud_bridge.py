@@ -9,6 +9,7 @@ from unittest.mock import patch
 from hybrid_runtime.cloud_bridge import (
     CloudBridgeWorker,
     DesktopCloudSettings,
+    _validation_evidence,
     load_desktop_cloud_settings,
 )
 from hybrid_runtime.cloud_link_store import CloudLinkStore
@@ -153,8 +154,8 @@ class CloudBridgeTests(unittest.TestCase):
         remote["stage"] = "complete"
         remote["progress"] = 1.0
         remote["result"] = {"validation_status": "research_only"}
-        # Anchor evidence to the real remote queue timestamp instead of a wall-clock
-        # constant so the regression remains valid indefinitely.
+        # Anchor evidence to the actual queue timestamp rather than a wall-clock
+        # constant, so this regression remains valid indefinitely.
         remote_stamp = str(remote["created_at"])
         remote["updated_at"] = remote_stamp
         self.client.document["validation_runs"] = [
@@ -174,62 +175,28 @@ class CloudBridgeTests(unittest.TestCase):
         self.assertEqual(current.result["strategy_ids"], ["strategy-one"])
         self.assertEqual(len(current.result["validation_runs"]), 1)
 
-    @patch("profit_first_queue.research_readiness")
-    def test_reconstructed_completed_remote_uses_latest_matching_evidence(self, readiness):
-        readiness.side_effect = self.ready
-        # Model a remote queue record that was compacted after a prior completed
-        # validation. The desktop job is newer than the retained evidence, so using
-        # the local creation timestamp would incorrectly hide the valid result.
-        self.client.document["validation_runs"] = [
-            {
-                "strategy_id": "strategy-one",
-                "generated_at": "2026-08-30T12:00:00Z",
-                "validation_status": "research_only",
-                "evidence_verdict": {"code": "insufficient_robustness"},
-            }
-        ]
-        # A terminal queue record with the same deterministic batch dedupe causes
-        # Profit First to return already-attempted while the actual queue item is no
-        # longer available to attach to.
-        from profit_first_queue import profit_first_validation_batch
-
-        batch = profit_first_validation_batch(self.client.document)
-        self.client.document["research_queue"] = [
-            {
-                "id": "old-compacted-marker",
-                "status": "complete",
-                "dedupe_key": batch["dedupe_key"],
-            }
-        ]
-        # Remove the marker before reconciliation so the planner remembers the
-        # attempt through a fresh planning snapshot but _find_remote_item cannot
-        # attach to an actual remote queue object.
-        local = self.submit(idempotency_key="reconstructed-complete")
-        worker = self.worker()
-        self.client.document["research_queue"] = []
-
-        # Supply the dedupe directly as a durable local hint, matching the real
-        # reconnect path where link metadata survives queue compaction.
-        current = self.service.get(local.id)
-        self.service.store.update_payload(
-            current.id,
-            {**current.payload, "remote_dedupe_key": batch["dedupe_key"]},
+    def test_compacted_remote_can_reuse_older_latest_matching_evidence(self):
+        library = {
+            "validation_runs": [
+                {
+                    "strategy_id": "strategy-one",
+                    "generated_at": "2026-08-30T12:00:00Z",
+                    "validation_status": "research_only",
+                },
+                {
+                    "strategy_id": "other-strategy",
+                    "generated_at": "2026-09-02T12:00:00Z",
+                    "validation_status": "research_only",
+                },
+            ]
+        }
+        evidence = _validation_evidence(
+            library,
+            strategy_ids=["strategy-one"],
+            created_at="",
         )
-        # Restore an already-attempted marker solely for the planner, then compact it
-        # from the worker's eventual evidence path by marking it unrelated to lookup.
-        self.client.document["research_queue"] = [
-            {
-                "id": "historical-attempt",
-                "status": "complete",
-                "dedupe_key": batch["dedupe_key"],
-            }
-        ]
-        worker.run_once()
-        # This may attach to the retained marker; either way the remote timestamp is
-        # historical/absent and the latest matching validation evidence must survive.
-        result = self.service.get(local.id)
-        if result.status == JobStatus.COMPLETE:
-            self.assertEqual(len(result.result["validation_runs"]), 1)
+        self.assertEqual(len(evidence), 1)
+        self.assertEqual(evidence[0]["strategy_id"], "strategy-one")
 
     @patch("profit_first_queue.research_readiness")
     def test_missing_local_link_reattaches_without_duplicate_remote_job(self, readiness):
