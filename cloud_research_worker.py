@@ -14,7 +14,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from trading_auto_research import (
+    effective_autonomous_validation_status,
     merge_autonomous_research_into_library,
+    reconcile_autonomous_validation_statuses,
     run_autonomous_research,
 )
 from stock_strategy_finder import (
@@ -117,10 +119,10 @@ def _pending_web_strategies(data: dict[str, Any], maximum: int = 3) -> list[dict
         if str(item.get("validation_status") or "") == "validated":
             continue
         last = item.get("last_autonomous_research")
-        if isinstance(last, dict) and str(last.get("validation_status") or "") in {
-            "validated",
-            "research_only",
-        }:
+        effective_last_status = ""
+        if isinstance(last, dict):
+            effective_last_status, _ = effective_autonomous_validation_status(last)
+        if effective_last_status in {"validated", "research_only"}:
             # Avoid repeatedly burning compute on the same hypothesis until a
             # later research cycle changes its rules/evidence.
             continue
@@ -478,6 +480,9 @@ def main() -> int:
     # work automatically, so this is a bounded self-feeding queue rather than an
     # uncontrolled infinite API loop.
     data = store.load_latest()
+    data, validation_status_changed = reconcile_autonomous_validation_statuses(data)
+    if validation_status_changed:
+        store.save(data)
     data, seeded = seed_continuous_research_cycle(
         data,
         maximum_topics=int(env("RESEARCH_TOPICS_PER_CYCLE", "10") or 10),

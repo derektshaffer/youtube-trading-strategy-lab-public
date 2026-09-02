@@ -75,7 +75,9 @@ from trading_progress_ui import (
     session_task_profiles,
 )
 from trading_auto_research import (
+    effective_autonomous_validation_status,
     merge_autonomous_research_into_library,
+    reconcile_autonomous_validation_statuses,
     run_autonomous_research,
 )
 from trading_research_orchestrator import (
@@ -397,6 +399,7 @@ def load_library() -> dict[str, Any]:
     data.setdefault("strategies", [])
     data.setdefault("research_runs", [])
     data.setdefault("validation_runs", [])
+    data, validation_status_changed = reconcile_autonomous_validation_statuses(data)
 
     # Automatically pull newly analyzed YouTube strategies from the original Trading Lab.
     # The user should not have to remember to import them before the family manager can use them.
@@ -463,7 +466,7 @@ def load_library() -> dict[str, Any]:
     canonical_changed = canonical_families != existing_canonical
     data["strategies"] = [*source_and_other, *canonical_families]
 
-    if legacy_changed or sources_changed or canonical_changed:
+    if legacy_changed or sources_changed or canonical_changed or validation_status_changed:
         try:
             store.save(data)
         except AppError:
@@ -4565,16 +4568,30 @@ elif module == "AI Research Autopilot":
             strength, summary, display_global_score = current_result_scores(result)
             winner = (result.get("optimization_report") or {}).get("winner") or {}
             holdout = winner.get("holdout_metrics") or {}
+            parameter_stability = result.get("parameter_stability") or {}
+            effective_status, evidence_status = effective_autonomous_validation_status(
+                result,
+                fallback_version=current_auto.get("validation_version"),
+            )
+            adaptive_static = result.get("adaptive_static_comparison") or {}
             result_rows.append(
                 {
                     "Strategy": result.get("strategy_name"),
-                    "Status": str(result.get("validation_status") or "research_only").replace("_", " ").title(),
+                    "Status": effective_status.replace("_", " ").title(),
+                    "Evidence": evidence_status.get("label", "unknown").replace("_", " ").title(),
                     "Global score": display_global_score,
                     "Robustness": safe_float(strength.get("score"), 0.0) or 0.0,
                     "Cross-stock": safe_float(summary.get("score"), 0.0) or 0.0,
                     "Anchor": result.get("anchor_symbol"),
                     "Stocks tested": int(summary.get("active_symbols") or 0),
                     "Cross-stock trades": int(summary.get("total_trades") or 0),
+                    "Neighborhood": (
+                        f"{parameter_stability.get('label') or parameter_stability.get('status') or 'Missing'} · "
+                        f"{safe_float(parameter_stability.get('positive_pct'), 0.0) or 0.0:.1f}% positive"
+                    ),
+                    "Adaptive vs static": str(
+                        adaptive_static.get("decision") or "Missing"
+                    ).replace("_", " ").title(),
                     "Holdout P/L": safe_float(holdout.get("net_pnl"), 0.0) or 0.0,
                 }
             )
@@ -4590,9 +4607,13 @@ elif module == "AI Research Autopilot":
 
         for result in current_auto.get("results") or []:
             display_strength, _, display_global_score = current_result_scores(result)
+            effective_status, evidence_status = effective_autonomous_validation_status(
+                result,
+                fallback_version=current_auto.get("validation_version"),
+            )
             with st.expander(
                 f"{result.get('strategy_name') or 'Strategy'} · "
-                f"{str(result.get('validation_status') or 'research_only').replace('_', ' ').title()} · "
+                f"{effective_status.replace('_', ' ').title()} · "
                 f"{display_global_score:.1f}/100",
                 expanded=False,
             ):
@@ -4600,6 +4621,13 @@ elif module == "AI Research Autopilot":
                     f"Historical opportunity anchor: **{result.get('anchor_symbol') or '—'}** · "
                     f"cross-stock candidates: {', '.join(result.get('candidate_symbols') or []) or '—'}"
                 )
+                if evidence_status.get("label") != "current":
+                    st.warning(
+                        "Historical result only — stale / revalidation required under validation "
+                        f"version {evidence_status.get('current_validation_version')}."
+                    )
+                    for reason in evidence_status.get("reasons") or []:
+                        st.write("• " + str(reason))
                 stored_strength = safe_float((result.get("strength") or {}).get("score"))
                 current_strength = safe_float(display_strength.get("score"), 0.0) or 0.0
                 if stored_strength is not None and abs(stored_strength - current_strength) >= 0.1:
@@ -4611,6 +4639,28 @@ elif module == "AI Research Autopilot":
                     st.markdown("**Robustness cautions:**")
                     for reason in display_strength.get("reasons") or []:
                         st.write("• " + str(reason))
+                parameter_stability = result.get("parameter_stability") or {}
+                if parameter_stability:
+                    st.write(
+                        "Parameter neighborhood: "
+                        f"**{parameter_stability.get('label') or parameter_stability.get('status') or 'Unknown'}** · "
+                        f"{int(parameter_stability.get('positive') or 0)}/"
+                        f"{int(parameter_stability.get('active') or 0)} active configurations profitable · "
+                        f"{safe_float(parameter_stability.get('positive_pct'), 0.0) or 0.0:.1f}% positive · "
+                        f"{int(parameter_stability.get('tested') or 0)} distinct configurations tested"
+                    )
+                else:
+                    st.warning("This saved result has no parameter-neighborhood robustness evidence.")
+                adaptive_static = result.get("adaptive_static_comparison") or {}
+                if adaptive_static:
+                    st.write(
+                        "Adaptive vs frozen static: "
+                        f"**{str(adaptive_static.get('decision') or 'Unknown').replace('_', ' ').title()}** · "
+                        f"recommended mode: {str(adaptive_static.get('recommended_mode') or 'none').replace('_', ' ')} · "
+                        f"return advantage: {safe_float(adaptive_static.get('return_advantage_pct'), 0.0) or 0.0:.3f}%"
+                    )
+                else:
+                    st.warning("This saved result has no adaptive-versus-frozen-static evidence.")
                 opportunities = result.get("opportunities") or []
                 if opportunities:
                     st.dataframe(
@@ -4652,11 +4702,14 @@ elif module == "AI Research Autopilot":
                     st.markdown("**Why it did not pass every autonomous gate:**")
                     for reason in result.get("gate_reasons") or []:
                         st.write("• " + str(reason))
-                else:
+                elif effective_status == "validated":
                     st.success(
                         "Passed anchor validation, untouched holdout, stress, cross-stock breadth, "
-                        "trade-count, available walk-forward gates, and the point-in-time universe gate."
+                        "trade-count, required walk-forward, parameter-neighborhood, adaptive/static, "
+                        "and point-in-time universe gates."
                     )
+                else:
+                    st.warning("This historical result is not currently validated or deployable.")
 
         for limitation in current_auto.get("limitations") or []:
             if limitation:

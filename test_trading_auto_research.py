@@ -5,6 +5,7 @@ import unittest
 from youtube_strategy_engine import AppError
 
 from trading_auto_research import (
+    CURRENT_AUTONOMOUS_VALIDATION_VERSION,
     _batched_bars,
     autonomous_research_baselines,
     _global_validation_gate,
@@ -12,8 +13,10 @@ from trading_auto_research import (
     deterministic_catalog_sample,
     deterministic_symbol_sample,
     infer_symbol_lifecycle,
+    effective_autonomous_validation_status,
     merge_autonomous_research_into_library,
     rank_historical_opportunities,
+    reconcile_autonomous_validation_statuses,
     score_historical_opportunities,
     select_event_research_window,
 )
@@ -386,6 +389,207 @@ class AutonomousResearchTests(unittest.TestCase):
         self.assertEqual(status, "research_only")
         self.assertTrue(any("selection bias" in reason.lower() for reason in reasons))
 
+    def test_missing_walk_forward_evidence_can_never_receive_validated_status(self):
+        status, reasons = _global_validation_gate(
+            anchor_report={"winner": {"status": "VALIDATED"}},
+            strength={"independently_positive": True, "score": 90},
+            generalization={
+                "summary": {
+                    "score": 90,
+                    "active_symbols": 5,
+                    "profitable_symbol_pct": 80,
+                    "total_trades": 50,
+                }
+            },
+            walk_forward=None,
+            broad_universe=True,
+        )
+        self.assertEqual(status, "research_only")
+        self.assertTrue(any("walk-forward" in reason.lower() for reason in reasons))
+
+    def test_walk_forward_error_detail_is_preserved_in_gate_reasons(self):
+        status, reasons = _global_validation_gate(
+            anchor_report={"winner": {"status": "VALIDATED"}},
+            strength={"independently_positive": True, "score": 90},
+            generalization={
+                "summary": {
+                    "score": 90,
+                    "active_symbols": 5,
+                    "profitable_symbol_pct": 80,
+                    "total_trades": 50,
+                }
+            },
+            walk_forward={"status": "error", "error": "provider bars unavailable"},
+            broad_universe=True,
+        )
+        self.assertEqual(status, "research_only")
+        self.assertTrue(any("provider bars unavailable" in reason for reason in reasons))
+
+    def test_robust_parameter_neighborhood_allows_promotion(self):
+        status, reasons = _global_validation_gate(
+            anchor_report={"winner": {"status": "VALIDATED"}},
+            strength={"independently_positive": True, "score": 90},
+            generalization={
+                "summary": {
+                    "score": 90,
+                    "active_symbols": 5,
+                    "profitable_symbol_pct": 80,
+                    "total_trades": 50,
+                }
+            },
+            walk_forward={
+                "summary": {
+                    "profitable_fold_pct": 100,
+                    "external_trade_count": 10,
+                }
+            },
+            broad_universe=True,
+            parameter_stability={
+                "status": "complete",
+                "label": "STRONG",
+                "tested": 12,
+                "active": 10,
+                "positive": 7,
+                "positive_pct": 70.0,
+            },
+            adaptive_static_comparison={
+                "status": "complete",
+                "evidence_valid": True,
+                "decision": "no_material_adaptive_advantage",
+            },
+        )
+        self.assertEqual(status, "validated")
+        self.assertEqual(reasons, [])
+
+    def test_brittle_parameter_neighborhood_blocks_promotion(self):
+        status, reasons = _global_validation_gate(
+            anchor_report={"winner": {"status": "VALIDATED"}},
+            strength={"independently_positive": True, "score": 90},
+            generalization={
+                "summary": {
+                    "score": 90,
+                    "active_symbols": 5,
+                    "profitable_symbol_pct": 80,
+                    "total_trades": 50,
+                }
+            },
+            walk_forward={
+                "summary": {
+                    "profitable_fold_pct": 100,
+                    "external_trade_count": 10,
+                }
+            },
+            broad_universe=True,
+            parameter_stability={
+                "status": "complete",
+                "label": "BRITTLE",
+                "tested": 12,
+                "active": 10,
+                "positive": 4,
+                "positive_pct": 40.0,
+            },
+        )
+        self.assertEqual(status, "research_only")
+        self.assertTrue(any("55%" in reason for reason in reasons))
+
+    def test_missing_parameter_neighborhood_blocks_promotion(self):
+        status, reasons = _global_validation_gate(
+            anchor_report={"winner": {"status": "VALIDATED"}},
+            strength={"independently_positive": True, "score": 90},
+            generalization={
+                "summary": {
+                    "score": 90,
+                    "active_symbols": 5,
+                    "profitable_symbol_pct": 80,
+                    "total_trades": 50,
+                }
+            },
+            walk_forward={
+                "summary": {
+                    "profitable_fold_pct": 100,
+                    "external_trade_count": 10,
+                }
+            },
+            broad_universe=True,
+            parameter_stability=None,
+        )
+        self.assertEqual(status, "research_only")
+        self.assertTrue(any("missing" in reason.lower() for reason in reasons))
+
+    def test_legacy_autonomous_validation_is_demoted_without_rewriting_history(self):
+        historical_run = {"id": "legacy-run", "validation_status": "validated", "legacy": True}
+        library = {
+            "strategies": [
+                {
+                    "id": "s1",
+                    "validation_status": "validated",
+                    "validated_rules": {"min_relative_volume": 2.0},
+                    "last_autonomous_research": {
+                        "validation_status": "validated",
+                        "walk_forward_evidence_complete": True,
+                    },
+                }
+            ],
+            "validation_runs": [historical_run],
+        }
+        reconciled, changed = reconcile_autonomous_validation_statuses(library)
+        strategy = reconciled["strategies"][0]
+        self.assertTrue(changed)
+        self.assertEqual(strategy["validation_status"], "revalidation_required")
+        self.assertEqual(strategy["validated_rules"], {"min_relative_volume": 2.0})
+        self.assertEqual(reconciled["validation_runs"], [historical_run])
+
+    def test_current_complete_autonomous_validation_remains_validated(self):
+        current = {
+            "validation_status": "validated",
+            "validation_version": CURRENT_AUTONOMOUS_VALIDATION_VERSION,
+            "walk_forward_evidence_complete": True,
+            "parameter_stability_evidence_complete": True,
+            "adaptive_static_evidence_complete": True,
+            "promotion_gate_passed": True,
+        }
+        status, evidence = effective_autonomous_validation_status(current)
+        self.assertEqual(status, "validated")
+        self.assertTrue(evidence["current_eligible"])
+
+    def test_current_evidence_without_gate_attestation_cannot_remain_validated(self):
+        status, evidence = effective_autonomous_validation_status(
+            {
+                "validation_status": "validated",
+                "validation_version": CURRENT_AUTONOMOUS_VALIDATION_VERSION,
+                "walk_forward_evidence_complete": True,
+                "parameter_stability_evidence_complete": True,
+                "adaptive_static_evidence_complete": True,
+            }
+        )
+        self.assertEqual(status, "revalidation_required")
+        self.assertFalse(evidence["promotion_gate_passed"])
+
+    def test_worker_does_not_skip_stale_autonomous_web_strategy(self):
+        from cloud_research_worker import _pending_web_strategies
+
+        stale = {
+            "id": "s1",
+            "source_type": "autonomous_web_research",
+            "validation_status": "revalidation_required",
+            "last_autonomous_research": {
+                "validation_status": "validated",
+                "walk_forward_evidence_complete": True,
+            },
+        }
+        self.assertEqual(_pending_web_strategies({"strategies": [stale]}), [stale])
+
+    def test_leaderboard_status_resolver_marks_legacy_result_for_revalidation(self):
+        status, evidence = effective_autonomous_validation_status(
+            {
+                "validation_status": "validated",
+                "walk_forward": {"summary": {"fold_count": 2}},
+                "parameter_stability": {"status": "complete"},
+            }
+        )
+        self.assertEqual(status, "revalidation_required")
+        self.assertTrue(evidence["legacy"])
+
     def test_library_merge_freezes_only_full_gate_winner(self):
         library = {
             "strategies": [{"id": "s1", "name": "Test", "validation_status": "unvalidated"}],
@@ -393,6 +597,7 @@ class AutonomousResearchTests(unittest.TestCase):
             "research_runs": [],
         }
         report = {
+            "validation_version": CURRENT_AUTONOMOUS_VALIDATION_VERSION,
             "generated_at": "2026-08-27T05:00:00Z",
             "timeframe": "5Min",
             "intraday_lookback_days": 60,
@@ -425,10 +630,26 @@ class AutonomousResearchTests(unittest.TestCase):
                     "candidate_symbols": ["AAA", "BBB", "CCC"],
                     "global_score": 82,
                     "validation_status": "validated",
+                    "promotion_gate_passed": True,
+                    "validation_version": CURRENT_AUTONOMOUS_VALIDATION_VERSION,
                     "gate_reasons": [],
                     "strength": {"score": 80, "label": "STRONG"},
                     "generalization": {"summary": {"score": 85, "label": "BROAD"}},
                     "walk_forward": {"summary": {"profitable_fold_pct": 100}},
+                    "parameter_stability": {
+                        "status": "complete",
+                        "label": "STRONG",
+                        "tested": 12,
+                        "active": 8,
+                        "positive": 6,
+                        "positive_pct": 75.0,
+                    },
+                    "adaptive_static_comparison": {
+                        "status": "complete",
+                        "evidence_valid": True,
+                        "decision": "no_material_adaptive_advantage",
+                        "recommended_mode": "frozen_static",
+                    },
                     "optimization_report": {
                         "winner": {
                             "status": "VALIDATED",
@@ -448,6 +669,13 @@ class AutonomousResearchTests(unittest.TestCase):
         self.assertEqual(strategy["validation_status"], "validated")
         self.assertEqual(strategy["validated_rules"]["min_relative_volume"], 2.5)
         self.assertTrue(merged["validation_runs"][0]["autonomous"])
+        self.assertEqual(merged["validation_runs"][0]["parameter_stability"]["tested"], 12)
+        self.assertEqual(
+            merged["validation_runs"][0]["validation_version"],
+            CURRENT_AUTONOMOUS_VALIDATION_VERSION,
+        )
+        self.assertTrue(merged["validation_runs"][0]["promotion_gate_passed"])
+        self.assertEqual(strategy["last_autonomous_research"]["parameter_stability_positive_pct"], 75.0)
         saved_run = merged["research_runs"][0]
         self.assertEqual(saved_run["kind"], "autonomous_research")
         self.assertEqual(saved_run["run_status"], "complete_with_skips")

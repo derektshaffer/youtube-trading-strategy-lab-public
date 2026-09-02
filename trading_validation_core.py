@@ -302,6 +302,7 @@ def walk_forward_validate(
                 "history_end": history_sessions[-1],
                 "external_test_start": external_test_sessions[0],
                 "external_test_end": external_test_sessions[-1],
+                "external_test_sessions": list(external_test_sessions),
                 "history_session_count": len(history_sessions),
                 "test_session_count": len(external_test_sessions),
                 "selected_strategy_id": source_id,
@@ -410,5 +411,263 @@ def walk_forward_validate(
         "note": (
             "Each external fold is unseen by that fold's optimizer. Results remain historical simulations "
             "and do not establish future profitability."
+        ),
+    }
+
+
+def _comparison_arm_summary(
+    folds: list[dict[str, Any]],
+    metrics_key: str,
+) -> dict[str, Any]:
+    metrics = [fold.get(metrics_key) or {} for fold in folds]
+    trade_count = sum(int(safe_float(item.get("trade_count"), 0) or 0) for item in metrics)
+    net_pnl = sum(safe_float(item.get("net_pnl"), 0.0) or 0.0 for item in metrics)
+    returns = [safe_float(item.get("return_pct"), 0.0) or 0.0 for item in metrics]
+    active = [item for item in metrics if int(safe_float(item.get("trade_count"), 0) or 0) > 0]
+    profitable = [item for item in active if (safe_float(item.get("net_pnl"), 0.0) or 0.0) > 0]
+    weighted_wins = sum(
+        (safe_float(item.get("win_rate_pct"), 0.0) or 0.0)
+        * int(safe_float(item.get("trade_count"), 0) or 0)
+        for item in metrics
+    )
+    profitable_pct = len(profitable) / len(active) * 100.0 if active else 0.0
+    average_return = mean(returns) if returns else 0.0
+    dispersion = pstdev(returns) if len(returns) > 1 else 0.0
+    stability = max(0.0, min(100.0, 100.0 * (1.0 - dispersion / max(abs(average_return), 1.0))))
+    return {
+        "fold_count": len(folds),
+        "active_fold_count": len(active),
+        "profitable_fold_count": len(profitable),
+        "profitable_fold_pct": round(profitable_pct, 1),
+        "trade_count": trade_count,
+        "net_pnl": round(net_pnl, 2),
+        "return_pct": round(sum(returns), 3),
+        "expectancy_per_trade": round(net_pnl / trade_count, 4) if trade_count else 0.0,
+        "win_rate_pct": round(weighted_wins / trade_count, 2) if trade_count else 0.0,
+        "max_drawdown_pct": round(
+            max([safe_float(item.get("max_drawdown_pct"), 0.0) or 0.0 for item in metrics] or [0.0]),
+            3,
+        ),
+        "average_fold_return_pct": round(average_return, 3),
+        "median_fold_return_pct": round(median(returns), 3) if returns else 0.0,
+        "fold_return_dispersion_pct": round(dispersion, 3),
+        "fold_stability_score": round(stability, 1),
+    }
+
+
+def adaptive_vs_static_compare(
+    rows: list[dict[str, Any]],
+    strategies: list[dict[str, Any]],
+    symbol: str,
+    backtest_settings: BacktestSettings | None = None,
+    optimization_settings: OptimizationSettings | None = None,
+    *,
+    adaptive_report: dict[str, Any] | None = None,
+    minimum_history_sessions: int = 8,
+    test_sessions_per_fold: int = 2,
+    max_folds: int = 3,
+) -> dict[str, Any]:
+    """Compare causal adaptive updates with one strategy frozen before unseen folds.
+
+    The adaptive fold choices come from ``walk_forward_validate``. Both arms are
+    re-evaluated on the exact same external rows with the same fixed execution and
+    risk settings. The static arm is optimized once on the first fold's history.
+    """
+    settings = backtest_settings or BacktestSettings()
+    settings.validate()
+    optimizer = optimization_settings or OptimizationSettings(selection_mode="validated")
+    optimizer = replace(optimizer, selection_mode="validated")
+    optimizer.validate()
+
+    adaptive = adaptive_report or walk_forward_validate(
+        rows,
+        strategies,
+        symbol,
+        settings,
+        optimizer,
+        minimum_history_sessions=minimum_history_sessions,
+        test_sessions_per_fold=test_sessions_per_fold,
+        max_folds=max_folds,
+    )
+    adaptive_folds = list(adaptive.get("folds") or [])
+    if len(adaptive_folds) < 2:
+        return {
+            "status": "insufficient_evidence",
+            "evidence_valid": False,
+            "decision": "insufficient_evidence",
+            "reasons": ["Adaptive-versus-static comparison requires at least two unseen folds."],
+            "folds": [],
+        }
+
+    frame = bars_to_frame(rows, include_extended_hours=True)
+    sessions = list(dict.fromkeys(frame.get("session", pd.Series(dtype=str)).tolist()))
+    initial_history_count = int(adaptive_folds[0].get("history_session_count") or 0)
+    if initial_history_count < 1 or initial_history_count >= len(sessions):
+        raise AppError("Adaptive-versus-static comparison could not resolve the initial history window.")
+
+    initial_sessions = sessions[:initial_history_count]
+    initial_frame = frame[frame["session"].isin(initial_sessions)].copy().reset_index(drop=True)
+    static_report = optimize_stock_strategies(
+        _frame_to_rows(initial_frame),
+        strategies,
+        symbol,
+        settings,
+        optimizer,
+        finalize_holdout=True,
+    )
+    static_winner = static_report.get("winner") or {}
+    static_source_id = str(static_winner.get("source_strategy_id") or "")
+    static_source = next(
+        (item for item in strategies if str(item.get("id") or "") == static_source_id),
+        None,
+    )
+    if static_source is None:
+        raise AppError("Frozen-static comparison could not resolve its initial strategy.")
+    static_rules = normalize_machine_rules(
+        static_winner.get("optimized_rules") or static_source.get("machine_rules")
+    )
+    static_strategy = {**static_source, "machine_rules": static_rules}
+
+    comparison_folds: list[dict[str, Any]] = []
+    previous_adaptive_rules: dict[str, Any] | None = None
+    adaptation_count = 0
+    changed_rule_count = 0
+    same_initial_selection = False
+
+    for index, adaptive_fold in enumerate(adaptive_folds):
+        external_sessions = list(adaptive_fold.get("external_test_sessions") or [])
+        if not external_sessions:
+            start = str(adaptive_fold.get("external_test_start") or "")
+            end = str(adaptive_fold.get("external_test_end") or "")
+            external_sessions = [session for session in sessions if start <= str(session) <= end]
+        external_frame = frame[frame["session"].isin(external_sessions)].copy().reset_index(drop=True)
+        if external_frame.empty:
+            raise AppError("Adaptive-versus-static comparison found an empty unseen fold.")
+
+        adaptive_source_id = str(adaptive_fold.get("selected_strategy_id") or "")
+        adaptive_source = next(
+            (item for item in strategies if str(item.get("id") or "") == adaptive_source_id),
+            None,
+        )
+        if adaptive_source is None:
+            raise AppError("Adaptive-versus-static comparison could not resolve an adaptive strategy.")
+        adaptive_rules = normalize_machine_rules(
+            adaptive_fold.get("optimized_rules") or adaptive_source.get("machine_rules")
+        )
+        adaptive_strategy = {**adaptive_source, "machine_rules": adaptive_rules}
+        external_rows = _frame_to_rows(external_frame)
+        adaptive_metrics = (
+            run_backtest(external_rows, adaptive_strategy, symbol, settings).get("metrics") or {}
+        )
+        static_metrics = (
+            run_backtest(external_rows, static_strategy, symbol, settings).get("metrics") or {}
+        )
+
+        if index == 0:
+            same_initial_selection = (
+                adaptive_source_id == static_source_id and adaptive_rules == static_rules
+            )
+        elif previous_adaptive_rules is not None and adaptive_rules != previous_adaptive_rules:
+            adaptation_count += 1
+            changed_rule_count += sum(
+                1
+                for key in set(previous_adaptive_rules) | set(adaptive_rules)
+                if previous_adaptive_rules.get(key) != adaptive_rules.get(key)
+            )
+        previous_adaptive_rules = adaptive_rules
+
+        comparison_folds.append(
+            {
+                "fold": adaptive_fold.get("fold", index + 1),
+                "adaptive_history_end": adaptive_fold.get("history_end"),
+                "external_test_sessions": external_sessions,
+                "adaptive_strategy_id": adaptive_source_id,
+                "static_strategy_id": static_source_id,
+                "adaptive_rules": adaptive_rules,
+                "static_rules": static_rules,
+                "adaptive_metrics": adaptive_metrics,
+                "static_metrics": static_metrics,
+            }
+        )
+
+    adaptive_summary = _comparison_arm_summary(comparison_folds, "adaptive_metrics")
+    static_summary = _comparison_arm_summary(comparison_folds, "static_metrics")
+    return_delta = adaptive_summary["return_pct"] - static_summary["return_pct"]
+    expectancy_delta = (
+        adaptive_summary["expectancy_per_trade"] - static_summary["expectancy_per_trade"]
+    )
+    material_threshold = max(0.5, abs(static_summary["return_pct"]) * 0.10)
+    evidence_valid = bool(
+        same_initial_selection
+        and len(comparison_folds) >= 2
+        and adaptive_summary["trade_count"] >= 4
+        and static_summary["trade_count"] >= 4
+    )
+
+    adaptive_materially_better = bool(
+        evidence_valid
+        and return_delta >= material_threshold
+        and expectancy_delta > 0
+        and adaptive_summary["win_rate_pct"] >= static_summary["win_rate_pct"]
+        and adaptive_summary["profitable_fold_pct"] >= static_summary["profitable_fold_pct"]
+        and adaptive_summary["max_drawdown_pct"] <= static_summary["max_drawdown_pct"] + 1.0
+    )
+    static_materially_better = bool(
+        evidence_valid
+        and (
+            -return_delta >= material_threshold
+            or adaptive_summary["max_drawdown_pct"] > static_summary["max_drawdown_pct"] + 1.0
+            or adaptive_summary["profitable_fold_pct"] < static_summary["profitable_fold_pct"]
+        )
+    )
+    if not evidence_valid:
+        decision = "insufficient_evidence"
+        recommended_mode = None
+    elif adaptive_materially_better:
+        decision = "adaptive_materially_outperforms"
+        recommended_mode = "adaptive"
+    elif static_materially_better:
+        decision = "frozen_static_preferred"
+        recommended_mode = "frozen_static"
+    else:
+        decision = "no_material_adaptive_advantage"
+        recommended_mode = "frozen_static"
+
+    reasons: list[str] = []
+    if not same_initial_selection:
+        reasons.append("The two arms did not produce the same deterministic initial selection.")
+    if adaptive_summary["trade_count"] < 4:
+        reasons.append("Adaptive unseen periods contain fewer than four trades.")
+    if static_summary["trade_count"] < 4:
+        reasons.append("Frozen-static unseen periods contain fewer than four trades.")
+    if decision == "no_material_adaptive_advantage":
+        reasons.append("Adaptive updates did not clear the material-improvement threshold after complexity.")
+    if decision == "frozen_static_preferred":
+        reasons.append("Adaptive updates added complexity without preserving the frozen-static risk/performance profile.")
+
+    return {
+        "status": "complete" if evidence_valid else "insufficient_evidence",
+        "evidence_valid": evidence_valid,
+        "decision": decision,
+        "recommended_mode": recommended_mode,
+        "same_initial_selection": same_initial_selection,
+        "initial_history_sessions": initial_sessions,
+        "evaluation_backtest_settings": asdict(settings),
+        "adaptive": adaptive_summary,
+        "frozen_static": static_summary,
+        "return_advantage_pct": round(return_delta, 3),
+        "expectancy_advantage_per_trade": round(expectancy_delta, 4),
+        "material_return_threshold_pct": round(material_threshold, 3),
+        "adaptation_cost": {
+            "adaptation_count": adaptation_count,
+            "changed_rule_count": changed_rule_count,
+            "monetized_cost": None,
+            "note": "Rule-update turnover is recorded; no unsupported monetary adaptation cost is invented.",
+        },
+        "folds": comparison_folds,
+        "reasons": reasons,
+        "note": (
+            "Both arms use identical unseen rows and fixed execution/risk settings. Adaptive rules may "
+            "change only after each prior unseen period has entered the historical window."
         ),
     }

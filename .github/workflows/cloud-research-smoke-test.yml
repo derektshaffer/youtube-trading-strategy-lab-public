@@ -5,6 +5,14 @@ run-name: Cloud research smoke test · ${{ inputs.requested_from || 'manual' }}
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: "Bounded smoke mode"
+        required: true
+        default: "dependency"
+        type: choice
+        options:
+          - dependency
+          - validation_pipeline
       requested_from:
         description: "Where the smoke test was requested from"
         required: false
@@ -20,16 +28,11 @@ concurrency:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     env:
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      GITHUB_BACKUP_REPOSITORY: ${{ secrets.TRADING_LAB_BACKUP_REPOSITORY }}
-      GITHUB_BACKUP_TOKEN: ${{ secrets.TRADING_LAB_BACKUP_TOKEN }}
       GITHUB_BACKUP_BRANCH: ${{ vars.GITHUB_BACKUP_BRANCH }}
       GITHUB_BACKUP_PATH: ${{ vars.TRADING_INTELLIGENCE_BACKUP_PATH || 'trading-intelligence-lab/intelligence_library.json' }}
       TRADING_SYSTEM_HEALTH_BACKUP_PATH: ${{ vars.TRADING_SYSTEM_HEALTH_BACKUP_PATH || 'trading-intelligence-lab/system_health.json' }}
-      ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
-      ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
       ALPACA_LIVE_FEED: ${{ vars.ALPACA_LIVE_FEED || 'iex' }}
       ALPACA_HISTORICAL_FEED: ${{ vars.ALPACA_HISTORICAL_FEED || 'sip' }}
 
@@ -43,11 +46,19 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
 
-      - name: Validate required worker secrets
+      - name: Validate dependency-smoke secrets
+        if: inputs.mode == 'dependency'
         shell: bash
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_BACKUP_REPOSITORY: ${{ secrets.TRADING_LAB_BACKUP_REPOSITORY }}
+          GITHUB_BACKUP_TOKEN: ${{ secrets.TRADING_LAB_BACKUP_TOKEN }}
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
         run: |
+          set +x
           missing=0
-          for name in GEMINI_API_KEY GITHUB_BACKUP_REPOSITORY GITHUB_BACKUP_TOKEN ALPACA_API_KEY ALPACA_SECRET_KEY; do
+          for name in ALPACA_API_KEY ALPACA_SECRET_KEY GEMINI_API_KEY GITHUB_BACKUP_REPOSITORY GITHUB_BACKUP_TOKEN; do
             if [ -z "${!name}" ]; then
               echo "::error::Missing required Actions secret: $name"
               missing=1
@@ -58,4 +69,41 @@ jobs:
           fi
 
       - name: Run end-to-end cloud smoke test
+        if: inputs.mode == 'dependency'
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_BACKUP_REPOSITORY: ${{ secrets.TRADING_LAB_BACKUP_REPOSITORY }}
+          GITHUB_BACKUP_TOKEN: ${{ secrets.TRADING_LAB_BACKUP_TOKEN }}
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
         run: python cloud_research_smoke_test.py
+
+      - name: Validate authenticated validation-smoke secrets
+        if: inputs.mode == 'validation_pipeline'
+        shell: bash
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+        run: |
+          set +x
+          missing=0
+          for name in ALPACA_API_KEY ALPACA_SECRET_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing required Actions secret: $name"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Run bounded authenticated validation-pipeline smoke
+        if: inputs.mode == 'validation_pipeline'
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+        run: |
+          set +x
+          python authenticated_validation_pipeline_smoke.py

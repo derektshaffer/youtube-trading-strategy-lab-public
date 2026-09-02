@@ -16,8 +16,9 @@ from typing import Any, Callable
 
 from trading_catalyst_core import enrich_bars_with_point_in_time_catalysts, historical_news
 from trading_intelligence_core import effective_strategy_for_research, research_readiness
+from stock_strategy_finder import parameter_stability_test
 from trading_universe_research import cross_stock_generalization
-from trading_validation_core import validation_strength, walk_forward_validate
+from trading_validation_core import adaptive_vs_static_compare, validation_strength, walk_forward_validate
 from youtube_strategy_engine import (
     AlpacaMarketData,
     AppError,
@@ -38,6 +39,96 @@ AUTO_DAILY_LOOKBACK_DAYS = 1825
 AUTO_EVENT_WINDOW_DAYS = 120
 AUTO_EVENT_WINDOW_BUFFER_DAYS = 30
 AUTO_TIMEFRAME = "5Min"
+AUTO_PARAMETER_STABILITY_VARIANTS = 12
+CURRENT_AUTONOMOUS_VALIDATION_VERSION = 2
+
+
+def autonomous_validation_evidence_status(
+    record: dict[str, Any],
+    *,
+    fallback_version: int | None = None,
+) -> dict[str, Any]:
+    """Derive current eligibility without mutating the historical validation record."""
+    raw_version = record.get("validation_version", fallback_version)
+    try:
+        version = int(raw_version or 0)
+    except (TypeError, ValueError):
+        version = 0
+
+    walk = record.get("walk_forward") or {}
+    stability = record.get("parameter_stability") or {}
+    comparison = record.get("adaptive_static_comparison") or {}
+    walk_complete = bool(record.get("walk_forward_evidence_complete")) or bool(walk.get("summary"))
+    stability_complete = bool(record.get("parameter_stability_evidence_complete")) or (
+        str(stability.get("status") or "").lower() == "complete"
+    )
+    comparison_complete = bool(record.get("adaptive_static_evidence_complete")) or (
+        str(comparison.get("status") or "").lower() == "complete"
+        and bool(comparison.get("evidence_valid"))
+    )
+    evidence_complete = walk_complete and stability_complete and comparison_complete
+    legacy = version < CURRENT_AUTONOMOUS_VALIDATION_VERSION
+    promotion_gate_passed = bool(record.get("promotion_gate_passed"))
+    reasons: list[str] = []
+    if legacy:
+        reasons.append(
+            f"Validation version {version or 'legacy'} predates current version "
+            f"{CURRENT_AUTONOMOUS_VALIDATION_VERSION}."
+        )
+    if not walk_complete:
+        reasons.append("Required walk-forward evidence is missing.")
+    if not stability_complete:
+        reasons.append("Required parameter-neighborhood evidence is missing or incomplete.")
+    if not comparison_complete:
+        reasons.append("Required adaptive-versus-frozen-static evidence is missing or invalid.")
+    return {
+        "validation_version": version,
+        "current_validation_version": CURRENT_AUTONOMOUS_VALIDATION_VERSION,
+        "legacy": legacy,
+        "evidence_complete": evidence_complete,
+        "promotion_gate_passed": promotion_gate_passed,
+        "current_eligible": bool(not legacy and evidence_complete and promotion_gate_passed),
+        "label": "current" if not legacy and evidence_complete else "stale_revalidation_required",
+        "reasons": reasons,
+    }
+
+
+def effective_autonomous_validation_status(
+    record: dict[str, Any],
+    *,
+    fallback_version: int | None = None,
+) -> tuple[str, dict[str, Any]]:
+    requested = str(record.get("validation_status") or "research_only")
+    evidence = autonomous_validation_evidence_status(record, fallback_version=fallback_version)
+    if requested == "validated" and not evidence["current_eligible"]:
+        return "revalidation_required", evidence
+    return requested, evidence
+
+
+def reconcile_autonomous_validation_statuses(
+    library: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    """Demote stale current status while preserving all historical results and rules."""
+    data = dict(library or {})
+    changed = False
+    strategies: list[dict[str, Any]] = []
+    for raw in data.get("strategies") or []:
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        last = item.get("last_autonomous_research")
+        if isinstance(last, dict) and str(item.get("validation_status") or "") == "validated":
+            status, evidence = effective_autonomous_validation_status(last)
+            if status != "validated":
+                item["historical_autonomous_validation_status"] = "validated"
+                item["validation_status"] = "revalidation_required"
+                item["current_validation_eligible"] = False
+                item["validation_evidence_status"] = evidence["label"]
+                item["validation_revalidation_reasons"] = evidence["reasons"]
+                changed = True
+        strategies.append(item)
+    data["strategies"] = strategies
+    return data, changed
 
 
 def _notify(callback: Callable[[str], None] | None, message: str) -> None:
@@ -973,6 +1064,8 @@ def _global_validation_gate(
     generalization: dict[str, Any],
     walk_forward: dict[str, Any] | None,
     broad_universe: bool,
+    parameter_stability: dict[str, Any] | None = None,
+    adaptive_static_comparison: dict[str, Any] | None = None,
 ) -> tuple[str, list[str]]:
     winner = anchor_report.get("winner") or {}
     summary = generalization.get("summary") or {}
@@ -995,12 +1088,45 @@ def _global_validation_gate(
     if not broad_universe:
         reasons.append("Only a current-screener fallback universe was available, so selection bias is too high.")
 
-    if walk_forward:
+    if not walk_forward:
+        reasons.append("Walk-forward validation did not produce required unseen-period evidence.")
+    elif str(walk_forward.get("status") or "").lower() == "error":
+        detail = str(walk_forward.get("error") or "unknown walk-forward error")
+        reasons.append(f"Walk-forward validation failed: {detail}")
+    else:
         wf = walk_forward.get("summary") or {}
         if (safe_float(wf.get("profitable_fold_pct"), 0.0) or 0.0) < 50.0:
             reasons.append("Fewer than half of rolling walk-forward folds were profitable.")
         if int(wf.get("external_trade_count") or 0) < 4:
             reasons.append("Walk-forward unseen periods contain fewer than four trades.")
+
+    if not parameter_stability:
+        reasons.append("Required parameter-neighborhood robustness evidence is missing.")
+    else:
+        stability_status = str(parameter_stability.get("status") or "").strip().lower()
+        tested = int(parameter_stability.get("tested") or 0)
+        active = int(parameter_stability.get("active") or 0)
+        positive = int(parameter_stability.get("positive") or 0)
+        positive_pct = safe_float(parameter_stability.get("positive_pct"), 0.0) or 0.0
+        active_coverage = active / tested if tested > 0 else 0.0
+        if stability_status != "complete":
+            reasons.append("Parameter-neighborhood robustness testing did not complete.")
+        if tested < 3:
+            reasons.append("Parameter-neighborhood testing produced fewer than three distinct configurations.")
+        if active < 3 or active_coverage < 0.50:
+            reasons.append("Too few nearby parameter configurations produced usable trade evidence.")
+        if positive < 3:
+            reasons.append("Fewer than three parameter configurations were profitable on the untouched holdout.")
+        if positive_pct < 55.0:
+            reasons.append("Fewer than 55% of active nearby parameter configurations were profitable.")
+
+    if not adaptive_static_comparison:
+        reasons.append("Required adaptive-versus-frozen-static comparison evidence is missing.")
+    elif (
+        str(adaptive_static_comparison.get("status") or "").lower() != "complete"
+        or not bool(adaptive_static_comparison.get("evidence_valid"))
+    ):
+        reasons.append("Adaptive-versus-frozen-static comparison evidence is incomplete or invalid.")
 
     return ("validated" if not reasons else "research_only"), reasons
 
@@ -1246,8 +1372,58 @@ def run_autonomous_research(
                     test_sessions_per_fold=2,
                     max_folds=2,
                 )
-            except AppError:
-                walk_report = None
+            except AppError as exc:
+                walk_report = {
+                    "status": "error",
+                    "summary": {},
+                    "folds": [],
+                    "error": str(exc),
+                }
+
+            adaptive_static_comparison = None
+            if walk_report and str(walk_report.get("status") or "").lower() != "error":
+                try:
+                    _notify(
+                        progress,
+                        f"Comparing adaptive and frozen-static behavior for {strategy.get('name')}…",
+                    )
+                    adaptive_static_comparison = adaptive_vs_static_compare(
+                        rows,
+                        [effective],
+                        anchor,
+                        settings,
+                        optimizer,
+                        adaptive_report=walk_report,
+                    )
+                except AppError as exc:
+                    adaptive_static_comparison = {
+                        "status": "error",
+                        "evidence_valid": False,
+                        "decision": "insufficient_evidence",
+                        "error": str(exc),
+                    }
+
+            parameter_stability = None
+            try:
+                _notify(
+                    progress,
+                    f"Testing the nearby parameter neighborhood for {strategy.get('name')}…",
+                )
+                parameter_stability = parameter_stability_test(
+                    rows,
+                    effective,
+                    report,
+                    maximum=AUTO_PARAMETER_STABILITY_VARIANTS,
+                )
+            except AppError as exc:
+                parameter_stability = {
+                    "status": "error",
+                    "tested": 0,
+                    "active": 0,
+                    "positive": 0,
+                    "positive_pct": 0.0,
+                    "error": str(exc),
+                }
 
             strength = validation_strength(report, walk_report)
             frozen = {
@@ -1276,6 +1452,8 @@ def run_autonomous_research(
                 generalization=generalization,
                 walk_forward=walk_report,
                 broad_universe=bool(universe.get("point_in_time_capable")),
+                parameter_stability=parameter_stability,
+                adaptive_static_comparison=adaptive_static_comparison,
             )
             global_score = round(
                 (safe_float(strength.get("score"), 0.0) or 0.0) * 0.65
@@ -1307,11 +1485,15 @@ def run_autonomous_research(
                     },
                     "optimization_report": report,
                     "walk_forward": walk_report,
+                    "parameter_stability": parameter_stability,
+                    "adaptive_static_comparison": adaptive_static_comparison,
+                    "validation_version": CURRENT_AUTONOMOUS_VALIDATION_VERSION,
                     "strength": strength,
                     "generalization": generalization,
                     "global_score": global_score,
                     "validation_status": validation_status,
                     "gate_reasons": gate_reasons,
+                    "promotion_gate_passed": validation_status == "validated" and not gate_reasons,
                     "catalyst_summary_by_symbol": {
                         symbol: catalyst_summary_by_symbol.get(symbol)
                         for symbol in candidate_symbols
@@ -1345,6 +1527,7 @@ def run_autonomous_research(
     )
 
     return {
+        "validation_version": CURRENT_AUTONOMOUS_VALIDATION_VERSION,
         "generated_at": utc_now().isoformat(),
         "universe": universe,
         "daily_lookback_days": AUTO_DAILY_LOOKBACK_DAYS,
@@ -1384,7 +1567,7 @@ def merge_autonomous_research_into_library(
     report: dict[str, Any],
 ) -> dict[str, Any]:
     """Persist autonomous research outcomes without requiring manual save clicks."""
-    data = dict(library or {})
+    data, _ = reconcile_autonomous_validation_statuses(library)
     strategies = [dict(item) for item in data.get("strategies") or [] if isinstance(item, dict)]
     by_id = {str(item.get("id") or ""): item for item in strategies if item.get("id")}
 
@@ -1399,7 +1582,12 @@ def merge_autonomous_research_into_library(
         strength = result.get("strength") or {}
         generalization = result.get("generalization") or {}
         walk = result.get("walk_forward") or {}
-        status = str(result.get("validation_status") or "research_only")
+        parameter_stability = result.get("parameter_stability") or {}
+        adaptive_static = result.get("adaptive_static_comparison") or {}
+        status, evidence = effective_autonomous_validation_status(
+            result,
+            fallback_version=report.get("validation_version"),
+        )
 
         item["validation_status"] = status
         item["optimization_status"] = str(winner.get("status") or "not_run").lower().replace(" ", "_")
@@ -1412,6 +1600,25 @@ def merge_autonomous_research_into_library(
             "robustness_label": strength.get("label"),
             "generalization_score": (generalization.get("summary") or {}).get("score"),
             "generalization_label": (generalization.get("summary") or {}).get("label"),
+            "parameter_stability_status": parameter_stability.get("status"),
+            "parameter_stability_label": parameter_stability.get("label"),
+            "parameter_stability_tested": parameter_stability.get("tested"),
+            "parameter_stability_active": parameter_stability.get("active"),
+            "parameter_stability_positive": parameter_stability.get("positive"),
+            "parameter_stability_positive_pct": parameter_stability.get("positive_pct"),
+            "adaptive_static_decision": adaptive_static.get("decision"),
+            "adaptive_static_recommended_mode": adaptive_static.get("recommended_mode"),
+            "validation_version": evidence["validation_version"],
+            "walk_forward_evidence_complete": bool(walk.get("summary")),
+            "parameter_stability_evidence_complete": (
+                str(parameter_stability.get("status") or "").lower() == "complete"
+            ),
+            "adaptive_static_evidence_complete": (
+                str(adaptive_static.get("status") or "").lower() == "complete"
+                and bool(adaptive_static.get("evidence_valid"))
+            ),
+            "promotion_gate_passed": evidence["promotion_gate_passed"],
+            "validation_evidence_status": evidence["label"],
             "validation_status": status,
             "gate_reasons": result.get("gate_reasons") or [],
             "universe_source": (report.get("universe") or {}).get("source"),
@@ -1443,6 +1650,11 @@ def merge_autonomous_research_into_library(
                 "holdout_metrics": winner.get("holdout_metrics") or {},
                 "stress_metrics": winner.get("stress_metrics") or {},
                 "walk_forward_summary": walk.get("summary"),
+                "parameter_stability": parameter_stability,
+                "adaptive_static_comparison": adaptive_static,
+                "validation_version": evidence["validation_version"],
+                "validation_evidence_status": evidence["label"],
+                "promotion_gate_passed": evidence["promotion_gate_passed"],
                 "optimized_rules": winner.get("optimized_rules") or {},
                 "optimized_backtest_settings": winner.get("optimized_backtest_settings") or {},
                 "autonomous": True,
@@ -1464,6 +1676,7 @@ def merge_autonomous_research_into_library(
         "id": f"autonomous:{report.get('generated_at')}",
         "generated_at": report.get("generated_at"),
         "kind": "autonomous_research",
+        "validation_version": report.get("validation_version"),
         "universe": report.get("universe") or {},
         "daily_lookback_days": report.get("daily_lookback_days"),
         "event_window_days": report.get("event_window_days"),
