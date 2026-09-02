@@ -1,0 +1,52 @@
+name: Validation Calibration Audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "codex/validation-calibration-audit-*"
+    paths:
+      - "validation_calibration_audit.py"
+      - "test_validation_calibration_audit.py"
+      - "trading_validation_core.py"
+      - "trading_auto_research.py"
+      - ".github/workflows/validation-calibration-audit.yml"
+  pull_request:
+    paths:
+      - "validation_calibration_audit.py"
+      - "test_validation_calibration_audit.py"
+      - "trading_validation_core.py"
+      - "trading_auto_research.py"
+      - ".github/workflows/validation-calibration-audit.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  calibrate-validator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Run hard calibration regressions
+        run: python -m unittest test_validation_calibration_audit -v
+
+      - name: Generate diagnostic calibration report
+        run: python validation_calibration_audit.py --json /tmp/validation_calibration_audit.json
+
+      - name: Upload calibration report
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-calibration-audit
+          path: /tmp/validation_calibration_audit.json
+          if-no-files-found: error
+          retention-days: 30
