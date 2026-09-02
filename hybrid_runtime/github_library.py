@@ -285,10 +285,18 @@ class GitHubJSONFile:
         )
         return commit_sha
 
-    def dispatch_workflow(self, inputs: Mapping[str, Any] | None = None) -> bool:
-        if not self.config.action_repository or not self.config.workflow_file:
+    def dispatch_workflow(
+        self,
+        inputs: Mapping[str, Any] | None = None,
+        *,
+        workflow_file: str | None = None,
+    ) -> bool:
+        if not self.config.action_repository:
             return False
-        workflow = quote(self.config.workflow_file, safe="")
+        selected_workflow = str(workflow_file or self.config.workflow_file or "").strip().strip("/")
+        if not selected_workflow:
+            return False
+        workflow = quote(selected_workflow, safe="")
         repository = self.config.action_repository
         url = f"{GITHUB_API_URL}/repos/{repository}/actions/workflows/{workflow}/dispatches"
         payload: dict[str, Any] = {"ref": self.config.workflow_ref}
