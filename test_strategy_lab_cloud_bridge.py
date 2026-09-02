@@ -20,6 +20,8 @@ from hybrid_runtime.strategy_lab_bridge import (
     STRATEGY_LAB_CHECKPOINT_PATH,
     prepare_strategy_lab_publication,
 )
+from strategy_lab_jobs import execute_strategy_lab_job_once
+from youtube_strategy_engine import StrategyStore
 
 
 class FakeGitHub:
@@ -229,6 +231,59 @@ def test_bridge_dispatches_progresses_and_completes_from_small_checkpoint():
         assert complete.result["winner_strategy_name"] == "VWAP continuation"
         assert complete.result["holdout_metrics"]["net_pnl"] == 55.0
         assert "report" not in complete.result
+
+
+def test_cloud_wrapper_actually_calls_existing_executor_and_persists_completion():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        checkpoint_store = StrategyStore(root / "checkpoint")
+        main_store = StrategyStore(root / "main")
+        calls: list[dict] = []
+
+        class Market:
+            historical_feed = "sip"
+            live_feed = "sip"
+
+        def fake_executor(job, *, market, main_store, progress, optimizer_resume_state, optimizer_checkpoint):
+            calls.append(
+                {
+                    "ticker": job["ticker"],
+                    "resume_state": optimizer_resume_state,
+                    "market_type": type(market).__name__,
+                }
+            )
+            progress(0.55, "optimization", "Halfway")
+            optimizer_checkpoint({"completed_strategy_ids": ["strategy-one"]})
+            return {
+                "ticker": job["ticker"],
+                "timeframe": job["timeframe"],
+                "history_days": job["history_days"],
+                "report": {"winner": {"strategy_name": "Fake winner"}},
+                "strength": {"score": 77.0},
+                "evidence_verdict": {"code": "research_only"},
+            }
+
+        outcome = execute_strategy_lab_job_once(
+            run_id="wrapper-execution-test",
+            job={
+                "ticker": "SDOT",
+                "timeframe": "5Min",
+                "history_days": 30,
+                "search_depth": 36,
+                "candidates": [{"id": "strategy-one"}],
+            },
+            checkpoint_store=checkpoint_store,
+            market=Market(),
+            main_store=main_store,
+            executor=fake_executor,
+        )
+        assert outcome["status"] == "complete"
+        assert calls and calls[0]["ticker"] == "SDOT"
+        saved = checkpoint_store.load_latest()
+        record = saved["validation_runs"][0]
+        assert record["id"] == "wrapper-execution-test"
+        assert record["status"] == "complete"
+        assert record["result"]["report"]["winner"]["strategy_name"] == "Fake winner"
 
 
 @patch("cloud_strategy_lab_worker.effective_strategy_for_research")
