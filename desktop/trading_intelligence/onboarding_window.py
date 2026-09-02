@@ -140,7 +140,7 @@ class MainWindow(SystemHealthMainWindow):
             self.onboarding.populate(settings, configured)
             self.onboarding.set_verifying(
                 "Verifying saved connections",
-                "Checking the authoritative library, private GitHub/cloud access, and Alpaca market data.",
+                "Checking the authoritative library, GitHub queue write + cloud workflow dispatch, and Alpaca market data.",
                 0.02,
             )
             request = {
@@ -196,7 +196,7 @@ class MainWindow(SystemHealthMainWindow):
             progress = float(job.get("progress") or 0.0)
             self.onboarding.set_verifying(
                 str(job.get("stage") or "verifying").replace("_", " ").title(),
-                "Verifying saved connections. No brokerage orders are submitted.",
+                "Verifying saved connections. No brokerage orders or strategy research are submitted.",
                 progress,
             )
             if not bool(job.get("terminal")):
@@ -227,10 +227,10 @@ class MainWindow(SystemHealthMainWindow):
 
     def skip_onboarding(self) -> None:
         self.top_status.setText(
-            "Limited setup · unavailable connections will remain blocked until Setup is verified"
+            "Limited setup · System Health shows what remains unavailable until Setup is verified"
         )
-        self.show_page(0)
-        QTimer.singleShot(50, self.refresh_profit_first)
+        self.show_page(self.stack.indexOf(self.system_health))
+        QTimer.singleShot(50, self.refresh_system_health)
 
     def save_connection(self, raw_settings: dict[str, Any], token: str) -> None:
         # The legacy Connection Settings page predates the market-feed setting.
