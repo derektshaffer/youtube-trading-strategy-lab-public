@@ -323,5 +323,5 @@ def execute_strategy_lab_job_once(
         checkpoint_store=checkpoint_store,
         market=market,
         main_store=main_store,
-        executor=executor,
+        execute=executor,
     )
