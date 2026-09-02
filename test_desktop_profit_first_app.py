@@ -31,6 +31,8 @@ def test_production_desktop_python_sources_parse():
         "desktop/trading_intelligence/strategy_lab_window.py",
         "desktop/trading_intelligence/research_ml_page.py",
         "desktop/trading_intelligence/research_ml_window.py",
+        "desktop/trading_intelligence/system_health_page.py",
+        "desktop/trading_intelligence/system_health_window.py",
         "hybrid_runtime/desktop_settings.py",
         "hybrid_runtime/library_source.py",
         "hybrid_runtime/market_cache.py",
@@ -41,6 +43,7 @@ def test_production_desktop_python_sources_parse():
         "hybrid_runtime/strategy_lab_bridge.py",
         "hybrid_runtime/strategy_lab_options.py",
         "hybrid_runtime/research_ml_summary.py",
+        "hybrid_runtime/system_health_summary.py",
         "hybrid_runtime/server.py",
         "scripts/build_trading_intelligence_desktop.py",
     ]
@@ -48,7 +51,7 @@ def test_production_desktop_python_sources_parse():
         ast.parse(read(path), filename=path)
 
 
-def test_production_shell_exposes_profit_first_finder_results_research_ml_jobs_and_secure_connection():
+def test_production_shell_exposes_profit_first_finder_results_research_ml_health_jobs_and_secure_connection():
     ui = (
         read("desktop/trading_intelligence/pages.py")
         + read("desktop/trading_intelligence/window.py")
@@ -62,6 +65,8 @@ def test_production_shell_exposes_profit_first_finder_results_research_ml_jobs_a
         + read("desktop/trading_intelligence/strategy_lab_window.py")
         + read("desktop/trading_intelligence/research_ml_page.py")
         + read("desktop/trading_intelligence/research_ml_window.py")
+        + read("desktop/trading_intelligence/system_health_page.py")
+        + read("desktop/trading_intelligence/system_health_window.py")
     )
     settings = read("hybrid_runtime/desktop_settings.py")
     source = read("hybrid_runtime/library_source.py")
@@ -80,6 +85,9 @@ def test_production_shell_exposes_profit_first_finder_results_research_ml_jobs_a
     assert "Research + ML" in ui
     assert "Refresh Research + ML" in ui
     assert "library.research_ml_summary" in ui
+    assert "System Health" in ui
+    assert "Refresh Health" in ui
+    assert "runtime_health=runtime_health" in ui
     assert "strategy.profit_first_plan" in ui
     assert "strategy.profit_first_validation" in ui
     assert "strategy.stock_finder" in ui
@@ -155,6 +163,7 @@ def test_market_cache_is_persistent_incremental_and_explicit_about_price_age():
     cache = read("hybrid_runtime/market_cache.py")
     analysis = read("desktop/trading_intelligence/analysis_page.py")
     ui = read("desktop/trading_intelligence/ui.py")
+    health_window = read("desktop/trading_intelligence/system_health_window.py")
 
     assert "CACHE_DIRECTORY = \"market-cache-v1\"" in cache
     assert "overlap = timedelta" in cache
@@ -162,7 +171,8 @@ def test_market_cache_is_persistent_incremental_and_explicit_about_price_age():
     assert "data_age_seconds" in cache
     assert "Latest completed Alpaca candle close" in cache
     assert "macOS Keychain" in analysis or "persistent local cache" in analysis
-    assert "from .research_ml_window import MainWindow" in ui
+    assert "from .system_health_window import MainWindow" in ui
+    assert "from .research_ml_window import MainWindow as ResearchMLMainWindow" in health_window
 
 
 def test_finder_cloud_jobs_are_background_and_reconnect_safe():
@@ -210,6 +220,21 @@ def test_research_ml_is_bounded_read_only_and_preserves_cloud_reconciliation():
     assert '"affects_live_ranking": False' in summary
     assert '"affects_execution": False' in summary
     assert '"library.research_ml_summary"' in router
+
+
+def test_system_health_is_read_only_source_aware_and_live():
+    page = read("desktop/trading_intelligence/system_health_page.py")
+    window = read("desktop/trading_intelligence/system_health_window.py")
+    summary = read("hybrid_runtime/system_health_summary.py")
+
+    assert "read-only diagnostic" in page
+    assert 'request_json("GET", "/health")' in window
+    assert "build_system_health_summary" in window
+    assert '"runtime_service"' in summary
+    assert '"library_connection"' in summary
+    assert "using_local_library" in summary
+    assert "github_required_for_library" in summary
+    assert '"affects_execution": False' in summary
 
 
 def test_apple_silicon_workflow_launches_full_profit_first_gui():
