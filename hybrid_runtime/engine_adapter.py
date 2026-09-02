@@ -47,6 +47,25 @@ def system_health_handler(
     }
 
 
+def onboarding_probe_handler(
+    payload: Mapping[str, Any],
+    progress: ProgressCallback,
+    cancelled: CancellationCheck,
+) -> Mapping[str, Any]:
+    """Verify saved first-run connections while keeping all credentials in Keychain."""
+
+    data_dir = _desktop_data_dir()
+    if not data_dir:
+        raise RuntimeError("The desktop data directory is unavailable")
+    from .onboarding import verify_setup
+
+    return verify_setup(
+        data_dir,
+        progress=progress,
+        cancelled=cancelled,
+    )
+
+
 def _positive_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
     try:
         parsed = int(value)
@@ -335,6 +354,7 @@ def stock_analysis_handler(
 def default_handlers() -> dict[str, JobHandler]:
     return {
         "system.health": system_health_handler,
+        "system.onboarding_probe": onboarding_probe_handler,
         "chart.framework_fixture": chart_framework_fixture_handler,
         "library.configuration": library_configuration_handler,
         "library.summary": library_summary_handler,
