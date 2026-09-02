@@ -47,6 +47,7 @@ class RoutingPolicy:
             "system.health",
             "cache.inspect",
             "chart.refresh",
+            "chart.framework_fixture",
             "analysis.stock",
             "backtest.quick",
             "strategy.profit_first_plan",
