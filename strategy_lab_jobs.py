@@ -299,3 +299,29 @@ def strategy_lab_job_outcome(run_id: str) -> dict[str, Any]:
         return deepcopy(future.result())
     except BaseException as exc:  # defensive: _run_job normally converts failures
         return {"status": "failed", "message": _message_for_failure(exc)}
+
+
+def execute_strategy_lab_job_once(
+    *,
+    run_id: str,
+    job: dict[str, Any],
+    checkpoint_store: Any,
+    market: Any,
+    main_store: Any,
+    executor: Any = execute_strategy_lab_run,
+) -> dict[str, Any]:
+    """Run one Strategy Lab job through the existing resumable job contract.
+
+    This is used by the dedicated cloud worker. It intentionally shares the
+    exact checkpoint, optimizer-resume, retry, and execution code used by the
+    in-process web runner instead of reimplementing Strategy Lab logic.
+    """
+
+    return _run_job(
+        str(run_id),
+        dict(job),
+        checkpoint_store=checkpoint_store,
+        market=market,
+        main_store=main_store,
+        execute=executor,
+    )

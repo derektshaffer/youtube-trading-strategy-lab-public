@@ -195,17 +195,63 @@ def results_summary_handler(
 
     loaded = load_library_for_job(payload, data_dir=_desktop_data_dir())
     _check_cancelled(cancelled)
-    progress(0.58, "preparing_features", "Compacting recent durable research evidence")
+    progress(0.48, "preparing_features", "Loading the small Strategy Lab checkpoint")
+    combined_library = dict(loaded.library)
+    try:
+        from .library_source import load_strategy_lab_checkpoint_library
+
+        checkpoint = load_strategy_lab_checkpoint_library(data_dir=_desktop_data_dir())
+        checkpoint_runs = [
+            dict(item)
+            for item in checkpoint.library.get("validation_runs") or []
+            if isinstance(item, Mapping)
+        ]
+        if checkpoint_runs:
+            combined_library["validation_runs"] = [
+                *checkpoint_runs,
+                *[
+                    dict(item)
+                    for item in combined_library.get("validation_runs") or []
+                    if isinstance(item, Mapping)
+                    and str(item.get("record_type") or "") != "strategy_lab_checkpoint"
+                ],
+            ]
+    except Exception:
+        # Results remains usable from the authoritative main library even when
+        # the optional small Strategy Lab checkpoint cannot refresh.
+        pass
+    progress(0.62, "preparing_features", "Compacting recent durable research evidence")
     from .results_summary import build_results_summary
 
     limit = _positive_int(payload.get("limit"), default=30, minimum=5, maximum=100)
-    result = dict(build_results_summary(loaded.library, limit=limit))
+    result = dict(build_results_summary(combined_library, limit=limit))
     _check_cancelled(cancelled)
     result["library"] = dict(loaded.metadata)
     result["research_only"] = True
     result["affects_live_ranking"] = False
     result["affects_execution"] = False
     progress(0.92, "saving", "Preparing bounded Results payload")
+    return result
+
+
+def strategy_lab_options_handler(
+    payload: Mapping[str, Any],
+    progress: ProgressCallback,
+    cancelled: CancellationCheck,
+) -> Mapping[str, Any]:
+    progress(0.15, "downloading_data", "Loading the authoritative strategy library")
+    from .library_source import load_library_for_job
+
+    loaded = load_library_for_job(payload, data_dir=_desktop_data_dir())
+    _check_cancelled(cancelled)
+    progress(0.58, "preparing_features", "Applying the Strategy Lab fidelity gate")
+    from .strategy_lab_options import build_strategy_lab_options
+
+    limit = _positive_int(payload.get("limit"), default=300, minimum=1, maximum=500)
+    result = dict(build_strategy_lab_options(loaded.library, limit=limit))
+    result["library"] = dict(loaded.metadata)
+    _check_cancelled(cancelled)
+    progress(0.92, "saving", "Preparing faithful Strategy Lab choices")
     return result
 
 
@@ -265,6 +311,7 @@ def default_handlers() -> dict[str, JobHandler]:
         "library.configuration": library_configuration_handler,
         "library.summary": library_summary_handler,
         "library.results_summary": results_summary_handler,
+        "library.strategy_lab_options": strategy_lab_options_handler,
         "strategy.profit_first_plan": profit_first_plan_handler,
         "analysis.stock": stock_analysis_handler,
     }

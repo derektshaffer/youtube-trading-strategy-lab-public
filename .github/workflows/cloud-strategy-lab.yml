@@ -1,0 +1,76 @@
+name: Cloud Strategy Lab
+
+on:
+  schedule:
+    # Recovery poller. Immediate desktop dispatch is the normal path.
+    - cron: "11,41 * * * *"
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: "Exact queued Strategy Lab job to claim immediately"
+        required: false
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - "cloud_strategy_lab_worker.py"
+      - "strategy_lab_execution.py"
+      - "strategy_lab_jobs.py"
+      - "strategy_lab_persistence.py"
+      - "hybrid_runtime/strategy_lab_bridge.py"
+      - ".github/workflows/cloud-strategy-lab.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialize Strategy Lab workers with each other so a timed-out/recovery run
+  # cannot overlap a still-running Very Deep job. Main-library writes themselves
+  # use optimistic conflict retries and therefore do not hold the global library
+  # writer lock for a multi-hour optimization.
+  group: strategy-lab-cloud-worker
+  cancel-in-progress: false
+
+jobs:
+  strategy-lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      GITHUB_BACKUP_REPOSITORY: ${{ secrets.TRADING_LAB_BACKUP_REPOSITORY }}
+      GITHUB_BACKUP_TOKEN: ${{ secrets.TRADING_LAB_BACKUP_TOKEN }}
+      GITHUB_BACKUP_BRANCH: ${{ vars.GITHUB_BACKUP_BRANCH }}
+      GITHUB_BACKUP_PATH: ${{ vars.TRADING_INTELLIGENCE_BACKUP_PATH || 'trading-intelligence-lab/intelligence_library.json' }}
+      ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+      ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+      ALPACA_LIVE_FEED: ${{ vars.ALPACA_LIVE_FEED || 'iex' }}
+      ALPACA_HISTORICAL_FEED: ${{ vars.ALPACA_HISTORICAL_FEED || 'sip' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Validate Strategy Lab cloud secrets
+        shell: bash
+        run: |
+          missing=0
+          for name in GITHUB_BACKUP_REPOSITORY GITHUB_BACKUP_TOKEN ALPACA_API_KEY ALPACA_SECRET_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing required secret: $name"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Run queued Strategy Lab job
+        run: >-
+          python cloud_strategy_lab_worker.py
+          --job-id "${{ inputs.job_id }}"

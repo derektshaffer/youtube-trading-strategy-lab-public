@@ -27,6 +27,8 @@ def test_production_desktop_python_sources_parse():
         "desktop/trading_intelligence/finder_window.py",
         "desktop/trading_intelligence/results_page.py",
         "desktop/trading_intelligence/results_window.py",
+        "desktop/trading_intelligence/strategy_lab_page.py",
+        "desktop/trading_intelligence/strategy_lab_window.py",
         "hybrid_runtime/desktop_settings.py",
         "hybrid_runtime/library_source.py",
         "hybrid_runtime/market_cache.py",
@@ -34,6 +36,8 @@ def test_production_desktop_python_sources_parse():
         "hybrid_runtime/cloud_link_store.py",
         "hybrid_runtime/stock_finder_bridge.py",
         "hybrid_runtime/results_summary.py",
+        "hybrid_runtime/strategy_lab_bridge.py",
+        "hybrid_runtime/strategy_lab_options.py",
         "hybrid_runtime/server.py",
         "scripts/build_trading_intelligence_desktop.py",
     ]
@@ -51,6 +55,8 @@ def test_production_shell_exposes_profit_first_finder_results_jobs_and_secure_co
         + read("desktop/trading_intelligence/finder_window.py")
         + read("desktop/trading_intelligence/results_page.py")
         + read("desktop/trading_intelligence/results_window.py")
+        + read("desktop/trading_intelligence/strategy_lab_page.py")
+        + read("desktop/trading_intelligence/strategy_lab_window.py")
     )
     settings = read("hybrid_runtime/desktop_settings.py")
     source = read("hybrid_runtime/library_source.py")
@@ -64,9 +70,12 @@ def test_production_shell_exposes_profit_first_finder_results_jobs_and_secure_co
     assert "Results" in ui
     assert "Refresh Results" in ui
     assert "library.results_summary" in ui
+    assert "Strategy Lab" in ui
+    assert "Run Strategy Lab in Cloud" in ui
     assert "strategy.profit_first_plan" in ui
     assert "strategy.profit_first_validation" in ui
     assert "strategy.stock_finder" in ui
+    assert "strategy.strategy_lab" in ui
     assert "Run strict cloud validation" in ui
     assert "Attach to active validation" in ui
     assert "continue_after_app_exit" in ui
@@ -75,6 +84,7 @@ def test_production_shell_exposes_profit_first_finder_results_jobs_and_secure_co
     assert "analysis.stock" in ui
     assert "finder_job_id" in ui
     assert "profit_validation_job_id" in ui
+    assert "strategy_lab_job_id" in ui
     assert "MacOSKeychain().set_secret" in ui
     assert "ALPACA_API_KEY_ACCOUNT" in settings
     assert "ALPACA_SECRET_KEY_ACCOUNT" in settings
@@ -93,6 +103,7 @@ def test_production_sidecar_activates_cloud_bridge_finder_and_link_lookup():
     server = read("hybrid_runtime/server.py")
     bridge = read("hybrid_runtime/cloud_bridge.py")
     finder_bridge = read("hybrid_runtime/stock_finder_bridge.py")
+    strategy_lab_bridge = read("hybrid_runtime/strategy_lab_bridge.py")
     api = read("hybrid_runtime/api.py")
 
     assert "CloudBridgeWorker(" in server
@@ -101,9 +112,12 @@ def test_production_sidecar_activates_cloud_bridge_finder_and_link_lookup():
     assert "cloud_link_lookup=cloud_links.get" in server
     assert '"strategy.profit_first_validation"' in bridge
     assert '"strategy.stock_finder"' in bridge
+    assert '"strategy.strategy_lab"' in bridge
     assert 'DISTRIBUTED_STOCK_FINDER_WORKFLOW = "distributed-stock-finder.yml"' in finder_bridge
     assert 'REMOTE_STOCK_FINDER_TYPE = "stock_finder"' in finder_bridge
     assert "finder_report_for_remote" in finder_bridge
+    assert 'CLOUD_STRATEGY_LAB_WORKFLOW = "cloud-strategy-lab.yml"' in strategy_lab_bridge
+    assert 'REMOTE_STRATEGY_LAB_TYPE = "strategy_lab"' in strategy_lab_bridge
     assert "/v1/jobs/{job_id}/cloud-link" in api
 
 
@@ -121,6 +135,7 @@ def test_production_build_keeps_trading_engines_in_sidecar():
     assert '"youtube_strategy_engine"' not in build
     assert "from youtube_strategy_engine import AlpacaMarketData" in market_cache
     assert '"library.results_summary": results_summary_handler' in adapter
+    assert '"library.strategy_lab_options": strategy_lab_options_handler' in adapter
     app = read("desktop/trading_intelligence/app.py")
     assert "from desktop.trading_intelligence.runtime" in app
     assert "TRADING_INTELLIGENCE_LOCAL_TOKEN" in runtime
@@ -138,7 +153,7 @@ def test_market_cache_is_persistent_incremental_and_explicit_about_price_age():
     assert "data_age_seconds" in cache
     assert "Latest completed Alpaca candle close" in cache
     assert "macOS Keychain" in analysis or "persistent local cache" in analysis
-    assert "from .results_window import MainWindow" in ui
+    assert "from .strategy_lab_window import MainWindow" in ui
 
 
 def test_finder_cloud_jobs_are_background_and_reconnect_safe():

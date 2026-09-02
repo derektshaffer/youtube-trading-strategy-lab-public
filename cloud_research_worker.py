@@ -90,7 +90,7 @@ from youtube_strategy_engine import (
 
 # stock_finder is executable here for direct/dedicated deployments, while the
 # continuous worker deliberately leaves it for the distributed Finder workflow.
-CONTINUOUS_WORKER_JOB_TYPES = SUPPORTED_RESEARCH_JOB_TYPES - {"stock_finder"}
+CONTINUOUS_WORKER_JOB_TYPES = SUPPORTED_RESEARCH_JOB_TYPES - {"stock_finder", "strategy_lab"}
 CLOUD_FINDER_INTEGRITY_VERSION = 2
 DEFAULT_LIVE_LEARNING_OUTBOX_PATH = "trading-intelligence-lab/live_learning_outbox.json"
 LIVE_LEARNING_STORAGE_KEY = "live_learning_observations"
