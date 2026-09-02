@@ -3,6 +3,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 import plistlib
+import subprocess
+import sys
 
 from hybrid_runtime.build_identity import (
     CHANNEL_KEY,
@@ -160,10 +162,28 @@ def test_support_snapshot_carries_only_safe_build_identity():
     assert "app_path" not in str(snapshot)
 
 
+def test_release_scripts_can_run_directly_from_repo_root():
+    for script in (
+        "scripts/build_trading_intelligence_desktop.py",
+        "scripts/package_desktop_beta.py",
+        "scripts/stamp_desktop_bundle.py",
+    ):
+        completed = subprocess.run(
+            [sys.executable, script, "--help"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert completed.returncode == 0, (script, completed.stdout, completed.stderr)
+        assert "usage:" in completed.stdout.lower()
+
+
 def test_build_identity_is_wired_before_final_signing_and_into_system_health():
     build_script = (ROOT / "scripts/build_trading_intelligence_desktop.py").read_text(
         encoding="utf-8"
     )
+    beta_script = (ROOT / "scripts/package_desktop_beta.py").read_text(encoding="utf-8")
     stamp_script = (ROOT / "scripts/stamp_desktop_bundle.py").read_text(encoding="utf-8")
     health_window = (ROOT / "desktop/trading_intelligence/system_health_window.py").read_text(
         encoding="utf-8"
@@ -180,8 +200,11 @@ def test_build_identity_is_wired_before_final_signing_and_into_system_health():
     ):
         ast.parse((ROOT / path).read_text(encoding="utf-8"), filename=path)
 
+    for script_source in (build_script, beta_script, stamp_script):
+        assert "sys.path.insert(0, str(REPO_ROOT))" in script_source
     assert build_script.rfind("stamp_bundle_identity(") < build_script.rfind('["codesign", "--force"')
     assert 'DEFAULT_BUILD_CHANNEL = "development_candidate"' in build_script
+    assert "embedded_identity = read_build_identity(" in beta_script
     assert 'channel: str = "notarized_candidate"' in stamp_script
     assert "read_build_identity()" in health_window
     assert 'result["build"] = read_build_identity()' in health_window
