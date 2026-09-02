@@ -17,7 +17,11 @@ from hybrid_runtime.desktop_settings import (
     save_desktop_settings,
 )
 from hybrid_runtime.keychain import KeychainError, KeychainUnavailable, MacOSKeychain
-from hybrid_runtime.onboarding_state import configuration_status
+from hybrid_runtime.onboarding_state import (
+    configuration_status,
+    mark_setup_pending,
+    mark_setup_verified,
+)
 
 from .onboarding_page import OnboardingPage
 from .system_health_window import MainWindow as SystemHealthMainWindow, clean_error, write_metrics
@@ -38,6 +42,8 @@ class MainWindow(SystemHealthMainWindow):
                 "cloud_configured": False,
                 "market_configured": False,
                 "full_configured": False,
+                "launch_ready": False,
+                "setup_verification": "missing",
             }
         self.onboarding = OnboardingPage(settings, configured)
         self.stack.addWidget(self.onboarding)
@@ -91,15 +97,22 @@ class MainWindow(SystemHealthMainWindow):
                     "cloud_configured": False,
                     "market_configured": False,
                     "full_configured": False,
+                    "launch_ready": False,
+                    "setup_verification": "missing",
                 }
                 self.onboarding.set_error("Setup settings need attention: " + clean_error(exc))
             self.onboarding.populate(settings, configured)
-            if bool(configured.get("full_configured")):
-                # Preserve the existing launch behavior for already-configured users.
+            if bool(configured.get("launch_ready")):
+                # Existing fully configured beta users are grandfathered once;
+                # any later Setup/Connection edit creates a pending state that
+                # must pass the live probes before launch can skip Setup again.
                 super().wait_for_health()
                 return
+            verification = str(configured.get("setup_verification") or "missing")
             self.top_status.setText(
-                "First-run setup · connect the library, cloud research, and market data"
+                "Setup verification pending · re-check the library, cloud research, and market data"
+                if verification == "pending"
+                else "First-run setup · connect the library, cloud research, and market data"
             )
             self.show_page(self.stack.indexOf(self.onboarding))
             self.refresh_jobs()
@@ -133,6 +146,8 @@ class MainWindow(SystemHealthMainWindow):
                 keychain.set_secret(ALPACA_API_KEY_ACCOUNT, alpaca_key)
             if alpaca_secret:
                 keychain.set_secret(ALPACA_SECRET_KEY_ACCOUNT, alpaca_secret)
+            # Any saved setup change is fail-closed until the live probes pass.
+            mark_setup_pending(self.runtime.data_dir)
             # Keep the older Connection Settings page synchronized. It remains a
             # convenient advanced library editor after first-run setup.
             self.connection.populate(settings)
@@ -207,6 +222,13 @@ class MainWindow(SystemHealthMainWindow):
             result = job.get("result") if isinstance(job.get("result"), dict) else {}
             self.active_job_id = ""
             self.active_purpose = ""
+            if result.get("ready"):
+                mark_setup_verified(self.runtime.data_dir)
+            else:
+                mark_setup_pending(self.runtime.data_dir)
+            refreshed_configuration = configuration_status(self.runtime.data_dir)
+            result = dict(result)
+            result["configuration"] = refreshed_configuration
             self.onboarding.render_probe(result)
             self.refresh_jobs()
             self.top_status.setText(
@@ -217,10 +239,24 @@ class MainWindow(SystemHealthMainWindow):
         except BaseException as exc:
             self.active_job_id = ""
             self.active_purpose = ""
+            try:
+                mark_setup_pending(self.runtime.data_dir)
+            except Exception:
+                pass
             self.onboarding.set_error(clean_error(exc))
             self.refresh_jobs()
 
     def complete_onboarding(self) -> None:
+        try:
+            configured = configuration_status(self.runtime.data_dir)
+        except Exception as exc:
+            self.onboarding.set_error("Setup verification state is unavailable: " + clean_error(exc))
+            return
+        if not bool(configured.get("launch_ready")):
+            self.onboarding.set_error(
+                "Setup is not verified for the current configuration. Save securely + verify again."
+            )
+            return
         self.top_status.setText("Setup verified · loading Profit First")
         self.show_page(0)
         QTimer.singleShot(50, self.refresh_profit_first)
@@ -242,6 +278,17 @@ class MainWindow(SystemHealthMainWindow):
         except Exception:
             merged = dict(raw_settings)
         super().save_connection(merged, token)
+        try:
+            mark_setup_pending(self.runtime.data_dir)
+            current = load_desktop_settings(self.runtime.data_dir)
+            self.onboarding.populate(
+                current,
+                configuration_status(self.runtime.data_dir),
+            )
+        except Exception:
+            # Connection Settings already owns its user-facing error handling.
+            # A later Setup/System Health refresh will surface any state issue.
+            pass
 
 
 __all__ = ["MainWindow", "clean_error", "write_metrics"]
