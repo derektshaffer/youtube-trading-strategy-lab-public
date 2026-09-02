@@ -18,7 +18,10 @@ def test_desktop_build_workflow_uses_native_arm_runner_and_both_candidates():
     assert 'test "$(uname -m)" = "arm64"' in workflow
     assert "codesign --verify --deep --strict" in workflow
     assert "smoke_tauri_bundle.py" in workflow
-    assert "--headless-smoke" in workflow
+    assert "--gui-smoke" in workflow
+    assert '"full_gui": True' in (
+        ROOT / "desktop" / "pyside6_spike" / "pyside_gui.py"
+    ).read_text(encoding="utf-8")
     assert "actions/upload-artifact@v4" in workflow
 
 
@@ -81,6 +84,41 @@ def test_tauri_icon_is_present_and_valid_png():
     assert len(data) > 256
 
 
+def test_both_frameworks_render_interactive_candles_from_the_same_local_job():
+    html = (ROOT / "desktop" / "tauri_spike" / "src" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    javascript = (ROOT / "desktop" / "tauri_spike" / "src" / "main.js").read_text(
+        encoding="utf-8"
+    )
+    pyside_app = (ROOT / "desktop" / "pyside6_spike" / "app.py").read_text(
+        encoding="utf-8"
+    )
+    pyside_chart = (
+        ROOT / "desktop" / "pyside6_spike" / "pyside_chart.py"
+    ).read_text(encoding="utf-8")
+    pyside_gui = (
+        ROOT / "desktop" / "pyside6_spike" / "pyside_gui.py"
+    ).read_text(encoding="utf-8")
+    adapter = (ROOT / "hybrid_runtime" / "engine_adapter.py").read_text(
+        encoding="utf-8"
+    )
+    router = (ROOT / "hybrid_runtime" / "router.py").read_text(encoding="utf-8")
+    smoke = (ROOT / "scripts" / "smoke_tauri_bundle.py").read_text(encoding="utf-8")
+
+    assert '<canvas id="chart"' in html
+    assert "Scroll to zoom" in html
+    assert "chart.framework_fixture" in javascript
+    assert "tauri-ui-ready-" in javascript
+    assert "class CandleChart" in pyside_chart
+    assert "--gui-smoke" in pyside_app
+    assert "pyside-ui" in pyside_gui
+    assert "chart_framework_fixture_handler" in adapter
+    assert '"chart.framework_fixture": chart_framework_fixture_handler' in adapter
+    assert '"chart.framework_fixture"' in router
+    assert "wait_for_tauri_ui" in smoke
+
+
 def test_desktop_build_and_smoke_scripts_parse():
     paths = [
         ROOT / "scripts" / "build_desktop_sidecar.py",
@@ -88,6 +126,9 @@ def test_desktop_build_and_smoke_scripts_parse():
         ROOT / "scripts" / "desktop_sidecar_smoke.py",
         ROOT / "scripts" / "smoke_tauri_bundle.py",
         ROOT / "desktop" / "pyside6_spike" / "app.py",
+        ROOT / "desktop" / "pyside6_spike" / "pyside_chart.py",
+        ROOT / "desktop" / "pyside6_spike" / "pyside_gui.py",
+        ROOT / "hybrid_runtime" / "engine_adapter.py",
     ]
     for path in paths:
         ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
