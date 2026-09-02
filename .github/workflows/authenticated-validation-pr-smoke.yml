@@ -1,0 +1,51 @@
+name: Authenticated Validation Smoke (temporary PR gate)
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: github.head_ref == 'codex/authenticated-validation-smoke-current-20260901'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ALPACA_LIVE_FEED: ${{ vars.ALPACA_LIVE_FEED || 'iex' }}
+      ALPACA_HISTORICAL_FEED: ${{ vars.ALPACA_HISTORICAL_FEED || 'sip' }}
+      ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+      ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Validate authenticated provider secrets
+        shell: bash
+        run: |
+          set +x
+          missing=0
+          for name in ALPACA_API_KEY ALPACA_SECRET_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing required Actions secret: $name"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Run authenticated current-pipeline smoke
+        shell: bash
+        run: |
+          set +x
+          python authenticated_validation_pipeline_smoke.py
