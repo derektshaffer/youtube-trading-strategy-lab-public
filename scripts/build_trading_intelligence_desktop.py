@@ -9,6 +9,11 @@ import platform
 import subprocess
 import sys
 
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from hybrid_runtime.build_identity import stamp_bundle_identity
 
 
@@ -20,7 +25,7 @@ DEFAULT_BUILD_CHANNEL = "development_candidate"
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
+    parser.add_argument("--repo-root", default=str(REPO_ROOT))
     parser.add_argument("--sidecar", default="")
     args = parser.parse_args(argv)
     root = Path(args.repo_root).expanduser().resolve()
