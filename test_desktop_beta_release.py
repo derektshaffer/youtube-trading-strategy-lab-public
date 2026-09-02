@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from scripts.package_desktop_beta import build_number, clean_version
+from scripts.package_desktop_beta import build_number, bundle_short_version, clean_version
 
 
 ROOT = Path(__file__).resolve().parent
@@ -23,6 +23,9 @@ def test_beta_packaging_sources_parse_and_version_helpers_are_bounded():
         ast.parse(read(path), filename=path)
     assert clean_version(" 0.2.0 beta / unsafe ") == "0.2.0betaunsafe"
     assert clean_version("") == "0.1.0-beta"
+    assert bundle_short_version("0.2.0-beta.47") == "0.2.0"
+    assert bundle_short_version("2.4") == "2.4.0"
+    assert bundle_short_version("beta") == "0.1.0"
     assert build_number("run-001234") == "001234"
     assert build_number("") == "1"
 
@@ -50,6 +53,7 @@ def test_internal_beta_workflow_is_valid_and_never_publishes_a_release():
 def test_packager_records_exact_distribution_state_and_checksums():
     source = read("scripts/package_desktop_beta.py")
     assert '"channel": "internal_beta"' in source
+    assert '"bundle_short_version": short_version' in source
     assert '"public_distribution_ready"' in source
     assert '"developer_id_signed"' in source
     assert '"stapled_ticket_valid"' in source
