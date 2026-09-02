@@ -1,4 +1,4 @@
-"""Run the authenticated loopback service and its bounded local worker."""
+"""Run the authenticated loopback service and its local/cloud workers."""
 
 from __future__ import annotations
 
@@ -10,6 +10,8 @@ import socket
 import threading
 
 from .api import create_app
+from .cloud_bridge import CloudBridgeWorker
+from .cloud_link_store import CloudLinkStore
 from .contracts import utc_now_text
 from .security import (
     assert_loopback_host,
@@ -71,15 +73,32 @@ def main(argv: list[str] | None = None) -> int:
     if recovered_jobs:
         print(f"Recovered {recovered_jobs} stale local job(s).", flush=True)
     service = HybridService(store)
-    worker = LocalWorker(service, worker_id=f"{socket.gethostname()}:{os.getpid()}")
-    stop_event = threading.Event()
-    thread = threading.Thread(
-        target=worker.run_forever,
-        args=(stop_event,),
-        name="trading-intelligence-local-worker",
-        daemon=True,
+    local_worker = LocalWorker(
+        service,
+        worker_id=f"{socket.gethostname()}:{os.getpid()}:local",
     )
-    thread.start()
+    cloud_links = CloudLinkStore(data_dir / "cloud-links.sqlite3")
+    cloud_worker = CloudBridgeWorker(
+        service,
+        cloud_links,
+        data_dir=data_dir,
+        worker_id=f"{socket.gethostname()}:{os.getpid()}:cloud",
+    )
+    stop_event = threading.Event()
+    threads = [
+        threading.Thread(
+            target=local_worker.run_forever,
+            args=(stop_event,),
+            name="trading-intelligence-local-worker",
+            daemon=True,
+        ),
+        threading.Thread(
+            target=cloud_worker.run_forever,
+            args=(stop_event,),
+            name="trading-intelligence-cloud-bridge",
+            daemon=True,
+        ),
+    ]
 
     try:
         import uvicorn
@@ -91,12 +110,20 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Trading Intelligence local service token: {token_path}", flush=True)
     print(f"Trading Intelligence local service: http://{host}:{int(args.port)}", flush=True)
-    app = create_app(service, expected_token=token)
+    app = create_app(
+        service,
+        expected_token=token,
+        cloud_link_lookup=cloud_links.get,
+    )
     try:
+        for thread in threads:
+            thread.start()
         uvicorn.run(app, host=host, port=int(args.port), log_level="warning")
     finally:
         stop_event.set()
-        thread.join(timeout=2.0)
+        for thread in threads:
+            if thread.is_alive():
+                thread.join(timeout=2.0)
         runtime_path.unlink(missing_ok=True)
     return 0
 

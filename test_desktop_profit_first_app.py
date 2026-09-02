@@ -26,6 +26,9 @@ def test_production_desktop_python_sources_parse():
         "hybrid_runtime/desktop_settings.py",
         "hybrid_runtime/library_source.py",
         "hybrid_runtime/market_cache.py",
+        "hybrid_runtime/cloud_bridge.py",
+        "hybrid_runtime/cloud_link_store.py",
+        "hybrid_runtime/server.py",
         "scripts/build_trading_intelligence_desktop.py",
     ]
     for path in paths:
@@ -47,8 +50,12 @@ def test_production_shell_exposes_profit_first_jobs_and_secure_connection():
     assert "Connection Settings" in ui
     assert "Quick Analysis" in ui
     assert "strategy.profit_first_plan" in ui
+    assert "strategy.profit_first_validation" in ui
+    assert "Run strict cloud validation" in ui
+    assert "Attach to active validation" in ui
+    assert "continue_after_app_exit" in ui
+    assert "remote_dedupe_key" in ui
     assert "analysis.stock" in ui
-    assert "Cloud validation bridge pending" in ui
     assert "MacOSKeychain().set_secret" in ui
     assert "ALPACA_API_KEY_ACCOUNT" in settings
     assert "ALPACA_SECRET_KEY_ACCOUNT" in settings
@@ -61,6 +68,19 @@ def test_production_shell_exposes_profit_first_jobs_and_secure_connection():
     assert "GitHubCloudBackup" in source
     assert "StrategyStore" in source
     assert "redact_text(exc, (token,))" in source
+
+
+def test_production_sidecar_activates_cloud_bridge_and_link_lookup():
+    server = read("hybrid_runtime/server.py")
+    bridge = read("hybrid_runtime/cloud_bridge.py")
+    api = read("hybrid_runtime/api.py")
+
+    assert "CloudBridgeWorker(" in server
+    assert "CloudLinkStore(" in server
+    assert 'name="trading-intelligence-cloud-bridge"' in server
+    assert "cloud_link_lookup=cloud_links.get" in server
+    assert 'SUPPORTED_CLOUD_JOB_TYPES = frozenset({"strategy.profit_first_validation"})' in bridge
+    assert "/v1/jobs/{job_id}/cloud-link" in api
 
 
 def test_production_build_keeps_trading_engines_in_sidecar():

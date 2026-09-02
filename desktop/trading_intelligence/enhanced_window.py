@@ -1,4 +1,4 @@
-"""Production window extensions for real cached market analysis."""
+"""Production window extensions for real cached market analysis and cloud validation."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ from .window import MainWindow as BaseMainWindow, clean_error, write_metrics
 
 
 class MainWindow(BaseMainWindow):
-    """Add quick market analysis without rewriting the stable Profit First shell."""
+    """Add quick market analysis and the existing durable cloud validation bridge."""
 
     def __init__(self, runtime: Any, *, smoke: bool = False, metrics_output: str = "") -> None:
         super().__init__(runtime, smoke=smoke, metrics_output=metrics_output)
@@ -43,6 +43,7 @@ class MainWindow(BaseMainWindow):
         self.analysis.analyze_requested.connect(self.run_stock_analysis)
         self._install_analysis_navigation()
         self._install_market_connection_fields()
+        self._install_profit_first_cloud_validation()
 
     def _install_analysis_navigation(self) -> None:
         sidebar = self.nav_buttons[0].parentWidget()
@@ -126,6 +127,40 @@ class MainWindow(BaseMainWindow):
             insert_at = max(0, root.count() - 2)
             root.insertWidget(insert_at, card)
 
+    def _install_profit_first_cloud_validation(self) -> None:
+        self.profit_first.validation.setText("Run strict cloud validation")
+        self.profit_first.validation.setToolTip(
+            "Runs the existing strict validator in the cloud. The remote job continues if this app closes."
+        )
+        self.profit_first.validation.clicked.connect(self.run_profit_first_validation)
+        self._sync_profit_first_validation_button()
+
+    def _sync_profit_first_validation_button(self) -> None:
+        status = str(self.last_plan.get("queue_status") or "").strip()
+        if status == "ready":
+            self.profit_first.validation.setText("Run strict cloud validation")
+            self.profit_first.validation.setEnabled(not bool(self.active_job_id))
+            self.profit_first.next_detail.setText(
+                "These candidates are ready. Strict validation runs in the existing cloud worker, "
+                "uses the authoritative research library, and can continue after the desktop app closes."
+            )
+        elif status == "active":
+            self.profit_first.validation.setText("Attach to active validation")
+            self.profit_first.validation.setEnabled(not bool(self.active_job_id))
+            self.profit_first.next_detail.setText(
+                "A matching strict validation is already running. The desktop will attach to that exact "
+                "cloud job instead of launching duplicate work."
+            )
+        elif status == "already-attempted":
+            self.profit_first.validation.setText("Already attempted")
+            self.profit_first.validation.setEnabled(False)
+        elif status == "no-eligible-candidates":
+            self.profit_first.validation.setText("No eligible candidates")
+            self.profit_first.validation.setEnabled(False)
+        else:
+            self.profit_first.validation.setText("Strict cloud validation")
+            self.profit_first.validation.setEnabled(False)
+
     def save_connection(self, raw_settings: dict[str, Any], token: str) -> None:
         try:
             payload = dict(raw_settings)
@@ -185,10 +220,57 @@ class MainWindow(BaseMainWindow):
         except BaseException as exc:
             self.analysis.set_error(clean_error(exc))
 
-    def poll_active_job(self) -> None:
-        if not self.active_job_id or self.active_purpose != "stock_analysis":
-            super().poll_active_job()
+    def run_profit_first_validation(self) -> None:
+        if self.active_job_id:
             return
+        queue_status = str(self.last_plan.get("queue_status") or "").strip()
+        if queue_status not in {"ready", "active"}:
+            self._sync_profit_first_validation_button()
+            return
+        dedupe = str(
+            self.last_plan.get("dedupe_key")
+            or self.last_plan.get("active_job_id")
+            or self.last_plan.get("existing_job_id")
+            or "current-batch"
+        ).strip()
+        self.profit_first.set_working(
+            "Connecting to strict cloud validation",
+            "Publishing or attaching to the existing authoritative validation queue. Closing the app will not stop remote work.",
+            0.01,
+        )
+        self.profit_first.validation.setEnabled(False)
+        request = {
+            "job_type": "strategy.profit_first_validation",
+            "payload": {
+                "maximum_candidates": 3,
+                "remote_dedupe_key": dedupe if dedupe != "current-batch" else "",
+                "continue_after_app_exit": True,
+            },
+            "requested_target": "auto",
+            "idempotency_key": f"desktop-profit-first-validation-{dedupe}",
+            "engine_version": "desktop-cloud-bridge-v1",
+        }
+        try:
+            self.submit_job(request, "profit_first_validation")
+        except BaseException as exc:
+            self.profit_first.set_error(clean_error(exc))
+            self._sync_profit_first_validation_button()
+
+    def poll_active_job(self) -> None:
+        if not self.active_job_id:
+            return
+        if self.active_purpose == "stock_analysis":
+            self._poll_stock_analysis()
+            return
+        if self.active_purpose == "profit_first_validation":
+            self._poll_profit_first_validation()
+            return
+        previous_purpose = self.active_purpose
+        super().poll_active_job()
+        if previous_purpose == "profit_first" and not self.active_job_id:
+            self._sync_profit_first_validation_button()
+
+    def _poll_stock_analysis(self) -> None:
         try:
             job = self.runtime.request_json("GET", f"/v1/jobs/{self.active_job_id}")
             progress = float(job.get("progress") or 0.0)
@@ -217,6 +299,64 @@ class MainWindow(BaseMainWindow):
             self.active_purpose = ""
             self.analysis.set_error(clean_error(exc))
             self.refresh_jobs()
+
+    def _cloud_wait_detail(self, job_id: str) -> str:
+        try:
+            payload = self.runtime.request_json("GET", f"/v1/jobs/{job_id}/cloud-link")
+        except BaseException:
+            return ""
+        link = payload.get("link") if isinstance(payload.get("link"), dict) else {}
+        error = str(link.get("dispatch_error") or "").strip()
+        if not error:
+            return ""
+        metadata = link.get("metadata") if isinstance(link.get("metadata"), dict) else {}
+        prefix = (
+            "Cloud connection required: "
+            if bool(metadata.get("waiting_for_connection"))
+            else "Cloud queue note: "
+        )
+        return prefix + error
+
+    def _poll_profit_first_validation(self) -> None:
+        try:
+            job_id = self.active_job_id
+            job = self.runtime.request_json("GET", f"/v1/jobs/{job_id}")
+            progress = float(job.get("progress") or 0.0)
+            stage = str(job.get("stage") or "cloud_queued").replace("_", " ")
+            detail = self._cloud_wait_detail(job_id)
+            if not detail:
+                detail = (
+                    "Remote validation continues independently of this window. "
+                    "Progress is reconciled into this durable desktop job."
+                )
+            self.profit_first.set_working(
+                f"Strict cloud validation · {stage}",
+                detail,
+                progress,
+            )
+            if not bool(job.get("terminal")):
+                return
+            if job.get("status") != "complete":
+                message = (job.get("error") or {}).get("message") or str(job.get("status"))
+                raise RuntimeError(message)
+            result = job.get("result") if isinstance(job.get("result"), dict) else {}
+            outcome = str(result.get("outcome") or "cloud_validation_complete")
+            self.active_job_id = ""
+            self.active_purpose = ""
+            self.refresh_jobs()
+            self.top_status.setText(outcome.replace("_", " ").title())
+            self.profit_first.banner_title.setText(outcome.replace("_", " ").title())
+            self.profit_first.banner_detail.setText(
+                "The authoritative cloud result is saved. Refreshing Profit First from the research library…"
+            )
+            self.profit_first.progress.setValue(1000)
+            QTimer.singleShot(150, self.refresh_profit_first)
+        except BaseException as exc:
+            self.active_job_id = ""
+            self.active_purpose = ""
+            self.profit_first.set_error(clean_error(exc))
+            self.refresh_jobs()
+            self._sync_profit_first_validation_button()
 
 
 __all__ = ["MainWindow", "clean_error", "write_metrics"]
