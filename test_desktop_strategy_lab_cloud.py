@@ -24,6 +24,7 @@ def test_strategy_lab_cloud_sources_parse():
 
 def test_production_ui_retains_strategy_lab_cloud_chain_under_later_wrappers():
     ui = read("desktop/trading_intelligence/ui.py")
+    onboarding_window = read("desktop/trading_intelligence/onboarding_window.py")
     health_window = read("desktop/trading_intelligence/system_health_window.py")
     research_window = read("desktop/trading_intelligence/research_ml_window.py")
     page = read("desktop/trading_intelligence/strategy_lab_page.py")
@@ -31,7 +32,9 @@ def test_production_ui_retains_strategy_lab_cloud_chain_under_later_wrappers():
     router = read("hybrid_runtime/router.py")
     adapter = read("hybrid_runtime/engine_adapter.py")
 
-    assert "from .system_health_window import MainWindow" in ui
+    assert "from .onboarding_window import MainWindow" in ui
+    assert "from .system_health_window import MainWindow as SystemHealthMainWindow" in onboarding_window
+    assert "class MainWindow(SystemHealthMainWindow):" in onboarding_window
     assert "from .research_ml_window import MainWindow as ResearchMLMainWindow" in health_window
     assert "class MainWindow(ResearchMLMainWindow):" in health_window
     assert "from .strategy_lab_window import MainWindow as StrategyLabMainWindow" in research_window
