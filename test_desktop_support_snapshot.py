@@ -124,6 +124,7 @@ def test_support_snapshot_is_bounded_selected_and_redacted():
         "NEVER_INCLUDE",
         "some_model_coefficients",
         "raw_strategy_payload",
+        "data_dir",
     ):
         assert forbidden not in encoded
 
@@ -144,7 +145,7 @@ def test_support_snapshot_never_serializes_full_paths_or_library_payloads():
     assert "Documents/private" not in encoded
 
 
-def test_system_health_ui_exposes_copy_and_owner_only_save_actions():
+def test_system_health_ui_exposes_copy_and_owner_only_save_actions_without_network_calls():
     page = (ROOT / "desktop/trading_intelligence/system_health_page.py").read_text(
         encoding="utf-8"
     )
@@ -163,3 +164,14 @@ def test_system_health_ui_exposes_copy_and_owner_only_save_actions():
     assert "last_system_health_result" in window
     assert "build_support_snapshot" in window
     assert "Full paths, credentials, research/strategy/model content" in snapshot
+
+    copy_body = window.split("def copy_support_snapshot", 1)[1].split(
+        "def save_support_snapshot", 1
+    )[0]
+    save_body = window.split("def save_support_snapshot", 1)[1].split(
+        "__all__", 1
+    )[0]
+    assert "request_json" not in copy_body
+    assert "request_json" not in save_body
+    assert "urlopen" not in copy_body
+    assert "urlopen" not in save_body
