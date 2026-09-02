@@ -14,6 +14,7 @@ from .desktop_settings import (
     load_desktop_settings,
 )
 from .keychain import KeychainError, MacOSKeychain
+from .onboarding_state import configuration_status
 from .storage import HybridStore
 
 
@@ -48,7 +49,8 @@ def build_system_health_summary(
 
     A valid configured local library is allowed to satisfy the library-connection
     gate without GitHub credentials. GitHub credential state remains visible as
-    a separate cloud-capability diagnostic.
+    a separate cloud-capability diagnostic. Explicitly pending first-run Setup is
+    also surfaced so health and feature gates cannot disagree.
     """
 
     root = Path(data_dir).expanduser().resolve()
@@ -98,6 +100,21 @@ def build_system_health_summary(
         credentials["alpaca_api_key"] and credentials["alpaca_secret_key"]
     )
 
+    try:
+        setup = configuration_status(root, keychain=secrets)
+    except Exception:
+        setup = {
+            "setup_verification": "unavailable",
+            "launch_ready": False,
+            "capabilities": {"library": False, "cloud": False, "market": False},
+        }
+    setup_capabilities = (
+        dict(setup.get("capabilities"))
+        if isinstance(setup.get("capabilities"), Mapping)
+        else {"library": False, "cloud": False, "market": False}
+    )
+    setup_pending = str(setup.get("setup_verification") or "").strip().lower() == "pending"
+
     local_library = Path(settings.local_library_path).expanduser() if settings.local_library_path else None
     cache_stats = {
         "market": _file_stats(root / "market-cache-v1"),
@@ -141,12 +158,8 @@ def build_system_health_summary(
         library_connection_ready = github_refresh_ready
         library_mode = "github"
     else:
-        # Before a successful library read, judge the configured preference rather
-        # than falsely requiring GitHub for an explicit local-file setup.
         if settings.library_source == "local_file":
-            library_connection_ready = bool(
-                local_library and local_library.is_file()
-            )
+            library_connection_ready = bool(local_library and local_library.is_file())
             library_mode = "local"
         else:
             library_connection_ready = github_refresh_ready
@@ -164,6 +177,10 @@ def build_system_health_summary(
         "github_library_credential": credentials["github_private_library"],
         "github_library_configured": github_configured,
         "market_cache_present": bool(cache_stats["market"]["files"]),
+        "setup_library_verified": bool(setup_capabilities.get("library")),
+        "setup_cloud_verified": bool(setup_capabilities.get("cloud")),
+        "setup_market_verified": bool(setup_capabilities.get("market")),
+        "setup_not_pending": not setup_pending,
     }
     required_checks = (
         "runtime_service",
@@ -173,11 +190,21 @@ def build_system_health_summary(
         "alpaca_credentials",
     )
     required_ok = all(checks[name] for name in required_checks)
+    overall_ready = bool(required_ok and not setup_pending)
 
     return {
-        "status": "ready" if required_ok else "attention",
+        "status": "ready" if overall_ready else "attention",
         "checks": checks,
         "required_checks": list(required_checks),
+        "setup": {
+            "verification": str(setup.get("setup_verification") or "unavailable"),
+            "launch_ready": bool(setup.get("launch_ready")),
+            "capabilities": {
+                "library": bool(setup_capabilities.get("library")),
+                "cloud": bool(setup_capabilities.get("cloud")),
+                "market": bool(setup_capabilities.get("market")),
+            },
+        },
         "credentials": credentials,
         "runtime": {
             "status": str(live_runtime.get("status") or "unverified"),
