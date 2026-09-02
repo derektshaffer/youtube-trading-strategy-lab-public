@@ -8,6 +8,7 @@ from threading import RLock
 import time
 from typing import Any, Callable
 
+from research_cached_market import CachedResearchMarket
 from strategy_lab_execution import execute_strategy_lab_run
 from strategy_lab_persistence import (
     load_latest_strategy_lab_checkpoint,
@@ -168,10 +169,15 @@ def _run_job(
             force=True,
         )
 
+    cached_market = (
+        market
+        if isinstance(market, CachedResearchMarket)
+        else CachedResearchMarket(market, store=main_store)
+    )
     try:
         result = execute(
             job,
-            market=market,
+            market=cached_market,
             main_store=main_store,
             progress=on_progress,
             optimizer_resume_state=resume_state,
@@ -194,6 +200,21 @@ def _run_job(
         except AppError:
             pass
         return {"status": "failed", "message": message}
+
+    if isinstance(result, dict) and cached_market.research_cache_events:
+        result = deepcopy(result)
+        events = deepcopy(cached_market.research_cache_events)
+        result["research_history_cache"] = {
+            "requests": events,
+            "request_count": len(events),
+            "reused_request_count": sum(
+                1 for item in events if bool(item.get("cache_hit"))
+            ),
+            "network_request_count": sum(
+                1 for item in events if bool(item.get("network_request"))
+            ),
+            "exact_window_only": True,
+        }
 
     completion_warning = ""
     try:
