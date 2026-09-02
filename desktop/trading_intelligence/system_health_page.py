@@ -49,7 +49,7 @@ class SystemHealthPage(QWidget):
         title = QLabel("Connections, caches, and durable job health")
         title.setObjectName("PageTitle")
         subtitle = QLabel(
-            "A read-only diagnostic view. It checks configuration and durable state without placing trades or launching research."
+            "A read-only diagnostic view. It verifies the authenticated local service, data connections, credentials, caches, and recent durable failures without changing trading state."
         )
         subtitle.setObjectName("Subtle")
         subtitle.setWordWrap(True)
@@ -67,7 +67,7 @@ class SystemHealthPage(QWidget):
         banner = QVBoxLayout(self.banner)
         self.status = QLabel("Health status has not been checked yet.")
         self.status.setObjectName("BannerTitle")
-        self.detail = QLabel("Refresh to verify the local runtime and current private-library connection.")
+        self.detail = QLabel("Refresh to verify the local runtime and current research-library connection.")
         self.detail.setObjectName("Subtle")
         self.detail.setWordWrap(True)
         banner.addWidget(self.status)
@@ -136,19 +136,14 @@ class SystemHealthPage(QWidget):
         self.banner.style().polish(self.banner)
         self.status.setText("System health ready" if ready else "System health needs attention")
         self.detail.setText(
-            "Required local/cloud configuration is available."
+            "Required local runtime, library, and market-data configuration are available."
             if ready
-            else "One or more required connections or credentials are missing/unreadable. No trading state was changed."
+            else "One or more required runtime, library, or market-data checks need attention. No trading state was changed."
         )
 
         checks = result.get("checks") if isinstance(result.get("checks"), dict) else {}
-        required_names = (
-            "runtime_storage",
-            "github_library_configured",
-            "github_library_credential",
-            "library_readable",
-            "alpaca_credentials",
-        )
+        required_names = result.get("required_checks") if isinstance(result.get("required_checks"), list) else []
+        required_names = [str(name) for name in required_names]
         passed = sum(1 for name in required_names if checks.get(name))
         jobs = result.get("jobs") if isinstance(result.get("jobs"), dict) else {}
         failures = jobs.get("recent_failures") if isinstance(jobs.get("recent_failures"), list) else []
@@ -161,27 +156,57 @@ class SystemHealthPage(QWidget):
 
         library = result.get("library") if isinstance(result.get("library"), dict) else {}
         connection = result.get("connection") if isinstance(result.get("connection"), dict) else {}
+        runtime = result.get("runtime") if isinstance(result.get("runtime"), dict) else {}
+        github_required = bool(connection.get("github_required_for_library"))
         details = {
-            "runtime_storage": "Local durable SQLite job database",
-            "github_library_configured": f"{connection.get('github_repository') or 'No repository'} · {connection.get('github_path') or 'No path'}",
-            "github_library_credential": "GitHub token present in macOS Keychain" if checks.get("github_library_credential") else "GitHub token missing from macOS Keychain",
+            "runtime_service": (
+                "Authenticated loopback sidecar answered /health"
+                if checks.get("runtime_service")
+                else "The authenticated local Python service did not report healthy"
+            ),
+            "runtime_storage": "Local durable SQLite job database is readable",
+            "library_connection": (
+                f"{connection.get('library_mode') or 'unknown'} library connection · preference {connection.get('library_source_preference') or 'auto'}"
+            ),
             "library_readable": f"Library source: {library.get('source') or 'unverified'}",
-            "alpaca_credentials": f"Alpaca credentials present · feed {connection.get('market_feed') or 'unknown'}" if checks.get("alpaca_credentials") else "Alpaca API key/secret missing from macOS Keychain",
+            "alpaca_credentials": (
+                f"Alpaca credentials present · feed {connection.get('market_feed') or 'unknown'}"
+                if checks.get("alpaca_credentials")
+                else "Alpaca API key/secret missing from macOS Keychain"
+            ),
+            "github_library_credential": (
+                "GitHub credential present for cloud library/research"
+                if checks.get("github_library_credential")
+                else (
+                    "Required for the active GitHub library connection"
+                    if github_required
+                    else "Optional for this local-library setup; required for cloud research"
+                )
+            ),
             "market_cache_present": f"{int(market.get('files') or 0):,} cached files · {_bytes(market.get('bytes'))}",
         }
         labels = {
+            "runtime_service": "Authenticated local service",
             "runtime_storage": "Durable job storage",
-            "github_library_configured": "Private library configured",
-            "github_library_credential": "Private library credential",
-            "library_readable": "Private library readable",
+            "library_connection": "Research library connection",
+            "library_readable": "Research library readable",
             "alpaca_credentials": "Alpaca market data credentials",
+            "github_library_credential": "Cloud research credential",
             "market_cache_present": "Persistent market cache",
         }
         rows = list(labels)
         self.checks.setRowCount(len(rows))
         for row, name in enumerate(rows):
+            is_required = name in required_names
+            value = bool(checks.get(name))
+            if value:
+                status = "OK"
+            elif not is_required:
+                status = "Optional"
+            else:
+                status = "Attention"
             self.checks.setItem(row, 0, self._item(labels[name]))
-            self.checks.setItem(row, 1, self._item("OK" if checks.get(name) else "Attention"))
+            self.checks.setItem(row, 1, self._item(status))
             self.checks.setItem(row, 2, self._item(details.get(name, "")))
 
         self.failures.setRowCount(len(failures))
