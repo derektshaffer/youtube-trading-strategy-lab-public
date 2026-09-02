@@ -8,9 +8,11 @@ couples their partially initialized module state and caused deploy-time errors.
 from __future__ import annotations
 
 import os
+from typing import Any
 
 import streamlit as st
 
+from research_cached_market import CachedResearchMarket
 from youtube_strategy_engine import AlpacaMarketData
 
 
@@ -23,10 +25,19 @@ def setting(name: str, default: str = "") -> str:
     return str(os.environ.get(name, default)).strip()
 
 
-def market_client() -> AlpacaMarketData:
-    return AlpacaMarketData(
+def market_client() -> Any:
+    """Return the authoritative Alpaca client behind a narrow research cache proxy.
+
+    The proxy only intercepts single-symbol bar requests with explicit frozen
+    start/end/timeframe boundaries and standard arguments. Live/batch/provider-
+    specific requests delegate directly to Alpaca. Finalized exact windows are
+    reusable across reconnects and process restarts without changing backtest rows.
+    """
+
+    market = AlpacaMarketData(
         setting("ALPACA_API_KEY"),
         setting("ALPACA_SECRET_KEY"),
         setting("ALPACA_LIVE_FEED", "iex"),
         setting("ALPACA_HISTORICAL_FEED", "sip"),
     )
+    return CachedResearchMarket(market)
