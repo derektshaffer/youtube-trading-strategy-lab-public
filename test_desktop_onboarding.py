@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import pytest
 import hybrid_runtime.onboarding as onboarding
 import hybrid_runtime.onboarding_state as onboarding_state
 from hybrid_runtime.contracts import ExecutionTarget, JobRequest
@@ -22,6 +24,21 @@ class FakeKeychain:
         if account not in self.values:
             raise KeychainError("missing")
         return self.values[account]
+
+
+class FakeResponse:
+    def __init__(self, payload: dict, *, status: int = 200) -> None:
+        self.payload = payload
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self, _limit: int = -1) -> bytes:
+        return json.dumps(self.payload).encode("utf-8")
 
 
 def test_local_library_setup_distinguishes_local_readiness_from_full_hybrid_readiness(tmp_path):
@@ -136,6 +153,50 @@ def test_verify_setup_returns_bounded_readiness_without_secret_values(tmp_path, 
     assert progress[-1][1] == "saving"
 
 
+def test_github_probe_requires_write_permission_without_mutating_repo(monkeypatch):
+    settings = DesktopSettings(
+        github_repository="owner/private-repo",
+        github_branch="main",
+        github_path="trading-intelligence-lab/intelligence_library.json",
+    )
+    token = "SUPER-PRIVATE-GITHUB-TOKEN"
+    keychain = FakeKeychain({"github-backup-token": token})
+    captured: list[object] = []
+
+    def writable_urlopen(request, timeout=0):
+        captured.append(request)
+        captured.append(timeout)
+        return FakeResponse(
+            {
+                "full_name": "owner/private-repo",
+                "permissions": {"pull": True, "push": True, "admin": False},
+            }
+        )
+
+    monkeypatch.setattr(onboarding, "urlopen", writable_urlopen)
+    result = onboarding._github_access(settings, keychain)
+    assert result["ready"] is True
+    assert result["write_access"] is True
+    assert "read-write" in result["message"]
+    assert token not in str(result)
+    assert len(captured) == 2
+    request = captured[0]
+    assert getattr(request, "method", None) == "GET"
+
+    monkeypatch.setattr(
+        onboarding,
+        "urlopen",
+        lambda request, timeout=0: FakeResponse(
+            {
+                "full_name": "owner/private-repo",
+                "permissions": {"pull": True, "push": False, "maintain": False, "admin": False},
+            }
+        ),
+    )
+    with pytest.raises(onboarding.OnboardingError, match="does not have write access"):
+        onboarding._github_access(settings, keychain)
+
+
 def test_onboarding_probe_is_always_local():
     request = JobRequest.from_mapping(
         {
@@ -165,6 +226,7 @@ def test_onboarding_ui_keeps_credentials_out_of_durable_job_payload():
     assert "keychain.set_secret(ALPACA_API_KEY_ACCOUNT" in window
     assert "keychain.set_secret(ALPACA_SECRET_KEY_ACCOUNT" in window
     assert '"Authorization": "Bearer " + token' in probe
+    assert 'permissions.get("push")' in probe
     assert 'provider.bars(' in probe
     assert '["AAPL"]' in probe
 
