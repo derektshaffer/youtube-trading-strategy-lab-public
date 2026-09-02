@@ -23,11 +23,14 @@ def test_production_desktop_python_sources_parse():
         "desktop/trading_intelligence/enhanced_window.py",
         "desktop/trading_intelligence/analysis_page.py",
         "desktop/trading_intelligence/chart.py",
+        "desktop/trading_intelligence/finder_page.py",
+        "desktop/trading_intelligence/finder_window.py",
         "hybrid_runtime/desktop_settings.py",
         "hybrid_runtime/library_source.py",
         "hybrid_runtime/market_cache.py",
         "hybrid_runtime/cloud_bridge.py",
         "hybrid_runtime/cloud_link_store.py",
+        "hybrid_runtime/stock_finder_bridge.py",
         "hybrid_runtime/server.py",
         "scripts/build_trading_intelligence_desktop.py",
     ]
@@ -35,12 +38,14 @@ def test_production_desktop_python_sources_parse():
         ast.parse(read(path), filename=path)
 
 
-def test_production_shell_exposes_profit_first_jobs_and_secure_connection():
+def test_production_shell_exposes_profit_first_finder_jobs_and_secure_connection():
     ui = (
         read("desktop/trading_intelligence/pages.py")
         + read("desktop/trading_intelligence/window.py")
         + read("desktop/trading_intelligence/enhanced_window.py")
         + read("desktop/trading_intelligence/analysis_page.py")
+        + read("desktop/trading_intelligence/finder_page.py")
+        + read("desktop/trading_intelligence/finder_window.py")
     )
     settings = read("hybrid_runtime/desktop_settings.py")
     source = read("hybrid_runtime/library_source.py")
@@ -49,13 +54,19 @@ def test_production_shell_exposes_profit_first_jobs_and_secure_connection():
     assert "Durable Jobs" in ui
     assert "Connection Settings" in ui
     assert "Quick Analysis" in ui
+    assert "Stock Strategy Finder" in ui
+    assert "Run Finder in Cloud" in ui
     assert "strategy.profit_first_plan" in ui
     assert "strategy.profit_first_validation" in ui
+    assert "strategy.stock_finder" in ui
     assert "Run strict cloud validation" in ui
     assert "Attach to active validation" in ui
     assert "continue_after_app_exit" in ui
     assert "remote_dedupe_key" in ui
+    assert "distributed_shards_completed" in ui
     assert "analysis.stock" in ui
+    assert "finder_job_id" in ui
+    assert "profit_validation_job_id" in ui
     assert "MacOSKeychain().set_secret" in ui
     assert "ALPACA_API_KEY_ACCOUNT" in settings
     assert "ALPACA_SECRET_KEY_ACCOUNT" in settings
@@ -70,16 +81,21 @@ def test_production_shell_exposes_profit_first_jobs_and_secure_connection():
     assert "redact_text(exc, (token,))" in source
 
 
-def test_production_sidecar_activates_cloud_bridge_and_link_lookup():
+def test_production_sidecar_activates_cloud_bridge_finder_and_link_lookup():
     server = read("hybrid_runtime/server.py")
     bridge = read("hybrid_runtime/cloud_bridge.py")
+    finder_bridge = read("hybrid_runtime/stock_finder_bridge.py")
     api = read("hybrid_runtime/api.py")
 
     assert "CloudBridgeWorker(" in server
     assert "CloudLinkStore(" in server
     assert 'name="trading-intelligence-cloud-bridge"' in server
     assert "cloud_link_lookup=cloud_links.get" in server
-    assert 'SUPPORTED_CLOUD_JOB_TYPES = frozenset({"strategy.profit_first_validation"})' in bridge
+    assert '"strategy.profit_first_validation"' in bridge
+    assert '"strategy.stock_finder"' in bridge
+    assert 'DISTRIBUTED_STOCK_FINDER_WORKFLOW = "distributed-stock-finder.yml"' in finder_bridge
+    assert 'REMOTE_STOCK_FINDER_TYPE = "stock_finder"' in finder_bridge
+    assert "finder_report_for_remote" in finder_bridge
     assert "/v1/jobs/{job_id}/cloud-link" in api
 
 
@@ -112,7 +128,20 @@ def test_market_cache_is_persistent_incremental_and_explicit_about_price_age():
     assert "data_age_seconds" in cache
     assert "Latest completed Alpaca candle close" in cache
     assert "macOS Keychain" in analysis or "persistent local cache" in analysis
-    assert "from .enhanced_window import MainWindow" in ui
+    assert "from .finder_window import MainWindow" in ui
+
+
+def test_finder_cloud_jobs_are_background_and_reconnect_safe():
+    window = read("desktop/trading_intelligence/finder_window.py")
+
+    assert "finder_job_id" in window
+    assert "profit_validation_job_id" in window
+    assert "_restore_background_cloud_jobs" in window
+    assert "_submit_background_cloud_job" in window
+    assert "_poll_stock_finder" in window
+    assert "_poll_background_profit_validation" in window
+    assert "You can continue using Quick Analysis while it runs" in window
+    assert "Cloud cancellation is available before the remote worker starts" in window
 
 
 def test_apple_silicon_workflow_launches_full_profit_first_gui():
