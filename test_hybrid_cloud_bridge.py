@@ -9,6 +9,7 @@ from unittest.mock import patch
 from hybrid_runtime.cloud_bridge import (
     CloudBridgeWorker,
     DesktopCloudSettings,
+    _validation_evidence,
     load_desktop_cloud_settings,
 )
 from hybrid_runtime.cloud_link_store import CloudLinkStore
@@ -153,11 +154,14 @@ class CloudBridgeTests(unittest.TestCase):
         remote["stage"] = "complete"
         remote["progress"] = 1.0
         remote["result"] = {"validation_status": "research_only"}
-        remote["updated_at"] = "2026-09-02T10:00:00Z"
+        # Anchor evidence to the actual queue timestamp rather than a wall-clock
+        # constant, so this regression remains valid indefinitely.
+        remote_stamp = str(remote["created_at"])
+        remote["updated_at"] = remote_stamp
         self.client.document["validation_runs"] = [
             {
                 "strategy_id": "strategy-one",
-                "generated_at": "2026-09-02T10:00:00Z",
+                "generated_at": remote_stamp,
                 "validation_status": "research_only",
                 "evidence_verdict": {"code": "insufficient_robustness"},
             }
@@ -170,6 +174,29 @@ class CloudBridgeTests(unittest.TestCase):
         self.assertEqual(current.result["outcome"], "cloud_validation_complete")
         self.assertEqual(current.result["strategy_ids"], ["strategy-one"])
         self.assertEqual(len(current.result["validation_runs"]), 1)
+
+    def test_compacted_remote_can_reuse_older_latest_matching_evidence(self):
+        library = {
+            "validation_runs": [
+                {
+                    "strategy_id": "strategy-one",
+                    "generated_at": "2026-08-30T12:00:00Z",
+                    "validation_status": "research_only",
+                },
+                {
+                    "strategy_id": "other-strategy",
+                    "generated_at": "2026-09-02T12:00:00Z",
+                    "validation_status": "research_only",
+                },
+            ]
+        }
+        evidence = _validation_evidence(
+            library,
+            strategy_ids=["strategy-one"],
+            created_at="",
+        )
+        self.assertEqual(len(evidence), 1)
+        self.assertEqual(evidence[0]["strategy_id"], "strategy-one")
 
     @patch("profit_first_queue.research_readiness")
     def test_missing_local_link_reattaches_without_duplicate_remote_job(self, readiness):

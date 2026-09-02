@@ -639,10 +639,15 @@ class CloudBridgeWorker:
         if status in {"complete", "completed", "success", "succeeded", "done"}:
             current = self._ensure_claimed(job.id, "Cloud worker accepted the job")
             strategy_ids = _strategy_ids(item, job)
+            evidence_cutoff = str(
+                item.get("created_at")
+                or item.get("queued_at")
+                or ""
+            ).strip()
             evidence = _validation_evidence(
                 library,
                 strategy_ids=strategy_ids,
-                created_at=job.created_at,
+                created_at=evidence_cutoff,
             )
             remote_result = item.get("result") or item.get("output") or item.get("validation_result")
             result = {
