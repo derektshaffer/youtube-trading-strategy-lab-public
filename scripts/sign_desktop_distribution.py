@@ -18,7 +18,8 @@ def sign(app: Path, identity: str) -> None:
         raise ValueError("A Developer ID Application identity is required")
     # PyInstaller produces a self-contained app with nested Mach-O code. Re-sign
     # the complete bundle recursively for direct distribution, using the hardened
-    # runtime and Apple's secure timestamp required by notarization.
+    # runtime and Apple's secure timestamp required by notarization. The real
+    # notary service remains the authoritative nested-code acceptance gate.
     run(
         [
             "codesign",
@@ -45,8 +46,19 @@ def sign(app: Path, identity: str) -> None:
     text = details.stdout + "\n" + details.stderr
     if "Authority=Developer ID Application:" not in text:
         raise RuntimeError("The final app is not signed with Developer ID Application")
-    if "runtime" not in text.lower():
+    flags_line = next(
+        (line.strip() for line in text.splitlines() if line.strip().startswith("flags=")),
+        "",
+    )
+    if "runtime" not in flags_line.casefold():
         raise RuntimeError("The final app signature does not advertise hardened runtime")
+    timestamp_line = next(
+        (line.strip() for line in text.splitlines() if line.strip().startswith("Timestamp=")),
+        "",
+    )
+    timestamp = timestamp_line.split("=", 1)[1].strip() if "=" in timestamp_line else ""
+    if not timestamp or timestamp.casefold() in {"none", "n/a", "not set", "-"}:
+        raise RuntimeError("The final Developer ID signature does not have a secure timestamp")
 
 
 def main(argv: list[str] | None = None) -> int:
