@@ -1,0 +1,338 @@
+"""Launch the packaged Tauri app and verify its embedded Python sidecar."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import platform
+import plistlib
+import shutil
+import signal
+import subprocess
+import time
+from typing import Any
+from urllib.request import Request, urlopen
+
+
+DEFAULT_DATA_DIR = (
+    Path.home()
+    / "Library"
+    / "Application Support"
+    / "com.derektshaffer.trading-intelligence-spike"
+)
+
+
+def directory_size(path: Path) -> int:
+    return sum(
+        item.stat().st_size
+        for item in path.rglob("*")
+        if item.is_file()
+    )
+
+
+def main_executable(app: Path) -> Path:
+    """Resolve the app executable from Info.plist, not by counting sidecars."""
+
+    plist_path = app / "Contents" / "Info.plist"
+    try:
+        with plist_path.open("rb") as handle:
+            metadata = plistlib.load(handle)
+    except (OSError, plistlib.InvalidFileException) as exc:
+        raise RuntimeError(f"Unable to read app metadata at {plist_path}: {exc}") from exc
+    executable_name = str(metadata.get("CFBundleExecutable") or "").strip()
+    if not executable_name:
+        raise RuntimeError(f"CFBundleExecutable is missing from {plist_path}")
+    executable = app / "Contents" / "MacOS" / executable_name
+    if not executable.is_file() or not os.access(executable, os.X_OK):
+        raise RuntimeError(
+            f"App metadata points to a missing or non-executable binary: {executable}"
+        )
+    return executable
+
+
+def file_description(path: Path) -> str:
+    return subprocess.run(
+        ["file", "-b", str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def request_json(
+    base_url: str,
+    token: str,
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = Request(
+        base_url + path,
+        data=data,
+        method=method,
+        headers={
+            "Authorization": "Bearer " + token,
+            "Content-Type": "application/json",
+        },
+    )
+    with urlopen(request, timeout=5) as response:
+        decoded = json.loads(response.read().decode("utf-8"))
+    if not isinstance(decoded, dict):
+        raise RuntimeError("Tauri sidecar returned a non-object response")
+    return decoded
+
+
+def terminate_pid(pid: int) -> None:
+    if pid <= 1:
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.1)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def wait_for_tauri_ui(
+    base_url: str,
+    token: str,
+    *,
+    timeout_seconds: float = 45.0,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Require proof that frontend JavaScript rendered the chart and called Python."""
+
+    deadline = time.monotonic() + max(1.0, float(timeout_seconds))
+    latest_chart: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        response = request_json(base_url, token, "GET", "/v1/jobs?limit=50")
+        jobs = response.get("jobs")
+        jobs = jobs if isinstance(jobs, list) else []
+        for job in jobs:
+            if (
+                isinstance(job, dict)
+                and str(job.get("job_type") or "") == "chart.framework_fixture"
+            ):
+                latest_chart = job
+                break
+        for job in jobs:
+            if not isinstance(job, dict):
+                continue
+            key = str(job.get("idempotency_key") or "")
+            checks = (
+                (job.get("payload") or {}).get("checks")
+                if isinstance(job.get("payload"), dict)
+                else []
+            )
+            if key.startswith("tauri-ui-ready-") or (
+                isinstance(checks, list)
+                and "tauri-ui" in checks
+                and "chart-rendered" in checks
+            ):
+                if bool(job.get("terminal")):
+                    if job.get("status") != "complete":
+                        raise RuntimeError(
+                            "Tauri frontend-ready handshake ended as "
+                            + str(job.get("status") or "unknown")
+                        )
+                    return job, latest_chart
+        time.sleep(0.1)
+    raise RuntimeError(
+        "Tauri frontend never proved that its chart rendered and authenticated "
+        "against the embedded Python sidecar"
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--app", required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR))
+    args = parser.parse_args(argv)
+
+    app = Path(args.app).expanduser().resolve()
+    if not app.is_dir():
+        raise SystemExit(f"Missing Tauri app bundle: {app}")
+    output = Path(args.output).expanduser().resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    data_dir = Path(args.data_dir).expanduser().resolve()
+    shutil.rmtree(data_dir, ignore_errors=True)
+    data_dir.parent.mkdir(parents=True, exist_ok=True)
+    runtime_path = data_dir / "local-service.json"
+    token_path = data_dir / "local-service.token"
+    executable = main_executable(app)
+    log_path = output.with_suffix(".tauri.log")
+
+    metrics: dict[str, Any] = {
+        "framework": "tauri",
+        "status": "failed",
+        "full_gui": True,
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "app": str(app),
+        "app_bytes": directory_size(app),
+        "executable": str(executable),
+        "executable_description": file_description(executable),
+        "log_path": str(log_path),
+    }
+    process: subprocess.Popen[bytes] | None = None
+    sidecar_pid = 0
+    started = time.perf_counter()
+    try:
+        with log_path.open("wb") as log:
+            process = subprocess.Popen(
+                [str(executable)],
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+            deadline = time.monotonic() + 60.0
+            runtime: dict[str, Any] | None = None
+            token = ""
+            while time.monotonic() < deadline:
+                if process.poll() is not None:
+                    raise RuntimeError(
+                        f"Tauri app exited before sidecar startup with code {process.returncode}"
+                    )
+                if runtime_path.is_file() and token_path.is_file():
+                    try:
+                        decoded = json.loads(runtime_path.read_text(encoding="utf-8"))
+                        if isinstance(decoded, dict):
+                            runtime = decoded
+                            token = token_path.read_text(encoding="utf-8").strip()
+                    except (OSError, ValueError):
+                        runtime = None
+                    if runtime and token:
+                        break
+                time.sleep(0.1)
+            if not runtime or not token:
+                raise RuntimeError("Tauri app did not start its packaged sidecar")
+            sidecar_pid = int(runtime.get("pid") or 0)
+            base_url = f"http://{runtime.get('host')}:{int(runtime.get('port') or 0)}"
+            health: dict[str, Any] | None = None
+            deadline = time.monotonic() + 30.0
+            while time.monotonic() < deadline:
+                try:
+                    health = request_json(base_url, token, "GET", "/health")
+                    break
+                except OSError:
+                    time.sleep(0.1)
+            if not health or health.get("status") != "ok":
+                raise RuntimeError("Tauri packaged sidecar did not become healthy")
+            service_ready_at = time.perf_counter()
+
+            ui_ready, chart_job = wait_for_tauri_ui(
+                base_url,
+                token,
+                timeout_seconds=45.0,
+            )
+            ui_ready_at = time.perf_counter()
+            ui_result = (
+                ui_ready.get("result")
+                if isinstance(ui_ready.get("result"), dict)
+                else {}
+            )
+            client_metrics = (
+                ui_result.get("client_metrics")
+                if isinstance(ui_result.get("client_metrics"), dict)
+                else {}
+            )
+
+            request = {
+                "job_type": "system.health",
+                "payload": {"checks": ["runtime", "sqlite", "external-tauri-smoke"]},
+                "requested_target": "auto",
+                "idempotency_key": f"tauri-app-smoke-{os.getpid()}-{time.time_ns()}",
+            }
+            route = request_json(base_url, token, "POST", "/v1/route", request)
+            job_started = time.perf_counter()
+            submitted = request_json(base_url, token, "POST", "/v1/jobs", request)
+            job_id = str((submitted.get("job") or {}).get("id") or "")
+            if not job_id:
+                raise RuntimeError("Tauri sidecar returned no job id")
+            terminal: dict[str, Any] | None = None
+            deadline = time.monotonic() + 30.0
+            while time.monotonic() < deadline:
+                current = request_json(base_url, token, "GET", f"/v1/jobs/{job_id}")
+                if bool(current.get("terminal")):
+                    terminal = current
+                    break
+                time.sleep(0.1)
+            if not terminal or terminal.get("status") != "complete":
+                raise RuntimeError("Tauri packaged health job did not complete")
+            metrics.update(
+                {
+                    "status": "passed",
+                    "health": health,
+                    "route": route,
+                    "service_ready_seconds": round(service_ready_at - started, 4),
+                    "ui_ready_seconds": round(ui_ready_at - started, 4),
+                    "external_job_seconds": round(
+                        time.perf_counter() - job_started,
+                        4,
+                    ),
+                    "total_seconds": round(time.perf_counter() - started, 4),
+                    "frontend_metrics": dict(client_metrics),
+                    "ui_ready_result": dict(ui_result),
+                    "chart_job_seconds": (
+                        None
+                        if not isinstance(chart_job, dict)
+                        else round(
+                            max(
+                                0.0,
+                                float(
+                                    (
+                                        chart_job.get("result") or {}
+                                    ).get("runtime_seconds")
+                                    or 0.0
+                                ),
+                            ),
+                            4,
+                        )
+                    ),
+                    "chart_route": (
+                        {}
+                        if not isinstance(chart_job, dict)
+                        else {
+                            "target": chart_job.get("execution_target"),
+                            "reason": chart_job.get("route_reason"),
+                        }
+                    ),
+                    "result": terminal.get("result") or {},
+                }
+            )
+    except BaseException as exc:
+        metrics["error_type"] = type(exc).__name__
+        metrics["error"] = " ".join(str(exc).split())[:1_000]
+        raise
+    finally:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        terminate_pid(sidecar_pid)
+        output.write_text(
+            json.dumps(metrics, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    print(output)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

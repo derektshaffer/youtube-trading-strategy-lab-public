@@ -7,6 +7,7 @@
     "frontendDist": "../src"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "Trading Intelligence",
@@ -17,12 +18,20 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src http://127.0.0.1:8765; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; connect-src http://127.0.0.1:*; style-src 'self' 'unsafe-inline'"
     }
   },
   "bundle": {
     "active": true,
-    "targets": "all",
-    "externalBin": ["binaries/trading-intelligence-service"]
+    "targets": [
+      "app"
+    ],
+    "externalBin": [
+      "binaries/trading-intelligence-service"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "signingIdentity": "-"
+    }
   }
 }

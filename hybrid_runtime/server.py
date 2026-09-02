@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import socket
 import threading
 
 from .api import create_app
-from .security import assert_loopback_host, generate_service_token, write_private_token_file
+from .contracts import utc_now_text
+from .security import (
+    assert_loopback_host,
+    generate_service_token,
+    write_private_text_file,
+    write_private_token_file,
+)
 from .service import HybridService
 from .storage import HybridStore
 from .worker import LocalWorker
@@ -41,6 +48,20 @@ def main(argv: list[str] | None = None) -> int:
     if len(token) < 32:
         raise SystemExit("The local service token must contain at least 32 characters")
     token_path = write_private_token_file(data_dir / "local-service.token", token)
+    runtime_path = data_dir / "local-service.json"
+    write_private_text_file(
+        runtime_path,
+        json.dumps(
+            {
+                "host": host,
+                "port": int(args.port),
+                "pid": os.getpid(),
+                "started_at": utc_now_text(),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    )
 
     store = HybridStore(data_dir / "hybrid.sqlite3")
     recovered_jobs = store.requeue_stale_jobs(stale_after_seconds=180)
@@ -60,17 +81,20 @@ def main(argv: list[str] | None = None) -> int:
     try:
         import uvicorn
     except ImportError as exc:
+        runtime_path.unlink(missing_ok=True)
         raise SystemExit(
             "uvicorn is not installed. Install requirements-desktop.txt."
         ) from exc
 
     print(f"Trading Intelligence local service token: {token_path}", flush=True)
+    print(f"Trading Intelligence local service: http://{host}:{int(args.port)}", flush=True)
     app = create_app(service, expected_token=token)
     try:
         uvicorn.run(app, host=host, port=int(args.port), log_level="warning")
     finally:
         stop_event.set()
         thread.join(timeout=2.0)
+        runtime_path.unlink(missing_ok=True)
     return 0
 
 

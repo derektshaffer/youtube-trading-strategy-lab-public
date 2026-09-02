@@ -1,0 +1,84 @@
+"""Build the PySide6 framework spike as an Apple Silicon .app bundle."""
+
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+import platform
+import subprocess
+import sys
+
+
+APP_NAME = "Trading Intelligence PySide Spike"
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
+    parser.add_argument("--sidecar", default="")
+    args = parser.parse_args(argv)
+    root = Path(args.repo_root).expanduser().resolve()
+    sidecar = (
+        Path(args.sidecar).expanduser().resolve()
+        if str(args.sidecar).strip()
+        else root / ".desktop_build" / "dist" / "trading-intelligence-service"
+    )
+    if not sidecar.is_file():
+        subprocess.run(
+            [sys.executable, str(root / "scripts" / "build_desktop_sidecar.py")],
+            cwd=root,
+            check=True,
+        )
+    if not sidecar.is_file():
+        raise SystemExit(f"Missing packaged sidecar: {sidecar}")
+
+    build_root = root / ".desktop_build" / "pyside"
+    dist = build_root / "dist"
+    work = build_root / "work"
+    spec = build_root / "spec"
+    for path in (dist, work, spec):
+        path.mkdir(parents=True, exist_ok=True)
+
+    command = [
+        sys.executable,
+        "-m",
+        "PyInstaller",
+        "--noconfirm",
+        "--clean",
+        "--windowed",
+        "--onedir",
+        "--name",
+        APP_NAME,
+        "--osx-bundle-identifier",
+        "com.derektshaffer.trading-intelligence-pyside-spike",
+        "--add-binary",
+        f"{sidecar}{os.pathsep}.",
+        "--distpath",
+        str(dist),
+        "--workpath",
+        str(work),
+        "--specpath",
+        str(spec),
+    ]
+    if sys.platform == "darwin":
+        architecture = "arm64" if platform.machine().lower() == "arm64" else "x86_64"
+        command.extend(["--target-architecture", architecture])
+        command.extend(["--codesign-identity", "-"])
+    command.append(str(root / "desktop" / "pyside6_spike" / "app.py"))
+    subprocess.run(command, cwd=root, check=True)
+
+    app = dist / f"{APP_NAME}.app"
+    if not app.is_dir():
+        raise SystemExit(f"PyInstaller did not create the expected app bundle: {app}")
+    if sys.platform == "darwin":
+        subprocess.run(
+            ["codesign", "--force", "--deep", "--sign", "-", str(app)],
+            check=True,
+        )
+    print(app)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
