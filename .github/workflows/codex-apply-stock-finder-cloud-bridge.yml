@@ -33,6 +33,8 @@ jobs:
         with:
           python-version: "3.14"
 
+      # This workflow is temporary and self-removes only after the guarded
+      # transformation and focused bridge regressions pass on the current head.
       - name: Apply guarded bridge transformation
         run: python .codex/apply_stock_finder_cloud_bridge.py
 
