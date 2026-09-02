@@ -99,6 +99,22 @@ class CachedResearchMarketTests(unittest.TestCase):
             self.assertNotIn("adjustment", base.last_kwargs)
             self.assertEqual(market.research_cache_events, [])
 
+    def test_adjusted_history_delegates_to_provider(self):
+        base = FakeMarket()
+        with tempfile.TemporaryDirectory() as temporary:
+            market = CachedResearchMarket(base, data_dir=temporary)
+            market.bars(
+                ["SDOT"],
+                start=datetime(2026, 8, 30, tzinfo=UTC),
+                end=datetime(2026, 9, 1, tzinfo=UTC),
+                timeframe="1Min",
+                adjustment="split",
+                max_pages=30,
+            )
+            self.assertEqual(base.calls, 1)
+            self.assertEqual(base.last_kwargs["adjustment"], "split")
+            self.assertEqual(market.research_cache_events, [])
+
     def test_batch_request_and_other_methods_delegate(self):
         base = FakeMarket()
         with tempfile.TemporaryDirectory() as temporary:
