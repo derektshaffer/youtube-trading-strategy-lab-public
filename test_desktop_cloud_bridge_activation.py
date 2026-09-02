@@ -30,6 +30,7 @@ def test_cloud_bridge_job_types_expand_only_through_explicit_contracts():
 
     assert '"strategy.profit_first_validation"' in supported_line
     assert '"strategy.stock_finder"' in supported_line
+    assert '"strategy.strategy_lab"' in supported_line
     # Guard against an accidental catch-all that would silently send unknown
     # local jobs through the cloud bridge without a publication/result contract.
     assert "research.autonomous" not in supported_line
