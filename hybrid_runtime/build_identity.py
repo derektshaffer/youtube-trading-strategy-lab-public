@@ -55,6 +55,7 @@ def stamp_bundle_identity(
     commit: str = "",
     bundle_short_version: str | None = None,
     bundle_build: str | None = None,
+    display_name: str | None = None,
 ) -> dict[str, str]:
     """Write build metadata before the caller performs its final code signing."""
 
@@ -74,6 +75,11 @@ def stamp_bundle_identity(
         or os.environ.get("TRADING_INTELLIGENCE_BUILD_COMMIT")
         or os.environ.get("GITHUB_SHA")
     )
+    if display_name is not None and str(display_name).strip():
+        # Product display names intentionally allow spaces; do not use _clean().
+        clean_display = " ".join(str(display_name).split())[:96]
+        data["CFBundleDisplayName"] = clean_display
+        data["CFBundleName"] = clean_display
     data[VERSION_LABEL_KEY] = clean_version
     data[CHANNEL_KEY] = clean_channel
     if clean_commit:
