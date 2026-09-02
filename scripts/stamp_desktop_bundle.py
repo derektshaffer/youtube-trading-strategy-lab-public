@@ -20,17 +20,15 @@ def stamp(
     clean_label = clean_version(version)
     short_version = bundle_short_version(clean_label)
     bundle_build = build_number(build)
-    values = stamp_bundle_identity(
+    return stamp_bundle_identity(
         app,
         version_label=clean_label,
         channel=channel,
         commit=commit,
         bundle_short_version=short_version,
         bundle_build=bundle_build,
+        display_name=APP_NAME,
     )
-    # Preserve the product names set by the package/build system. The helper
-    # changes only version/build identity and never claims signing readiness.
-    return values
 
 
 def main(argv: list[str] | None = None) -> int:
