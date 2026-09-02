@@ -35,6 +35,7 @@ class RoutingPolicy:
         {
             "strategy.very_deep",
             "strategy.profit_first_validation",
+            "strategy.stock_finder",
             "research.autonomous",
             "research.book_extract",
             "research.video_extract",
@@ -50,9 +51,8 @@ class RoutingPolicy:
             "chart.framework_fixture",
             "analysis.stock",
             "backtest.quick",
-            "library.configuration",
-            "library.summary",
             "strategy.profit_first_plan",
+            "strategy.finder_quick",
         }
     )
 
