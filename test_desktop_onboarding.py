@@ -42,6 +42,29 @@ class FakeResponse:
         return json.dumps(self.payload).encode("utf-8")
 
 
+def configured_fixture(tmp_path: Path) -> tuple[Path, Path, FakeKeychain]:
+    root = tmp_path / "desktop"
+    root.mkdir()
+    library = root / "library.json"
+    library.write_text("{}", encoding="utf-8")
+    save_desktop_settings(
+        DesktopSettings(
+            library_source="local_file",
+            local_library_path=str(library),
+            market_feed="iex",
+        ),
+        root,
+    )
+    keychain = FakeKeychain(
+        {
+            "github-backup-token": "github-secret",
+            "alpaca-api-key": "alpaca-key",
+            "alpaca-secret-key": "alpaca-secret",
+        }
+    )
+    return root, library, keychain
+
+
 def test_local_library_setup_distinguishes_local_readiness_from_full_hybrid_readiness(tmp_path):
     root = tmp_path / "desktop"
     root.mkdir()
@@ -68,6 +91,7 @@ def test_local_library_setup_distinguishes_local_readiness_from_full_hybrid_read
     assert partial["market_configured"] is True
     assert partial["cloud_configured"] is False
     assert partial["full_configured"] is False
+    assert partial["launch_ready"] is False
 
     complete = onboarding_state.configuration_status(
         root,
@@ -81,8 +105,44 @@ def test_local_library_setup_distinguishes_local_readiness_from_full_hybrid_read
     )
     assert complete["full_configured"] is True
     assert complete["market_feed"] == "iex"
+    assert complete["setup_verification"] == "legacy"
+    assert complete["launch_ready"] is True
     assert "github-secret" not in str(complete)
     assert "alpaca-secret" not in str(complete)
+
+
+def test_pending_and_verified_setup_state_survives_restart_and_invalidates_on_change(tmp_path):
+    root, library, keychain = configured_fixture(tmp_path)
+
+    onboarding_state.mark_setup_pending(root)
+    pending = onboarding_state.configuration_status(root, keychain=keychain)
+    assert pending["full_configured"] is True
+    assert pending["setup_verification"] == "pending"
+    assert pending["launch_ready"] is False
+
+    onboarding_state.mark_setup_verified(root)
+    verified = onboarding_state.configuration_status(root, keychain=keychain)
+    assert verified["setup_verification"] == "verified"
+    assert verified["launch_ready"] is True
+    state_path = onboarding_state.verification_path(root)
+    state_text = state_path.read_text(encoding="utf-8")
+    assert "github-secret" not in state_text
+    assert "alpaca-key" not in state_text
+    assert "alpaca-secret" not in state_text
+
+    # A non-secret connection change invalidates the prior verification fingerprint.
+    save_desktop_settings(
+        DesktopSettings(
+            library_source="local_file",
+            local_library_path=str(library),
+            market_feed="sip",
+        ),
+        root,
+    )
+    changed = onboarding_state.configuration_status(root, keychain=keychain)
+    assert changed["full_configured"] is True
+    assert changed["setup_verification"] == "pending"
+    assert changed["launch_ready"] is False
 
 
 def test_verify_setup_returns_bounded_readiness_without_secret_values(tmp_path, monkeypatch):
@@ -248,6 +308,8 @@ def test_onboarding_ui_keeps_credentials_out_of_durable_job_payload():
     assert "keychain.set_secret(settings.keychain_account" in window
     assert "keychain.set_secret(ALPACA_API_KEY_ACCOUNT" in window
     assert "keychain.set_secret(ALPACA_SECRET_KEY_ACCOUNT" in window
+    assert "mark_setup_pending" in window
+    assert "mark_setup_verified" in window
     assert '"Authorization": "Bearer " + token' in probe
     assert 'permissions.get("push")' in probe
     assert "_workflow_dispatch_access(token)" in probe
@@ -266,9 +328,10 @@ def test_first_run_wrapper_skips_real_credentials_only_for_ci_smoke_and_stays_li
     state = (ROOT / "hybrid_runtime/onboarding_state.py").read_text(encoding="utf-8")
     assert "if self.smoke:" in source
     assert "super().wait_for_health()" in source
+    assert 'configured.get("launch_ready")' in source
     assert '"First-run setup · connect the library, cloud research, and market data"' in source
     assert "configuration_status(self.runtime.data_dir)" in source
     assert 'merged["market_feed"] = current.market_feed' in source
-    assert "from hybrid_runtime.onboarding_state import configuration_status" in source
+    assert "from hybrid_runtime.onboarding_state import" in source
     assert "youtube_strategy_engine" not in source
     assert "youtube_strategy_engine" not in state
