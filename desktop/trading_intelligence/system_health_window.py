@@ -40,7 +40,7 @@ class MainWindow(ResearchMLMainWindow):
             )
             return
         self.system_health.set_working(
-            "Reading the private-library connection and local durable state."
+            "Reading the research-library connection and local durable state."
         )
         request = {
             "job_type": "library.summary",
@@ -89,10 +89,20 @@ class MainWindow(ResearchMLMainWindow):
             job = self.runtime.request_json("GET", f"/v1/jobs/{self.active_job_id}")
             if not bool(job.get("terminal")):
                 return
-            if job.get("status") != "complete":
+
+            if job.get("status") == "complete":
+                library = job.get("result") if isinstance(job.get("result"), dict) else {}
+            else:
+                # A broken/missing library is precisely something System Health
+                # must diagnose. Convert the failed library read into a bounded
+                # diagnostic input instead of making the diagnostic page itself fail.
                 message = (job.get("error") or {}).get("message") or str(job.get("status"))
-                raise RuntimeError(message)
-            library = job.get("result") if isinstance(job.get("result"), dict) else {}
+                library = {
+                    "source": "error",
+                    "error": clean_error(RuntimeError(message)),
+                    "cloud_refreshed": False,
+                }
+
             runtime_health = self.runtime.request_json("GET", "/health")
             from hybrid_runtime.system_health_summary import build_system_health_summary
 
