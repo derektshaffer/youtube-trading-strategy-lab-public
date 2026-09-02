@@ -18,23 +18,37 @@ def inspect(app: Path) -> dict[str, Any]:
     codesign = run(["codesign", "--verify", "--deep", "--strict", "--verbose=4", str(app)])
     details = run(["codesign", "-dv", "--verbose=4", str(app)])
     text = "\n".join(filter(None, (details.stdout, details.stderr)))
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
     authorities = [
         line.split("=", 1)[1].strip()
-        for line in text.splitlines()
+        for line in lines
         if line.startswith("Authority=")
     ]
     developer_id = any("Developer ID Application" in authority for authority in authorities)
+    flags_line = next((line for line in lines if line.startswith("flags=")), "")
+    hardened_runtime = "runtime" in flags_line.casefold()
+    timestamp_line = next((line for line in lines if line.startswith("Timestamp=")), "")
+    timestamp_value = timestamp_line.split("=", 1)[1].strip() if "=" in timestamp_line else ""
+    secure_timestamp = bool(
+        timestamp_value
+        and timestamp_value.casefold() not in {"none", "n/a", "not set", "-"}
+    )
     stapler = run(["xcrun", "stapler", "validate", str(app)])
     gatekeeper = run(["spctl", "-a", "-t", "exec", "-vv", str(app)])
     ready = bool(
         codesign.returncode == 0
         and developer_id
+        and hardened_runtime
+        and secure_timestamp
         and stapler.returncode == 0
         and gatekeeper.returncode == 0
     )
     return {
         "codesign_valid": codesign.returncode == 0,
         "developer_id_signed": developer_id,
+        "hardened_runtime": hardened_runtime,
+        "secure_timestamp": secure_timestamp,
+        "timestamp": timestamp_value,
         "authorities": authorities,
         "stapled_ticket_valid": stapler.returncode == 0,
         "gatekeeper_accepted": gatekeeper.returncode == 0,
