@@ -60,12 +60,7 @@ def chart_framework_fixture_handler(
     progress: ProgressCallback,
     cancelled: CancellationCheck,
 ) -> Mapping[str, Any]:
-    """Create deterministic OHLCV data for desktop-framework interaction tests.
-
-    This is intentionally synthetic and clearly labeled. It lets both desktop
-    candidates render exactly the same payload without spending provider quota
-    or confusing a framework benchmark with real trading evidence.
-    """
+    """Create deterministic OHLCV data for desktop-framework interaction tests."""
 
     symbol = str(payload.get("symbol") or "SDOT").strip().upper()[:12] or "SDOT"
     timeframe = str(payload.get("timeframe") or "5Min").strip()
@@ -92,9 +87,7 @@ def chart_framework_fixture_handler(
 
     def random_unit() -> float:
         nonlocal state
-        state = (
-            6364136223846793005 * state + 1442695040888963407
-        ) & mask
+        state = (6364136223846793005 * state + 1442695040888963407) & mask
         return ((state >> 11) & ((1 << 53) - 1)) / float(1 << 53)
 
     start = datetime(2026, 8, 31, 13, 30, tzinfo=timezone.utc)
@@ -111,11 +104,7 @@ def chart_framework_fixture_handler(
         cycle = math.sin(index / 10.5) * 0.055
         slower_cycle = math.sin(index / 41.0) * 0.035
         trend = 0.0045 if index < bars * 0.62 else -0.0015
-        impulse = (
-            0.16
-            if index in {round(bars * 0.28), round(bars * 0.64)}
-            else 0.0
-        )
+        impulse = 0.16 if index in {round(bars * 0.28), round(bars * 0.64)} else 0.0
         noise = (random_unit() - 0.5) * 0.15
         opening = price
         closing = max(0.5, opening + trend + cycle + slower_cycle + impulse + noise)
@@ -194,6 +183,32 @@ def library_summary_handler(
     return summary
 
 
+def results_summary_handler(
+    payload: Mapping[str, Any],
+    progress: ProgressCallback,
+    cancelled: CancellationCheck,
+) -> Mapping[str, Any]:
+    """Read bounded result summaries while keeping full evidence in durable storage."""
+
+    progress(0.12, "downloading_data", "Loading the authoritative research library")
+    from .library_source import load_library_for_job
+
+    loaded = load_library_for_job(payload, data_dir=_desktop_data_dir())
+    _check_cancelled(cancelled)
+    progress(0.58, "preparing_features", "Compacting recent durable research evidence")
+    from .results_summary import build_results_summary
+
+    limit = _positive_int(payload.get("limit"), default=30, minimum=5, maximum=100)
+    result = dict(build_results_summary(loaded.library, limit=limit))
+    _check_cancelled(cancelled)
+    result["library"] = dict(loaded.metadata)
+    result["research_only"] = True
+    result["affects_live_ranking"] = False
+    result["affects_execution"] = False
+    progress(0.92, "saving", "Preparing bounded Results payload")
+    return result
+
+
 def profit_first_plan_handler(
     payload: Mapping[str, Any],
     progress: ProgressCallback,
@@ -249,6 +264,7 @@ def default_handlers() -> dict[str, JobHandler]:
         "chart.framework_fixture": chart_framework_fixture_handler,
         "library.configuration": library_configuration_handler,
         "library.summary": library_summary_handler,
+        "library.results_summary": results_summary_handler,
         "strategy.profit_first_plan": profit_first_plan_handler,
         "analysis.stock": stock_analysis_handler,
     }
