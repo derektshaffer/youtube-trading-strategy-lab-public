@@ -34,14 +34,19 @@ def assert_loopback_host(host: str) -> str:
     return clean
 
 
-def write_private_token_file(path: str | os.PathLike[str], token: str) -> Path:
+def write_private_text_file(
+    path: str | os.PathLike[str],
+    content: str,
+) -> Path:
+    """Atomically replace one owner-readable runtime file with mode 0600."""
+
     target = Path(path).expanduser().resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary_name = tempfile.mkstemp(prefix=target.name + ".", dir=target.parent)
     temporary = Path(temporary_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(str(token))
+            handle.write(str(content))
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(temporary, 0o600)
@@ -50,6 +55,10 @@ def write_private_token_file(path: str | os.PathLike[str], token: str) -> Path:
     finally:
         temporary.unlink(missing_ok=True)
     return target
+
+
+def write_private_token_file(path: str | os.PathLike[str], token: str) -> Path:
+    return write_private_text_file(path, str(token))
 
 
 def redact_text(text: object, secrets_to_redact: Iterable[str] = ()) -> str:

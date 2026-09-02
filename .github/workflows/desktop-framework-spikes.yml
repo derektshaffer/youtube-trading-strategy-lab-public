@@ -1,0 +1,218 @@
+name: Desktop Framework Spikes
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "hybrid_runtime/**"
+      - "hybrid_sidecar_entry.py"
+      - "desktop/**"
+      - "scripts/build_desktop_sidecar.py"
+      - "scripts/build_pyside_spike.py"
+      - "scripts/desktop_sidecar_smoke.py"
+      - "scripts/smoke_tauri_bundle.py"
+      - "requirements-desktop*.txt"
+      - "test_desktop_build_workflow.py"
+      - "test_hybrid_runtime*.py"
+      - ".github/workflows/desktop-framework-spikes.yml"
+  push:
+    branches: [main]
+    paths:
+      - "hybrid_runtime/**"
+      - "hybrid_sidecar_entry.py"
+      - "desktop/**"
+      - "scripts/build_desktop_sidecar.py"
+      - "scripts/build_pyside_spike.py"
+      - "scripts/desktop_sidecar_smoke.py"
+      - "scripts/smoke_tauri_bundle.py"
+      - "requirements-desktop*.txt"
+      - "test_desktop_build_workflow.py"
+      - "test_hybrid_runtime*.py"
+      - ".github/workflows/desktop-framework-spikes.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-framework-spikes-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tauri-apple-silicon:
+    name: Tauri · Apple Silicon
+    runs-on: macos-14
+    timeout-minutes: 75
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-desktop.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Verify native Apple Silicon runner
+        run: |
+          test "$(uname -m)" = "arm64"
+          python -c 'import platform; assert platform.machine() == "arm64"'
+          sw_vers
+
+      - name: Install Python desktop dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-desktop.txt "pytest>=8,<9"
+
+      - name: Run hybrid runtime tests
+        run: >-
+          python -m pytest -q
+          test_hybrid_runtime.py
+          test_hybrid_runtime_hardening.py
+          test_desktop_build_workflow.py
+
+      - name: Install stable Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc -Vv
+          cargo -V
+
+      - name: Build and smoke packaged Python sidecar
+        run: |
+          python scripts/build_desktop_sidecar.py --target-triple aarch64-apple-darwin
+          SIDECAR=".desktop_build/dist/trading-intelligence-service"
+          file "$SIDECAR" | tee "$RUNNER_TEMP/tauri-sidecar-file.txt"
+          file "$SIDECAR" | grep -q "arm64"
+          codesign --verify --verbose=4 "$SIDECAR"
+          python scripts/desktop_sidecar_smoke.py \
+            --binary "$SIDECAR" \
+            --output "$RUNNER_TEMP/tauri-sidecar-metrics.json" \
+            --data-dir "$RUNNER_TEMP/tauri-sidecar-data"
+
+      - name: Install Tauri dependencies
+        working-directory: desktop/tauri_spike
+        run: npm install --no-audit --no-fund
+
+      - name: Build ad-hoc-signed Tauri app
+        working-directory: desktop/tauri_spike
+        run: npm run build -- --bundles app
+
+      - name: Verify and launch Tauri app bundle
+        run: |
+          APP="desktop/tauri_spike/src-tauri/target/release/bundle/macos/Trading Intelligence Tauri Spike.app"
+          test -d "$APP"
+          APP_EXE="$(find "$APP/Contents/MacOS" -type f -perm -111 -print -quit)"
+          test -n "$APP_EXE"
+          file "$APP_EXE" | tee "$RUNNER_TEMP/tauri-app-file.txt"
+          file "$APP_EXE" | grep -q "arm64"
+          codesign --verify --deep --strict --verbose=4 "$APP"
+          python scripts/smoke_tauri_bundle.py \
+            --app "$APP" \
+            --output "$RUNNER_TEMP/tauri-app-metrics.json"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$APP" "$RUNNER_TEMP/trading-intelligence-tauri-apple-silicon.zip"
+
+      - name: Upload Tauri candidate and measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trading-intelligence-tauri-apple-silicon
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/trading-intelligence-tauri-apple-silicon.zip
+            ${{ runner.temp }}/tauri-*-metrics.json
+            ${{ runner.temp }}/tauri-*.log
+            ${{ runner.temp }}/tauri-*-file.txt
+
+  pyside-apple-silicon:
+    name: PySide6 · Apple Silicon
+    runs-on: macos-14
+    timeout-minutes: 75
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-desktop.txt
+            requirements-desktop-pyside.txt
+
+      - name: Verify native Apple Silicon runner
+        run: |
+          test "$(uname -m)" = "arm64"
+          python -c 'import platform; assert platform.machine() == "arm64"'
+          sw_vers
+
+      - name: Install PySide6 desktop dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-desktop-pyside.txt "pytest>=8,<9"
+
+      - name: Run hybrid runtime tests
+        run: >-
+          python -m pytest -q
+          test_hybrid_runtime.py
+          test_hybrid_runtime_hardening.py
+          test_desktop_build_workflow.py
+
+      - name: Build and smoke packaged Python sidecar
+        run: |
+          python scripts/build_desktop_sidecar.py --target-triple aarch64-apple-darwin
+          SIDECAR=".desktop_build/dist/trading-intelligence-service"
+          file "$SIDECAR" | tee "$RUNNER_TEMP/pyside-sidecar-file.txt"
+          file "$SIDECAR" | grep -q "arm64"
+          codesign --verify --verbose=4 "$SIDECAR"
+          python scripts/desktop_sidecar_smoke.py \
+            --binary "$SIDECAR" \
+            --output "$RUNNER_TEMP/pyside-sidecar-metrics.json" \
+            --data-dir "$RUNNER_TEMP/pyside-sidecar-data"
+
+      - name: Build ad-hoc-signed PySide6 app
+        run: python scripts/build_pyside_spike.py
+
+      - name: Verify and launch PySide6 app bundle
+        run: |
+          APP=".desktop_build/pyside/dist/Trading Intelligence PySide Spike.app"
+          test -d "$APP"
+          APP_EXE="$APP/Contents/MacOS/Trading Intelligence PySide Spike"
+          test -x "$APP_EXE"
+          file "$APP_EXE" | tee "$RUNNER_TEMP/pyside-app-file.txt"
+          file "$APP_EXE" | grep -q "arm64"
+          codesign --verify --deep --strict --verbose=4 "$APP"
+          rm -rf "$RUNNER_TEMP/pyside-app-data"
+          TRADING_INTELLIGENCE_SPIKE_DATA_DIR="$RUNNER_TEMP/pyside-app-data" \
+            "$APP_EXE" --headless-smoke \
+            --metrics-output "$RUNNER_TEMP/pyside-app-metrics.json"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$APP" "$RUNNER_TEMP/trading-intelligence-pyside-apple-silicon.zip"
+
+      - name: Upload PySide6 candidate and measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trading-intelligence-pyside-apple-silicon
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/trading-intelligence-pyside-apple-silicon.zip
+            ${{ runner.temp }}/pyside-*-metrics.json
+            ${{ runner.temp }}/pyside-*.log
+            ${{ runner.temp }}/pyside-*-file.txt

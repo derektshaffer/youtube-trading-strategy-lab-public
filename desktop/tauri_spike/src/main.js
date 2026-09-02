@@ -1,6 +1,7 @@
-import { Command } from "@tauri-apps/plugin-shell";
+const { appDataDir } = window.__TAURI__.path;
+const { Command } = window.__TAURI__.shell;
 
-const state = { baseUrl: "http://127.0.0.1:8765", token: "", jobId: "" };
+const state = { baseUrl: "", token: "", jobId: "", child: null };
 const service = document.querySelector("#service");
 const route = document.querySelector("#route");
 const progress = document.querySelector("#progress");
@@ -10,6 +11,11 @@ const details = document.querySelector("#details");
 function randomToken() {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   return Array.from(bytes, value => value.toString(16).padStart(2, "0")).join("");
+}
+
+function randomPort() {
+  const value = crypto.getRandomValues(new Uint32Array(1))[0];
+  return 20000 + (value % 30000);
 }
 
 async function api(path, options = {}) {
@@ -26,7 +32,7 @@ async function api(path, options = {}) {
 }
 
 async function waitForHealth() {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
     try {
       const health = await api("/health");
       service.textContent = `Local service: ${health.status}`;
@@ -39,20 +45,40 @@ async function waitForHealth() {
   throw new Error("The local Python service did not become ready.");
 }
 
+async function stopSidecar() {
+  const child = state.child;
+  state.child = null;
+  if (child) {
+    try {
+      await child.kill();
+    } catch (_error) {
+      // The child may already have stopped with the parent application.
+    }
+  }
+}
+
 async function startSidecar() {
   state.token = randomToken();
+  const port = randomPort();
+  state.baseUrl = `http://127.0.0.1:${port}`;
+  const dataDir = await appDataDir();
   const command = Command.sidecar(
     "binaries/trading-intelligence-service",
-    [],
-    { env: { TRADING_INTELLIGENCE_LOCAL_TOKEN: state.token } }
+    ["--host", "127.0.0.1", "--port", String(port)],
+    {
+      env: {
+        TRADING_INTELLIGENCE_LOCAL_TOKEN: state.token,
+        TRADING_INTELLIGENCE_DESKTOP_DATA_DIR: dataDir
+      }
+    }
   );
   command.stdout.on("data", line => {
-    // Do not display or persist bearer tokens. The service only reports its
-    // token-file location, which is useful for diagnostics.
+    // Never display or persist bearer tokens. The sidecar reports only its
+    // owner-readable token-file location and loopback URL.
     details.textContent += line + "\n";
   });
   command.stderr.on("data", line => { details.textContent += line + "\n"; });
-  await command.spawn();
+  state.child = await command.spawn();
   await waitForHealth();
 }
 
@@ -61,7 +87,7 @@ async function submit() {
     job_type: "system.health",
     payload: { checks: ["runtime", "sqlite"] },
     requested_target: "auto",
-    idempotency_key: "tauri-spike-health"
+    idempotency_key: `tauri-spike-health-${Date.now()}`
   };
   const decision = await api("/v1/route", { method: "POST", body: JSON.stringify(request) });
   route.textContent = `Route: ${decision.target} — ${decision.reason}`;
@@ -84,5 +110,6 @@ async function poll() {
 
 run.disabled = true;
 run.addEventListener("click", () => submit().catch(error => { service.textContent = error.message; }));
+window.addEventListener("beforeunload", () => { void stopSidecar(); });
 startSidecar().catch(error => { service.textContent = error.message; });
 setInterval(() => poll().catch(error => { service.textContent = error.message; }), 700);

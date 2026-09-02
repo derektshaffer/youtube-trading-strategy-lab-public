@@ -7,12 +7,21 @@
   ],
   "permissions": [
     "core:default",
+    "shell:allow-kill",
     {
       "identifier": "shell:allow-spawn",
       "allow": [
         {
           "name": "binaries/trading-intelligence-service",
-          "sidecar": true
+          "sidecar": true,
+          "args": [
+            "--host",
+            "127.0.0.1",
+            "--port",
+            {
+              "validator": "^[1-9][0-9]{3,4}$"
+            }
+          ]
         }
       ]
     }
