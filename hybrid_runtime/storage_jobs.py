@@ -16,7 +16,7 @@ from .contracts import (
     transition_allowed,
     utc_now_text,
 )
-from .storage_base import InvalidJobTransition, JobNotFound
+from .storage_base import HybridStoreError, InvalidJobTransition, JobNotFound
 
 
 class JobStoreMixin:
@@ -49,6 +49,13 @@ class JobStoreMixin:
                     (fingerprint, *terminal),
                 ).fetchone()
             if existing is not None:
+                if (
+                    request.idempotency_key
+                    and str(existing["request_fingerprint"]) != fingerprint
+                ):
+                    raise HybridStoreError(
+                        "Idempotency key is already associated with a different request"
+                    )
                 return self._record(existing), False
 
             job_id = uuid4().hex

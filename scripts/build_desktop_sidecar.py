@@ -60,6 +60,8 @@ def main(argv: list[str] | None = None) -> int:
             "--onefile",
             "--name",
             name,
+            "--hidden-import",
+            "keyring.backends.macOS",
             "--distpath",
             str(dist),
             "--workpath",

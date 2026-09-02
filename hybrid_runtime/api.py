@@ -53,6 +53,8 @@ def create_app(service: HybridService, *, expected_token: str) -> Any:
             return {"created": created, "job": record.as_dict()}
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except HybridStoreError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/v1/jobs", dependencies=[Depends(require_token)])
     def list_jobs(limit: int = Query(default=100, ge=1, le=1000)) -> dict[str, Any]:

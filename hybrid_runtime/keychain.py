@@ -1,10 +1,9 @@
-"""Minimal macOS Keychain adapter for desktop-only credentials."""
+"""Native macOS Keychain adapter for desktop-only credentials."""
 
 from __future__ import annotations
 
 import platform
-import subprocess
-from typing import Sequence
+from typing import Any
 
 
 class KeychainError(RuntimeError):
@@ -16,6 +15,8 @@ class KeychainUnavailable(KeychainError):
 
 
 class MacOSKeychain:
+    """Store credentials through keyring's native macOS Security API backend."""
+
     def __init__(self, service: str = "Trading Intelligence Lab") -> None:
         self.service = str(service or "Trading Intelligence Lab").strip()
         if not self.service:
@@ -25,67 +26,58 @@ class MacOSKeychain:
     def _available() -> bool:
         return platform.system() == "Darwin"
 
-    def _run(self, arguments: Sequence[str]) -> subprocess.CompletedProcess[str]:
+    def _backend(self) -> Any:
         if not self._available():
             raise KeychainUnavailable("macOS Keychain is only available on macOS")
         try:
-            return subprocess.run(
-                ["security", *arguments],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except FileNotFoundError as exc:
-            raise KeychainUnavailable("The macOS security command is unavailable") from exc
-        except subprocess.CalledProcessError as exc:
-            # Never include stderr because the security CLI can echo sensitive input.
-            raise KeychainError(
-                f"Keychain command failed with exit code {exc.returncode}"
+            from keyring.backends.macOS import Keyring
+        except (ImportError, RuntimeError) as exc:
+            raise KeychainUnavailable(
+                "The native macOS keyring backend is unavailable; install requirements-desktop.txt"
             ) from exc
+        try:
+            return Keyring()
+        except Exception as exc:
+            raise KeychainUnavailable("The native macOS Keychain could not be initialized") from exc
+
+    @staticmethod
+    def _account(value: str) -> str:
+        account = str(value or "").strip()
+        if not account:
+            raise ValueError("account is required")
+        return account
 
     def set_secret(self, account: str, value: str) -> None:
-        clean_account = str(account or "").strip()
-        if not clean_account or not str(value):
-            raise ValueError("Both account and non-empty secret are required")
-        self._run(
-            [
-                "add-generic-password",
-                "-U",
-                "-a",
-                clean_account,
-                "-s",
-                self.service,
-                "-w",
-                str(value),
-            ]
-        )
+        clean_account = self._account(account)
+        secret = str(value or "")
+        if not secret:
+            raise ValueError("A non-empty secret is required")
+        try:
+            self._backend().set_password(self.service, clean_account, secret)
+        except KeychainError:
+            raise
+        except Exception as exc:
+            # Do not echo backend details: some implementations include command
+            # arguments or values in exception messages.
+            raise KeychainError("The credential could not be stored in macOS Keychain") from exc
 
     def get_secret(self, account: str) -> str:
-        clean_account = str(account or "").strip()
-        if not clean_account:
-            raise ValueError("account is required")
-        completed = self._run(
-            [
-                "find-generic-password",
-                "-a",
-                clean_account,
-                "-s",
-                self.service,
-                "-w",
-            ]
-        )
-        return completed.stdout.rstrip("\n")
+        clean_account = self._account(account)
+        try:
+            value = self._backend().get_password(self.service, clean_account)
+        except KeychainError:
+            raise
+        except Exception as exc:
+            raise KeychainError("The credential could not be read from macOS Keychain") from exc
+        if value is None:
+            raise KeychainError("No matching credential exists in macOS Keychain")
+        return str(value)
 
     def delete_secret(self, account: str) -> None:
-        clean_account = str(account or "").strip()
-        if not clean_account:
-            raise ValueError("account is required")
-        self._run(
-            [
-                "delete-generic-password",
-                "-a",
-                clean_account,
-                "-s",
-                self.service,
-            ]
-        )
+        clean_account = self._account(account)
+        try:
+            self._backend().delete_password(self.service, clean_account)
+        except KeychainError:
+            raise
+        except Exception as exc:
+            raise KeychainError("The credential could not be deleted from macOS Keychain") from exc

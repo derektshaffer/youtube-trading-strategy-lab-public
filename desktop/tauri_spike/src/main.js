@@ -41,10 +41,11 @@ async function waitForHealth() {
 
 async function startSidecar() {
   state.token = randomToken();
-  const command = Command.sidecar("binaries/trading-intelligence-service", [
-    "--token",
-    state.token
-  ]);
+  const command = Command.sidecar(
+    "binaries/trading-intelligence-service",
+    [],
+    { env: { TRADING_INTELLIGENCE_LOCAL_TOKEN: state.token } }
+  );
   command.stdout.on("data", line => {
     // Do not display or persist bearer tokens. The service only reports its
     // token-file location, which is useful for diagnostics.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import os
 from pathlib import Path
 import secrets
 import socket
@@ -35,6 +36,8 @@ PORT = available_port()
 SERVICE_URL = f"http://127.0.0.1:{PORT}"
 TOKEN = secrets.token_urlsafe(48)
 DATA_DIR = Path(tempfile.mkdtemp(prefix="trading-intelligence-pyside-spike-"))
+SERVICE_ENV = os.environ.copy()
+SERVICE_ENV["TRADING_INTELLIGENCE_LOCAL_TOKEN"] = TOKEN
 SERVICE_PROCESS = subprocess.Popen(
     [
         sys.executable,
@@ -44,13 +47,12 @@ SERVICE_PROCESS = subprocess.Popen(
         "127.0.0.1",
         "--port",
         str(PORT),
-        "--token",
-        TOKEN,
         "--data-dir",
         str(DATA_DIR),
     ],
     stdout=subprocess.DEVNULL,
     stderr=subprocess.DEVNULL,
+    env=SERVICE_ENV,
 )
 
 
