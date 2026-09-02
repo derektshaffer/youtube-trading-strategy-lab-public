@@ -1,4 +1,4 @@
-"""Run the authenticated loopback service and its bounded local worker."""
+"""Run the authenticated loopback service and its bounded local/cloud workers."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import socket
 import threading
 
 from .api import create_app
+from .cloud_link_store import CloudLinkStore
 from .contracts import utc_now_text
 from .security import (
     assert_loopback_host,
@@ -19,6 +20,7 @@ from .security import (
 )
 from .service import HybridService
 from .storage import HybridStore
+from .unified_cloud_bridge import UnifiedCloudBridgeWorker
 from .worker import LocalWorker
 
 
@@ -67,23 +69,41 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     store = HybridStore(data_dir / "hybrid.sqlite3")
+    cloud_links = CloudLinkStore(data_dir / "cloud-links.sqlite3")
     recovered_jobs = store.requeue_stale_jobs(stale_after_seconds=180)
     if recovered_jobs:
         print(f"Recovered {recovered_jobs} stale local job(s).", flush=True)
     service = HybridService(store)
-    worker = LocalWorker(service, worker_id=f"{socket.gethostname()}:{os.getpid()}")
+    local_worker = LocalWorker(
+        service,
+        worker_id=f"{socket.gethostname()}:{os.getpid()}:local",
+    )
+    cloud_worker = UnifiedCloudBridgeWorker(
+        service,
+        cloud_links,
+        data_dir=data_dir,
+        worker_id=f"{socket.gethostname()}:{os.getpid()}:cloud",
+    )
     stop_event = threading.Event()
-    thread = threading.Thread(
-        target=worker.run_forever,
+    local_thread = threading.Thread(
+        target=local_worker.run_forever,
         args=(stop_event,),
         name="trading-intelligence-local-worker",
         daemon=True,
     )
-    thread.start()
+    cloud_thread = threading.Thread(
+        target=cloud_worker.run_forever,
+        args=(stop_event,),
+        name="trading-intelligence-cloud-reconciler",
+        daemon=True,
+    )
+    local_thread.start()
+    cloud_thread.start()
 
     try:
         import uvicorn
     except ImportError as exc:
+        stop_event.set()
         runtime_path.unlink(missing_ok=True)
         raise SystemExit(
             "uvicorn is not installed. Install requirements-desktop.txt."
@@ -91,12 +111,17 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Trading Intelligence local service token: {token_path}", flush=True)
     print(f"Trading Intelligence local service: http://{host}:{int(args.port)}", flush=True)
-    app = create_app(service, expected_token=token)
+    app = create_app(
+        service,
+        expected_token=token,
+        cloud_link_lookup=cloud_links.get,
+    )
     try:
         uvicorn.run(app, host=host, port=int(args.port), log_level="warning")
     finally:
         stop_event.set()
-        thread.join(timeout=2.0)
+        local_thread.join(timeout=2.0)
+        cloud_thread.join(timeout=2.0)
         runtime_path.unlink(missing_ok=True)
     return 0
 
