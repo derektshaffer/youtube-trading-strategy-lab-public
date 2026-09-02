@@ -8,12 +8,16 @@ from __future__ import annotations
 
 import streamlit as st
 
+from explosive_stock_glossary import install_metric_help
+
 st.set_page_config(
     page_title="Explosive Stock Lab",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+install_metric_help()
 
 page = st.Page(
     "explosive_stock_page.py",
