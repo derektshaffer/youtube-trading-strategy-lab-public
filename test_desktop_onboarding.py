@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from urllib.error import HTTPError
 
 import pytest
 import hybrid_runtime.onboarding as onboarding
@@ -27,8 +28,8 @@ class FakeKeychain:
 
 
 class FakeResponse:
-    def __init__(self, payload: dict, *, status: int = 200) -> None:
-        self.payload = payload
+    def __init__(self, payload: dict | None = None, *, status: int = 200) -> None:
+        self.payload = dict(payload or {})
         self.status = status
 
     def __enter__(self):
@@ -153,7 +154,7 @@ def test_verify_setup_returns_bounded_readiness_without_secret_values(tmp_path, 
     assert progress[-1][1] == "saving"
 
 
-def test_github_probe_requires_write_permission_without_mutating_repo(monkeypatch):
+def test_github_probe_requires_queue_write_and_workflow_dispatch(monkeypatch):
     settings = DesktopSettings(
         github_repository="owner/private-repo",
         github_branch="main",
@@ -161,27 +162,31 @@ def test_github_probe_requires_write_permission_without_mutating_repo(monkeypatc
     )
     token = "SUPER-PRIVATE-GITHUB-TOKEN"
     keychain = FakeKeychain({"github-backup-token": token})
-    captured: list[object] = []
+    captured: list[tuple[str, str]] = []
 
     def writable_urlopen(request, timeout=0):
-        captured.append(request)
-        captured.append(timeout)
-        return FakeResponse(
-            {
-                "full_name": "owner/private-repo",
-                "permissions": {"pull": True, "push": True, "admin": False},
-            }
-        )
+        method = str(getattr(request, "method", "GET") or "GET")
+        url = str(getattr(request, "full_url", ""))
+        captured.append((method, url))
+        if method == "GET":
+            return FakeResponse(
+                {
+                    "full_name": "owner/private-repo",
+                    "permissions": {"pull": True, "push": True, "admin": False},
+                }
+            )
+        assert method == "POST"
+        assert onboarding.CLOUD_PERMISSION_WORKFLOW in url
+        return FakeResponse(status=204)
 
     monkeypatch.setattr(onboarding, "urlopen", writable_urlopen)
     result = onboarding._github_access(settings, keychain)
     assert result["ready"] is True
     assert result["write_access"] is True
-    assert "read-write" in result["message"]
+    assert result["workflow_dispatch"] is True
+    assert "queue write + cloud workflow dispatch" in result["message"]
     assert token not in str(result)
-    assert len(captured) == 2
-    request = captured[0]
-    assert getattr(request, "method", None) == "GET"
+    assert [method for method, _url in captured] == ["GET", "POST"]
 
     monkeypatch.setattr(
         onboarding,
@@ -195,6 +200,23 @@ def test_github_probe_requires_write_permission_without_mutating_repo(monkeypatc
     )
     with pytest.raises(onboarding.OnboardingError, match="does not have write access"):
         onboarding._github_access(settings, keychain)
+
+
+def test_workflow_dispatch_probe_fails_closed_when_actions_write_is_missing(monkeypatch):
+    token = "SUPER-PRIVATE-GITHUB-TOKEN"
+
+    def denied(_request, timeout=0):
+        raise HTTPError(
+            url="https://api.github.com/fake",
+            code=403,
+            msg="Forbidden",
+            hdrs=None,
+            fp=None,
+        )
+
+    monkeypatch.setattr(onboarding, "urlopen", denied)
+    with pytest.raises(onboarding.OnboardingError, match="Actions: read/write"):
+        onboarding._workflow_dispatch_access(token)
 
 
 def test_onboarding_probe_is_always_local():
@@ -213,6 +235,7 @@ def test_onboarding_ui_keeps_credentials_out_of_durable_job_payload():
     page = (ROOT / "desktop/trading_intelligence/onboarding_page.py").read_text(encoding="utf-8")
     window = (ROOT / "desktop/trading_intelligence/onboarding_window.py").read_text(encoding="utf-8")
     probe = (ROOT / "hybrid_runtime/onboarding.py").read_text(encoding="utf-8")
+    handshake = (ROOT / ".github/workflows/desktop-cloud-credential-smoke.yml").read_text(encoding="utf-8")
 
     assert '"_github_token"' in page
     assert '"_alpaca_api_key"' in page
@@ -227,8 +250,15 @@ def test_onboarding_ui_keeps_credentials_out_of_durable_job_payload():
     assert "keychain.set_secret(ALPACA_SECRET_KEY_ACCOUNT" in window
     assert '"Authorization": "Bearer " + token' in probe
     assert 'permissions.get("push")' in probe
+    assert "_workflow_dispatch_access(token)" in probe
     assert 'provider.bars(' in probe
     assert '["AAPL"]' in probe
+    assert "workflow_dispatch:" in handshake
+    assert "schedule:" not in handshake
+    assert "push:" not in handshake.split("permissions:", 1)[0]
+    assert "pull_request:" not in handshake.split("permissions:", 1)[0]
+    assert "secrets." not in handshake
+    assert "checkout" not in handshake.lower()
 
 
 def test_first_run_wrapper_skips_real_credentials_only_for_ci_smoke_and_stays_lightweight():
