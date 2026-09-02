@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, Callable
 
 from .contracts import TERMINAL_JOB_STATUSES
 from .security import token_matches
@@ -12,7 +12,12 @@ from .service import HybridService
 from .storage import HybridStoreError, JobNotFound
 
 
-def create_app(service: HybridService, *, expected_token: str) -> Any:
+def create_app(
+    service: HybridService,
+    *,
+    expected_token: str,
+    cloud_link_lookup: Callable[[str], dict[str, Any] | None] | None = None,
+) -> Any:
     """Create the HTTP adapter without making FastAPI a Streamlit dependency."""
 
     try:
@@ -26,7 +31,7 @@ def create_app(service: HybridService, *, expected_token: str) -> Any:
 
     app = FastAPI(
         title="Trading Intelligence Local Service",
-        version="0.1.0",
+        version="0.2.0",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
@@ -79,6 +84,20 @@ def create_app(service: HybridService, *, expected_token: str) -> Any:
             return service.get(job_id).as_dict()
         except JobNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/v1/jobs/{job_id}/cloud-link", dependencies=[Depends(require_token)])
+    def get_cloud_link(job_id: str) -> dict[str, Any]:
+        try:
+            service.get(job_id)
+        except JobNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if cloud_link_lookup is None:
+            return {"configured": False, "link": None}
+        try:
+            link = cloud_link_lookup(job_id)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"configured": True, "link": link}
 
     @app.post("/v1/jobs/{job_id}/cancel", dependencies=[Depends(require_token)])
     def cancel_job(job_id: str) -> dict[str, Any]:
