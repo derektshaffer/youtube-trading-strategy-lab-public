@@ -56,6 +56,7 @@ class RoutingPolicy:
             "library.summary",
             "library.results_summary",
             "library.strategy_lab_options",
+            "library.research_ml_summary",
             "strategy.profit_first_plan",
         }
     )

@@ -8,7 +8,7 @@ from typing import Any
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication
 
-from .strategy_lab_window import MainWindow, clean_error, write_metrics
+from .research_ml_window import MainWindow, clean_error, write_metrics
 
 
 def run_gui(

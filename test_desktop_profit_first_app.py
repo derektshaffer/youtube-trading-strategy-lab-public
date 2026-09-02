@@ -29,6 +29,8 @@ def test_production_desktop_python_sources_parse():
         "desktop/trading_intelligence/results_window.py",
         "desktop/trading_intelligence/strategy_lab_page.py",
         "desktop/trading_intelligence/strategy_lab_window.py",
+        "desktop/trading_intelligence/research_ml_page.py",
+        "desktop/trading_intelligence/research_ml_window.py",
         "hybrid_runtime/desktop_settings.py",
         "hybrid_runtime/library_source.py",
         "hybrid_runtime/market_cache.py",
@@ -38,6 +40,7 @@ def test_production_desktop_python_sources_parse():
         "hybrid_runtime/results_summary.py",
         "hybrid_runtime/strategy_lab_bridge.py",
         "hybrid_runtime/strategy_lab_options.py",
+        "hybrid_runtime/research_ml_summary.py",
         "hybrid_runtime/server.py",
         "scripts/build_trading_intelligence_desktop.py",
     ]
@@ -45,7 +48,7 @@ def test_production_desktop_python_sources_parse():
         ast.parse(read(path), filename=path)
 
 
-def test_production_shell_exposes_profit_first_finder_results_jobs_and_secure_connection():
+def test_production_shell_exposes_profit_first_finder_results_research_ml_jobs_and_secure_connection():
     ui = (
         read("desktop/trading_intelligence/pages.py")
         + read("desktop/trading_intelligence/window.py")
@@ -57,6 +60,8 @@ def test_production_shell_exposes_profit_first_finder_results_jobs_and_secure_co
         + read("desktop/trading_intelligence/results_window.py")
         + read("desktop/trading_intelligence/strategy_lab_page.py")
         + read("desktop/trading_intelligence/strategy_lab_window.py")
+        + read("desktop/trading_intelligence/research_ml_page.py")
+        + read("desktop/trading_intelligence/research_ml_window.py")
     )
     settings = read("hybrid_runtime/desktop_settings.py")
     source = read("hybrid_runtime/library_source.py")
@@ -72,6 +77,9 @@ def test_production_shell_exposes_profit_first_finder_results_jobs_and_secure_co
     assert "library.results_summary" in ui
     assert "Strategy Lab" in ui
     assert "Run Strategy Lab in Cloud" in ui
+    assert "Research + ML" in ui
+    assert "Refresh Research + ML" in ui
+    assert "library.research_ml_summary" in ui
     assert "strategy.profit_first_plan" in ui
     assert "strategy.profit_first_validation" in ui
     assert "strategy.stock_finder" in ui
@@ -136,6 +144,7 @@ def test_production_build_keeps_trading_engines_in_sidecar():
     assert "from youtube_strategy_engine import AlpacaMarketData" in market_cache
     assert '"library.results_summary": results_summary_handler' in adapter
     assert '"library.strategy_lab_options": strategy_lab_options_handler' in adapter
+    assert '"library.research_ml_summary": research_ml_summary_handler' in adapter
     app = read("desktop/trading_intelligence/app.py")
     assert "from desktop.trading_intelligence.runtime" in app
     assert "TRADING_INTELLIGENCE_LOCAL_TOKEN" in runtime
@@ -153,7 +162,7 @@ def test_market_cache_is_persistent_incremental_and_explicit_about_price_age():
     assert "data_age_seconds" in cache
     assert "Latest completed Alpaca candle close" in cache
     assert "macOS Keychain" in analysis or "persistent local cache" in analysis
-    assert "from .strategy_lab_window import MainWindow" in ui
+    assert "from .research_ml_window import MainWindow" in ui
 
 
 def test_finder_cloud_jobs_are_background_and_reconnect_safe():
@@ -183,6 +192,24 @@ def test_results_are_bounded_read_only_and_keep_cloud_jobs_reconciling():
     assert '"bounded": True' in summary
     assert '"validated_strategies"' in summary
     assert '"library.results_summary"' in router
+
+
+def test_research_ml_is_bounded_read_only_and_preserves_cloud_reconciliation():
+    page = read("desktop/trading_intelligence/research_ml_page.py")
+    window = read("desktop/trading_intelligence/research_ml_window.py")
+    summary = read("hybrid_runtime/research_ml_summary.py")
+    router = read("hybrid_runtime/router.py")
+
+    assert "never launches compute or changes trading decisions" in page
+    assert "shadow models and do not place trades" in page
+    assert "library.research_ml_summary" in window
+    assert "_poll_strategy_lab" in window
+    assert "_poll_stock_finder" in window
+    assert "_poll_background_profit_validation" in window
+    assert '"bounded": True' in summary
+    assert '"affects_live_ranking": False' in summary
+    assert '"affects_execution": False' in summary
+    assert '"library.research_ml_summary"' in router
 
 
 def test_apple_silicon_workflow_launches_full_profit_first_gui():

@@ -234,6 +234,34 @@ def results_summary_handler(
     return result
 
 
+def research_ml_summary_handler(
+    payload: Mapping[str, Any],
+    progress: ProgressCallback,
+    cancelled: CancellationCheck,
+) -> Mapping[str, Any]:
+    """Read bounded cloud-research/model status without loading artifacts into the UI."""
+
+    progress(0.14, "downloading_data", "Loading the authoritative research library")
+    from .library_source import load_library_for_job
+
+    loaded = load_library_for_job(payload, data_dir=_desktop_data_dir())
+    _check_cancelled(cancelled)
+    progress(0.62, "preparing_features", "Compacting research queue and predictive ML status")
+    from .research_ml_summary import build_research_ml_summary
+
+    limit = _positive_int(payload.get("limit"), default=30, minimum=5, maximum=100)
+    result = dict(
+        build_research_ml_summary(
+            loaded.library,
+            metadata=loaded.metadata,
+            limit=limit,
+        )
+    )
+    _check_cancelled(cancelled)
+    progress(0.92, "saving", "Preparing bounded Research + ML payload")
+    return result
+
+
 def strategy_lab_options_handler(
     payload: Mapping[str, Any],
     progress: ProgressCallback,
@@ -311,6 +339,7 @@ def default_handlers() -> dict[str, JobHandler]:
         "library.configuration": library_configuration_handler,
         "library.summary": library_summary_handler,
         "library.results_summary": results_summary_handler,
+        "library.research_ml_summary": research_ml_summary_handler,
         "library.strategy_lab_options": strategy_lab_options_handler,
         "strategy.profit_first_plan": profit_first_plan_handler,
         "analysis.stock": stock_analysis_handler,
