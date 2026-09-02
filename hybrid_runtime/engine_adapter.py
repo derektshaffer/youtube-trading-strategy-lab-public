@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import hashlib
-import json
 import math
-from pathlib import Path
+import os
 import platform
 import sys
 from typing import Any, Callable, Mapping
@@ -162,18 +161,37 @@ def chart_framework_fixture_handler(
     }
 
 
-def _load_library(payload: Mapping[str, Any]) -> dict[str, Any]:
-    inline = payload.get("library")
-    if isinstance(inline, dict):
-        return dict(inline)
-    raw_path = str(payload.get("library_path") or "").strip()
-    if not raw_path:
-        raise ValueError("strategy.profit_first_plan requires library or library_path")
-    path = Path(raw_path).expanduser().resolve()
-    decoded = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(decoded, dict):
-        raise ValueError("The Trading Intelligence library must be a JSON object")
-    return decoded
+def _desktop_data_dir() -> str | None:
+    value = str(os.environ.get("TRADING_INTELLIGENCE_DESKTOP_DATA_DIR") or "").strip()
+    return value or None
+
+
+def library_configuration_handler(
+    payload: Mapping[str, Any],
+    progress: ProgressCallback,
+    cancelled: CancellationCheck,
+) -> Mapping[str, Any]:
+    _check_cancelled(cancelled)
+    progress(0.6, "preparing_features", "Reading non-secret desktop settings")
+    from .desktop_settings import load_desktop_settings
+
+    settings = load_desktop_settings(_desktop_data_dir() or ".")
+    _check_cancelled(cancelled)
+    return settings.as_dict()
+
+
+def library_summary_handler(
+    payload: Mapping[str, Any],
+    progress: ProgressCallback,
+    cancelled: CancellationCheck,
+) -> Mapping[str, Any]:
+    progress(0.15, "downloading_data", "Resolving the authoritative research library")
+    from .library_source import library_connection_summary
+
+    summary = library_connection_summary(payload, data_dir=_desktop_data_dir())
+    _check_cancelled(cancelled)
+    progress(0.9, "saving", "Preparing the library summary")
+    return summary
 
 
 def profit_first_plan_handler(
@@ -181,8 +199,10 @@ def profit_first_plan_handler(
     progress: ProgressCallback,
     cancelled: CancellationCheck,
 ) -> Mapping[str, Any]:
-    progress(0.15, "preparing_features", "Loading the research library")
-    library = _load_library(payload)
+    progress(0.12, "downloading_data", "Loading the authoritative research library")
+    from .library_source import load_library_for_job
+
+    loaded = load_library_for_job(payload, data_dir=_desktop_data_dir())
     _check_cancelled(cancelled)
     progress(0.55, "searching", "Ranking strict Profit First candidates")
     # Lazy import keeps the hybrid core independent of Streamlit and heavy engine
@@ -190,15 +210,26 @@ def profit_first_plan_handler(
     from profit_first_queue import profit_first_validation_batch
 
     maximum = max(1, min(3, int(payload.get("maximum_candidates") or 2)))
-    result = profit_first_validation_batch(library, maximum_candidates=maximum)
+    result = dict(
+        profit_first_validation_batch(
+            loaded.library,
+            maximum_candidates=maximum,
+        )
+    )
     _check_cancelled(cancelled)
     progress(0.9, "saving", "Preparing the candidate plan")
-    return dict(result)
+    result["library"] = loaded.metadata
+    result["research_only"] = True
+    result["affects_live_ranking"] = False
+    result["affects_execution"] = False
+    return result
 
 
 def default_handlers() -> dict[str, JobHandler]:
     return {
         "system.health": system_health_handler,
         "chart.framework_fixture": chart_framework_fixture_handler,
+        "library.configuration": library_configuration_handler,
+        "library.summary": library_summary_handler,
         "strategy.profit_first_plan": profit_first_plan_handler,
     }

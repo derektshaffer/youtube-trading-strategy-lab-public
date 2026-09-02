@@ -43,6 +43,9 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("--port must be between 1 and 65535")
     data_dir = Path(args.data_dir).expanduser().resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
+    # Job handlers read this process-scoped path. Keeping it out of job payloads
+    # prevents local filesystem details from being confused with cloud contracts.
+    os.environ["TRADING_INTELLIGENCE_DESKTOP_DATA_DIR"] = str(data_dir)
     environment_token = os.environ.pop("TRADING_INTELLIGENCE_LOCAL_TOKEN", "")
     token = str(environment_token or generate_service_token()).strip()
     if len(token) < 32:
