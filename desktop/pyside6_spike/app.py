@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 from typing import Any
-from urllib.error import HTTPError, URLError
+from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 
@@ -59,6 +59,37 @@ def packaged_sidecar() -> Path | None:
         if candidate.is_file():
             return candidate
     return None
+
+
+def directory_size(path: Path) -> int:
+    total = 0
+    for item in path.rglob("*"):
+        try:
+            if item.is_file():
+                total += item.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def frozen_app_bundle() -> Path | None:
+    if not bool(getattr(sys, "frozen", False)):
+        return None
+    executable = Path(sys.executable).resolve()
+    for parent in executable.parents:
+        if parent.suffix.lower() == ".app":
+            return parent
+    return None
+
+
+def write_metrics(metrics_output: str, metrics: dict[str, Any]) -> None:
+    text = json.dumps(metrics, indent=2, sort_keys=True) + "\n"
+    if str(metrics_output or "").strip():
+        path = Path(metrics_output).expanduser().resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    else:
+        print(text, end="", flush=True)
 
 
 class RuntimeService:
@@ -157,7 +188,11 @@ class RuntimeService:
 
 
 def headless_smoke(runtime: RuntimeService, metrics_output: str = "") -> int:
-    metrics: dict[str, Any] = {"framework": "pyside6", "status": "failed"}
+    metrics: dict[str, Any] = {
+        "framework": "pyside6",
+        "status": "failed",
+        "full_gui": False,
+    }
     started = time.perf_counter()
     try:
         runtime.start()
@@ -165,9 +200,9 @@ def headless_smoke(runtime: RuntimeService, metrics_output: str = "") -> int:
         ready_at = time.perf_counter()
         request = {
             "job_type": "system.health",
-            "payload": {"checks": ["runtime", "sqlite", "pyside-app"]},
+            "payload": {"checks": ["runtime", "sqlite", "pyside-headless"]},
             "requested_target": "auto",
-            "idempotency_key": f"pyside-smoke-{os.getpid()}-{time.time_ns()}",
+            "idempotency_key": f"pyside-headless-{os.getpid()}-{time.time_ns()}",
         }
         route = runtime.request_json("POST", "/v1/route", request)
         submitted = runtime.request_json("POST", "/v1/jobs", request)
@@ -202,124 +237,50 @@ def headless_smoke(runtime: RuntimeService, metrics_output: str = "") -> int:
         return_code = 1
     finally:
         runtime.stop()
-        text = json.dumps(metrics, indent=2, sort_keys=True) + "\n"
-        if str(metrics_output or "").strip():
-            path = Path(metrics_output).expanduser().resolve()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
-        else:
-            print(text, end="")
+        write_metrics(metrics_output, metrics)
     return return_code
 
 
-def run_gui(runtime: RuntimeService) -> int:
-    from PySide6.QtCore import QTimer
-    from PySide6.QtWidgets import (
-        QApplication,
-        QLabel,
-        QMainWindow,
-        QPushButton,
-        QProgressBar,
-        QVBoxLayout,
-        QWidget,
+def run_gui(
+    runtime: RuntimeService,
+    *,
+    gui_smoke: bool = False,
+    metrics_output: str = "",
+) -> int:
+    # Keep Qt imports out of the command-line/headless path and let PyInstaller
+    # discover the dedicated UI modules normally.
+    from pyside_gui import run_gui as run_pyside_gui
+
+    return run_pyside_gui(
+        runtime,
+        gui_smoke=gui_smoke,
+        metrics_output=metrics_output,
+        frozen_app_bundle=frozen_app_bundle,
+        directory_size=directory_size,
+        write_metrics=write_metrics,
     )
-
-    class Window(QMainWindow):
-        def __init__(self) -> None:
-            super().__init__()
-            self.job_id = ""
-            self.health_attempts = 0
-            self.setWindowTitle("Trading Intelligence — PySide6 spike")
-            self.resize(760, 480)
-            self.status = QLabel("Starting authenticated local service…")
-            self.route = QLabel("Routing decision will appear here")
-            self.progress = QProgressBar()
-            self.progress.setRange(0, 1000)
-            self.start = QPushButton("Run local health job")
-            self.start.setEnabled(False)
-            self.start.clicked.connect(self.submit_job)
-            layout = QVBoxLayout()
-            for widget in (self.status, self.route, self.progress, self.start):
-                layout.addWidget(widget)
-            root = QWidget()
-            root.setLayout(layout)
-            self.setCentralWidget(root)
-            self.timer = QTimer(self)
-            self.timer.timeout.connect(self.poll_job)
-            self.timer.start(700)
-            QTimer.singleShot(100, self.check_health)
-
-        def show_error(self, exc: BaseException) -> None:
-            if isinstance(exc, HTTPError):
-                detail = exc.read().decode("utf-8", errors="replace")
-            else:
-                detail = str(exc)
-            self.status.setText("Error: " + detail)
-
-        def check_health(self) -> None:
-            self.health_attempts += 1
-            try:
-                result = runtime.request_json("GET", "/health")
-                self.status.setText("Local service: " + str(result.get("status") or "unknown"))
-                self.start.setEnabled(True)
-            except (OSError, URLError, ValueError) as exc:
-                if self.health_attempts < 80 and runtime.process is not None and runtime.process.poll() is None:
-                    QTimer.singleShot(150, self.check_health)
-                else:
-                    self.show_error(exc)
-
-        def submit_job(self) -> None:
-            try:
-                payload = {
-                    "job_type": "system.health",
-                    "payload": {"checks": ["runtime", "sqlite"]},
-                    "requested_target": "auto",
-                    "idempotency_key": f"pyside-gui-{time.time_ns()}",
-                }
-                decision = runtime.request_json("POST", "/v1/route", payload)
-                self.route.setText(
-                    f"Route: {decision['target']} — {decision['reason']}"
-                )
-                result = runtime.request_json("POST", "/v1/jobs", payload)
-                self.job_id = str(result["job"]["id"])
-                self.start.setEnabled(False)
-            except (OSError, URLError, ValueError, KeyError) as exc:
-                self.show_error(exc)
-
-        def poll_job(self) -> None:
-            if not self.job_id:
-                return
-            try:
-                job = runtime.request_json("GET", f"/v1/jobs/{self.job_id}")
-                self.progress.setValue(round(float(job.get("progress") or 0) * 1000))
-                self.status.setText(f"{job['status']} · {job['stage']}")
-                if job.get("terminal"):
-                    self.start.setEnabled(True)
-                    self.job_id = ""
-            except (OSError, URLError, ValueError, KeyError) as exc:
-                self.show_error(exc)
-
-    runtime.start()
-    application = QApplication(sys.argv[:1])
-    application.aboutToQuit.connect(runtime.stop)
-    window = Window()
-    window.show()
-    return application.exec()
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument("--headless-smoke", action="store_true")
+    parser.add_argument("--gui-smoke", action="store_true")
     parser.add_argument("--metrics-output", default="")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.headless_smoke and args.gui_smoke:
+        raise SystemExit("Choose either --headless-smoke or --gui-smoke")
     runtime = RuntimeService()
     if args.headless_smoke:
         return headless_smoke(runtime, args.metrics_output)
-    return run_gui(runtime)
+    return run_gui(
+        runtime,
+        gui_smoke=args.gui_smoke,
+        metrics_output=args.metrics_output,
+    )
 
 
 if __name__ == "__main__":
