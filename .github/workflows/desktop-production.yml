@@ -1,0 +1,141 @@
+name: Trading Intelligence Desktop
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "desktop/trading_intelligence/**"
+      - "hybrid_runtime/**"
+      - "scripts/build_trading_intelligence_desktop.py"
+      - "scripts/build_desktop_sidecar.py"
+      - "requirements-desktop*.txt"
+      - "test_hybrid_desktop_settings.py"
+      - "test_desktop_profit_first_app.py"
+      - ".github/workflows/desktop-production.yml"
+  push:
+    branches: [main]
+    paths:
+      - "desktop/trading_intelligence/**"
+      - "hybrid_runtime/**"
+      - "scripts/build_trading_intelligence_desktop.py"
+      - "scripts/build_desktop_sidecar.py"
+      - "requirements-desktop*.txt"
+      - "test_hybrid_desktop_settings.py"
+      - "test_desktop_profit_first_app.py"
+      - ".github/workflows/desktop-production.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trading-intelligence-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  production-apple-silicon:
+    name: Production desktop · Apple Silicon
+    runs-on: macos-14
+    timeout-minutes: 90
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-desktop.txt
+            requirements-desktop-pyside.txt
+
+      - name: Verify native Apple Silicon runner
+        run: |
+          test "$(uname -m)" = "arm64"
+          python -c 'import platform; assert platform.machine() == "arm64"'
+          sw_vers
+
+      - name: Install desktop dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-desktop-pyside.txt "pytest>=8,<9"
+
+      - name: Run full repository and desktop regression suites
+        run: |
+          python -m pytest -q
+          python -m pytest -q \
+            test_hybrid_desktop_settings.py \
+            test_desktop_profit_first_app.py
+
+      - name: Build packaged Python sidecar
+        run: |
+          python scripts/build_desktop_sidecar.py --target-triple aarch64-apple-darwin
+          SIDECAR=".desktop_build/dist/trading-intelligence-service"
+          file "$SIDECAR" | tee "$RUNNER_TEMP/desktop-sidecar-file.txt"
+          file "$SIDECAR" | grep -q "arm64"
+          codesign --verify --verbose=4 "$SIDECAR"
+
+      - name: Build production desktop app
+        run: python scripts/build_trading_intelligence_desktop.py
+
+      - name: Launch full Profit First vertical slice
+        run: |
+          APP=".desktop_build/production/dist/Trading Intelligence.app"
+          APP_EXE="$APP/Contents/MacOS/Trading Intelligence"
+          test -d "$APP"
+          test -x "$APP_EXE"
+          file "$APP_EXE" | tee "$RUNNER_TEMP/desktop-app-file.txt"
+          file "$APP_EXE" | grep -q "arm64"
+          codesign --verify --deep --strict --verbose=4 "$APP"
+
+          cat > "$RUNNER_TEMP/empty-library.json" <<'JSON'
+          {
+            "strategies": [],
+            "validation_runs": [],
+            "research_queue": [],
+            "predictive_ml_runs": [],
+            "knowledge_sources": []
+          }
+          JSON
+          rm -rf "$RUNNER_TEMP/trading-intelligence-production-data"
+          TRADING_INTELLIGENCE_DESKTOP_DATA_DIR="$RUNNER_TEMP/trading-intelligence-production-data" \
+            "$APP_EXE" \
+            --smoke \
+            --library-fixture "$RUNNER_TEMP/empty-library.json" \
+            --metrics-output "$RUNNER_TEMP/trading-intelligence-desktop-metrics.json"
+
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          metrics = json.loads(
+              Path(os.environ["RUNNER_TEMP"], "trading-intelligence-desktop-metrics.json")
+              .read_text(encoding="utf-8")
+          )
+          assert metrics["status"] == "passed", metrics
+          assert metrics["product"] == "trading-intelligence-desktop", metrics
+          assert metrics["queue_status"] == "no-eligible-candidates", metrics
+          assert metrics["library_source"] == "configured_local_file", metrics
+          assert metrics["route"]["target"] == "local", metrics
+          PY
+
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$APP" "$RUNNER_TEMP/trading-intelligence-apple-silicon.zip"
+
+      - name: Upload production desktop candidate
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trading-intelligence-production-apple-silicon
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/trading-intelligence-apple-silicon.zip
+            ${{ runner.temp }}/trading-intelligence-desktop-metrics.json
+            ${{ runner.temp }}/desktop-*-file.txt
+            ${{ runner.temp }}/trading-intelligence-production-data/desktop-service.log
