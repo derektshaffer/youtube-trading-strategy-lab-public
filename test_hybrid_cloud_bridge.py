@@ -145,16 +145,19 @@ class CloudBridgeTests(unittest.TestCase):
         self.assertEqual(self.client.dispatch_count, 1)
 
     @patch("profit_first_queue.research_readiness")
-    def test_profit_first_dispatch_matches_the_no_input_workflow(self, readiness):
+    def test_profit_first_dispatch_matches_the_exact_job_workflow(self, readiness):
         readiness.side_effect = self.ready
         self.submit()
         with patch.object(self.client, "dispatch_workflow", return_value=True) as dispatch:
             self.worker().run_once()
-        dispatch.assert_called_once_with()
+        remote = self.client.document["research_queue"][0]
+        dispatch.assert_called_once_with({"job_id": remote["id"]})
         workflow = (Path(__file__).parent / ".github/workflows/continuous-trading-research.yml").read_text()
         declaration = re.search(r"(?m)^  workflow_dispatch:\n((?: {4,}[^\n]*\n|\n)*)", workflow)
         self.assertIsNotNone(declaration)
-        self.assertNotIn("inputs:", declaration.group(1))
+        self.assertIn("job_id:", declaration.group(1))
+        self.assertIn("required: false", declaration.group(1))
+        self.assertIn('python cloud_profit_first_worker.py --job-id "$EXACT_PROFIT_FIRST_JOB_ID"', workflow)
 
     @patch("profit_first_queue.research_readiness")
     def test_dispatch_failure_survives_reconciliation_without_duplicate_dispatch(self, readiness):

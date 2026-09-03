@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "17 * * * *"
   workflow_dispatch:
+    inputs:
+      job_id:
+        description: "Optional exact existing desktop Profit First job; skips all broad research"
+        required: false
+        type: string
   push:
     branches: [main]
     paths:
@@ -34,6 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 330
     env:
+      EXACT_PROFIT_FIRST_JOB_ID: ${{ inputs.job_id }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GEMINI_PAID_API_KEY: ${{ secrets.GEMINI_PAID_API_KEY }}
       GEMINI_RESEARCH_BULK_MODEL: ${{ vars.GEMINI_RESEARCH_BULK_MODEL || 'gemini-3.7-flash' }}
@@ -78,7 +84,11 @@ jobs:
         shell: bash
         run: |
           missing=0
-          for name in GEMINI_API_KEY GITHUB_BACKUP_REPOSITORY GITHUB_BACKUP_TOKEN ALPACA_API_KEY ALPACA_SECRET_KEY; do
+          names="GITHUB_BACKUP_REPOSITORY GITHUB_BACKUP_TOKEN ALPACA_API_KEY ALPACA_SECRET_KEY"
+          if [ -z "$EXACT_PROFIT_FIRST_JOB_ID" ]; then
+            names="GEMINI_API_KEY $names"
+          fi
+          for name in $names; do
             if [ -z "${!name}" ]; then
               echo "::error::Missing required Actions secret: $name"
               missing=1
@@ -89,4 +99,9 @@ jobs:
           fi
 
       - name: Run persistent autonomous research worker
+        if: ${{ !inputs.job_id }}
         run: python cloud_research_worker.py
+
+      - name: Run only the requested Profit First job
+        if: ${{ inputs.job_id != '' }}
+        run: python cloud_profit_first_worker.py --job-id "$EXACT_PROFIT_FIRST_JOB_ID"

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import argparse
+import json
 import os
 import socket
 from typing import Any
@@ -20,8 +21,11 @@ from hybrid_runtime.strategy_lab_bridge import (
     REMOTE_STRATEGY_LAB_TYPE,
     STRATEGY_LAB_CHECKPOINT_PATH,
     strategy_lab_result_summary,
+    strategy_lab_checkpoint_record,
 )
 from strategy_lab_jobs import execute_strategy_lab_job_once
+from strategy_lab_persistence import restore_strategy_lab_result
+from stock_strategy_finder import apply_holdout_reuse_guard, record_holdout_exposure
 from trading_intelligence_core import effective_strategy_for_research, strategy_integrity_report
 from trading_research_orchestrator import (
     claim_next_research_job,
@@ -39,8 +43,24 @@ def env(name: str, default: str = "") -> str:
     return str(os.environ.get(name, default) or "").strip()
 
 
+class CloudStrategyLabStore(StrategyStore):
+    def commit_holdout_exposure(self, wrapper: dict[str, Any], *, generated_at: str) -> dict[str, Any]:
+        committed: dict[str, Any] = {}
+
+        def mutation(library: dict[str, Any]) -> dict[str, Any]:
+            guarded = apply_holdout_reuse_guard(library, deepcopy(wrapper))
+            updated = record_holdout_exposure(
+                library, guarded, source="manual_strategy_lab", generated_at=generated_at,
+            )
+            committed["wrapper"] = guarded
+            return updated
+
+        mutate_remote_library(mutation)
+        return committed["wrapper"]
+
+
 def build_main_store() -> StrategyStore:
-    return StrategyStore(
+    return CloudStrategyLabStore(
         directory=".cloud_strategy_lab_main",
         cloud_backup=build_cloud_backup(),
     )
@@ -59,12 +79,25 @@ def _claim(preferred_job_id: str = "") -> dict[str, Any] | None:
 
     def mutation(data: dict[str, Any]) -> dict[str, Any] | None:
         if preferred_job_id:
-            updated, claimed = claim_research_job_by_id(
-                data,
+            matches = [row for row in data.get("research_queue", []) if row.get("id") == preferred_job_id]
+            if len(matches) != 1:
+                raise AppError("Exact Strategy Lab job is missing or duplicated.")
+            row = matches[0]
+            if row.get("status") not in {"queued", "retry"}:
+                holder["job"] = None
+                return None
+            if int(row.get("attempts") or 0) >= int(row.get("max_attempts") or 3):
+                raise AppError("Exact Strategy Lab job has exhausted its retry budget.")
+            _, claimed = claim_research_job_by_id(
+                {"research_queue": [deepcopy(row)]},
                 worker_id,
                 preferred_job_id,
                 allowed_types={REMOTE_STRATEGY_LAB_TYPE},
             )
+            updated = deepcopy(data)
+            if claimed is not None:
+                updated["research_queue"] = [claimed if item.get("id") == preferred_job_id else item
+                                             for item in data["research_queue"]]
         else:
             updated, claimed = claim_next_research_job(
                 data,
@@ -164,6 +197,14 @@ def _complete_queue(
     result_ref = f"strategy-lab-checkpoint:{run_id}"
 
     def mutation(data: dict[str, Any]) -> dict[str, Any]:
+        matches = [item for item in data.get("research_queue", []) if item.get("id") == job_id]
+        if len(matches) != 1:
+            raise AppError("Strategy Lab queue identity changed before completion.")
+        current = matches[0]
+        if (current.get("type") != REMOTE_STRATEGY_LAB_TYPE
+                or (current.get("payload") or {}).get("run_id") != run_id
+                or current.get("status") != "running"):
+            raise AppError("Strategy Lab completion refused: the original run is no longer active.")
         updated = finish_research_job(data, job_id, result_ref=result_ref)
         queue: list[dict[str, Any]] = []
         for raw in updated.get("research_queue") or []:
@@ -201,6 +242,21 @@ def _fail_queue(job_id: str, message: str) -> str:
     return holder["status"]
 
 
+def _saved_cloud_result(checkpoint_store: StrategyStore, run_id: str, ticker: str) -> dict[str, Any]:
+    remote = checkpoint_store.cloud_backup.read_library()
+    saved = strategy_lab_checkpoint_record((remote or {}).get("library") or {}, run_id=run_id)
+    if saved.get("status") != "complete":
+        return {}
+    if str(saved.get("ticker") or "").upper() != ticker:
+        raise AppError("Completed cloud checkpoint ticker does not match the requested run.")
+    result = saved.get("result")
+    if not result and saved.get("result_archive"):
+        result = restore_strategy_lab_result(saved)
+    if not isinstance(result, dict) or not result:
+        raise AppError("Completed cloud checkpoint has no verifiable result.")
+    return result
+
+
 def run_once(preferred_job_id: str = "") -> dict[str, Any]:
     remote_job = _claim(str(preferred_job_id or "").strip())
     if remote_job is None:
@@ -213,6 +269,14 @@ def run_once(preferred_job_id: str = "") -> dict[str, Any]:
     main_store = build_main_store()
     checkpoint_store = build_checkpoint_store()
     try:
+        # Finish a queue-only recovery from exact durable evidence. A prior
+        # successful upload followed by queue-save failure must not recompute.
+        saved_result = _saved_cloud_result(checkpoint_store, run_id, ticker)
+        if saved_result:
+            summary = strategy_lab_result_summary(saved_result, run_id=run_id)
+            _complete_queue(job_id, run_id=run_id, result_summary=summary)
+            return {"status": "complete", "job_id": job_id, "run_id": run_id,
+                    "ticker": ticker, "result": summary, "recovered_from_checkpoint": True}
         library = main_store.load_latest()
         job = _job_spec(remote_job, library)
         outcome = execute_strategy_lab_job_once(
@@ -233,6 +297,12 @@ def run_once(preferred_job_id: str = "") -> dict[str, Any]:
                 "message": message,
             }
         result = outcome.get("result") if isinstance(outcome.get("result"), dict) else {}
+        # A runner's local disk is ephemeral. Never mark the queue complete
+        # merely because computation finished while checkpoint upload failed.
+        saved_result = _saved_cloud_result(checkpoint_store, run_id, ticker)
+        expected = json.loads(json.dumps(result, default=str, allow_nan=False))
+        if not result or saved_result != expected:
+            raise AppError("Strategy Lab result is not verified in the private cloud checkpoint; queue completion refused.")
         summary = strategy_lab_result_summary(result, run_id=run_id)
         _complete_queue(job_id, run_id=run_id, result_summary=summary)
         return {
@@ -266,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
     print(result, flush=True)
     # A durable retry is a successfully handled worker cycle; the scheduled
     # workflow will pick it up again after next_attempt_at.
-    return 0
+    return 1 if result.get("status") == "failed" else 0
 
 
 if __name__ == "__main__":

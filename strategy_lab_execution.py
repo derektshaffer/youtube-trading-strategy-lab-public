@@ -350,18 +350,24 @@ def execute_strategy_lab_run(
         spread_audit,
     )
     _progress(progress, 0.99, "saving", "Saving holdout exposure and final result")
-    current_integrity_library = main_store.load_latest()
-    integrity_wrapper = apply_holdout_reuse_guard(
-        current_integrity_library,
-        integrity_wrapper,
-    )
-    exposure_library = record_holdout_exposure(
-        current_integrity_library,
-        integrity_wrapper,
-        source="manual_strategy_lab",
-        generated_at=str(report.get("generated_at") or ""),
-    )
-    main_store.save(exposure_library)
+    commit_exposure = getattr(main_store, "commit_holdout_exposure", None)
+    if callable(commit_exposure):
+        # Cloud workers re-evaluate the guard on each fresh CAS snapshot. Never
+        # replay an entire stale library or carry a prior eligibility verdict.
+        integrity_wrapper = commit_exposure(
+            integrity_wrapper, generated_at=str(report.get("generated_at") or "")
+        )
+    else:
+        current_integrity_library = main_store.load_latest()
+        integrity_wrapper = apply_holdout_reuse_guard(
+            current_integrity_library, integrity_wrapper,
+        )
+        exposure_library = record_holdout_exposure(
+            current_integrity_library, integrity_wrapper,
+            source="manual_strategy_lab",
+            generated_at=str(report.get("generated_at") or ""),
+        )
+        main_store.save(exposure_library)
 
     report = integrity_wrapper.get("optimization") or report
     strength = integrity_wrapper.get("robustness") or strength

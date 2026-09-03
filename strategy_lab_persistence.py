@@ -201,7 +201,7 @@ def _saved_time(record: dict[str, Any]) -> float:
         return 0.0
 
 
-def _checkpoint_rank(record: dict[str, Any]) -> tuple[int, float, int, float]:
+def _checkpoint_rank(record: dict[str, Any]) -> tuple[int, int, int, float, int, float]:
     """Prefer terminal evidence and never regress a resumable run's progress."""
 
     status = str(record.get("status") or "").strip().lower()
@@ -221,7 +221,13 @@ def _checkpoint_rank(record: dict[str, Any]) -> tuple[int, float, int, float]:
     resumable_payload = int(bool(record.get("job"))) + int(
         bool(record.get("optimizer_state"))
     )
-    return lifecycle_rank, progress, resumable_payload, _saved_time(record)
+    try:
+        attempt = max(0, int(record.get("attempt") or 0))
+    except (TypeError, ValueError, OverflowError):
+        attempt = 0
+    # A completed result remains authoritative. Otherwise an explicitly newer
+    # attempt must be able to replace the previous attempt's terminal failure.
+    return int(lifecycle_rank == 3), attempt, lifecycle_rank, progress, resumable_payload, _saved_time(record)
 
 
 def merge_strategy_lab_checkpoint_libraries(
@@ -231,7 +237,8 @@ def merge_strategy_lab_checkpoint_libraries(
     """Merge bounded checkpoint histories without discarding either writer.
 
     A completed result always wins for the same run. Failed state wins over a
-    stale running copy, and two running copies keep the furthest saved progress.
+    stale running copy within the same attempt; a later attempt supersedes an
+    earlier failure. Two running copies keep the furthest saved progress.
     Distinct run IDs are retained newest-first within the existing history cap.
     """
 
@@ -378,8 +385,8 @@ def save_strategy_lab_checkpoint(
     elif normalized_status == "failed":
         record.pop("result", None)
         record.pop("result_archive", None)
-        record.pop("job", None)
-        record.pop("optimizer_state", None)
+        # Retain completed optimizer families for a permitted retry. The same
+        # job signature and current integrity checks still govern reuse.
 
     if existing and _checkpoint_rank(existing) > _checkpoint_rank(record):
         return deepcopy(existing)
