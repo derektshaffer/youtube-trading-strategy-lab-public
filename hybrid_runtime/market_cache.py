@@ -512,7 +512,7 @@ def run_stock_analysis(
         0,
         min(300, int(payload.get("max_cache_age_seconds") or 20)),
     )
-    progress(0.05, "preparing_features", "Loading secure Alpaca credentials")
+    progress(0.05, "downloading_data", "Loading secure Alpaca credentials")
     api_key, secret_key = load_alpaca_credentials()
     if cancelled():
         raise MarketCacheError("Stock analysis was cancelled")

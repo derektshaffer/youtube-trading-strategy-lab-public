@@ -14,7 +14,7 @@ from hybrid_runtime.cloud_bridge import (
 )
 from hybrid_runtime.cloud_link_store import CloudLinkStore
 from hybrid_runtime.contracts import JobStatus
-from hybrid_runtime.github_library import GitHubLibraryConfig, RemoteJSONDocument
+from hybrid_runtime.github_library import GitHubLibraryConfig, GitHubLibraryError, RemoteJSONDocument
 from hybrid_runtime.service import HybridService
 from hybrid_runtime.storage import HybridStore
 
@@ -142,6 +142,28 @@ class CloudBridgeTests(unittest.TestCase):
         self.assertEqual(len(self.client.document["research_queue"]), 1)
         self.assertEqual(self.client.write_count, 1)
         self.assertEqual(self.client.dispatch_count, 1)
+
+    @patch("profit_first_queue.research_readiness")
+    def test_interrupted_read_keeps_job_queued_then_publishes_once(self, readiness):
+        readiness.side_effect = self.ready
+        local = self.submit()
+        worker = self.worker()
+        with patch.object(self.client, "read", side_effect=GitHubLibraryError(
+            "GitHub cloud bridge transfer failed after 3 attempt(s) (IncompleteRead)."
+        )):
+            worker.run_once()
+        self.assertEqual(self.service.get(local.id).status, JobStatus.QUEUED)
+        self.assertIn("IncompleteRead", self.links.get(local.id)["dispatch_error"])
+        self.assertEqual(self.client.write_count, 0)
+        self.assertEqual(self.client.dispatch_count, 0)
+
+        worker.run_once()
+        worker.run_once()
+        self.assertEqual(self.service.get(local.id).status, JobStatus.CLAIMED)
+        self.assertEqual(self.client.write_count, 1)
+        self.assertEqual(self.client.dispatch_count, 1)
+        self.assertEqual(len(self.client.document["research_queue"]), 1)
+        self.assertEqual(self.links.get(local.id)["dispatch_error"], "")
 
     @patch("profit_first_queue.research_readiness")
     def test_completed_remote_validation_finishes_local_job(self, readiness):
