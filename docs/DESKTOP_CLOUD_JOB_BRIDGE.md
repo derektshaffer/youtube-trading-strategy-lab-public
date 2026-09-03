@@ -38,6 +38,11 @@ research queue.
   update.
 - A separate SQLite link store contains only non-secret remote identifiers.
 - If that link store is lost, the bridge recovers by the remote dedupe key.
+- Profit First dispatch sends no inputs, matching the continuous-research
+  workflow contract without changing worker scope or validation rules.
+- Only an actual dispatch call updates the dispatch-attempt timestamp. Queue
+  polling preserves the recorded dispatch outcome, including through a later
+  connection failure. Reattaching a queue item never silently redispatches it.
 
 ## Large-library uploads
 

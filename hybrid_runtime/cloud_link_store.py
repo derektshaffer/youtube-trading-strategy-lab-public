@@ -221,6 +221,7 @@ class CloudLinkStore:
         path: str,
         metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        previous = self.get(local_job_id) or {}
         return self.upsert(
             local_job_id=local_job_id,
             repository=repository,
@@ -228,7 +229,8 @@ class CloudLinkStore:
             path=path,
             dispatch_error=" ".join(str(message or "").split())[:2_000],
             last_sync_at=utc_now_text(),
-            metadata=metadata,
+            # Keep dispatch evidence through an unrelated connection failure.
+            metadata={**(previous.get("metadata") or {}), **dict(metadata or {})},
         )
 
     def delete(self, local_job_id: str) -> bool:
