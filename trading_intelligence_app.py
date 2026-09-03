@@ -8236,8 +8236,10 @@ elif module == "Strategy Lab":
     durable_checkpoint: dict[str, Any] = {}
     if not st.session_state.get("_til_strategy_lab_checkpoint_loaded"):
         try:
-            durable_checkpoint = load_latest_strategy_lab_checkpoint(
-                build_strategy_lab_checkpoint_store()
+            checkpoint_store = build_strategy_lab_checkpoint_store()
+            durable_checkpoint = load_latest_strategy_lab_checkpoint(checkpoint_store)
+            checkpoint_conflict_recovered = bool(
+                getattr(checkpoint_store, "checkpoint_conflict_recovered", False)
             )
             if durable_checkpoint:
                 durable_status = str(durable_checkpoint.get("status") or "")
@@ -8278,7 +8280,7 @@ elif module == "Strategy Lab":
                             "outside the browser session and records its abort stage explicitly."
                         )
                         save_strategy_lab_checkpoint(
-                            build_strategy_lab_checkpoint_store(),
+                            checkpoint_store,
                             run_id=durable_run_id,
                             status="failed",
                             ticker=durable_ticker,
@@ -8292,6 +8294,16 @@ elif module == "Strategy Lab":
                             "ticker": durable_ticker,
                             "message": durable_message,
                         }
+            if checkpoint_conflict_recovered:
+                recovery_message = (
+                    "Recovered the Strategy Lab storage conflict without discarding the newest "
+                    "valid state from either checkpoint history. The previous local copy was "
+                    "preserved in an automatic backup and the merged checkpoint is now durable."
+                )
+                durable_restore_notice = (
+                    recovery_message
+                    + (" " + durable_restore_notice if durable_restore_notice else "")
+                )
         except AppError as exc:
             durable_restore_error = str(exc)
         st.session_state["_til_strategy_lab_checkpoint_loaded"] = True
