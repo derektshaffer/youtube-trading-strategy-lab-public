@@ -39,6 +39,31 @@ research queue.
 - A separate SQLite link store contains only non-secret remote identifiers.
 - If that link store is lost, the bridge recovers by the remote dedupe key.
 
+## Large-library uploads
+
+Serialized libraries above 1,000,000 UTF-8 bytes use compressed Git transport
+instead of posting the entire JSON document to the GitHub Git Blob REST API.
+This requires Git (or the macOS command-line tools) on the desktop. Smaller
+documents retain the existing REST writer.
+
+The uploader fetches the configured branch into a private temporary bare
+repository and requires its tip to match the revision that was read. It hashes
+the exact JSON bytes, changes only the configured library entry, and creates
+a commit with that expected revision as its sole parent. A non-force push
+rejects concurrent updates. Fetch and push each have a 300-second timeout;
+a failed push is never automatically replayed. If its response is lost, a
+read-only remote-ref check confirms whether the exact commit was accepted.
+
+Temporary credentials are supplied through an askpass environment, never a
+token-bearing URL or file. User Git configuration, hooks, filters, tracing, and
+unrelated provider credentials are excluded; TLS verification stays enabled.
+The temporary repository and helper are removed on success or failure.
+
+An upload failure leaves the original desktop jobs queued, with an actionable
+link-store error, and dispatches no workflows. The next bridge pass reloads the
+authoritative library and uses the existing deduplication rules. This transport
+does not remove history, relax validation, or bypass GitHub file-size policies.
+
 ## Security
 
 - GitHub tokens are loaded from an environment override for CI or from macOS
