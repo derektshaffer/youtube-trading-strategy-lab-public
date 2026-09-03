@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -144,6 +145,64 @@ class CloudBridgeTests(unittest.TestCase):
         self.assertEqual(self.client.dispatch_count, 1)
 
     @patch("profit_first_queue.research_readiness")
+    def test_profit_first_dispatch_matches_the_no_input_workflow(self, readiness):
+        readiness.side_effect = self.ready
+        self.submit()
+        with patch.object(self.client, "dispatch_workflow", return_value=True) as dispatch:
+            self.worker().run_once()
+        dispatch.assert_called_once_with()
+        workflow = (Path(__file__).parent / ".github/workflows/continuous-trading-research.yml").read_text()
+        declaration = re.search(r"(?m)^  workflow_dispatch:\n((?: {4,}[^\n]*\n|\n)*)", workflow)
+        self.assertIsNotNone(declaration)
+        self.assertNotIn("inputs:", declaration.group(1))
+
+    @patch("profit_first_queue.research_readiness")
+    def test_dispatch_failure_survives_reconciliation_without_duplicate_dispatch(self, readiness):
+        readiness.side_effect = self.ready
+        local = self.submit()
+        worker = self.worker()
+        with patch.object(self.client, "dispatch_workflow", side_effect=GitHubLibraryError("Workflow rejected input")) as dispatch:
+            worker.run_once()
+            initial = self.links.get(local.id)
+            self.assertTrue(initial["dispatch_attempted_at"])
+            self.assertEqual(initial["dispatch_error"], "Workflow rejected input")
+            with patch.object(self.client, "read", side_effect=GitHubLibraryError("Temporary read failure")):
+                worker.run_once()
+            self.assertEqual(self.links.get(local.id)["dispatch_error"], "Temporary read failure")
+            worker.run_once()
+            worker.run_once()
+            dispatch.assert_called_once()
+        current = self.links.get(local.id)
+        self.assertEqual(current["dispatch_attempted_at"], initial["dispatch_attempted_at"])
+        self.assertEqual(current["dispatch_error"], initial["dispatch_error"])
+        self.assertEqual(self.client.write_count, 1)
+        self.assertEqual(len(self.client.document["research_queue"]), 1)
+        self.assertEqual(self.service.get(local.id).status, JobStatus.CLAIMED)
+
+    @patch("profit_first_queue.research_readiness")
+    def test_successful_dispatch_timestamp_is_not_rewritten_by_polling(self, readiness):
+        readiness.side_effect = self.ready
+        local = self.submit()
+        worker = self.worker()
+        worker.run_once()
+        initial = self.links.get(local.id)
+        with patch.object(self.client, "read", side_effect=GitHubLibraryError("Temporary read failure")):
+            worker.run_once()
+        worker.run_once()
+        self.assertEqual(self.links.get(local.id)["dispatch_attempted_at"], initial["dispatch_attempted_at"])
+        self.assertEqual(self.links.get(local.id)["dispatch_error"], "")
+        self.assertEqual(self.client.dispatch_count, 1)
+
+    @patch("profit_first_queue.research_readiness")
+    def test_disabled_dispatch_is_not_reported_as_success(self, readiness):
+        readiness.side_effect = self.ready
+        local = self.submit()
+        with patch.object(self.client, "dispatch_workflow", return_value=False):
+            self.worker().run_once()
+        self.assertIn("not configured", self.links.get(local.id)["dispatch_error"])
+        self.assertEqual(len(self.client.document["research_queue"]), 1)
+
+    @patch("profit_first_queue.research_readiness")
     def test_interrupted_read_keeps_job_queued_then_publishes_once(self, readiness):
         readiness.side_effect = self.ready
         local = self.submit()
@@ -278,6 +337,8 @@ class CloudBridgeTests(unittest.TestCase):
         self.assertEqual(len(self.client.document["research_queue"]), 1)
         self.assertEqual(self.links.get(local.id)["remote_job_id"], remote_id)
         self.assertEqual(self.client.write_count, 1)
+        self.assertIsNone(self.links.get(local.id)["dispatch_attempted_at"])
+        self.assertEqual(self.client.dispatch_count, 1)
 
     @patch("profit_first_queue.research_readiness")
     def test_queued_remote_job_honors_desktop_cancellation(self, readiness):

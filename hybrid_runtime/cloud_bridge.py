@@ -578,8 +578,21 @@ class CloudBridgeWorker:
         settings: DesktopCloudSettings,
         *,
         revision: str,
-        dispatch_error: str = "",
+        dispatch_error: str | None = None,
     ) -> dict[str, Any]:
+        # Reconciliation is not a dispatch attempt. Preserve an actual dispatch
+        # failure until a new attempt supersedes it; do not invent timestamps
+        # or erase the evidence just because the durable queue can be read.
+        previous = self.link_store.get(job.id) or {}
+        error = dispatch_error
+        if error is None:
+            previous_metadata = previous.get("metadata") or {}
+            error = str(previous_metadata.get("workflow_dispatch_error") or "")
+            if "workflow_dispatch_error" not in previous_metadata:
+                # Older links have only the combined error field. A connection
+                # failure must not be mistaken for a failed workflow dispatch.
+                if previous.get("dispatch_attempted_at") and not previous_metadata.get("waiting_for_connection"):
+                    error = str(previous.get("dispatch_error") or "")
         metadata: dict[str, Any]
         if job.job_type == "strategy.strategy_lab":
             from .strategy_lab_bridge import strategy_lab_link_metadata
@@ -594,6 +607,7 @@ class CloudBridgeWorker:
                 "strategy_ids": _strategy_ids(item, job),
                 "job_type": job.job_type,
             }
+        metadata["workflow_dispatch_error"] = error
         return self.link_store.upsert(
             local_job_id=job.id,
             remote_job_id=str(item.get("id") or ""),
@@ -605,8 +619,8 @@ class CloudBridgeWorker:
             remote_stage=_remote_stage(item),
             remote_progress=_remote_progress(item),
             last_remote_revision=revision,
-            dispatch_attempted_at=utc_now_text(),
-            dispatch_error=dispatch_error,
+            dispatch_attempted_at=utc_now_text() if dispatch_error is not None else None,
+            dispatch_error=error,
             last_sync_at=utc_now_text(),
             metadata=metadata,
         )
@@ -932,25 +946,27 @@ class CloudBridgeWorker:
 
         dispatch_errors: dict[str, str] = {}
         for job, item, _plan in published:
+            dispatch_errors[job.id] = ""
             try:
                 if job.job_type == "strategy.strategy_lab":
                     from .strategy_lab_bridge import CLOUD_STRATEGY_LAB_WORKFLOW
 
-                    client.dispatch_workflow(
+                    dispatched = client.dispatch_workflow(
                         {"job_id": str(item.get("id") or "")},
                         workflow_file=CLOUD_STRATEGY_LAB_WORKFLOW,
                     )
                 elif job.job_type == "strategy.stock_finder":
                     from .stock_finder_bridge import DISTRIBUTED_STOCK_FINDER_WORKFLOW
 
-                    client.dispatch_workflow(
+                    dispatched = client.dispatch_workflow(
                         {"job_id": str(item.get("id") or "")},
                         workflow_file=DISTRIBUTED_STOCK_FINDER_WORKFLOW,
                     )
                 else:
-                    client.dispatch_workflow(
-                        {"origin": "trading_intelligence_desktop"}
-                    )
+                    # The continuous-research workflow declares no inputs.
+                    dispatched = client.dispatch_workflow()
+                if not dispatched:
+                    raise GitHubLibraryError("Cloud workflow dispatch is not configured; the durable job remains queued.")
             except GitHubLibraryError as exc:
                 # Queue publication is already durable. Scheduled workers can still
                 # claim it even when this token lacks Actions permission.
@@ -976,7 +992,7 @@ class CloudBridgeWorker:
                 effective_item,
                 settings,
                 revision=revision,
-                dispatch_error=dispatch_errors.get(job.id, ""),
+                dispatch_error=dispatch_errors.get(job.id),
             )
             self._advance_from_remote(
                 job,
