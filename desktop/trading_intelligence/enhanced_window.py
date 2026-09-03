@@ -347,7 +347,7 @@ class MainWindow(BaseMainWindow):
             self.top_status.setText(outcome.replace("_", " ").title())
             self.profit_first.banner_title.setText(outcome.replace("_", " ").title())
             self.profit_first.banner_detail.setText(
-                "The authoritative cloud result is saved. Refreshing Profit First from the research library…"
+                "The authoritative cloud result is saved. Refreshing Home from the research library…"
             )
             self.profit_first.progress.setValue(1000)
             QTimer.singleShot(150, self.refresh_profit_first)

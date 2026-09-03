@@ -8,9 +8,9 @@ from typing import Any
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication
 
-# The production wrapper chain continues through
-# `from .onboarding_window import MainWindow` inside beta_recovery_window.
-from .beta_recovery_window import MainWindow, clean_error, write_metrics
+# The final wrapper restores the web app's primary navigation and Market
+# Discovery flow while retaining the beta recovery/capability safeguards.
+from .parity_window import MainWindow, clean_error, write_metrics
 
 
 def run_gui(

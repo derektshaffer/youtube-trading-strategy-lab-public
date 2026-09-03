@@ -52,6 +52,7 @@ class RoutingPolicy:
             "chart.refresh",
             "chart.framework_fixture",
             "analysis.stock",
+            "market.discovery",
             "backtest.quick",
             "library.configuration",
             "library.summary",

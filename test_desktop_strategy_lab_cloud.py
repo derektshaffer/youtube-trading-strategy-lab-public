@@ -34,7 +34,9 @@ def test_production_ui_retains_strategy_lab_cloud_chain_under_later_wrappers():
     router = read("hybrid_runtime/router.py")
     adapter = read("hybrid_runtime/engine_adapter.py")
 
-    assert "from .beta_recovery_window import MainWindow" in ui
+    assert "from .parity_window import MainWindow" in ui
+    parity_window = read("desktop/trading_intelligence/parity_window.py")
+    assert "from .beta_recovery_window import MainWindow as RecoveryMainWindow" in parity_window
     assert "from .onboarding_window import MainWindow as OnboardingMainWindow" in recovery_window
     assert "class MainWindow(OnboardingMainWindow):" in recovery_window
     assert "from .system_health_window import MainWindow as SystemHealthMainWindow" in onboarding_window

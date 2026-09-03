@@ -257,7 +257,7 @@ class MainWindow(SystemHealthMainWindow):
                 "Setup is not verified for the current configuration. Save securely + verify again."
             )
             return
-        self.top_status.setText("Setup verified · loading Profit First")
+        self.top_status.setText("Setup verified · loading Home")
         self.show_page(0)
         QTimer.singleShot(50, self.refresh_profit_first)
 
