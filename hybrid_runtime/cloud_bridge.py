@@ -989,8 +989,8 @@ class CloudBridgeWorker:
                         workflow_file=DISTRIBUTED_STOCK_FINDER_WORKFLOW,
                     )
                 else:
-                    # The continuous-research workflow declares no inputs.
-                    dispatched = client.dispatch_workflow()
+                    # The optional exact-job input skips the broad seeding loop.
+                    dispatched = client.dispatch_workflow({"job_id": str(item.get("id") or "")})
                 if not dispatched:
                     raise GitHubLibraryError("Cloud workflow dispatch is not configured; the durable job remains queued.")
             except GitHubLibraryError as exc:

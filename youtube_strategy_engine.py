@@ -2514,10 +2514,11 @@ class StrategyStore:
 
     def load_latest(self) -> dict[str, Any]:
         """Reconcile local/cloud copies using their last shared version, never timestamp winner-takes-all."""
+        missing_before_load = not self.path.exists()
         local = self.load()
         if self.cloud_backup is None:
             return local
-        if self.restored_on_startup:
+        if missing_before_load and self.restored_on_startup:
             # load() just restored this exact cloud snapshot because the local
             # file was missing. Re-downloading the same large private library
             # immediately would double cold-start I/O and JSON decoding for no
