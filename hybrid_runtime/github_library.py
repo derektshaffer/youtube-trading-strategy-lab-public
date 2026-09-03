@@ -2,8 +2,8 @@
 
 The existing Trading Intelligence library can exceed the inline payload size
 of GitHub's Contents API. Large reads use compressed raw Git blobs, and
-writes always use Git data objects with a non-force ref update. A concurrent
-writer causes an explicit conflict instead of silently overwriting research.
+writes use Git data objects or compressed Git transport with a non-force update.
+A concurrent writer causes an explicit conflict instead of silently overwriting research.
 """
 
 from __future__ import annotations
@@ -26,6 +26,8 @@ from .contracts import canonical_json
 
 
 GITHUB_API_URL = "https://api.github.com"
+# Match the existing backup engine's conservative REST payload boundary.
+GITHUB_LIBRARY_API_SAFE_BYTES = 1_000_000
 
 
 class GitHubLibraryError(RuntimeError):
@@ -257,13 +259,22 @@ class GitHubJSONFile:
         if current != expected:
             raise GitHubLibraryConflict("GitHub branch moved before the research-library update.")
 
+        compact = canonical_json(dict(document))
+        serialized = compact.encode("utf-8")
+        if len(serialized) > GITHUB_LIBRARY_API_SAFE_BYTES:
+            from .github_git_upload import write_large_library
+
+            return write_large_library(
+                self.config, self._token, serialized,
+                expected_revision=expected, message=message,
+            )
+
         commit = self._request(self._api(f"git/commits/{quote(expected, safe='')}"))
         try:
             base_tree = str(commit["tree"]["sha"])
         except (TypeError, KeyError) as exc:
             raise GitHubLibraryError("GitHub commit metadata omitted its tree SHA.") from exc
 
-        compact = canonical_json(dict(document))
         blob = self._request(
             self._api("git/blobs"),
             method="POST",

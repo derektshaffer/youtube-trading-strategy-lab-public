@@ -14,7 +14,7 @@ from hybrid_runtime.cloud_bridge import (
 )
 from hybrid_runtime.cloud_link_store import CloudLinkStore
 from hybrid_runtime.contracts import JobStatus
-from hybrid_runtime.github_library import GitHubLibraryConfig, GitHubLibraryError, RemoteJSONDocument
+from hybrid_runtime.github_library import GitHubLibraryConfig, GitHubLibraryConflict, GitHubLibraryError, RemoteJSONDocument
 from hybrid_runtime.service import HybridService
 from hybrid_runtime.storage import HybridStore
 
@@ -46,7 +46,7 @@ class FakeGitHubClient:
         self.write_count += 1
         return self.revision
 
-    def dispatch_workflow(self, inputs=None) -> bool:
+    def dispatch_workflow(self, inputs=None, *, workflow_file=None) -> bool:
         self.dispatch_count += 1
         return True
 
@@ -164,6 +164,51 @@ class CloudBridgeTests(unittest.TestCase):
         self.assertEqual(self.client.dispatch_count, 1)
         self.assertEqual(len(self.client.document["research_queue"]), 1)
         self.assertEqual(self.links.get(local.id)["dispatch_error"], "")
+
+    @patch("profit_first_queue.research_readiness")
+    def test_upload_failures_preserve_all_three_jobs_then_publish_once(self, readiness):
+        readiness.side_effect = self.ready
+        jobs = [self.submit()]
+        for job_type, payload in (
+            ("strategy.stock_finder", {"symbol": "SDOT", "profile": "Deep"}),
+            ("strategy.strategy_lab", {
+                "run_id": "upload-recovery-lab", "ticker": "SDOT",
+                "strategy_ids": ["strategy-one"], "run_walk_forward": True,
+            }),
+        ):
+            job, created = self.service.submit({
+                "job_type": job_type, "payload": payload,
+                "requested_target": "cloud", "idempotency_key": job_type,
+            })
+            self.assertTrue(created)
+            jobs.append(job)
+        self.client.document["historical_artifacts"] = {"completed": ["must-survive"]}
+        worker = self.worker()
+        for failure in (
+            GitHubLibraryError("Large cloud-library Git push timed out"),
+            GitHubLibraryConflict("GitHub branch moved during the large-library push"),
+        ):
+            with patch.object(self.client, "write", side_effect=failure):
+                worker.run_once()
+            self.assertEqual(self.client.dispatch_count, 0)
+            self.assertEqual(self.client.write_count, 0)
+            self.assertEqual(self.client.document["research_queue"], [])
+            for original in jobs:
+                current = self.service.get(original.id)
+                self.assertEqual(current.status, JobStatus.QUEUED)
+                self.assertEqual(current.payload, original.payload)
+                self.assertIn(str(failure), self.links.get(original.id)["dispatch_error"])
+
+        worker.run_once()
+        worker.run_once()
+        self.assertEqual(self.client.write_count, 1)
+        self.assertEqual(self.client.dispatch_count, 3)
+        self.assertEqual(len(self.client.document["research_queue"]), 3)
+        self.assertEqual(self.client.document["historical_artifacts"], {"completed": ["must-survive"]})
+        self.assertEqual({job.id for job in self.service.list()}, {job.id for job in jobs})
+        for original in jobs:
+            self.assertEqual(self.service.get(original.id).status, JobStatus.CLAIMED)
+            self.assertEqual(self.links.get(original.id)["dispatch_error"], "")
 
     @patch("profit_first_queue.research_readiness")
     def test_completed_remote_validation_finishes_local_job(self, readiness):
