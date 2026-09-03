@@ -1,7 +1,7 @@
 """GitHub-backed JSON storage used by the desktop-to-cloud research bridge.
 
-The existing Trading Intelligence library can exceed the reliable payload size
-of GitHub's Contents API. Reads therefore fall through to the Git Blob API and
+The existing Trading Intelligence library can exceed the inline payload size
+of GitHub's Contents API. Large reads use compressed raw Git blobs, and
 writes always use Git data objects with a non-force ref update. A concurrent
 writer causes an explicit conflict instead of silently overwriting research.
 """
@@ -11,11 +11,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 import base64
 import binascii
+import gzip
+from hashlib import sha1
+from http.client import HTTPException
 import json
+from time import sleep
 from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+import zlib
 
 from .contracts import canonical_json
 
@@ -94,6 +99,7 @@ class GitHubJSONFile:
         method: str = "GET",
         payload: Mapping[str, Any] | None = None,
         expected_statuses: tuple[int, ...] = (200,),
+        raw_response: bool = False,
     ) -> Any:
         body = None
         if payload is not None:
@@ -103,25 +109,50 @@ class GitHubJSONFile:
             data=body,
             method=method,
             headers={
-                "Accept": "application/vnd.github+json",
+                "Accept": (
+                    "application/vnd.github.raw+json"
+                    if raw_response else "application/vnd.github+json"
+                ),
                 "Authorization": f"Bearer {self._token}",
                 "Content-Type": "application/json",
+                "Accept-Encoding": "gzip" if raw_response else "identity",
                 "User-Agent": "Trading-Intelligence-Desktop-Cloud-Bridge/1",
                 "X-GitHub-Api-Version": "2022-11-28",
             },
         )
         try:
-            with urlopen(request, timeout=self.timeout_seconds) as response:
-                status = int(getattr(response, "status", 200))
-                raw = response.read()
+            # Retry only reads: replaying a POST/PATCH after an uncertain response
+            # could duplicate writes. Never decode a partial response body.
+            attempts = 3 if method == "GET" else 1
+            for attempt in range(attempts):
+                try:
+                    timeout = (
+                        max(90.0, self.timeout_seconds)
+                        if raw_response else self.timeout_seconds
+                    )
+                    with urlopen(request, timeout=timeout) as response:
+                        status = int(getattr(response, "status", 200))
+                        raw = response.read()
+                        encoding = str(response.headers.get("Content-Encoding") or "").lower()
+                        if encoding == "gzip":
+                            raw = gzip.decompress(raw)
+                        elif encoding not in {"", "identity"}:
+                            raise GitHubLibraryError("GitHub returned an unsupported transfer encoding.")
+                    break
+                except HTTPError:
+                    raise
+                except (HTTPException, URLError, TimeoutError, OSError, EOFError, zlib.error):
+                    if attempt + 1 == attempts:
+                        raise
+                    sleep(0.25 * (attempt + 1))
         except HTTPError as exc:
             try:
                 detail = exc.read().decode("utf-8", errors="replace")
                 decoded = json.loads(detail)
                 message = str(decoded.get("message") or "") if isinstance(decoded, dict) else ""
-            except (OSError, ValueError, AttributeError):
+            except (HTTPException, OSError, ValueError, AttributeError):
                 message = ""
-            safe = " ".join(message.split())[:350]
+            safe = " ".join(message.replace(self._token, "<redacted>").split())[:350]
             if exc.code in {409, 422}:
                 raise GitHubLibraryConflict(
                     f"GitHub branch changed during update ({exc.code})."
@@ -137,12 +168,15 @@ class GitHubJSONFile:
             raise GitHubLibraryError(
                 f"GitHub request failed ({exc.code})" + (f": {safe}" if safe else ".")
             ) from exc
-        except (URLError, TimeoutError, OSError) as exc:
+        except (HTTPException, URLError, TimeoutError, OSError, EOFError, zlib.error) as exc:
             raise GitHubLibraryError(
-                "GitHub could not be reached by the cloud bridge."
+                f"GitHub cloud bridge transfer failed after {attempts} "
+                f"attempt(s) ({type(exc).__name__})."
             ) from exc
         if status not in expected_statuses:
             raise GitHubLibraryError(f"GitHub returned unexpected status {status}.")
+        if raw_response:
+            return raw
         if not raw:
             return None
         try:
@@ -179,27 +213,28 @@ class GitHubJSONFile:
     def read(self) -> RemoteJSONDocument:
         revision = self.head_revision()
         encoded_path = quote(self.config.path, safe="/")
-        encoded_branch = quote(self.config.branch, safe="")
-        metadata = self._request(
-            self._api(f"contents/{encoded_path}?ref={encoded_branch}")
-        )
+        # Pin metadata and content to the same commit used by the later
+        # compare-and-swap write, even if main changes during the download.
+        contents_url = self._api(f"contents/{encoded_path}?ref={quote(revision, safe='')}")
+        metadata = self._request(contents_url)
         if not isinstance(metadata, Mapping):
             raise GitHubLibraryError("The configured research-library path is not a file.")
         blob_sha = str(metadata.get("sha") or "").strip()
+        if len(blob_sha) != 40 or any(character not in "0123456789abcdef" for character in blob_sha):
+            raise GitHubLibraryError("GitHub did not provide a valid research-library blob SHA.")
         content = str(metadata.get("content") or "")
         if content:
             raw = self._decode_blob(metadata)
         else:
-            git_url = str(metadata.get("git_url") or "").strip()
-            if not git_url and blob_sha:
-                git_url = self._api(f"git/blobs/{quote(blob_sha, safe='')}")
-            if not git_url:
-                raise GitHubLibraryError("GitHub did not provide a blob URL for the research library.")
-            blob = self._request(git_url)
-            if not isinstance(blob, Mapping):
-                raise GitHubLibraryError("GitHub returned invalid research-library blob metadata.")
-            raw = self._decode_blob(blob)
-            blob_sha = str(blob.get("sha") or blob_sha).strip()
+            # Avoid both the base64 wrapper and the uncompressed Contents raw
+            # response: both truncated for the real private library. The raw
+            # Git Blob endpoint supports gzip. Use only our API URL, not
+            # a metadata-provided URL that could receive the bearer token.
+            raw = self._request(self._api(f"git/blobs/{blob_sha}"), raw_response=True)
+        digest = sha1(f"blob {len(raw)}\0".encode("ascii"))
+        digest.update(raw)
+        if digest.hexdigest() != blob_sha:
+            raise GitHubLibraryError("The downloaded research library failed Git blob integrity verification.")
         try:
             decoded = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
