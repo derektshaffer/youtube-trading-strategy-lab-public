@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import platform
+import queue
+import threading
 import time
 from typing import Any
 from urllib.error import HTTPError
@@ -160,6 +162,10 @@ class MainWindow(QMainWindow):
         self.profit_first.refresh_requested.connect(self.refresh_profit_first)
         self.jobs.refresh_requested.connect(self.refresh_jobs)
         self.jobs.cancel_requested.connect(self.cancel_job)
+        self.jobs.reconnect_requested.connect(self.reconnect_cloud_job)
+        self._reconnect_results = queue.Queue()
+        self._reconnect_timer = QTimer(self)
+        self._reconnect_timer.timeout.connect(self._finish_cloud_reconnect)
         self.connection.saved.connect(self.save_connection)
         self.connection.test_requested.connect(self.test_connection)
 
@@ -255,6 +261,43 @@ class MainWindow(QMainWindow):
             self.refresh_jobs()
         except BaseException as exc:
             self.jobs.summary.setText("Cancellation failed: " + clean_error(exc))
+
+    def reconnect_cloud_job(self, job_id: str) -> None:
+        if self.jobs.reconnect_busy:
+            return
+        self.jobs.reconnect_busy = True
+        self.jobs._update_reconnect()
+        self.jobs.reconnect_status.setText("Verifying the exact cloud run… No new research will be started.")
+        # Large private-library reads must not block Qt's event loop. The daemon
+        # only calls the authenticated sidecar; widget updates stay on the UI thread.
+        runtime, results = self.runtime, self._reconnect_results
+
+        def request() -> None:
+            try:
+                result = runtime.request_json("POST", f"/v1/jobs/{job_id}/reconnect-cloud", {}, timeout=180.0)
+                results.put((result, ""))
+            except Exception as exc:
+                results.put((None, clean_error(exc)))
+
+        threading.Thread(target=request, name="cloud-reconnect-request", daemon=True).start()
+        self._reconnect_timer.start(100)
+
+    def _finish_cloud_reconnect(self) -> None:
+        try:
+            result, error = self._reconnect_results.get_nowait()
+        except queue.Empty:
+            return
+        self._reconnect_timer.stop()
+        self.jobs.reconnect_busy = False
+        self.refresh_jobs()
+        if error:
+            self.jobs.reconnect_status.setText("Reconnect not confirmed: " + error + " Refresh jobs before trying again.")
+            return
+        self.jobs.reconnect_status.setText("Reconnected to the same cloud run. Failure history preserved; no research dispatched.")
+        # Resume the dedicated Finder view as well as the Durable Jobs table.
+        if hasattr(self, "finder_job_id") and not self.finder_job_id:
+            self.finder_job_id = str(result.get("id") or "")
+            self._last_finder_poll_at = 0.0
 
     def save_connection(self, raw_settings: dict[str, Any], token: str) -> None:
         try:

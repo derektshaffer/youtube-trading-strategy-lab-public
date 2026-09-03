@@ -416,6 +416,13 @@ class CloudBridgeWorker:
         self.token_loader = token_loader
         self.client_factory = client_factory
         self.idle_poll_seconds = max(0.25, float(idle_poll_seconds))
+        self._reconciliation_lock = threading.RLock()
+
+    def reconnect_failed_finder(self, job_id: str) -> JobRecord:
+        from .cloud_recovery import reconnect_finder
+
+        with self._reconciliation_lock:
+            return reconnect_finder(self, job_id)
 
     def _jobs(self) -> list[JobRecord]:
         return [
@@ -832,6 +839,10 @@ class CloudBridgeWorker:
         )
 
     def run_once(self) -> bool:
+        with self._reconciliation_lock:
+            return self._run_once()
+
+    def _run_once(self) -> bool:
         jobs = self._jobs()
         if not jobs:
             return False
@@ -874,7 +885,22 @@ class CloudBridgeWorker:
         for job in jobs:
             link = self.link_store.get(job.id)
             item = None
-            if link:
+            recovery = self.service.store.cloud_recovery(job.id)
+            if recovery:
+                # Recovered entries are permanently read-only attachments. Never
+                # fall back to dedupe/publication if their exact cloud ID vanishes.
+                from .cloud_recovery import exact_recovery_item
+                from .storage import HybridStoreError
+
+                try:
+                    item = exact_recovery_item(library, recovery, settings, job)
+                except (HybridStoreError, ValueError, TypeError) as exc:
+                    self.link_store.record_error(
+                        job.id, redact_text(exc), repository=recovery["repository"],
+                        branch=recovery["branch"], path=recovery["path"],
+                    )
+                    continue
+            elif link:
                 if job.job_type == "strategy.strategy_lab":
                     from .strategy_lab_bridge import find_strategy_lab_remote_item
 

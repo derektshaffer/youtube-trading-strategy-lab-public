@@ -20,6 +20,61 @@ from .storage_base import HybridStoreError, InvalidJobTransition, JobNotFound
 
 
 class JobStoreMixin:
+    def cloud_recovery(self, job_id: str) -> dict[str, Any] | None:
+        with self._reader() as connection:
+            row = connection.execute(
+                "SELECT binding_json FROM cloud_job_recoveries WHERE job_id = ? ORDER BY id DESC LIMIT 1",
+                (job_id,),
+            ).fetchone()
+        return self._decode_json(row["binding_json"]) if row else None
+
+    def reconnect_failed_finder(
+        self, job_id: str, *, expected_updated_at: str,
+        binding: Mapping[str, Any], worker_id: str,
+    ) -> JobRecord:
+        """Explicit recovery only; ordinary terminal transitions remain forbidden.
+
+        The bridge must first verify this exact remote binding. Audit and local
+        state change share a transaction so a crash cannot erase the failure.
+        """
+        if not all(binding.get(key) for key in ("remote_job_id", "repository", "branch", "path", "revision")):
+            raise InvalidJobTransition("Verified cloud binding is required")
+        now = utc_now_text()
+        with self._transaction(immediate=True) as connection:
+            row = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if row is None:
+                raise JobNotFound(f"Unknown job: {job_id}")
+            current = self._record(row)
+            if (
+                current.status != JobStatus.FAILED
+                or current.execution_target != ExecutionTarget.CLOUD
+                or current.job_type != "strategy.stock_finder"
+                or current.cancel_requested or current.result
+                or current.updated_at != expected_updated_at
+            ):
+                raise InvalidJobTransition("Only the unchanged failed cloud Finder job can reconnect")
+            previous = {
+                key: current.as_dict().get(key)
+                for key in ("status", "stage", "progress", "error", "result", "attempt", "updated_at", "completed_at")
+            }
+            connection.execute(
+                "INSERT INTO cloud_job_recoveries(job_id, binding_json, previous_state_json, created_at) VALUES (?, ?, ?, ?)",
+                (job_id, canonical_json(dict(binding)), canonical_json(previous), now),
+            )
+            connection.execute(
+                """UPDATE jobs SET status = ?, stage = 'cloud_reconnected', progress = 0,
+                error_json = NULL, completed_at = NULL, updated_at = ?, heartbeat_at = ?, worker_id = ?
+                WHERE id = ?""",
+                (JobStatus.CLAIMED.value, now, now, worker_id, job_id),
+            )
+            self._append_event(
+                connection, job_id=job_id, status=JobStatus.CLAIMED,
+                stage="cloud_reconnected", progress=0.0,
+                message="Reconnected to the verified existing cloud run; previous failure archived; no research dispatched",
+                created_at=now,
+            )
+            return self._record(connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
+
     def create_or_get_job(
         self,
         request: JobRequest,

@@ -44,6 +44,31 @@ research queue.
   polling preserves the recorded dispatch outcome, including through a later
   connection failure. Reattaching a queue item never silently redispatches it.
 
+## Explicit reconnection of a recovered Finder run
+
+In **Durable Jobs**, select a failed cloud Stock Finder entry and choose
+**Reconnect recovered cloud run**. The desktop stays responsive while the
+authenticated sidecar checks the private library. This action never retries
+research, writes the remote queue, or dispatches a workflow.
+
+Reconnection requires the saved repository, branch, path, exact remote job ID,
+request symbol/profile, and any desktop ownership marker to match. The cloud
+job must be queued, retrying, running, or complete; completion also requires its
+matching saved report. Missing/ambiguous jobs, changed connections, cancellation,
+protected local results, and network failures fail closed.
+
+The local schema-v2 upgrade is additive. A transaction archives the prior
+failure state in `cloud_job_recoveries`, retains all job events, and explicitly
+reopens only the selected failed cloud Finder record. Ordinary terminal-state
+transitions remain forbidden. The same job ID then resumes normal progress and
+result reconciliation. Recovered entries retain their audited remote identity
+across app restarts or link-store loss; a missing remote record never falls back
+to publishing new work. Repeated clicks cannot create a new attempt or queue item.
+
+After a connection timeout, refresh jobs before trying again: local verification
+may have finished even if the response did not reach the UI. Failed checks are
+shown beside the reconnect button and do not launch research.
+
 ## Large-library uploads
 
 Serialized libraries above 1,000,000 UTF-8 bytes use compressed Git transport
