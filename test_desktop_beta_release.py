@@ -56,7 +56,11 @@ def test_packager_records_exact_distribution_state_checksums_and_bundle_identity
     identity = read("hybrid_runtime/build_identity.py")
     assert 'channel="internal_beta"' in source
     assert '"bundle_short_version": short_version' in source
-    assert '"bundle_identity": bundle_identity' in source
+    # The manifest must record what was read back from the actual Info.plist,
+    # not merely the values the packager attempted to write.
+    assert 'embedded_identity = read_build_identity(' in source
+    assert '"bundle_identity": embedded_identity' in source
+    assert "The embedded beta build identity does not match" in source
     assert "stamp_bundle_identity(" in source
     assert 'VERSION_LABEL_KEY = "TradingIntelligenceVersionLabel"' in identity
     assert 'CHANNEL_KEY = "TradingIntelligenceBuildChannel"' in identity
