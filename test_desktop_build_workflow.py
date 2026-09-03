@@ -4,8 +4,32 @@ import ast
 import json
 from pathlib import Path
 
+from hybrid_sidecar_entry import configure_tls_certificate_bundle
+
 
 ROOT = Path(__file__).resolve().parent
+
+
+def test_frozen_sidecar_uses_certifi_bundle_without_overriding_operator_choice(tmp_path):
+    bundle = tmp_path / "cacert.pem"
+    bundle.write_text("test certificate bundle", encoding="utf-8")
+    environment: dict[str, str] = {}
+
+    selected = configure_tls_certificate_bundle(
+        environ=environment,
+        certificate_bundle=bundle,
+    )
+
+    assert selected == str(bundle)
+    assert environment["SSL_CERT_FILE"] == str(bundle)
+
+    environment["SSL_CERT_FILE"] = "/operator/managed/ca.pem"
+    preserved = configure_tls_certificate_bundle(
+        environ=environment,
+        certificate_bundle=bundle,
+    )
+    assert preserved == "/operator/managed/ca.pem"
+    assert environment["SSL_CERT_FILE"] == "/operator/managed/ca.pem"
 
 
 def test_desktop_build_workflow_uses_native_arm_runner_and_both_candidates():
@@ -23,6 +47,15 @@ def test_desktop_build_workflow_uses_native_arm_runner_and_both_candidates():
         ROOT / "desktop" / "pyside6_spike" / "pyside_gui.py"
     ).read_text(encoding="utf-8")
     assert "actions/upload-artifact@v4" in workflow
+
+
+def test_desktop_sidecar_build_collects_the_tls_certificate_bundle():
+    build = (ROOT / "scripts" / "build_desktop_sidecar.py").read_text(encoding="utf-8")
+    requirements = (ROOT / "requirements-desktop.txt").read_text(encoding="utf-8")
+
+    assert '"--collect-data"' in build
+    assert '"certifi"' in build
+    assert "certifi>=" in requirements
 
 
 def test_desktop_tokens_are_environment_only_not_command_line_arguments():

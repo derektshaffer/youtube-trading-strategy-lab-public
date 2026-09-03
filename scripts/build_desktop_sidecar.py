@@ -81,6 +81,8 @@ def main(argv: list[str] | None = None) -> int:
         name,
         "--hidden-import",
         "keyring.backends.macOS",
+        "--collect-data",
+        "certifi",
         "--distpath",
         str(dist),
         "--workpath",
