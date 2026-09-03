@@ -51,6 +51,8 @@ def test_button_only_emits_for_selected_failed_cloud_finder_and_preserves_select
 
 def test_find_stocks_button_dispatches_payload_and_acknowledges_click(app):
     page = MarketDiscoveryPage()
+    page.set_working("Loading faithful strategies", "Applying integrity gates.", 0.04)
+    assert not page.scan.isEnabled()
     page.render_options(
         {
             "strategies": [
@@ -67,6 +69,11 @@ def test_find_stocks_button_dispatches_payload_and_acknowledges_click(app):
     emitted = []
     page.run_requested.connect(emitted.append)
 
+    assert page.scan.isEnabled()
+    assert page.strategy.isEnabled()
+    assert page.universe.isEnabled()
+    assert page.count.isEnabled()
+    assert page.include_research.isEnabled()
     page.scan.click()
     app.processEvents()
 

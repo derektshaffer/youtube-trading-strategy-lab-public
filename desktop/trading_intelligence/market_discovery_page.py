@@ -200,6 +200,9 @@ class MarketDiscoveryPage(QWidget):
             self.count.setValue(maximum)
 
     def render_options(self, result: dict[str, Any]) -> None:
+        # Loading options uses set_working(), which disables every scan control.
+        # Restore the complete control set before rendering the ready state.
+        self._set_controls_enabled(True)
         selected = str(self.strategy.currentData() or "")
         self.strategy.clear()
         self.strategy.addItem("All usable strategy families", "")
@@ -213,7 +216,6 @@ class MarketDiscoveryPage(QWidget):
         index = self.strategy.findData(selected)
         self.strategy.setCurrentIndex(max(0, index))
         self.options_loaded = True
-        self.refresh_options.setEnabled(True)
         self.status.setText(f"{len(strategies):,} faithful strategy families ready")
         blocked = int(result.get("blocked_count") or 0)
         self.detail.setText(
