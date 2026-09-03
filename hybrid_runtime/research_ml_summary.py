@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any, Mapping
 
+from experiment_registry import summarize_experiment
+
 
 ACTIVE_QUEUE_STATUSES = frozenset({"queued", "running", "retry", "retry_wait"})
 
@@ -114,6 +116,31 @@ def _hypotheses(library: Mapping[str, Any], limit: int) -> list[dict[str, Any]]:
                 ),
                 "confidence": _number(raw.get("confidence"), -1.0),
                 "when": _when(raw),
+            }
+        )
+    return _sorted(rows, limit)
+
+
+def _experiments(library: Mapping[str, Any], limit: int) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    collection = library.get("experiment_registry")
+    if not isinstance(collection, list):
+        collection = []
+    for raw in collection:
+        if not isinstance(raw, Mapping):
+            continue
+        summary = summarize_experiment(raw)
+        rows.append(
+            {
+                "id": _text(summary.get("id"), 140),
+                "strategy_name": _text(summary.get("strategy_name"), 220),
+                "status": _text(summary.get("status"), 60),
+                "stage": _text(summary.get("stage"), 80),
+                "stage_status": _text(summary.get("stage_status"), 60),
+                "promotion_status": _text(summary.get("promotion_status"), 80),
+                "reason": _text(summary.get("reason"), 260),
+                "hypothesis_id": _text(summary.get("hypothesis_id"), 140),
+                "when": _text(summary.get("updated_at"), 80),
             }
         )
     return _sorted(rows, limit)
@@ -232,6 +259,7 @@ def build_research_ml_summary(
 
     research_runs = _research_runs(library, maximum)
     hypotheses = _hypotheses(library, maximum)
+    experiments = _experiments(library, maximum)
     sources = _knowledge_sources(library, maximum)
     ml_runs, ready_models = _predictive_runs(library, maximum)
     research_system = library.get("research_system") if isinstance(library.get("research_system"), Mapping) else {}
@@ -245,6 +273,7 @@ def build_research_ml_summary(
         "queue": _sorted(queue_rows, maximum),
         "research_runs": research_runs,
         "hypotheses": hypotheses,
+        "experiments": experiments,
         "sources": sources,
         "predictive_ml_runs": ml_runs,
         "ready_shadow_models": ready_models,
@@ -257,6 +286,13 @@ def build_research_ml_summary(
                 if isinstance(library.get(name), list)
             ),
             "hypotheses": len(library.get("research_hypotheses") or []) if isinstance(library.get("research_hypotheses"), list) else 0,
+            "experiments": len(library.get("experiment_registry") or []) if isinstance(library.get("experiment_registry"), list) else 0,
+            "paper_shadow_eligible_experiments": sum(
+                1
+                for item in library.get("experiment_registry") or []
+                if isinstance(item, Mapping)
+                and str(item.get("promotion_status") or "") == "paper_shadow_eligible"
+            ),
             "sources": len(library.get("knowledge_sources") or []) if isinstance(library.get("knowledge_sources"), list) else 0,
             "predictive_ml_runs": len(library.get("predictive_ml_runs") or []) if isinstance(library.get("predictive_ml_runs"), list) else 0,
             "ready_shadow_models": len(ready_models),

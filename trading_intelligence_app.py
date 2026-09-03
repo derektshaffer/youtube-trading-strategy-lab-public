@@ -10,7 +10,7 @@ import importlib
 import inspect
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -258,7 +258,11 @@ from profit_first_queue import (
     CURRENT_AUTONOMOUS_VALIDATION_METHOD_VERSION,
     profit_first_validation_batch,
 )
+from experiment_registry import select_unseen_experiment_candidates, summarize_experiment
 from trading_auto_research import (
+    AUTONOMOUS_VALIDATION_METHOD_VERSION,
+    AUTO_TIMEFRAME,
+    completed_research_session_cutoff,
     merge_autonomous_research_into_library,
     run_autonomous_research,
 )
@@ -7593,10 +7597,11 @@ elif module == "AI Research Autopilot":
     research_system = dict(library.get("research_system") or {})
     grounded_runs = list(library.get("external_research_runs") or [])
     research_hypotheses = list(library.get("research_hypotheses") or [])
+    experiment_registry = list(library.get("experiment_registry") or [])
     worker_runs = list(library.get("research_worker_runs") or [])
 
     st.markdown("### Continuous Research System")
-    continuous_metrics = st.columns(4)
+    continuous_metrics = st.columns(5)
     continuous_metrics[0].metric("Research queue", int(cloud_queue.get("active") or 0))
     continuous_metrics[1].metric("Grounded web runs", len(grounded_runs))
     continuous_metrics[2].metric(
@@ -7608,6 +7613,14 @@ elif module == "AI Research Autopilot":
         delta_color="off",
     )
     continuous_metrics[3].metric(
+        "Experiments",
+        len(experiment_registry),
+        delta=(
+            f"{sum(1 for item in experiment_registry if str(item.get('promotion_status') or '') == 'paper_shadow_eligible')} paper/shadow eligible"
+        ),
+        delta_color="off",
+    )
+    continuous_metrics[4].metric(
         "Cloud worker",
         "ACTIVE" if research_system.get("last_worker_at") else "READY TO CONNECT",
         delta=str(research_system.get("last_worker_at") or "No cloud worker run saved yet"),
@@ -7698,6 +7711,36 @@ elif module == "AI Research Autopilot":
                             "Result": item.get("result_ref") or "",
                         }
                         for item in recent_queue
+                    ]
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+
+    recent_experiments = [
+        summarize_experiment(item)
+        for item in experiment_registry[:20]
+        if isinstance(item, dict)
+    ]
+    if recent_experiments:
+        with st.expander("Experiment registry — stages and decisions", expanded=False):
+            st.caption(
+                "Research starts as an unproven hypothesis. Paper/shadow eligibility is granted "
+                "only when every recorded historical stage passes; it never approves live trading."
+            )
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "Updated": item.get("updated_at"),
+                            "Experiment": item.get("strategy_name"),
+                            "State": str(item.get("status") or "").replace("_", " ").title(),
+                            "Stage": str(item.get("stage") or "").replace("_", " ").title(),
+                            "Stage result": str(item.get("stage_status") or "").replace("_", " ").title(),
+                            "Promotion": str(item.get("promotion_status") or "").replace("_", " ").title(),
+                            "Why": item.get("reason"),
+                        }
+                        for item in recent_experiments
                     ]
                 ),
                 width="stretch",
@@ -7886,7 +7929,27 @@ elif module == "AI Research Autopilot":
                 if (item.get("research_readiness") or research_readiness(item)).get("label")
                 == "ready_for_backtest"
             ]
+            ready_for_run, duplicate_experiments = select_unseen_experiment_candidates(
+                load_library(mutable=True),
+                ready_for_run,
+                validation_end=completed_research_session_cutoff(
+                    datetime.now(timezone.utc)
+                ),
+                method_version=AUTONOMOUS_VALIDATION_METHOD_VERSION,
+                timeframe=AUTO_TIMEFRAME,
+            )
+            if duplicate_experiments:
+                update_auto_activity(
+                    f"Skipped {len(duplicate_experiments)} exact experiment duplicate(s) "
+                    "already tested with today's completed-session cutoff and protocol."
+                )
             if not ready_for_run:
+                if duplicate_experiments:
+                    raise AppError(
+                        "Every ready strategy already has an experiment with identical rules, "
+                        "protocol, timeframe, and today's completed-session cutoff. New data or "
+                        "a material hypothesis/rule change is required before repeating it."
+                    )
                 raise AppError(
                     "AI could not yet translate any strategy family into enough objective rules for "
                     "historical testing. The families remain saved and can improve as more sources are added."

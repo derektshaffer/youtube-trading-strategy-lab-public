@@ -2387,6 +2387,7 @@ class StrategyStore:
             "external_research_runs": [],
             "research_hypotheses": [],
             "research_worker_runs": [],
+            "experiment_registry": [],
             "predictive_ml_runs": [],
             "research_system": {},
             "updated_at": None,
@@ -2410,6 +2411,7 @@ class StrategyStore:
             "external_research_runs",
             "research_hypotheses",
             "research_worker_runs",
+            "experiment_registry",
             "predictive_ml_runs",
         ):
             if not isinstance(result.get(name), list):
@@ -2466,6 +2468,7 @@ class StrategyStore:
             "external_research_runs",
             "research_hypotheses",
             "research_worker_runs",
+            "experiment_registry",
             "predictive_ml_runs",
         ):
             value = data.get(name)
