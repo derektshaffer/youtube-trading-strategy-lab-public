@@ -244,6 +244,7 @@ def ensure_research_collections(library: dict[str, Any] | None) -> dict[str, Any
         "external_research_runs",
         "research_hypotheses",
         "research_worker_runs",
+        "experiment_registry",
     ):
         if not isinstance(data.get(key), list):
             data[key] = []

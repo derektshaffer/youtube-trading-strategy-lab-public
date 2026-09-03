@@ -17,6 +17,7 @@ from statistics import median
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
+from experiment_registry import merge_report_into_experiment_registry
 from trading_catalyst_core import enrich_bars_with_point_in_time_catalysts, historical_news
 from trading_intelligence_core import effective_strategy_for_research, research_readiness
 from stock_strategy_finder import holdout_reuse_audit, record_holdout_exposure
@@ -2401,4 +2402,4 @@ def merge_autonomous_research_into_library(
         if str(item.get("id") or "") != str(run_record["id"])
     ]
     data["research_runs"] = [run_record, *previous_runs][:30]
-    return data
+    return merge_report_into_experiment_registry(data, report)

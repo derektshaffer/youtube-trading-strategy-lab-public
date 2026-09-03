@@ -91,10 +91,17 @@ class ResearchMLPage(QWidget):
         metrics = QGridLayout()
         self.active = MetricCard("Active cloud jobs")
         self.hypotheses_metric = MetricCard("Hypotheses")
+        self.experiments_metric = MetricCard("Experiments")
         self.sources_metric = MetricCard("Sources")
         self.models_metric = MetricCard("Shadow-ready models")
         for index, widget in enumerate(
-            (self.active, self.hypotheses_metric, self.sources_metric, self.models_metric)
+            (
+                self.active,
+                self.hypotheses_metric,
+                self.experiments_metric,
+                self.sources_metric,
+                self.models_metric,
+            )
         ):
             metrics.addWidget(widget, 0, index)
         root.addLayout(metrics)
@@ -112,6 +119,10 @@ class ResearchMLPage(QWidget):
             ["When", "Hypothesis", "Category", "Direction", "Status", "Confidence"],
             stretch_column=1,
         )
+        self.experiment_table = self._table(
+            ["Updated", "Experiment", "Stage", "Stage result", "Promotion", "Why"],
+            stretch_column=5,
+        )
         self.ml_run_table = self._table(
             ["When", "Status", "Models", "Symbols", "Rows", "Integrity", "Method"],
             stretch_column=6,
@@ -127,6 +138,7 @@ class ResearchMLPage(QWidget):
         self.tabs.addTab(self._card_for(self.queue_table), "Cloud Queue")
         self.tabs.addTab(self._card_for(self.run_table), "Research Runs")
         self.tabs.addTab(self._card_for(self.hypothesis_table), "Hypotheses")
+        self.tabs.addTab(self._card_for(self.experiment_table), "Experiments")
         self.tabs.addTab(self._ml_card(), "Predictive ML")
         self.tabs.addTab(self._card_for(self.source_table), "Sources")
         root.addWidget(self.tabs, 1)
@@ -215,6 +227,7 @@ class ResearchMLPage(QWidget):
         )
         self.active.value.setText(f"{int(counts.get('active_cloud_jobs') or 0):,}")
         self.hypotheses_metric.value.setText(f"{int(counts.get('hypotheses') or 0):,}")
+        self.experiments_metric.value.setText(f"{int(counts.get('experiments') or 0):,}")
         self.sources_metric.value.setText(f"{int(counts.get('sources') or 0):,}")
         self.models_metric.value.setText(f"{int(counts.get('ready_shadow_models') or 0):,}")
 
@@ -261,6 +274,21 @@ class ResearchMLPage(QWidget):
                     _confidence(item.get("confidence")),
                 )
                 for item in result.get("hypotheses") or []
+                if isinstance(item, dict)
+            ],
+        )
+        self._fill(
+            self.experiment_table,
+            [
+                (
+                    _display(item.get("when")),
+                    _display(item.get("strategy_name")),
+                    _display(item.get("stage")).replace("_", " ").title(),
+                    _display(item.get("stage_status")).replace("_", " ").title(),
+                    _display(item.get("promotion_status")).replace("_", " ").title(),
+                    _display(item.get("reason")),
+                )
+                for item in result.get("experiments") or []
                 if isinstance(item, dict)
             ],
         )

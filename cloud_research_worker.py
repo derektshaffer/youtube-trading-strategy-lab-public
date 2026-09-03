@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import socket
 import sys
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -18,9 +19,17 @@ from typing import Any
 # validation protocol exported by trading_auto_research.
 from trading_auto_research import (
     AUTONOMOUS_VALIDATION_METHOD_VERSION,
+    AUTO_TIMEFRAME,
+    completed_research_session_cutoff,
     invalidate_legacy_autonomous_validations,
     merge_autonomous_research_into_library,
     run_autonomous_research,
+)
+from experiment_registry import (
+    begin_experiments,
+    experiment_stage_for_progress,
+    select_unseen_experiment_candidates,
+    update_running_experiments,
 )
 from predictive_ml_backfill import (
     merge_backfill_result_into_library,
@@ -1105,10 +1114,78 @@ def execute_job(
             persist_store(store, latest)
             return "no-pending-validation"
 
+        candidates, duplicate_experiments = select_unseen_experiment_candidates(
+            latest,
+            candidates,
+            validation_end=completed_research_session_cutoff(
+                datetime.now(timezone.utc)
+            ),
+            method_version=AUTONOMOUS_VALIDATION_METHOD_VERSION,
+            timeframe=AUTO_TIMEFRAME,
+            job_id=str(job.get("id") or ""),
+        )
+        if duplicate_experiments:
+            print(
+                f"[validation] skipped {len(duplicate_experiments)} exact same-protocol "
+                "experiment duplicate(s)",
+                flush=True,
+            )
+        if not candidates:
+            latest = finish_research_job(
+                latest,
+                str(job.get("id") or ""),
+                result_ref="duplicate-experiments-skipped",
+            )
+            latest = record_worker_run(
+                latest,
+                worker_id=worker_id,
+                job_id=str(job.get("id") or ""),
+                job_type=job_type,
+                status="complete",
+                detail=(
+                    "All requested candidates already have an experiment with identical "
+                    "rules, protocol, timeframe, and completed-session cutoff."
+                ),
+            )
+            persist_store(store, latest)
+            return "duplicate-experiments-skipped"
+
+        latest = begin_experiments(
+            latest,
+            candidates,
+            validation_end=completed_research_session_cutoff(
+                datetime.now(timezone.utc)
+            ),
+            method_version=AUTONOMOUS_VALIDATION_METHOD_VERSION,
+            timeframe=AUTO_TIMEFRAME,
+            job_id=str(job.get("id") or ""),
+            status="running",
+        )
+        persist_store(store, latest)
+
         market = build_market()
+
+        progress_lock = threading.Lock()
+        latest_progress_stage = [""]
 
         def progress(message: str) -> None:
             print(f"[validation] {message}", flush=True)
+            stage = experiment_stage_for_progress(message)
+            if stage is None:
+                return
+            with progress_lock:
+                if stage == latest_progress_stage[0]:
+                    return
+                progress_library = store.load_latest()
+                progress_library, changed = update_running_experiments(
+                    progress_library,
+                    job_id=str(job.get("id") or ""),
+                    stage=stage,
+                    message=message,
+                )
+                if changed:
+                    persist_store(store, progress_library)
+                    latest_progress_stage[0] = stage
 
         report = run_autonomous_research(
             market,

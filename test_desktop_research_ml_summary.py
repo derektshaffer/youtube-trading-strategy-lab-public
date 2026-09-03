@@ -55,6 +55,26 @@ def fixture_library():
                 "machine_rules": {"giant": "r" * 100_000},
             }
         ],
+        "experiment_registry": [
+            {
+                "id": "exp-1",
+                "strategy_name": "Volume acceleration",
+                "status": "complete",
+                "current_stage": "paper_shadow_eligibility",
+                "promotion_status": "research_only",
+                "updated_at": "2026-09-02T18:06:00Z",
+                "failure_reasons": ["Profitable neighborhood was too narrow."],
+                "source_research": {"hypothesis_id": "h1"},
+                "stages": [
+                    {
+                        "name": "paper_shadow_eligibility",
+                        "status": "blocked",
+                        "reason": "Profitable neighborhood was too narrow.",
+                    }
+                ],
+                "full_evidence": "e" * 200_000,
+            }
+        ],
         "knowledge_sources": [
             {
                 "id": "src1",
@@ -111,6 +131,7 @@ def test_research_ml_summary_is_bounded_and_drops_large_artifacts(ready):
     assert result["affects_execution"] is False
     assert result["counts"]["active_cloud_jobs"] == 1
     assert result["counts"]["hypotheses"] == 1
+    assert result["counts"]["experiments"] == 1
     assert result["counts"]["sources"] == 1
     assert result["counts"]["ready_shadow_models"] == 1
     assert result["queue"][0]["progress"] == 0.64
@@ -118,6 +139,8 @@ def test_research_ml_summary_is_bounded_and_drops_large_artifacts(ready):
     assert "payload" not in result["queue"][0]
     assert "raw_grounding" not in result["research_runs"][0]
     assert "machine_rules" not in result["hypotheses"][0]
+    assert "full_evidence" not in result["experiments"][0]
+    assert result["experiments"][0]["reason"] == "Profitable neighborhood was too narrow."
     assert "full_text" not in result["sources"][0]
     assert "probability_models" not in result["predictive_ml_runs"][0]
     assert "coefficients" not in result["ready_shadow_models"][0]
