@@ -17,6 +17,7 @@ def create_app(
     *,
     expected_token: str,
     cloud_link_lookup: Callable[[str], dict[str, Any] | None] | None = None,
+    cloud_reconnect: Callable[[str], Any] | None = None,
 ) -> Any:
     """Create the HTTP adapter without making FastAPI a Streamlit dependency."""
 
@@ -107,6 +108,23 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except HybridStoreError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/v1/jobs/{job_id}/reconnect-cloud", dependencies=[Depends(require_token)])
+    def reconnect_cloud_job(job_id: str) -> dict[str, Any]:
+        from .github_library import GitHubLibraryError
+        from .keychain import KeychainError
+        from .security import redact_text
+
+        if cloud_reconnect is None:
+            raise HTTPException(status_code=409, detail="Cloud reconnection is not configured")
+        try:
+            return cloud_reconnect(job_id).as_dict()
+        except JobNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (HybridStoreError, ValueError, TypeError) as exc:
+            raise HTTPException(status_code=409, detail=redact_text(exc)) from exc
+        except (GitHubLibraryError, KeychainError) as exc:
+            raise HTTPException(status_code=503, detail=redact_text(exc)) from exc
 
     @app.get("/v1/jobs/{job_id}/events", dependencies=[Depends(require_token)])
     def job_events(job_id: str, after_id: int = Query(default=0, ge=0)) -> dict[str, Any]:

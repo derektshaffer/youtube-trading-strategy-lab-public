@@ -244,6 +244,7 @@ class ProfitFirstPage(QWidget):
 class JobsPage(QWidget):
     refresh_requested = Signal()
     cancel_requested = Signal(str)
+    reconnect_requested = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -289,10 +290,22 @@ class JobsPage(QWidget):
         self.summary.setObjectName("Subtle")
         self.cancel = QPushButton("Cancel selected")
         self.cancel.clicked.connect(self._emit_cancel)
+        self.reconnect_busy = False
+        self._jobs_by_id: dict[str, dict[str, Any]] = {}
+        self.reconnect = QPushButton("Reconnect recovered cloud run")
+        self.reconnect.setToolTip("Verify and follow the same recovered Stock Finder run. Does not start research.")
+        self.reconnect.setEnabled(False)
+        self.reconnect.clicked.connect(self._emit_reconnect)
+        self.table.itemSelectionChanged.connect(self._update_reconnect)
+        self.reconnect_status = QLabel("")
+        self.reconnect_status.setWordWrap(True)
+        self.reconnect_status.setObjectName("Subtle")
         controls.addWidget(self.summary, 1)
+        controls.addWidget(self.reconnect)
         controls.addWidget(self.cancel)
         layout.addWidget(self.table)
         layout.addLayout(controls)
+        layout.addWidget(self.reconnect_status)
         root.addWidget(card, 1)
 
     def _emit_cancel(self) -> None:
@@ -305,6 +318,9 @@ class JobsPage(QWidget):
             self.cancel_requested.emit(job_id)
 
     def render_jobs(self, jobs: list[dict[str, Any]]) -> None:
+        selected_id = self._selected_job_id()
+        self._jobs_by_id = {str(job.get("id") or ""): job for job in jobs}
+        self.table.clearSelection()
         self.table.setRowCount(len(jobs))
         active = 0
         for row, job in enumerate(jobs):
@@ -323,7 +339,30 @@ class JobsPage(QWidget):
                 if column == 0:
                     item.setData(Qt.ItemDataRole.UserRole, str(job.get("id") or ""))
                 self.table.setItem(row, column, item)
+            if str(job.get("id") or "") == selected_id:
+                self.table.selectRow(row)
         self.summary.setText(f"{len(jobs):,} recent jobs · {active:,} active")
+        self._update_reconnect()
+
+    def _selected_job_id(self) -> str:
+        if not self.table.selectedItems():
+            return ""
+        item = self.table.item(self.table.currentRow(), 0)
+        return str(item.data(Qt.ItemDataRole.UserRole) or "") if item else ""
+
+    def _update_reconnect(self) -> None:
+        job = self._jobs_by_id.get(self._selected_job_id(), {})
+        self.reconnect.setEnabled(
+            not self.reconnect_busy and job.get("status") == "failed"
+            and job.get("execution_target") == "cloud"
+            and job.get("job_type") == "strategy.stock_finder"
+            and not job.get("cancel_requested") and not job.get("result")
+        )
+
+    def _emit_reconnect(self) -> None:
+        self._update_reconnect()
+        if self.reconnect.isEnabled():
+            self.reconnect_requested.emit(self._selected_job_id())
 
 
 class ConnectionPage(QWidget):

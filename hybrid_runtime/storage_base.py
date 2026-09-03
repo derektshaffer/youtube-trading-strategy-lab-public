@@ -17,7 +17,7 @@ from .contracts import (
 )
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class HybridStoreError(RuntimeError):
@@ -80,6 +80,13 @@ CREATE TABLE IF NOT EXISTS job_events (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS job_events_lookup ON job_events(job_id, id);
+CREATE TABLE IF NOT EXISTS cloud_job_recoveries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL REFERENCES jobs(id),
+    binding_json TEXT NOT NULL,
+    previous_state_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS cache_entries (
     cache_key TEXT PRIMARY KEY,
     namespace TEXT NOT NULL,

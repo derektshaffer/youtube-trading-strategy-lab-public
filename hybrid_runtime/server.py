@@ -114,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
         service,
         expected_token=token,
         cloud_link_lookup=cloud_links.get,
+        cloud_reconnect=cloud_worker.reconnect_failed_finder,
     )
     try:
         for thread in threads:
