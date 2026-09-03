@@ -7,7 +7,12 @@ from urllib.error import HTTPError
 import pytest
 import hybrid_runtime.onboarding as onboarding
 import hybrid_runtime.onboarding_state as onboarding_state
-from hybrid_runtime.contracts import ExecutionTarget, JobRequest
+from hybrid_runtime.contracts import (
+    ExecutionTarget,
+    JobRequest,
+    JobStatus,
+    transition_allowed,
+)
 from hybrid_runtime.desktop_settings import DesktopSettings, save_desktop_settings
 from hybrid_runtime.router import RoutingPolicy
 
@@ -212,6 +217,11 @@ def test_verify_setup_returns_bounded_readiness_without_secret_values(tmp_path, 
     assert "SUPER-ALPACA-KEY" not in encoded
     assert "SUPER-ALPACA-SECRET" not in encoded
     assert progress[-1][1] == "saving"
+    stages = [JobStatus.CLAIMED, *(JobStatus(stage) for _value, stage in progress)]
+    assert all(
+        transition_allowed(previous, following)
+        for previous, following in zip(stages, stages[1:])
+    )
 
 
 def test_github_probe_requires_queue_write_and_workflow_dispatch(monkeypatch):

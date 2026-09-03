@@ -254,7 +254,7 @@ def verify_setup(
     results: dict[str, dict[str, Any]] = {}
     check_cancelled()
     if progress:
-        progress(0.08, "preparing_features", "Checking saved desktop configuration")
+        progress(0.08, "downloading_data", "Checking saved desktop configuration")
 
     if progress:
         progress(0.18, "downloading_data", "Verifying the research library")

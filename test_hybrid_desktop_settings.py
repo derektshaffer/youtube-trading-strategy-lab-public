@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 import pytest
+import hybrid_runtime.library_source as library_source
 
 from hybrid_runtime.contracts import ExecutionTarget, JobRequest
 from hybrid_runtime.desktop_settings import (
@@ -98,6 +99,23 @@ def test_inline_fixture_load_and_missing_source_failure(tmp_path: Path):
     )
     with pytest.raises(LibrarySourceError):
         load_library_for_job({}, data_dir=tmp_path)
+
+
+def test_desktop_library_prefers_keychain_token_over_generic_environment(
+    monkeypatch,
+):
+    class FakeKeychain:
+        def get_secret(self, account: str) -> str:
+            assert account == "github-backup-token"
+            return "keychain-private-repository-token"
+
+    monkeypatch.setenv("GITHUB_TOKEN", "unrelated-launcher-token")
+    monkeypatch.setattr(library_source, "MacOSKeychain", FakeKeychain)
+
+    token, source = library_source._github_token(DesktopSettings())
+
+    assert token == "keychain-private-repository-token"
+    assert source == "macos_keychain"
 
 
 def test_profit_first_handler_returns_library_provenance_for_empty_fixture():

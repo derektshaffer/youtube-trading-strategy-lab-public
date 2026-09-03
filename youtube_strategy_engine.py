@@ -10,6 +10,7 @@ from collections import OrderedDict
 from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, time, timedelta, timezone
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from http.client import HTTPException
 import base64
 import binascii
 import hashlib
@@ -64,6 +65,7 @@ GITHUB_API_URL = "https://api.github.com"
 # large libraries through Git data objects before the request body reaches that
 # endpoint; the current trading-intelligence library is already well above this.
 GITHUB_CONTENTS_API_SAFE_BYTES = 1_000_000
+GITHUB_LIBRARY_DOWNLOAD_ATTEMPTS = 3
 # Repeated Analyzer/Scanner runs often ask Alpaca for the same multi-day history.
 # Cache only history that ends before the current New York calendar day; anything
 # from the current day remains live/fresh. A short TTL also protects against
@@ -2034,39 +2036,46 @@ class GitHubCloudBackup:
         accept: str = "application/vnd.github.raw+json",
         missing_ok: bool = False,
     ) -> bytes | None:
-        request = Request(
-            url,
-            method="GET",
-            headers={
-                "Authorization": f"Bearer {self.token}",
-                "Accept": accept,
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-        )
-        try:
-            with urlopen(request, timeout=90) as response:
-                return response.read()
-        except HTTPError as exc:
-            if exc.code == 404 and missing_ok:
-                return None
+        for attempt in range(1, GITHUB_LIBRARY_DOWNLOAD_ATTEMPTS + 1):
+            request = Request(
+                url,
+                method="GET",
+                headers={
+                    "Authorization": f"Bearer {self.token}",
+                    "Accept": accept,
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+            )
             try:
-                details = json.loads(exc.read().decode("utf-8", errors="replace"))
-                message = str(details.get("message") or "").strip()
-            except (OSError, ValueError, AttributeError):
-                message = ""
-            if exc.code in {401, 403}:
+                with urlopen(request, timeout=90) as response:
+                    return response.read()
+            except HTTPError as exc:
+                if exc.code == 404 and missing_ok:
+                    return None
+                try:
+                    details = json.loads(exc.read().decode("utf-8", errors="replace"))
+                    message = str(details.get("message") or "").strip()
+                except (OSError, ValueError, AttributeError):
+                    message = ""
+                if exc.code in {401, 403}:
+                    raise AppError(
+                        "GitHub cloud backup was denied while reading the private library. "
+                        "Check the backup token and repository access."
+                    ) from exc
                 raise AppError(
-                    "GitHub cloud backup was denied while reading the private library. "
-                    "Check the backup token and repository access."
+                    f"GitHub cloud backup raw download failed ({exc.code}). "
+                    + (message or "Check the backup repository and token permissions.")
                 ) from exc
-            raise AppError(
-                f"GitHub cloud backup raw download failed ({exc.code}). "
-                + (message or "Check the backup repository and token permissions.")
-            ) from exc
-        except (URLError, TimeoutError, OSError) as exc:
-            raise AppError(
-                "GitHub cloud backup could not be reached while downloading the private library."
-            ) from exc
+            except (HTTPException, URLError, TimeoutError, OSError) as exc:
+                if attempt < GITHUB_LIBRARY_DOWNLOAD_ATTEMPTS:
+                    sleep(0.25 * attempt)
+                    continue
+                raise AppError(
+                    "GitHub cloud backup could not complete the private-library download "
+                    f"after {GITHUB_LIBRARY_DOWNLOAD_ATTEMPTS} attempts "
+                    f"({type(exc).__name__})."
+                ) from exc
+        raise AssertionError("unreachable")
 
     def _verify_private_repository(self) -> None:
         if self._repository_checked:

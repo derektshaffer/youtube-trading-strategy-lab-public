@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from http.client import IncompleteRead
 import ast
 import hashlib
 import json
@@ -1464,6 +1465,71 @@ class CloudDestinationBindingTests(unittest.TestCase):
 
 
 class CloudBackupReadTests(unittest.TestCase):
+    def test_large_private_library_retries_an_incomplete_download(self):
+        cloud = engine.GitHubCloudBackup(
+            "owner/private-backups",
+            "token",
+            branch="main",
+            path="trading-intelligence-lab/intelligence_library.json",
+        )
+        payload = b'{"strategies":[]}'
+
+        class Response:
+            def __init__(self, *, fail: bool):
+                self.fail = fail
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                if self.fail:
+                    raise IncompleteRead(b"partial", len(payload))
+                return payload
+
+        with patch.object(
+            engine,
+            "urlopen",
+            side_effect=[Response(fail=True), Response(fail=False)],
+        ) as request, patch.object(engine, "sleep") as wait:
+            restored = cloud._request_bytes("https://api.github.com/fake")
+
+        self.assertEqual(restored, payload)
+        self.assertEqual(request.call_count, 2)
+        wait.assert_called_once_with(0.25)
+
+    def test_large_private_library_reports_final_transient_error_type(self):
+        cloud = engine.GitHubCloudBackup(
+            "owner/private-backups",
+            "token",
+            branch="main",
+            path="trading-intelligence-lab/intelligence_library.json",
+        )
+
+        class BrokenResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                raise IncompleteRead(b"partial", 10)
+
+        with patch.object(engine, "urlopen", return_value=BrokenResponse()) as request, patch.object(
+            engine,
+            "sleep",
+        ):
+            with self.assertRaisesRegex(
+                engine.AppError,
+                "after 3 attempts \\(IncompleteRead\\)",
+            ):
+                cloud._request_bytes("https://api.github.com/fake")
+
+        self.assertEqual(request.call_count, engine.GITHUB_LIBRARY_DOWNLOAD_ATTEMPTS)
+
     def test_large_private_library_uses_raw_contents_download(self):
         cloud = engine.GitHubCloudBackup(
             "owner/private-backups",

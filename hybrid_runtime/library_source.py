@@ -71,14 +71,17 @@ def _environment_secret() -> tuple[str, str]:
 
 
 def _github_token(settings: DesktopSettings) -> tuple[str, str]:
-    token, source = _environment_secret()
-    if token:
-        return token, source
+    # The desktop settings and health screens validate the Keychain account, so
+    # desktop library jobs must use that same credential when it is available.
+    # Generic GITHUB_TOKEN/GH_TOKEN values can be inherited from a launcher or
+    # development shell and may only have access to the public application repo.
     try:
         token = MacOSKeychain().get_secret(settings.keychain_account).strip()
     except (KeychainError, KeychainUnavailable):
-        return "", ""
-    return (token, "macos_keychain") if token else ("", "")
+        token = ""
+    if token:
+        return token, "macos_keychain"
+    return _environment_secret()
 
 
 def _library_counts(library: Mapping[str, Any]) -> dict[str, int]:
