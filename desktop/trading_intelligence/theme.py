@@ -18,6 +18,7 @@ QPushButton:hover { border-color:#4c7396; color:#eef7ff; }
 QPushButton:checked { background:#17344c; color:#8ee4ff; border-color:#4b7898; }
 QPushButton#Primary { background:#58d9ae; color:#06140f; border:0; padding:10px 14px; font-weight:850; }
 QPushButton:disabled { color:#536579; background:#0b1725; border-color:#1a2b3d; }
+QPushButton#Primary:disabled { color:#536579; background:#0b1725; border:1px solid #1a2b3d; }
 QLineEdit, QComboBox { background:#081521; border:1px solid #2a425d; border-radius:7px; padding:8px; color:#edf6ff; }
 QTableWidget { background:#091522; alternate-background-color:#0c1a29; border:0; gridline-color:#1b3044; selection-background-color:#173e56; }
 QHeaderView::section { background:#0b1b2b; color:#8fa5bb; border:0; border-bottom:1px solid #294057; padding:8px; font-weight:750; }
