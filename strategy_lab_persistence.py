@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import json
+import zlib
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
@@ -12,10 +16,176 @@ from youtube_strategy_engine import AppError, StrategyStore, utc_now
 
 STRATEGY_LAB_RECORD_TYPE = "strategy_lab_checkpoint"
 MAX_STRATEGY_LAB_CHECKPOINTS = 5
+STRATEGY_LAB_RESULT_ARCHIVE_FORMAT = "zlib+base64+json"
+STRATEGY_LAB_RESULT_ARCHIVE_VERSION = 1
+MIN_RESULT_ARCHIVE_BYTES = 256 * 1024
+MAX_ARCHIVED_RESULT_BYTES = 200 * 1024 * 1024
 STRATEGY_LAB_CLOUD_CONFLICT_MARKER = (
     "Both the local Trading Lab library and the private GitHub library changed "
     "since their last shared version."
 )
+
+
+def _serialized_result(result: dict[str, Any]) -> bytes:
+    try:
+        return json.dumps(
+            result,
+            separators=(",", ":"),
+            default=str,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise AppError("Strategy Lab result could not be serialized for durable storage.") from exc
+
+
+def archive_strategy_lab_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Return a lossless, integrity-checked archive for one completed result."""
+
+    if not isinstance(result, dict) or not result:
+        raise AppError("Only a nonempty Strategy Lab result can be archived.")
+    raw = _serialized_result(result)
+    if len(raw) > MAX_ARCHIVED_RESULT_BYTES:
+        raise AppError("Strategy Lab result is too large for the bounded checkpoint archive.")
+    compressed = zlib.compress(raw, level=9)
+    return {
+        "version": STRATEGY_LAB_RESULT_ARCHIVE_VERSION,
+        "format": STRATEGY_LAB_RESULT_ARCHIVE_FORMAT,
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "uncompressed_bytes": len(raw),
+        "compressed_bytes": len(compressed),
+        "payload": base64.b64encode(compressed).decode("ascii"),
+    }
+
+
+def restore_strategy_lab_result(record: dict[str, Any]) -> dict[str, Any]:
+    """Restore and verify a completed result from either representation."""
+
+    result = record.get("result")
+    if isinstance(result, dict) and result:
+        return deepcopy(result)
+    archive = record.get("result_archive")
+    if not isinstance(archive, dict):
+        return {}
+    try:
+        archive_version = int(archive.get("version") or 0)
+    except (TypeError, ValueError) as exc:
+        raise AppError("Strategy Lab checkpoint has invalid result archive metadata.") from exc
+    if (
+        archive_version != STRATEGY_LAB_RESULT_ARCHIVE_VERSION
+        or str(archive.get("format") or "") != STRATEGY_LAB_RESULT_ARCHIVE_FORMAT
+    ):
+        raise AppError("Strategy Lab checkpoint uses an unsupported result archive format.")
+    try:
+        expected_size = int(archive.get("uncompressed_bytes") or 0)
+        expected_compressed_size = int(archive.get("compressed_bytes") or 0)
+    except (TypeError, ValueError) as exc:
+        raise AppError("Strategy Lab result archive size metadata is invalid.") from exc
+    if expected_size <= 0 or expected_size > MAX_ARCHIVED_RESULT_BYTES:
+        raise AppError("Strategy Lab result archive exceeds the safe restore limit.")
+    if expected_compressed_size <= 0 or expected_compressed_size > MAX_ARCHIVED_RESULT_BYTES:
+        raise AppError("Strategy Lab result archive compressed size is outside the safe limit.")
+    try:
+        compressed = base64.b64decode(str(archive.get("payload") or ""), validate=True)
+    except (binascii.Error, ValueError, TypeError) as exc:
+        raise AppError("Strategy Lab result archive payload is invalid.") from exc
+    if len(compressed) != expected_compressed_size:
+        raise AppError("Strategy Lab result archive compressed-size check failed.")
+    try:
+        decompressor = zlib.decompressobj()
+        raw = decompressor.decompress(compressed, expected_size + 1)
+        if decompressor.unconsumed_tail or len(raw) > expected_size:
+            raise AppError("Strategy Lab result archive uncompressed-size check failed.")
+        remainder = decompressor.flush()
+    except zlib.error as exc:
+        raise AppError("Strategy Lab result archive could not be decompressed.") from exc
+    if (
+        not decompressor.eof
+        or decompressor.unused_data
+        or len(raw) + len(remainder) > expected_size
+    ):
+        raise AppError("Strategy Lab result archive uncompressed-size check failed.")
+    raw += remainder
+    if len(raw) != expected_size:
+        raise AppError("Strategy Lab result archive uncompressed-size check failed.")
+    if hashlib.sha256(raw).hexdigest() != str(archive.get("sha256") or ""):
+        raise AppError("Strategy Lab result archive integrity check failed.")
+    try:
+        restored = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AppError("Strategy Lab result archive does not contain valid JSON.") from exc
+    if not isinstance(restored, dict) or not restored:
+        raise AppError("Strategy Lab result archive does not contain a valid result.")
+    return restored
+
+
+def _has_durable_result(record: dict[str, Any]) -> bool:
+    result = record.get("result")
+    if isinstance(result, dict) and bool(result):
+        return True
+    archive = record.get("result_archive")
+    return bool(
+        isinstance(archive, dict)
+        and archive.get("payload")
+        and archive.get("sha256")
+        and archive.get("uncompressed_bytes")
+    )
+
+
+def compact_strategy_lab_checkpoint_library(
+    data: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, int]]:
+    """Compress older completed results while leaving the newest one hot."""
+
+    compacted = deepcopy(data if isinstance(data, dict) else {})
+    source_records = compacted.get("validation_runs")
+    records = source_records if isinstance(source_records, list) else []
+    newest_complete_index: int | None = None
+    newest_complete_time = -1.0
+    for index, item in enumerate(records):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("status") or "").lower() != "complete":
+            continue
+        if not _has_durable_result(item):
+            continue
+        saved_time = _saved_time(item)
+        if saved_time > newest_complete_time:
+            newest_complete_index = index
+            newest_complete_time = saved_time
+
+    archived = 0
+    bytes_before = 0
+    bytes_after = 0
+    for index, item in enumerate(records):
+        if not isinstance(item, dict):
+            continue
+        result = item.get("result")
+        if (
+            str(item.get("status") or "").lower() != "complete"
+            or index == newest_complete_index
+            or not isinstance(result, dict)
+            or not result
+        ):
+            continue
+        raw = _serialized_result(result)
+        if len(raw) < MIN_RESULT_ARCHIVE_BYTES:
+            continue
+        archive = archive_strategy_lab_result(result)
+        archive_bytes = len(_serialized_result(archive))
+        if archive_bytes >= len(raw):
+            continue
+        item["result_archive"] = archive
+        item.pop("result", None)
+        archived += 1
+        bytes_before += len(raw)
+        bytes_after += archive_bytes
+
+    compacted["validation_runs"] = records
+    return compacted, {
+        "archived_results": archived,
+        "bytes_before": bytes_before,
+        "bytes_after": bytes_after,
+    }
 
 
 def _saved_time(record: dict[str, Any]) -> float:
@@ -31,11 +201,11 @@ def _saved_time(record: dict[str, Any]) -> float:
         return 0.0
 
 
-def _checkpoint_rank(record: dict[str, Any]) -> tuple[int, float, float, int]:
+def _checkpoint_rank(record: dict[str, Any]) -> tuple[int, float, int, float]:
     """Prefer terminal evidence and never regress a resumable run's progress."""
 
     status = str(record.get("status") or "").strip().lower()
-    has_result = isinstance(record.get("result"), dict) and bool(record.get("result"))
+    has_result = _has_durable_result(record)
     if status == "complete" and has_result:
         lifecycle_rank = 3
     elif status == "failed":
@@ -113,17 +283,25 @@ def recover_strategy_lab_checkpoint_conflict(
     local = store.load()
     remote = store.restore_cloud_backup()
     merged = merge_strategy_lab_checkpoint_libraries(local, remote)
+    merged, compaction = compact_strategy_lab_checkpoint_library(merged)
     if merged.get("validation_runs") != remote.get("validation_runs"):
         merged = store.save(merged)
     setattr(store, "checkpoint_conflict_recovered", True)
+    if compaction["archived_results"]:
+        setattr(store, "checkpoint_compaction", compaction)
     return merged
 
 
 def _load_checkpoint_library(store: StrategyStore) -> dict[str, Any]:
     try:
-        return store.load_latest()
+        data = store.load_latest()
     except AppError as exc:
-        return recover_strategy_lab_checkpoint_conflict(store, exc)
+        data = recover_strategy_lab_checkpoint_conflict(store, exc)
+    compacted, compaction = compact_strategy_lab_checkpoint_library(data)
+    if compaction["archived_results"]:
+        compacted = store.save(compacted)
+        setattr(store, "checkpoint_compaction", compaction)
+    return compacted
 
 
 def save_strategy_lab_checkpoint(
@@ -192,12 +370,14 @@ def save_strategy_lab_checkpoint(
         if not isinstance(result, dict) or not result:
             raise AppError("A completed Strategy Lab checkpoint requires a result.")
         record["result"] = deepcopy(result)
+        record.pop("result_archive", None)
         record["progress"] = 1.0
         record["stage"] = "complete"
         record.pop("job", None)
         record.pop("optimizer_state", None)
     elif normalized_status == "failed":
         record.pop("result", None)
+        record.pop("result_archive", None)
         record.pop("job", None)
         record.pop("optimizer_state", None)
 
@@ -212,6 +392,9 @@ def save_strategy_lab_checkpoint(
         and str(item.get("record_type") or "") == STRATEGY_LAB_RECORD_TYPE
     ]
     data["validation_runs"] = [record, *previous][:MAX_STRATEGY_LAB_CHECKPOINTS]
+    data, compaction = compact_strategy_lab_checkpoint_library(data)
+    if compaction["archived_results"]:
+        setattr(store, "checkpoint_compaction", compaction)
     store.save(data)
     return record
 
@@ -229,5 +412,12 @@ def load_latest_strategy_lab_checkpoint(
             isinstance(item, dict)
             and str(item.get("record_type") or "") == STRATEGY_LAB_RECORD_TYPE
         ):
-            return deepcopy(item)
+            restored = deepcopy(item)
+            if (
+                str(restored.get("status") or "").lower() == "complete"
+                and not restored.get("result")
+                and restored.get("result_archive")
+            ):
+                restored["result"] = restore_strategy_lab_result(restored)
+            return restored
     return {}

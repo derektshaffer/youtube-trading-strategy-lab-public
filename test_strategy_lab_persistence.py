@@ -5,8 +5,11 @@ import tempfile
 from strategy_lab_persistence import (
     MAX_STRATEGY_LAB_CHECKPOINTS,
     STRATEGY_LAB_CLOUD_CONFLICT_MARKER,
+    archive_strategy_lab_result,
+    compact_strategy_lab_checkpoint_library,
     load_latest_strategy_lab_checkpoint,
     merge_strategy_lab_checkpoint_libraries,
+    restore_strategy_lab_result,
     save_strategy_lab_checkpoint,
 )
 from youtube_strategy_engine import AppError, StrategyStore
@@ -15,11 +18,13 @@ from youtube_strategy_engine import AppError, StrategyStore
 class MemoryStore:
     def __init__(self):
         self.data = {"validation_runs": []}
+        self.save_calls = 0
 
     def load_latest(self):
         return deepcopy(self.data)
 
     def save(self, data):
+        self.save_calls += 1
         self.data = deepcopy(data)
         return deepcopy(self.data)
 
@@ -47,7 +52,128 @@ def checkpoint(
         item["job"] = job
     return item
 
+
+def large_result(marker):
+    return {
+        "ticker": "SLS",
+        "report": {
+            "marker": marker,
+            "variants": [
+                {"strategy": marker, "payload": "repeatable-result-data-" * 15000}
+            ],
+        },
+    }
+
+
 class StrategyLabPersistenceTests(unittest.TestCase):
+    def test_archive_round_trip_is_lossless_and_integrity_checked(self):
+        original = large_result("older-run")
+        archive = archive_strategy_lab_result(original)
+
+        self.assertLess(archive["compressed_bytes"], archive["uncompressed_bytes"])
+        restored = restore_strategy_lab_result({"result_archive": archive})
+        self.assertEqual(restored, original)
+        self.assertEqual(list(restored), list(original))
+
+        corrupted = deepcopy(archive)
+        corrupted["sha256"] = "0" * 64
+        with self.assertRaisesRegex(AppError, "integrity check failed"):
+            restore_strategy_lab_result({"result_archive": corrupted})
+
+    def test_compaction_keeps_newest_result_hot_and_archives_older_result(self):
+        newer = large_result("newer-run")
+        older = large_result("older-run")
+        library = {
+            "validation_runs": [
+                checkpoint(
+                    "newer",
+                    status="complete",
+                    saved_at="2026-09-03T02:00:00+00:00",
+                    progress=1.0,
+                    result=newer,
+                ),
+                checkpoint(
+                    "older",
+                    status="complete",
+                    saved_at="2026-09-03T01:00:00+00:00",
+                    progress=1.0,
+                    result=older,
+                ),
+            ]
+        }
+
+        compacted, stats = compact_strategy_lab_checkpoint_library(library)
+
+        self.assertEqual(stats["archived_results"], 1)
+        self.assertEqual(compacted["validation_runs"][0]["result"], newer)
+        self.assertNotIn("result_archive", compacted["validation_runs"][0])
+        archived_record = compacted["validation_runs"][1]
+        self.assertNotIn("result", archived_record)
+        self.assertEqual(restore_strategy_lab_result(archived_record), older)
+        self.assertLess(stats["bytes_after"], stats["bytes_before"])
+
+        compacted_again, second_stats = compact_strategy_lab_checkpoint_library(compacted)
+        self.assertEqual(second_stats["archived_results"], 0)
+        self.assertEqual(compacted_again, compacted)
+
+    def test_merge_treats_archived_complete_result_as_terminal(self):
+        complete = checkpoint(
+            "same-run",
+            status="complete",
+            saved_at="2026-09-03T01:00:00+00:00",
+            progress=1.0,
+            result=large_result("complete"),
+        )
+        complete["result_archive"] = archive_strategy_lab_result(complete.pop("result"))
+        stale_running = checkpoint(
+            "same-run",
+            saved_at="2026-09-03T02:00:00+00:00",
+            progress=0.99,
+            job={"search_depth": 160},
+        )
+
+        merged = merge_strategy_lab_checkpoint_libraries(
+            {"validation_runs": [stale_running]},
+            {"validation_runs": [complete]},
+        )
+
+        self.assertEqual(merged["validation_runs"][0]["status"], "complete")
+        self.assertIn("result_archive", merged["validation_runs"][0])
+
+    def test_load_compacts_cloud_library_once_and_keeps_latest_restorable(self):
+        store = MemoryStore()
+        newest = large_result("newest")
+        older = large_result("older")
+        store.data = {
+            "validation_runs": [
+                checkpoint(
+                    "newest",
+                    status="complete",
+                    saved_at="2026-09-03T02:00:00+00:00",
+                    progress=1.0,
+                    result=newest,
+                ),
+                checkpoint(
+                    "older",
+                    status="complete",
+                    saved_at="2026-09-03T01:00:00+00:00",
+                    progress=1.0,
+                    result=older,
+                ),
+            ]
+        }
+
+        latest = load_latest_strategy_lab_checkpoint(store)
+
+        self.assertEqual(latest["result"], newest)
+        self.assertEqual(store.save_calls, 1)
+        self.assertIn("result_archive", store.data["validation_runs"][1])
+        self.assertEqual(store.checkpoint_compaction["archived_results"], 1)
+
+        second_latest = load_latest_strategy_lab_checkpoint(store)
+        self.assertEqual(second_latest["result"], newest)
+        self.assertEqual(store.save_calls, 1)
+
     def test_merge_preserves_distinct_local_and_cloud_runs_newest_first(self):
         local = {
             "validation_runs": [

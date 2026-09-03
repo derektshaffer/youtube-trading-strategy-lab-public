@@ -8238,6 +8238,11 @@ elif module == "Strategy Lab":
         try:
             checkpoint_store = build_strategy_lab_checkpoint_store()
             durable_checkpoint = load_latest_strategy_lab_checkpoint(checkpoint_store)
+            checkpoint_compaction = getattr(
+                checkpoint_store,
+                "checkpoint_compaction",
+                {},
+            )
             checkpoint_conflict_recovered = bool(
                 getattr(checkpoint_store, "checkpoint_conflict_recovered", False)
             )
@@ -8294,6 +8299,21 @@ elif module == "Strategy Lab":
                             "ticker": durable_ticker,
                             "message": durable_message,
                         }
+            archived_results = int(checkpoint_compaction.get("archived_results") or 0)
+            if archived_results:
+                bytes_before = int(checkpoint_compaction.get("bytes_before") or 0)
+                bytes_after = int(checkpoint_compaction.get("bytes_after") or 0)
+                saved_megabytes = max(0.0, (bytes_before - bytes_after) / (1024 * 1024))
+                compaction_message = (
+                    f"Compacted {archived_results} older completed Strategy Lab "
+                    f"{'result' if archived_results == 1 else 'results'} and saved about "
+                    f"{saved_megabytes:.1f} MB. The archived history remains exact, "
+                    "integrity-checked, and restorable."
+                )
+                durable_restore_notice = (
+                    compaction_message
+                    + (" " + durable_restore_notice if durable_restore_notice else "")
+                )
             if checkpoint_conflict_recovered:
                 recovery_message = (
                     "Recovered the Strategy Lab storage conflict without discarding the newest "
