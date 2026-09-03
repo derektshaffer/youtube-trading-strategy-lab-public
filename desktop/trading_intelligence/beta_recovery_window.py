@@ -63,7 +63,7 @@ class MainWindow(OnboardingMainWindow):
         return False
 
     def refresh_profit_first(self) -> None:
-        if self._require_capabilities(("library",), "Profit First"):
+        if self._require_capabilities(("library",), "Home"):
             super().refresh_profit_first()
 
     def refresh_results(self) -> None:

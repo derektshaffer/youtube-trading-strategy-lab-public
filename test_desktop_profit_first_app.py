@@ -35,6 +35,11 @@ def test_production_desktop_python_sources_parse():
         "desktop/trading_intelligence/system_health_window.py",
         "desktop/trading_intelligence/onboarding_page.py",
         "desktop/trading_intelligence/onboarding_window.py",
+        "desktop/trading_intelligence/market_discovery_page.py",
+        "desktop/trading_intelligence/scanner_launcher_page.py",
+        "desktop/trading_intelligence/parity_window.py",
+        "hybrid_runtime/market_discovery_job.py",
+        "hybrid_runtime/scanner_launcher.py",
         "hybrid_runtime/desktop_settings.py",
         "hybrid_runtime/library_source.py",
         "hybrid_runtime/market_cache.py",
@@ -72,6 +77,9 @@ def test_production_shell_exposes_setup_profit_first_finder_results_research_ml_
         + read("desktop/trading_intelligence/system_health_window.py")
         + read("desktop/trading_intelligence/onboarding_page.py")
         + read("desktop/trading_intelligence/onboarding_window.py")
+        + read("desktop/trading_intelligence/market_discovery_page.py")
+        + read("desktop/trading_intelligence/scanner_launcher_page.py")
+        + read("desktop/trading_intelligence/parity_window.py")
     )
     settings = read("hybrid_runtime/desktop_settings.py")
     source = read("hybrid_runtime/library_source.py")
@@ -86,6 +94,10 @@ def test_production_shell_exposes_setup_profit_first_finder_results_research_ml_
     assert "Quick Analysis" in ui
     assert "Stock Strategy Finder" in ui
     assert "Run Finder in Cloud" in ui
+    assert "Find Stocks" in ui
+    assert "Find stocks worth watching" in ui
+    assert "market.discovery" in ui
+    assert "Open Momentum Scanner" in ui
     assert "Results" in ui
     assert "Refresh Results" in ui
     assert "library.results_summary" in ui
@@ -186,7 +198,9 @@ def test_market_cache_is_persistent_incremental_and_explicit_about_price_age():
     assert "data_age_seconds" in cache
     assert "Latest completed Alpaca candle close" in cache
     assert "macOS Keychain" in analysis or "persistent local cache" in analysis
-    assert "from .onboarding_window import MainWindow" in ui
+    assert "from .parity_window import MainWindow" in ui
+    parity = read("desktop/trading_intelligence/parity_window.py")
+    assert "from .beta_recovery_window import MainWindow as RecoveryMainWindow" in parity
     assert "from .system_health_window import MainWindow as SystemHealthMainWindow" in onboarding_window
     assert "from .research_ml_window import MainWindow as ResearchMLMainWindow" in health_window
 

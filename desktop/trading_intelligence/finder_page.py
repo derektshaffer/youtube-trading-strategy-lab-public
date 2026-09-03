@@ -135,7 +135,7 @@ class StockFinderPage(QWidget):
         root.addWidget(result_card, 1)
 
         safety = QLabel(
-            "Research only · Finder does not bypass Profit First or strict validation gates and does not place brokerage orders."
+            "Research only · Finder does not bypass strict validation gates and does not place brokerage orders."
         )
         safety.setObjectName("Subtle")
         safety.setWordWrap(True)

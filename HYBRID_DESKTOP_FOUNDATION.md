@@ -3,6 +3,23 @@
 The Trading Intelligence desktop migration is additive. It does not replace or
 modify the working Streamlit UI.
 
+## Primary workflow parity
+
+The production desktop keeps the same user-facing directions as the web app:
+
+- **Find & Test a Strategy:** choose one stock, then search for strategies that fit it.
+- **Find Stocks:** choose one strategy or all faithful strategy families, then scan
+  Momentum Universe, Top Gainers, Most Active, or a Custom Watchlist for current
+  rule matches.
+- **Home:** review strategy candidates and strict-validation status. This is the
+  clearer user-facing name for the internal Profit First queue.
+- **Open Momentum Scanner:** launch the independently maintained Momentum Scanner /
+  Stock Analyzer without merging its code, rankings, or validation state into the Lab.
+
+Market Discovery matches are research-only and keep validated and research-only
+strategies visibly distinct. The separate Scanner launcher stores only a web URL or
+local macOS app/launcher path.
+
 Run the core tests:
 
 ```bash

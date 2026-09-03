@@ -146,7 +146,11 @@ def test_recovery_wrapper_gates_real_work_but_bypasses_ci_smoke():
     )
     ui = (ROOT / "desktop/trading_intelligence/ui.py").read_text(encoding="utf-8")
 
-    assert "from .beta_recovery_window import MainWindow" in ui
+    assert "from .parity_window import MainWindow" in ui
+    parity = (ROOT / "desktop/trading_intelligence/parity_window.py").read_text(
+        encoding="utf-8"
+    )
+    assert "from .beta_recovery_window import MainWindow as RecoveryMainWindow" in parity
     assert "if self.smoke:" in wrapper
     assert '"library": True, "cloud": True, "market": True' in wrapper
     assert 'self._require_capabilities(("market",), "Quick Analysis")' in wrapper

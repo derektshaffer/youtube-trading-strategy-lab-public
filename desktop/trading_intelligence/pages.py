@@ -57,20 +57,20 @@ class ProfitFirstPage(QWidget):
 
         top = QHBoxLayout()
         titles = QVBoxLayout()
-        eyebrow = QLabel("PROFIT FIRST")
+        eyebrow = QLabel("HOME")
         eyebrow.setObjectName("Eyebrow")
-        title = QLabel("Find the strongest strategy candidates first")
+        title = QLabel("Trading Intelligence Home")
         title.setObjectName("PageTitle")
         subtitle = QLabel(
-            "The desktop app reads the same authoritative research library and ranks "
-            "only candidates eligible for strict validation. It does not weaken any gate."
+            "See the strongest strategy candidates, their validation status, and the next useful action. "
+            "Use Find Stocks when you want to scan the market for setups matching strategy rules."
         )
         subtitle.setObjectName("Subtle")
         subtitle.setWordWrap(True)
         titles.addWidget(eyebrow)
         titles.addWidget(title)
         titles.addWidget(subtitle)
-        self.refresh = QPushButton("Refresh Profit First")
+        self.refresh = QPushButton("Refresh strategy candidates")
         self.refresh.setObjectName("Primary")
         self.refresh.clicked.connect(self.refresh_requested.emit)
         top.addLayout(titles, 1)
@@ -138,7 +138,7 @@ class ProfitFirstPage(QWidget):
         next_heading = QLabel("What happens next")
         next_heading.setObjectName("SectionTitle")
         self.next_detail = QLabel(
-            "Connect a library to calculate the next Profit First action."
+            "Connect a library to calculate the next strategy-development action."
         )
         self.next_detail.setObjectName("Subtle")
         self.next_detail.setWordWrap(True)
@@ -164,7 +164,7 @@ class ProfitFirstPage(QWidget):
         self.banner.setProperty("state", "error")
         self.banner.style().unpolish(self.banner)
         self.banner.style().polish(self.banner)
-        self.banner_title.setText("Profit First could not load")
+        self.banner_title.setText("Home could not load")
         self.banner_detail.setText(message)
         self.progress.setValue(0)
         self.table.setRowCount(0)
@@ -185,7 +185,7 @@ class ProfitFirstPage(QWidget):
         self.banner_title.setText(
             f"Library ready · {source} · {queue_status.replace('_', ' ')}"
         )
-        detail = f"Profit First phase: {phase}."
+        detail = f"Strategy candidate phase: {phase}."
         if warning:
             detail += " " + warning
         self.banner_detail.setText(detail)
@@ -217,7 +217,7 @@ class ProfitFirstPage(QWidget):
 
         descriptions = {
             "active": (
-                "A strict Profit First validation job is already active in the authoritative cloud queue. "
+                "A strict validation job is already active in the authoritative cloud queue. "
                 "The desktop cloud bridge will attach to that exact job rather than duplicate it."
             ),
             "ready": (
@@ -225,7 +225,7 @@ class ProfitFirstPage(QWidget):
                 "button to the existing durable validation worker without moving the computation onto your Mac."
             ),
             "already-attempted": (
-                "This exact candidate batch has already been attempted. Profit First will wait for new evidence "
+                "This exact candidate batch has already been attempted. The Lab will wait for new evidence "
                 "instead of wasting compute on an identical rerun."
             ),
             "no-eligible-candidates": (
@@ -236,7 +236,7 @@ class ProfitFirstPage(QWidget):
         self.next_detail.setText(
             descriptions.get(
                 queue_status,
-                "Profit First loaded, but the current queue status needs review before validation.",
+                "Strategy candidates loaded, but the current queue status needs review before validation.",
             )
         )
 

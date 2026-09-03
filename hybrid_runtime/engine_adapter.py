@@ -351,6 +351,24 @@ def stock_analysis_handler(
     )
 
 
+def market_discovery_handler(
+    payload: Mapping[str, Any],
+    progress: ProgressCallback,
+    cancelled: CancellationCheck,
+) -> Mapping[str, Any]:
+    """Run the web-parity strategy-to-stock discovery engine in the sidecar."""
+
+    from .market_discovery_job import (
+        MarketDiscoveryCancelled,
+        desktop_market_discovery_handler,
+    )
+
+    try:
+        return desktop_market_discovery_handler(payload, progress, cancelled)
+    except MarketDiscoveryCancelled as exc:
+        raise JobCancelled(str(exc)) from exc
+
+
 def default_handlers() -> dict[str, JobHandler]:
     return {
         "system.health": system_health_handler,
@@ -363,4 +381,5 @@ def default_handlers() -> dict[str, JobHandler]:
         "library.strategy_lab_options": strategy_lab_options_handler,
         "strategy.profit_first_plan": profit_first_plan_handler,
         "analysis.stock": stock_analysis_handler,
+        "market.discovery": market_discovery_handler,
     }

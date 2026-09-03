@@ -178,7 +178,7 @@ class MainWindow(QMainWindow):
         self.watchdog = QTimer(self)
         self.watchdog.setSingleShot(True)
         self.watchdog.timeout.connect(
-            lambda: self.fail_smoke(RuntimeError("Desktop Profit First smoke exceeded 90 seconds"))
+            lambda: self.fail_smoke(RuntimeError("Desktop Home smoke exceeded 90 seconds"))
         )
         if smoke:
             self.watchdog.start(90_000)
@@ -198,7 +198,7 @@ class MainWindow(QMainWindow):
                 time.perf_counter() - self.started,
                 4,
             )
-            self.top_status.setText("Local service ready · Profit First uses durable SQLite jobs")
+            self.top_status.setText("Local service ready · strategy candidates use durable SQLite jobs")
             self.refresh_profit_first()
         except BaseException as exc:
             if (
@@ -222,8 +222,14 @@ class MainWindow(QMainWindow):
         self.active_job_id = job_id
         self.active_purpose = purpose
         self.active_route = decision
+        purpose_label = {
+            "profit_first": "Home",
+            "profit_first_validation": "Strict Validation",
+            "market_discovery_options": "Find Stocks",
+            "market_discovery": "Find Stocks",
+        }.get(purpose, purpose.replace("_", " ").title())
         self.top_status.setText(
-            f"{purpose.replace('_', ' ').title()} · {decision.get('target')} · {decision.get('reason')}"
+            f"{purpose_label} · {decision.get('target')} · {decision.get('reason')}"
         )
 
     def refresh_profit_first(self) -> None:
