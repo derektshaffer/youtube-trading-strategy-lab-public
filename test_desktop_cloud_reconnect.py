@@ -11,6 +11,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QWidget
 
 from desktop.trading_intelligence.pages import JobsPage
+from desktop.trading_intelligence.market_discovery_page import MarketDiscoveryPage
 from desktop.trading_intelligence.window import MainWindow
 
 
@@ -45,6 +46,34 @@ def test_button_only_emits_for_selected_failed_cloud_finder_and_preserves_select
     page.reconnect_busy = True
     page.render_jobs(records)
     assert not page.reconnect.isEnabled()
+    page.close()
+
+
+def test_find_stocks_button_dispatches_payload_and_acknowledges_click(app):
+    page = MarketDiscoveryPage()
+    page.render_options(
+        {
+            "strategies": [
+                {
+                    "id": "breakout",
+                    "name": "Validated Breakout",
+                    "validation_status": "validated",
+                }
+            ],
+            "blocked_count": 0,
+        }
+    )
+    page.count.setValue(15)
+    emitted = []
+    page.run_requested.connect(emitted.append)
+
+    page.scan.click()
+    app.processEvents()
+
+    assert len(emitted) == 1
+    assert emitted[0]["universe"] == "momentum"
+    assert emitted[0]["candidate_count"] == 15
+    assert page.status.text() == "Starting Find Stocks scan…"
     page.close()
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -90,7 +90,9 @@ class MarketDiscoveryPage(QWidget):
         self.universe.currentIndexChanged.connect(self._sync_custom_state)
         self.scan = QPushButton("Scan for strategy matches")
         self.scan.setObjectName("Primary")
-        self.scan.clicked.connect(self.emit_run)
+        # Keep the native clicked(bool) signature explicit across packaged Qt
+        # bindings before forwarding to the custom payload signal.
+        self.scan.clicked.connect(self._scan_clicked)
 
         controls.addWidget(QLabel("Strategy rules"), 0, 0)
         controls.addWidget(self.strategy, 0, 1, 1, 3)
@@ -117,6 +119,7 @@ class MarketDiscoveryPage(QWidget):
         self.progress = QProgressBar()
         self.progress.setRange(0, 1000)
         self.progress.setValue(0)
+        self.progress.setVisible(False)
         banner.addWidget(self.status)
         banner.addWidget(self.detail)
         banner.addWidget(self.progress)
@@ -218,6 +221,17 @@ class MarketDiscoveryPage(QWidget):
             f"{blocked:,} low-fidelity families remain excluded."
         )
         self.progress.setValue(0)
+        self.progress.setVisible(False)
+
+    @Slot(bool)
+    def _scan_clicked(self, _checked: bool = False) -> None:
+        """Acknowledge the native button event before dispatching the scan."""
+
+        self.status.setText("Starting Find Stocks scan…")
+        self.detail.setText(
+            "Sending the selected strategy rules and stock universe to the local service."
+        )
+        self.emit_run()
 
     def emit_run(self) -> None:
         if str(self.universe.currentData() or "") == "custom":
@@ -248,6 +262,7 @@ class MarketDiscoveryPage(QWidget):
         self.banner.style().polish(self.banner)
         self.status.setText(title)
         self.detail.setText(detail)
+        self.progress.setVisible(True)
         self.progress.setValue(round(max(0.0, min(1.0, fraction)) * 1000))
 
     def _set_controls_enabled(self, enabled: bool) -> None:
@@ -266,6 +281,7 @@ class MarketDiscoveryPage(QWidget):
         self.banner.style().polish(self.banner)
         self.status.setText("Find Stocks could not continue")
         self.detail.setText(message)
+        self.progress.setVisible(False)
         self.progress.setValue(0)
 
     @staticmethod
@@ -291,6 +307,7 @@ class MarketDiscoveryPage(QWidget):
             "Each stock is paired with its strongest current rule match. "
             "Validated and research-only strategies remain labeled separately."
         )
+        self.progress.setVisible(True)
         self.progress.setValue(1000)
         self.match_metric.value.setText(f"{int(result.get('match_count') or 0):,}")
         self.validated_metric.value.setText(
