@@ -3,7 +3,6 @@ from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
 
 from hybrid_runtime.api import create_app
 from hybrid_runtime.cloud_bridge import CloudBridgeWorker, DesktopCloudSettings
@@ -228,6 +227,9 @@ def test_local_link_deduplication_and_local_cancel_without_cloud_dispatch(setup)
 
 
 def test_api_auth_and_running_cancellation_is_rejected(setup):
+    pytest.importorskip("fastapi")
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
     s = setup
     s.cloud.document["research_queue"] = [remote()]
     app = create_app(s.service, expected_token="fixture-token", search_monitor=s.monitor)
