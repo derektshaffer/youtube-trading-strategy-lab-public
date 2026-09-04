@@ -72,9 +72,11 @@ def _snapshot_rank_row(symbol: str, snapshot: dict[str, Any]) -> dict[str, float
     )
     latest_trade = _snapshot_value(snapshot, "latestTrade", "latest_trade")
 
-    current = safe_float(daily.get("c"))
+    # Prefer the latest trade so pre/after-hours movement is reflected instead of
+    # ranking from a possibly stale current-session daily-bar close.
+    current = safe_float(latest_trade.get("p"))
     if current is None or current <= 0:
-        current = safe_float(latest_trade.get("p"))
+        current = safe_float(daily.get("c"))
     if current is None or current <= 0:
         return None
 
