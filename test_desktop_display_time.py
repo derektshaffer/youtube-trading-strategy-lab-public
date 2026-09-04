@@ -16,6 +16,8 @@ def test_readable_display(value, expected):
 
 
 def test_http_error_displays_detail_not_json():
+    import pytest
+    pytest.importorskip("PySide6")
     from desktop.trading_intelligence.window import clean_error
     error = HTTPError("http://localhost", 409, "Conflict", {}, io.BytesIO(
         b'{"detail":"Cloud sync is busy. Your request is saved; retry shortly."}'))
