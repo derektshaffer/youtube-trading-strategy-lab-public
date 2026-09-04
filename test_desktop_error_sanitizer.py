@@ -64,7 +64,7 @@ def test_clean_error_non_auth_http_error_keeps_reason_without_html() -> None:
             "<html><h1>Server Error</h1><p>Database offline</p></html>",
         )
     )
-    assert "Request failed with HTTP 500" in error
+    assert error == "Server Error Database offline"
     assert "Server Error Database offline" in error
     assert "<html>" not in error.lower()
     assert "<p>" not in error.lower()

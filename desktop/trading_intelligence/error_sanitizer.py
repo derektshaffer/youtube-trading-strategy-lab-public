@@ -232,7 +232,7 @@ def _http_error_message(exc: HTTPError, body: str) -> str:
     if text:
         if exc.code in {401, 403}:
             return _auth_failure_message(exc, text)
-        return f"Request failed with HTTP {exc.code}: {text}"
+        return text
     return f"Request failed with HTTP {exc.code}."
 
 
