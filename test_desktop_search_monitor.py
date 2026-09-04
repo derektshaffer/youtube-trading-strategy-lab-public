@@ -144,6 +144,27 @@ def test_read_error_is_explicit_and_disables_stale_cancel(window, app, monkeypat
     assert not p.cancel.isEnabled() and p.refresh.isEnabled()
 
 
+def test_refresh_during_confirmation_cannot_silently_drop_yes(window, app, monkeypatch):
+    s = window.monitor_fixture
+    s.cloud.document['research_queue'] = [remote('cancel-me', 'queued')]
+    window.search_monitor.refresh()
+    settle(window, app)
+    p = panel(window, window.finder)
+    p.table.selectRow(0)
+    def answer(*args):
+        before = len(window.monitor_calls)
+        window.search_monitor.last_refresh = 0
+        window.search_monitor.refresh()
+        window.search_monitor.tick()
+        assert not window.search_monitor.busy and len(window.monitor_calls) == before
+        return QMessageBox.StandardButton.Yes
+    monkeypatch.setattr(QMessageBox, 'question', answer)
+    p.cancel.click()
+    settle(window, app)
+    assert s.cloud.document['research_queue'][0]['status'] == 'cancelled'
+    assert s.cloud.write_count == 1 and not window.search_monitor.confirming
+
+
 @pytest.mark.parametrize('failure', ['busy', 'timeout'])
 def test_cancellation_error_survives_refresh_and_navigation_without_auto_retry(window, app, monkeypatch, failure):
     s = window.monitor_fixture

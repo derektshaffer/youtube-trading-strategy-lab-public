@@ -163,6 +163,7 @@ class SearchMonitorController(QObject):
         self.last_refresh = 0.0
         self.actions = {}
         self.cancel_row = None
+        self.confirming = False
         for page in pages:
             panel = SearchMonitorCard()
             # Above the run form: current work must be visible before starting more.
@@ -212,7 +213,7 @@ class SearchMonitorController(QObject):
             self.refresh()
 
     def _start(self, purpose, method, path, body=None):
-        if self.busy:
+        if self.busy or self.confirming:
             return
         self.busy = True
         self.last_refresh = time.monotonic()
@@ -254,12 +255,18 @@ class SearchMonitorController(QObject):
 
     def confirm_cancel(self, row):
         action = self.actions.get(action_key(row))
-        if self.busy or (action and action["state"] != "unconfirmed"):
+        if self.busy or self.confirming or (action and action["state"] != "unconfirmed"):
             return
-        answer = QMessageBox.question(self.window, "Cancel selected search?",
-            f"Cancel {row['symbol']} · {row['kind']} ({row['target']})?\nRun: {row['id']}\n"
-            "The current state will be checked again before cancellation. Other searches and saved results are preserved.\n"
-            + row.get("cancel_reason", ""),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        # QMessageBox runs a nested Qt event loop. Do not let its refresh timer
+        # take the single request slot and silently discard the user's Yes.
+        self.confirming = True
+        try:
+            answer = QMessageBox.question(self.window, "Cancel selected search?",
+                f"Cancel {row['symbol']} · {row['kind']} ({row['target']})?\nRun: {row['id']}\n"
+                "The current state will be checked again before cancellation. Other searches and saved results are preserved.\n"
+                + row.get("cancel_reason", ""),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        finally:
+            self.confirming = False
         if answer == QMessageBox.StandardButton.Yes:
             self._start("cancel", "POST", "/v1/searches/cancel", row)
