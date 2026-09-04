@@ -109,6 +109,16 @@ def build_market() -> AlpacaMarketData:
     )
 
 
+def build_finalization_market() -> AlpacaMarketData:
+    if not env("ALPACA_API_KEY") or not env("ALPACA_SECRET_KEY"):
+        raise AppError(
+            "Final historical-spread validation requires ALPACA_API_KEY and "
+            "ALPACA_SECRET_KEY in the aggregate GitHub Actions worker. "
+            "Check that worker's secret wiring. Saved shard results are retained."
+        )
+    return build_market()
+
+
 def _is_conflict(exc: Exception) -> bool:
     text = str(exc).casefold()
     return (
@@ -1267,6 +1277,12 @@ def command_aggregate(run_id: str) -> int:
         )
         report["market_data_integrity"] = plan.get("market_data_integrity") or {}
 
+        finalization_stage[0] = "historical_spread_audit"
+        if job_id:
+            _update_parent_cloud_progress(
+                job_id, run_id=run_id, stage="historical_spread_audit", progress=0.98,
+                message="Checking historical entry spreads before saving the final report.",
+            )
         optimization_for_spread = report.get("optimization") or {}
         winner_for_spread = optimization_for_spread.get("winner") or {}
         winning_backtest_for_spread = optimization_for_spread.get("winning_backtest") or {}
@@ -1290,7 +1306,7 @@ def command_aggregate(run_id: str) -> int:
         spread_audit_trades = list(winning_backtest_for_spread.get("trades") or [])
         spread_audit_sessions = list(optimization_for_spread.get("holdout_sessions") or [])
         spread_market = (
-            build_market()
+            build_finalization_market()
             if spread_audit_trades and spread_audit_sessions
             else None
         )

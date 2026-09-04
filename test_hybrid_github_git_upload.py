@@ -211,6 +211,43 @@ def test_subprocess_environment_drops_overrides_and_other_secrets(tmp_path, monk
     assert environment["TRADING_INTELLIGENCE_GIT_UPLOAD_TOKEN"] == TOKEN
 
 
+@pytest.mark.parametrize("detail, category", [
+    ("remote: error: GH001: Large files detected", "size_limit"),
+    ("RPC failed; HTTP 413", "size_limit"),
+    ("remote: error: GH013: Repository rule violations", "repository_policy"),
+    ("! [remote rejected] main (pre-receive hook declined)", "repository_policy"),
+    ("fatal: Authentication failed", "authentication"),
+    ("fatal: could not read Username: terminal prompts disabled", "authentication"),
+    ("remote: Write access to repository not granted", "repository_access"),
+    ("fatal: repository not found", "repository_access"),
+    ("fatal: unable to access URL: SSL certificate problem", "certificate"),
+    ("fatal: Could not resolve host", "dns"),
+    ("error: RPC failed; curl 92 HTTP/2 stream was not closed cleanly", "connection"),
+    ("fatal: the remote end hung up unexpectedly", "connection"),
+    ("fatal: No space left on device", "local_storage"),
+    ("unexpected opaque failure", "unclassified"),
+])
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_upload_categories_are_actionable_without_leaking_raw_output(tmp_path, monkeypatch, detail, category, stream):
+    raw = (detail + f"\nAuthorization: Bearer {TOKEN}\nhttps://user:{TOKEN}@private.example/library\nprivate-path").encode()
+    response = subprocess.CompletedProcess([], 128, raw if stream == "stdout" else b"", raw if stream == "stderr" else b"")
+    monkeypatch.setattr(upload.subprocess, "run", lambda *a, **kw: response)
+    with pytest.raises(GitHubLibraryError) as caught:
+        upload._run_git("git", ["push"], root=tmp_path, environment={}, operation="push")
+    message = str(caught.value)
+    assert f"[{category}; exit 128]" in message
+    for private in (TOKEN, "private.example", "private-path", "Authorization"):
+        assert private not in message
+    assert not isinstance(caught.value, GitHubLibraryConflict)
+
+
+def test_porcelain_non_fast_forward_is_still_a_conflict(tmp_path, monkeypatch):
+    response = subprocess.CompletedProcess([], 1, b"! [rejected] main (fetch first)", TOKEN.encode())
+    monkeypatch.setattr(upload.subprocess, "run", lambda *a, **kw: response)
+    with pytest.raises(GitHubLibraryConflict, match="branch moved"):
+        upload._run_git("git", ["push"], root=tmp_path, environment={}, operation="push")
+
+
 def test_blob_hash_mismatch_is_rejected_before_push(repository, monkeypatch):
     _, _, expected, calls, intercept = repository
 

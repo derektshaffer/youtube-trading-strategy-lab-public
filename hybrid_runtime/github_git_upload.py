@@ -22,6 +22,41 @@ from .github_library import GitHubLibraryConfig, GitHubLibraryConflict, GitHubLi
 GIT_TRANSFER_TIMEOUT_SECONDS = 300
 
 
+def _failure_diagnostic(detail: str) -> tuple[str, str]:
+    # Allowlisted descriptions only: never echo a URL, header, filename, token,
+    # proxy setting, or arbitrary Git output into the desktop or durable logs.
+    categories = (
+        ("size_limit", ("gh001", "exceeds github's file size limit", "exceeds the file size limit",
+                        "pack exceeds maximum allowed size", "http 413", "error: 413"),
+         "GitHub rejected the upload size. The cloud library needs a size-safe storage change; repeated retries will not fix this."),
+        ("repository_policy", ("gh006", "gh013", "protected branch", "repository rule violations",
+                               "push declined due", "pre-receive hook declined"),
+         "GitHub rejected the push under a repository policy. Check the branch rules or push-protection report; do not bypass them."),
+        ("authentication", ("authentication failed", "invalid username or password", "invalid username or token",
+                            "could not read username", "could not read password", "terminal prompts disabled",
+                            "http basic: access denied", "error: 401"),
+         "Git could not authenticate. Check the GitHub credential used by this desktop connection."),
+        ("repository_access", ("write access to repository not granted", "permission to", "denied to",
+                               "repository not found", "error: 403", "http 403"),
+         "GitHub could not grant repository access. Check the repository name and this desktop credential's repository authorization and Contents write permission."),
+        ("certificate", ("ssl certificate problem", "certificate verify failed", "server certificate verification failed"),
+         "Git could not verify the HTTPS certificate. Check the trusted certificate or network proxy configuration; keep TLS verification enabled."),
+        ("dns", ("could not resolve host", "could not resolve proxy"),
+         "Git could not resolve the GitHub or proxy address. Check DNS and network connectivity."),
+        ("connection", ("rpc failed", "remote end hung up", "unexpected disconnect", "connection reset",
+                        "failed to connect", "connection timed out", "http/2 stream", "early eof",
+                        "error: 500", "error: 502", "error: 503", "error: 504"),
+         "The Git transfer was interrupted or the remote service was unavailable. Retry must check whether the saved request already reached GitHub."),
+        ("local_storage", ("no space left on device", "disk quota exceeded"),
+         "Git ran out of local temporary storage. Free disk space before retrying."),
+    )
+    for code, markers, message in categories:
+        if any(marker in detail for marker in markers):
+            return code, message
+    return ("unclassified",
+            "Git did not provide a recognized failure category. Raw diagnostics were withheld to protect credentials; the exact cause is not yet known.")
+
+
 def _git_environment(askpass: Path, token: str) -> dict[str, str]:
     # Do not forward unrelated brokerage credentials, tracing, Git overrides,
     # or the bundled Python runtime's library search paths to system Git.
@@ -82,13 +117,13 @@ def _run_git(
         # diagnostics can be on stderr. Inspect both, but never expose either.
         detail = (result.stdout + b"\n" + result.stderr).decode("utf-8", errors="replace").lower()
         if operation == "push" and any(
-            marker in detail for marker in ("non-fast-forward", "fetch first", "[rejected]")
+            marker in detail for marker in ("non-fast-forward", "fetch first")
         ):
             raise GitHubLibraryConflict("GitHub branch moved during the large-library push.")
-        # Never persist subprocess output: Git/curl diagnostics can contain
-        # credential-bearing URLs, proxy details, or authorization headers.
+        code, explanation = _failure_diagnostic(detail)
         raise GitHubLibraryError(
-            f"Large cloud-library Git {operation} failed. Check GitHub connectivity and repository access."
+            f"Large cloud-library Git {operation} failed [{code}; exit {int(result.returncode)}]. "
+            + explanation
         )
     return result.stdout.decode("utf-8", errors="replace").strip()
 
