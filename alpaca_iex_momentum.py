@@ -1,10 +1,15 @@
 """Alpaca momentum discovery that works on IEX-only market-data plans.
 
 Alpaca's beta movers/most-active screeners are SIP-backed even when the rest of
-an application is configured for IEX.  The Explosive Stock Scanner only needs a
+an application is configured for IEX. The Explosive Stock Scanner only needs a
 ranked candidate universe, so on an IEX plan we derive that universe from active
 U.S. equities plus batched IEX snapshots instead of calling the SIP-only
 screeners.
+
+The Streamlit app may also have a separate paper-account Alpaca key pair. If the
+primary market-data pair is stale and Alpaca returns 401, this client retries once
+with that explicitly configured fallback pair and keeps using it for the rest of
+the run. Provider HTML is never surfaced to the UI for snapshot/auth failures.
 """
 
 from __future__ import annotations
@@ -26,14 +31,20 @@ IEX_GAINERS_CACHE_SIZE = 50
 IEX_ACTIVE_CACHE_SIZE = 100
 
 
+def _is_unauthorized(error: Exception | str) -> bool:
+    message = str(error or "").lower()
+    return any(marker in message for marker in ("401", "authorization required", "unauthorized"))
+
+
 def _clean_market_access_error(error: Exception | str) -> AppError:
     """Return an actionable provider error without leaking HTML response bodies."""
     message = str(error or "")
     lowered = message.lower()
-    if any(marker in lowered for marker in ("401", "authorization required", "unauthorized")):
+    if _is_unauthorized(error):
         return AppError(
-            "Alpaca authentication failed. Check ALPACA_API_KEY and ALPACA_SECRET_KEY "
-            "in this app's secrets, then restart the app."
+            "Alpaca authentication failed. The API key/secret saved for this app were rejected. "
+            "Update the matching ALPACA_API_KEY and ALPACA_SECRET_KEY in Streamlit Secrets "
+            "(or configure ALPACA_PAPER_API_KEY and ALPACA_PAPER_SECRET_KEY), then restart the app."
         )
     if any(
         marker in lowered
@@ -104,10 +115,65 @@ class IexCompatibleAlpacaMarketData(AlpacaMarketData):
         secret_key: str,
         live_feed: str = "iex",
         historical_feed: str = "sip",
+        *,
+        fallback_api_key: str = "",
+        fallback_secret_key: str = "",
     ) -> None:
-        super().__init__(api_key, secret_key, live_feed, historical_feed)
+        primary_key = str(api_key or "").strip()
+        primary_secret = str(secret_key or "").strip()
+        fallback_key = str(fallback_api_key or "").strip()
+        fallback_secret = str(fallback_secret_key or "").strip()
+
+        # If only the optional paper pair is configured, use it directly rather
+        # than failing construction before a provider request can be attempted.
+        if (not primary_key or not primary_secret) and fallback_key and fallback_secret:
+            primary_key, primary_secret = fallback_key, fallback_secret
+            fallback_key, fallback_secret = "", ""
+
+        super().__init__(primary_key, primary_secret, live_feed, historical_feed)
+
+        self._fallback_headers: dict[str, str] | None = None
+        if (
+            fallback_key
+            and fallback_secret
+            and (fallback_key, fallback_secret) != (primary_key, primary_secret)
+        ):
+            self._fallback_headers = {
+                "APCA-API-KEY-ID": fallback_key,
+                "APCA-API-SECRET-KEY": fallback_secret,
+                "Accept": "application/json",
+            }
+        self._using_fallback_credentials = False
         self._iex_momentum_cache_at = 0.0
         self._iex_momentum_cache: tuple[list[str], list[str]] | None = None
+
+    def _get(self, path: str, parameters: dict[str, Any] | None = None) -> Any:
+        """Retry one rejected primary credential pair with the configured fallback."""
+        try:
+            return super()._get(path, parameters)
+        except AppError as exc:
+            if (
+                not _is_unauthorized(exc)
+                or self._fallback_headers is None
+                or self._using_fallback_credentials
+            ):
+                raise
+
+            # Switch once and keep the working credential pair for all subsequent
+            # snapshot/history/news calls in this client instance.
+            self.headers = dict(self._fallback_headers)
+            self._using_fallback_credentials = True
+            return super()._get(path, parameters)
+
+    def snapshots(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
+        """Load snapshots while keeping provider auth/feed errors safe for the UI."""
+        try:
+            return super().snapshots(symbols)
+        except AppError as exc:
+            message = str(exc).lower()
+            if _is_unauthorized(exc) or "403" in message or "forbidden" in message:
+                raise _clean_market_access_error(exc) from exc
+            raise
 
     def _active_equity_symbols(self) -> list[str]:
         try:
