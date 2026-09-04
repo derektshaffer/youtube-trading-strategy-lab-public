@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
     QPushButton,
 )
 
+from .error_sanitizer import sanitize_display_text
+
 from hybrid_runtime.desktop_settings import (
     ALPACA_API_KEY_ACCOUNT,
     ALPACA_SECRET_KEY_ACCOUNT,
@@ -306,7 +308,7 @@ class MainWindow(BaseMainWindow):
         except BaseException:
             return ""
         link = payload.get("link") if isinstance(payload.get("link"), dict) else {}
-        error = str(link.get("dispatch_error") or "").strip()
+        error = sanitize_display_text(link.get("dispatch_error") or "").strip()
         if not error:
             return ""
         metadata = link.get("metadata") if isinstance(link.get("metadata"), dict) else {}

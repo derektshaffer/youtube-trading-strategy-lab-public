@@ -20,11 +20,16 @@ from PySide6.QtWidgets import (
 )
 
 from .pages import Card, MetricCard
+from .error_sanitizer import sanitize_display_text
+from .time_utils import format_local_timestamp
 
 
 def _display(value: Any, fallback: str = "—") -> str:
-    text = " ".join(str(value or "").split())
-    return text if text else fallback
+    return sanitize_display_text(value or fallback)
+
+
+def _display_when(value: Any, fallback: str = "—") -> str:
+    return format_local_timestamp(value, fallback=fallback)
 
 
 def _percent(value: Any) -> str:
@@ -235,7 +240,7 @@ class ResearchMLPage(QWidget):
             self.queue_table,
             [
                 (
-                    _display(item.get("when")),
+                    _display_when(item.get("when")),
                     _display(item.get("type")),
                     _display(item.get("status")),
                     _display(item.get("stage")),
@@ -250,7 +255,7 @@ class ResearchMLPage(QWidget):
             self.run_table,
             [
                 (
-                    _display(item.get("when")),
+                    _display_when(item.get("when")),
                     _display(item.get("kind")),
                     _display(item.get("status")),
                     _display(item.get("topic")),
@@ -266,7 +271,7 @@ class ResearchMLPage(QWidget):
             self.hypothesis_table,
             [
                 (
-                    _display(item.get("when")),
+                    _display_when(item.get("when")),
                     _display(item.get("name")),
                     _display(item.get("category")),
                     _display(item.get("direction")),
@@ -281,7 +286,7 @@ class ResearchMLPage(QWidget):
             self.experiment_table,
             [
                 (
-                    _display(item.get("when")),
+                    _display_when(item.get("when")),
                     _display(item.get("strategy_name")),
                     _display(item.get("stage")).replace("_", " ").title(),
                     _display(item.get("stage_status")).replace("_", " ").title(),
@@ -296,7 +301,7 @@ class ResearchMLPage(QWidget):
             self.ml_run_table,
             [
                 (
-                    _display(item.get("when")),
+                    _display_when(item.get("when")),
                     _display(item.get("status")),
                     f"{int(item.get('model_count') or 0):,}",
                     f"{int(item.get('symbol_count') or 0):,}",
@@ -326,7 +331,7 @@ class ResearchMLPage(QWidget):
             self.source_table,
             [
                 (
-                    _display(item.get("when")),
+                    _display_when(item.get("when")),
                     _display(item.get("title")),
                     _display(item.get("source_type")),
                     _display(item.get("status")),
