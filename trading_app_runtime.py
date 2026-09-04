@@ -35,7 +35,9 @@ def market_client() -> Any:
 
     Live momentum discovery uses the configured Alpaca feed. On the default IEX
     plan, the client derives movers/most-active rankings from batched IEX snapshots
-    instead of calling Alpaca's SIP-backed screener endpoints.
+    instead of calling Alpaca's SIP-backed screener endpoints. If the primary
+    Alpaca key pair is rejected, an explicitly configured paper-account key pair
+    is available as a one-time authentication fallback.
     """
 
     market = IexCompatibleAlpacaMarketData(
@@ -43,5 +45,7 @@ def market_client() -> Any:
         setting("ALPACA_SECRET_KEY"),
         setting("ALPACA_LIVE_FEED", "iex"),
         setting("ALPACA_HISTORICAL_FEED", "sip"),
+        fallback_api_key=setting("ALPACA_PAPER_API_KEY"),
+        fallback_secret_key=setting("ALPACA_PAPER_SECRET_KEY"),
     )
     return CachedResearchMarket(market)
