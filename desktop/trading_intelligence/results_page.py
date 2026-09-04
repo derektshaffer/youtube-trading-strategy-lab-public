@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from .pages import Card, MetricCard
+from .time_utils import format_local_timestamp
 
 
 def _display(value: Any, fallback: str = "—") -> str:
@@ -200,7 +201,7 @@ class ResultsPage(QWidget):
                 continue
             finder_rows.append(
                 (
-                    _display(item.get("generated_at")),
+                    format_local_timestamp(item.get("generated_at"), fallback="—"),
                     _display(item.get("symbol")),
                     _display(item.get("profile")),
                     _display(item.get("winner")),
@@ -218,7 +219,7 @@ class ResultsPage(QWidget):
                 continue
             validation_rows.append(
                 (
-                    _display(item.get("generated_at")),
+                    format_local_timestamp(item.get("generated_at"), fallback="—"),
                     _display(item.get("strategy_name") or item.get("strategy_id")),
                     _display(item.get("symbol")),
                     _display(item.get("status")),
@@ -234,7 +235,7 @@ class ResultsPage(QWidget):
                 continue
             lab_rows.append(
                 (
-                    _display(item.get("saved_at")),
+                    format_local_timestamp(item.get("saved_at"), fallback="—"),
                     _display(item.get("ticker")),
                     _display(item.get("status")),
                     _display(item.get("stage")),
@@ -251,7 +252,7 @@ class ResultsPage(QWidget):
                 continue
             strategy_rows.append(
                 (
-                    _display(item.get("updated_at")),
+                    format_local_timestamp(item.get("updated_at"), fallback="—"),
                     _display(item.get("name") or item.get("id")),
                     _display(item.get("category")),
                     _display(item.get("optimized_for_symbol")),

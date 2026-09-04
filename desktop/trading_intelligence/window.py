@@ -9,7 +9,6 @@ import queue
 import threading
 import time
 from typing import Any
-from urllib.error import HTTPError
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
@@ -36,24 +35,9 @@ from hybrid_runtime.keychain import (
     MacOSKeychain,
 )
 
+from .error_sanitizer import clean_error
 from .pages import ConnectionPage, JobsPage, ProfitFirstPage
 from .theme import STYLESHEET
-
-
-def clean_error(exc: BaseException) -> str:
-    if isinstance(exc, HTTPError):
-        try:
-            message = exc.read().decode("utf-8", errors="replace")
-            try:
-                body = json.loads(message)
-                if isinstance(body, dict) and isinstance(body.get("detail"), str):
-                    message = body["detail"]
-            except ValueError:
-                pass
-            return " ".join(message.split())[:1_000]
-        except OSError:
-            pass
-    return " ".join(str(exc).split())[:1_000]
 
 
 def write_metrics(path: str, metrics: dict[str, Any]) -> None:

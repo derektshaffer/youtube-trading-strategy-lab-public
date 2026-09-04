@@ -10,6 +10,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QPushButton
 
 from .results_window import MainWindow as ResultsMainWindow, clean_error, write_metrics
+from .error_sanitizer import sanitize_display_text
 from .strategy_lab_page import StrategyLabPage
 
 
@@ -183,8 +184,8 @@ class MainWindow(ResultsMainWindow):
             metadata = link.get("metadata") if isinstance(link.get("metadata"), dict) else {}
             progress = float(job.get("progress") or link.get("remote_progress") or 0.0)
             stage = str(job.get("stage") or link.get("remote_stage") or "cloud_queued").replace("_", " ")
-            detail = str(metadata.get("distributed_message") or "").strip()
-            error = str(link.get("dispatch_error") or "").strip()
+            detail = sanitize_display_text(metadata.get("distributed_message") or "").strip()
+            error = sanitize_display_text(link.get("dispatch_error") or "").strip()
             if error:
                 detail = "Cloud connection required: " + error
             if not detail:

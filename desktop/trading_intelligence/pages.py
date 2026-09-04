@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from hybrid_runtime.desktop_settings import DesktopSettings
+from .time_utils import format_local_timestamp, format_local_timestamp_with_utc_tooltip
 
 
 class Card(QFrame):
@@ -207,7 +208,9 @@ class ProfitFirstPage(QWidget):
                 str(candidate.get("phase") or "").replace("_", " "),
                 f"{float(candidate.get('score') or 0.0):.2f}",
                 str(int(candidate.get("positive_evidence_periods") or 0)),
-                str(candidate.get("latest_validation_generated_at") or "Never"),
+                format_local_timestamp(
+                    candidate.get("latest_validation_generated_at"), fallback="Never"
+                ),
             )
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
@@ -273,7 +276,7 @@ class JobsPage(QWidget):
         layout = QVBoxLayout(card)
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(
-            ["Type", "Status", "Stage", "Route", "Progress", "Updated"]
+            ["Type", "Status", "Stage", "Route", "Progress", "Last Update"]
         )
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -326,18 +329,23 @@ class JobsPage(QWidget):
         for row, job in enumerate(jobs):
             if not bool(job.get("terminal")):
                 active += 1
+            updated_label, updated_tooltip = format_local_timestamp_with_utc_tooltip(
+                job.get("updated_at")
+            )
             values = (
                 str(job.get("job_type") or ""),
                 str(job.get("status") or ""),
                 str(job.get("stage") or ""),
                 str(job.get("execution_target") or ""),
                 f"{float(job.get('progress') or 0.0) * 100:.0f}%",
-                str(job.get("updated_at") or ""),
+                updated_label,
             )
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if column == 0:
                     item.setData(Qt.ItemDataRole.UserRole, str(job.get("id") or ""))
+                if column == 5 and updated_tooltip:
+                    item.setToolTip(f"Original: {updated_tooltip}")
                 self.table.setItem(row, column, item)
             if str(job.get("id") or "") == selected_id:
                 self.table.selectRow(row)

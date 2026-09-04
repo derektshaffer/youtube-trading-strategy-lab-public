@@ -9,6 +9,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QPushButton
 
 from .enhanced_window import MainWindow as EnhancedMainWindow, clean_error, write_metrics
+from .error_sanitizer import sanitize_display_text
 from .finder_page import StockFinderPage
 
 
@@ -301,17 +302,26 @@ class MainWindow(EnhancedMainWindow):
             metadata = link.get("metadata") if isinstance(link.get("metadata"), dict) else {}
             progress = float(job.get("progress") or link.get("remote_progress") or 0.0)
             stage = str(job.get("stage") or link.get("remote_stage") or "cloud_queued").replace("_", " ")
-            error = str(link.get("dispatch_error") or "").strip()
+            error = sanitize_display_text(link.get("dispatch_error") or "").strip()
             if job.get("stage") == "cloud_submission_retry_queued":
                 stage = "retry saved"
-                detail = "Retry saved; waiting for cloud sync. Your existing request will be checked before publishing again."
+                detail = (
+                    "Retry saved; waiting for cloud sync. Your existing request "
+                    "will be checked before publishing again."
+                )
             elif error:
-                detail = ("Cloud sync warning: " + error if link.get("remote_job_id")
-                          else "Cloud connection required: " + error)
+                detail = (
+                    "Cloud sync warning: " + error
+                    if link.get("remote_job_id")
+                    else "Cloud connection required: " + error
+                )
                 if link.get("remote_job_id"):
-                    detail += " The published cloud job remains attached; no duplicate submission is needed."
+                    detail += (
+                        " The published cloud job remains attached; "
+                        "no duplicate submission is needed."
+                    )
             else:
-                detail = str(metadata.get("distributed_message") or "").strip()
+                detail = sanitize_display_text(metadata.get("distributed_message") or "").strip()
                 total = int(metadata.get("distributed_shards_total") or 0)
                 completed = len(metadata.get("distributed_shards_completed") or [])
                 if total:

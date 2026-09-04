@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .error_sanitizer import sanitize_display_text
+from .time_utils import format_local_timestamp
 from .pages import Card, MetricCard
 
 
@@ -286,7 +288,12 @@ class SystemHealthPage(QWidget):
 
         self.failures.setRowCount(len(failures))
         for row, failure in enumerate(failures):
-            self.failures.setItem(row, 0, self._item(failure.get("updated_at") or "—"))
+            self.failures.setItem(
+                row,
+                0,
+                self._item(format_local_timestamp(failure.get("updated_at"), fallback="—")),
+            )
             self.failures.setItem(row, 1, self._item(failure.get("job_type") or "—"))
             self.failures.setItem(row, 2, self._item(failure.get("stage") or "—"))
-            self.failures.setItem(row, 3, self._item(failure.get("message") or "—"))
+            message = sanitize_display_text(failure.get("message"))
+            self.failures.setItem(row, 3, self._item(message or "—"))
