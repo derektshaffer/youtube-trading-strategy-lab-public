@@ -501,6 +501,8 @@ def claim_next_research_job(
         library,
         now=current,
     )
+    from cloud_search_control import guard_cancelled_rerun
+    guard_cancelled_rerun(data)
     eligible: list[dict[str, Any]] = []
     for job in data["research_queue"]:
         if str(job.get("status") or "") not in {"queued", "retry"}:
@@ -549,6 +551,8 @@ def claim_next_research_job(
             item["attempts"] = int(item.get("attempts") or 0) + 1
             item["next_attempt_at"] = None
             item["status_message"] = "Claimed by a research worker."
+            from cloud_search_control import bind_claim
+            bind_claim(item)
             claimed = item
         updated_queue.append(item)
     data["research_queue"] = updated_queue
@@ -569,6 +573,8 @@ def claim_research_job_by_id(
         library,
         now=current,
     )
+    from cloud_search_control import guard_cancelled_rerun
+    guard_cancelled_rerun(data)
     chosen_id = str(job_id or "").strip()
     if not chosen_id:
         return data, None
@@ -595,6 +601,8 @@ def claim_research_job_by_id(
             item["attempts"] = int(item.get("attempts") or 0) + 1
             item["next_attempt_at"] = None
             item["status_message"] = "Claimed by a research worker."
+            from cloud_search_control import bind_claim
+            bind_claim(item)
             claimed = item
         updated_queue.append(item)
     data["research_queue"] = updated_queue
@@ -699,7 +707,9 @@ def finish_research_job(
             "status_message": "Research job completed.",
             "result_ref": str(result_ref or "") or None,
         }
-        if str(item.get("id") or "") == str(job_id or "")
+        if (str(item.get("id") or "") == str(job_id or "")
+            and str(item.get("status") or "") not in {"cancelling", "cancelled", "canceled"}
+            and not item.get("cancel_requested"))
         else item
         for item in data["research_queue"]
     ]
