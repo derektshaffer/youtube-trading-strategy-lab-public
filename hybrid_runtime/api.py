@@ -18,6 +18,8 @@ def create_app(
     expected_token: str,
     cloud_link_lookup: Callable[[str], dict[str, Any] | None] | None = None,
     cloud_reconnect: Callable[[str], Any] | None = None,
+    cloud_submission_retry: Callable[[str], Any] | None = None,
+    search_monitor: Any = None,
 ) -> Any:
     """Create the HTTP adapter without making FastAPI a Streamlit dependency."""
 
@@ -108,6 +110,36 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except HybridStoreError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/v1/searches", dependencies=[Depends(require_token)])
+    def get_searches(refresh: bool = False) -> dict[str, Any]:
+        if search_monitor is None:
+            raise HTTPException(status_code=409, detail="Restart the source-dev app to load search monitoring.")
+        return search_monitor.snapshot(force=refresh)
+
+    @app.post("/v1/searches/cancel", dependencies=[Depends(require_token)])
+    def cancel_search(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        from .security import redact_text
+        if search_monitor is None:
+            raise HTTPException(status_code=409, detail="Search monitoring is not configured")
+        try:
+            return search_monitor.cancel(body)
+        except Exception as exc:
+            # Network failure, stale selection and CAS conflicts all mean that
+            # cancellation is NOT confirmed. No retry can be inferred here.
+            raise HTTPException(status_code=409, detail=redact_text(exc)) from exc
+
+    @app.post("/v1/jobs/{job_id}/retry-cloud-submission", dependencies=[Depends(require_token)])
+    def retry_cloud_submission(job_id: str) -> dict[str, Any]:
+        if cloud_submission_retry is None:
+            raise HTTPException(status_code=409, detail="Cloud submission retry is not configured")
+        try:
+            return cloud_submission_retry(job_id).as_dict()
+        except JobNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (HybridStoreError, ValueError, TypeError) as exc:
+            from .security import redact_text
+            raise HTTPException(status_code=409, detail=redact_text(exc)) from exc
 
     @app.post("/v1/jobs/{job_id}/reconnect-cloud", dependencies=[Depends(require_token)])
     def reconnect_cloud_job(job_id: str) -> dict[str, Any]:

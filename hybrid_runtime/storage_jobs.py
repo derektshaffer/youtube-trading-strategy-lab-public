@@ -203,6 +203,8 @@ class JobStoreMixin:
         result: Mapping[str, Any] | None = None,
         error: Mapping[str, Any] | None = None,
         worker_id: str | None = None,
+        expected_status: JobStatus | None = None,
+        expected_stage: str | None = None,
     ) -> JobRecord:
         status = next_status if isinstance(next_status, JobStatus) else JobStatus(str(next_status))
         now = utc_now_text()
@@ -211,6 +213,9 @@ class JobStoreMixin:
             if row is None:
                 raise JobNotFound(f"Unknown job: {job_id}")
             current = self._record(row)
+            if ((expected_status is not None and current.status != expected_status)
+                    or (expected_stage is not None and current.stage != expected_stage)):
+                raise InvalidJobTransition("The saved job changed; refresh before retrying.")
             if not transition_allowed(current.status, status):
                 raise InvalidJobTransition(
                     f"Cannot transition {current.status.value} -> {status.value}"

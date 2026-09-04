@@ -42,6 +42,8 @@ class MainWindow(RecoveryMainWindow):
         self._rename_primary_workflow()
         self._install_parity_navigation()
         self._order_navigation_like_web_app()
+        from .search_monitor import SearchMonitorController
+        self.search_monitor = SearchMonitorController(self, [self.strategy_lab, self.research_ml, self.finder])
 
     def _button(self, caption: str) -> QPushButton | None:
         return next((button for button in self.nav_buttons if button.text() == caption), None)
@@ -53,7 +55,7 @@ class MainWindow(RecoveryMainWindow):
             home.setToolTip("Strong strategy candidates, validation status, and the next useful action.")
         finder = self._button("Stock Strategy Finder")
         if finder is not None:
-            finder.setText("Find & Test a Strategy")
+            finder.setText("Find a Strategy")
             finder.setToolTip("Pick one stock, then find and test strategy candidates for it.")
 
     def _new_navigation_button(self, caption: str, page: Any, tooltip: str) -> QPushButton:
@@ -91,7 +93,7 @@ class MainWindow(RecoveryMainWindow):
             return
         order = (
             "Home",
-            "Find & Test a Strategy",
+            "Find a Strategy",
             "Find Stocks",
             "Quick Analysis",
             "Strategy Lab",

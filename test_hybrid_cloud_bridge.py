@@ -257,9 +257,14 @@ class CloudBridgeTests(unittest.TestCase):
             self.assertEqual(self.client.document["research_queue"], [])
             for original in jobs:
                 current = self.service.get(original.id)
-                self.assertEqual(current.status, JobStatus.QUEUED)
+                is_finder = original.job_type == "strategy.stock_finder"
+                self.assertEqual(current.status, JobStatus.RETRY_WAIT if is_finder else JobStatus.QUEUED)
+                if is_finder:
+                    self.assertEqual(current.stage, "cloud_submission_failed")
                 self.assertEqual(current.payload, original.payload)
                 self.assertIn(str(failure), self.links.get(original.id)["dispatch_error"])
+                if is_finder:
+                    worker.retry_finder_submission(original.id)
 
         worker.run_once()
         worker.run_once()

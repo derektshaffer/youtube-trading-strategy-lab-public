@@ -265,6 +265,46 @@ class DesktopStockFinderBridgeTests(unittest.TestCase):
         self.assertEqual(current.status, JobStatus.FAILED)
         self.assertEqual(current.error["type"], "CloudStockFinderResultMissing")
 
+    def test_queued_chpt_exposes_sls_without_borrowing_its_progress_or_results(self):
+        local = self.submit("CHPT", "Very Deep")
+        blocker = {
+            "id": "sls-existing", "type": "stock_finder", "status": "running",
+            "payload": {"symbol": "SLS", "profile": "Very Deep",
+                        "distributed_run_id": "dist-sls", "distributed_stage": "walk_forward",
+                        "distributed_progress": .94, "distributed_shards_total": 12,
+                        "distributed_shards_completed": list(range(12)),
+                        "distributed_message": "Validating six candidates",
+                        "distributed_last_update": "2026-09-04T00:10:44Z"},
+        }
+        self.client.document["research_queue"].append(blocker)
+        worker = self.worker()
+        worker.run_once()
+        metadata = self.links.get(local.id)["metadata"]
+        self.assertEqual(metadata["queue_blockers"][0]["symbol"], "SLS")
+        self.assertEqual(metadata["queue_blockers"][0]["progress"], .94)
+        self.assertEqual(metadata["queue_blockers"][0]["shards_completed"], 12)
+        self.assertEqual(self.service.get(local.id).progress, .01)
+        self.assertIsNone(self.service.get(local.id).result)
+        self.assertEqual(metadata["symbol"], "CHPT")
+        self.assertEqual(len(self.client.dispatches), 1)
+        writes = self.client.write_count
+        # Completion must remove the previous blocker from refreshed metadata.
+        next(item for item in self.client.document["research_queue"] if item["id"] == "sls-existing")["status"] = "complete"
+        worker.run_once()
+        self.assertEqual(self.links.get(local.id)["metadata"]["queue_blockers"], [])
+        self.assertEqual(self.client.write_count, writes)
+        self.assertEqual(len(self.client.dispatches), 1)
+
+    def test_running_finder_does_not_show_other_jobs_as_queue_blockers(self):
+        from hybrid_runtime.stock_finder_bridge import finder_queue_blockers
+        library = {"research_queue": [
+            {"id": "done", "type": "stock_finder", "status": "complete", "payload": {"distributed_run_id": "done"}},
+            {"id": "lab", "type": "strategy_lab", "status": "running", "payload": {"distributed_run_id": "lab"}},
+            {"id": "same", "type": "stock_finder", "status": "running", "payload": {"distributed_run_id": "same"}},
+        ]}
+        self.assertEqual(finder_queue_blockers(library, {"id": "same", "status": "queued"}), [])
+        self.assertEqual(finder_queue_blockers(library, {"id": "other", "status": "running"}), [])
+
 
 if __name__ == "__main__":
     unittest.main()
