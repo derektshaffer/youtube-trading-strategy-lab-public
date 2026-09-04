@@ -12,8 +12,8 @@ from typing import Any
 
 import streamlit as st
 
+from alpaca_iex_momentum import IexCompatibleAlpacaMarketData
 from research_cached_market import CachedResearchMarket
-from youtube_strategy_engine import AlpacaMarketData
 
 
 def setting(name: str, default: str = "") -> str:
@@ -32,9 +32,13 @@ def market_client() -> Any:
     start/end/timeframe boundaries and standard arguments. Live/batch/provider-
     specific requests delegate directly to Alpaca. Finalized exact windows are
     reusable across reconnects and process restarts without changing backtest rows.
+
+    Live momentum discovery uses the configured Alpaca feed. On the default IEX
+    plan, the client derives movers/most-active rankings from batched IEX snapshots
+    instead of calling Alpaca's SIP-backed screener endpoints.
     """
 
-    market = AlpacaMarketData(
+    market = IexCompatibleAlpacaMarketData(
         setting("ALPACA_API_KEY"),
         setting("ALPACA_SECRET_KEY"),
         setting("ALPACA_LIVE_FEED", "iex"),
