@@ -48,6 +48,10 @@ class CloudBridgeClient(Protocol):
 
     def read(self) -> RemoteJSONDocument: ...
 
+    def workflow_run(self, run_id: str) -> dict[str, Any]: ...
+
+    def cancel_workflow_run(self, run_id: str) -> None: ...
+
     def write(
         self,
         document: Mapping[str, Any],
@@ -417,6 +421,7 @@ class CloudBridgeWorker:
         self.client_factory = client_factory
         self.idle_poll_seconds = max(0.25, float(idle_poll_seconds))
         self._reconciliation_lock = threading.RLock()
+        self.search_snapshot_cache = None
 
     def reconnect_failed_finder(self, job_id: str) -> JobRecord:
         from .cloud_recovery import reconnect_finder
@@ -431,7 +436,27 @@ class CloudBridgeWorker:
             if job.execution_target == ExecutionTarget.CLOUD
             and job.status not in TERMINAL_JOB_STATUSES
             and job.job_type in SUPPORTED_CLOUD_JOB_TYPES
+            and not (job.status == JobStatus.RETRY_WAIT and job.stage == "cloud_submission_failed")
         ]
+
+    def retry_finder_submission(self, job_id: str) -> JobRecord:
+        # Paused submissions are excluded from reconciliation. Queue this same
+        # durable request atomically; do not wait for unrelated network I/O.
+        job = self.service.get(job_id)
+        link = self.link_store.get(job_id) or {}
+        if (job.job_type != "strategy.stock_finder"
+                or job.execution_target != ExecutionTarget.CLOUD
+                or job.status != JobStatus.RETRY_WAIT
+                or job.stage != "cloud_submission_failed"
+                or not link or link.get("remote_job_id") or self.service.store.cloud_recovery(job_id)):
+            raise ValueError("Only a failed, unpublished Finder submission can be retried here.")
+        # Keep error/link evidence until reconciliation succeeds: a timed-out
+        # push may have landed. Retry checks that same identity before publishing.
+        return self.service.store.transition_job(
+            job_id, JobStatus.QUEUED, stage="cloud_submission_retry_queued", progress=0.0, error={},
+            expected_status=JobStatus.RETRY_WAIT, expected_stage="cloud_submission_failed",
+            message="Retry saved; waiting for the cloud sync worker",
+        )
 
     def _record_waiting(
         self,
@@ -451,6 +476,19 @@ class CloudBridgeWorker:
                 path=path,
                 metadata={"waiting_for_connection": True},
             )
+            current = self.service.get(job.id)
+            link = self.link_store.get(job.id) or {}
+            if (job.job_type == "strategy.stock_finder"
+                    and current.status == JobStatus.QUEUED
+                    and not link.get("remote_job_id")
+                    and not self.service.store.cloud_recovery(job.id)):
+                self._ensure_claimed(job.id, "Finder submission attempted")
+                self.service.store.transition_job(
+                    job.id, JobStatus.RETRY_WAIT, stage="cloud_submission_failed", progress=0.0,
+                    error={"type": "CloudFinderSubmissionError", "message": redact_text(message)},
+                    worker_id=self.worker_id,
+                    message="Cloud Finder submission failed; explicit retry required",
+                )
 
     def _ensure_claimed(self, job_id: str, message: str) -> JobRecord:
         current = self.service.get(job_id)
@@ -586,6 +624,7 @@ class CloudBridgeWorker:
         *,
         revision: str,
         dispatch_error: str | None = None,
+        library: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         # Reconciliation is not a dispatch attempt. Preserve an actual dispatch
         # failure until a new attempt supersedes it; do not invent timestamps
@@ -608,7 +647,7 @@ class CloudBridgeWorker:
         elif job.job_type == "strategy.stock_finder":
             from .stock_finder_bridge import finder_link_metadata
 
-            metadata = finder_link_metadata(item, job)
+            metadata = finder_link_metadata(item, job, library)
         else:
             metadata = {
                 "strategy_ids": _strategy_ids(item, job),
@@ -662,7 +701,7 @@ class CloudBridgeWorker:
         status = _remote_status(item)
         stage = _remote_stage(item)
         progress = _remote_progress(item)
-        self._link(job, item, settings, revision=revision)
+        self._link(job, item, settings, revision=revision, library=library)
         current = self.service.get(job.id)
         if current.status in TERMINAL_JOB_STATUSES:
             return
@@ -863,6 +902,26 @@ class CloudBridgeWorker:
             return True
 
         library = dict(remote.data)
+        confirmed_stops = False
+        from cloud_search_control import supports_stop, verify_worker_run
+        for item in library.get("research_queue") or []:
+            if (not isinstance(item, dict) or item.get("status") != "cancelling"
+                    or not item.get("cancel_requested") or not supports_stop(item, settings.github.action_repository)):
+                continue
+            try:
+                bound = item["cloud_worker"]
+                run = verify_worker_run(bound, client.workflow_run(bound["run_id"]))
+            except (ValueError, GitHubLibraryError):
+                continue  # An unavailable Actions response is not a stop acknowledgment.
+            if run.get("status") == "completed":
+                cancelled = run.get("conclusion") == "cancelled"
+                item.update(status="cancelled" if cancelled else "failed",
+                            stage="cancelled" if cancelled else "worker_stopped",
+                            completed_at=utc_now_text(), updated_at=utc_now_text(),
+                            status_message="Cloud worker exit confirmed after the user's stop request.")
+                if not cancelled:
+                    item["last_error"] = "Cloud worker exited after stop request; outcome: " + str(run.get("conclusion") or "unknown")
+                confirmed_stops = True
         strategy_lab_checkpoint_library: dict[str, Any] = {}
         if any(job.job_type == "strategy.strategy_lab" for job in jobs):
             try:
@@ -877,10 +936,18 @@ class CloudBridgeWorker:
                 # The checkpoint may not exist until the remote worker writes its
                 # first progress record. The durable main queue remains authoritative.
                 strategy_lab_checkpoint_library = {}
+        from .search_monitor import remote_snapshot
+        try:
+            self.search_snapshot_cache = remote_snapshot(
+                library, settings, remote.revision, strategy_lab_checkpoint_library,
+            )
+        except Exception:
+            # An optional UI inventory must never interrupt research reconciliation.
+            self.search_snapshot_cache = None
         published: list[tuple[JobRecord, dict[str, Any], dict[str, Any] | None]] = []
         attached: list[tuple[JobRecord, dict[str, Any], dict[str, Any] | None]] = []
         terminal_plans: list[tuple[JobRecord, dict[str, Any]]] = []
-        changed = False
+        changed = confirmed_stops
 
         for job in jobs:
             link = self.link_store.get(job.id)
@@ -930,13 +997,7 @@ class CloudBridgeWorker:
                 try:
                     item, created, plan = self._publication_for(job, library)
                 except Exception as exc:
-                    self.link_store.record_error(
-                        job.id,
-                        redact_text(exc),
-                        repository=settings.github.repository,
-                        branch=settings.github.branch,
-                        path=settings.github.path,
-                    )
+                    self._record_waiting([job], redact_text(exc), settings)
                     continue
                 if item is None:
                     terminal_plans.append((job, dict(plan or {})))
@@ -1019,6 +1080,7 @@ class CloudBridgeWorker:
                 settings,
                 revision=revision,
                 dispatch_error=dispatch_errors.get(job.id),
+                library=library,
             )
             self._advance_from_remote(
                 job,

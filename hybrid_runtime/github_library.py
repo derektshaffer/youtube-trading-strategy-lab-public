@@ -331,6 +331,19 @@ class GitHubJSONFile:
         )
         return commit_sha
 
+    def workflow_run(self, run_id: str) -> dict[str, Any]:
+        if not str(run_id).isdigit() or not self.config.action_repository:
+            raise ValueError("An exact cloud workflow run is required.")
+        return self._request(f"{GITHUB_API_URL}/repos/{self.config.action_repository}/actions/runs/{run_id}")
+
+    def cancel_workflow_run(self, run_id: str) -> None:
+        if not str(run_id).isdigit() or not self.config.action_repository:
+            raise ValueError("An exact cloud workflow run is required.")
+        self._request(
+            f"{GITHUB_API_URL}/repos/{self.config.action_repository}/actions/runs/{run_id}/cancel",
+            method="POST", expected_statuses=(202,),
+        )
+
     def dispatch_workflow(
         self,
         inputs: Mapping[str, Any] | None = None,

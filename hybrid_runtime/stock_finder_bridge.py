@@ -163,7 +163,44 @@ def finder_distributed_message(item: Mapping[str, Any]) -> str:
     return " ".join(str(_payload(item).get("distributed_message") or "").split())[:500]
 
 
-def finder_link_metadata(item: Mapping[str, Any], local_job: Any) -> dict[str, Any]:
+def finder_queue_blockers(
+    library: Mapping[str, Any], item: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """Describe running distributed Finder work from the same queue snapshot.
+
+    The distributed workflow is serialized. This is display-only evidence:
+    never attach the waiting job to another stock's results or progress.
+    """
+    if str(item.get("status") or "").lower() not in {"queued", "pending", "retry", "retry_wait"}:
+        return []
+    blockers = []
+    for other in library.get("research_queue") or []:
+        if (not isinstance(other, Mapping)
+                or other.get("id") == item.get("id")
+                or other.get("type") != REMOTE_STOCK_FINDER_TYPE
+                or str(other.get("status") or "").lower() != "running"):
+            continue
+        payload = _payload(other)
+        if not payload.get("distributed_run_id"):
+            continue
+        blockers.append({
+            "remote_job_id": str(other.get("id") or ""),
+            "symbol": str(payload.get("symbol") or "Stock").upper(),
+            "profile": str(payload.get("profile") or ""),
+            "stage": finder_distributed_stage(other),
+            "progress": finder_distributed_progress(other),
+            "message": finder_distributed_message(other),
+            "shards_total": int(payload.get("distributed_shards_total") or 0),
+            "shards_completed": len(set(payload.get("distributed_shards_completed") or [])),
+            "updated_at": str(payload.get("distributed_last_update") or other.get("updated_at") or ""),
+        })
+    return blockers
+
+
+def finder_link_metadata(
+    item: Mapping[str, Any], local_job: Any,
+    library: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     payload = _payload(item)
     symbol = str(payload.get("symbol") or local_job.payload.get("symbol") or "").strip().upper()
     profile = str(payload.get("profile") or local_job.payload.get("profile") or "").strip()
@@ -175,6 +212,7 @@ def finder_link_metadata(item: Mapping[str, Any], local_job: Any) -> dict[str, A
         "distributed_shards_total": int(payload.get("distributed_shards_total") or 0),
         "distributed_shards_completed": list(payload.get("distributed_shards_completed") or []),
         "distributed_message": finder_distributed_message(item),
+        "queue_blockers": finder_queue_blockers(library or {}, item),
     }
 
 

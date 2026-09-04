@@ -43,7 +43,14 @@ from .theme import STYLESHEET
 def clean_error(exc: BaseException) -> str:
     if isinstance(exc, HTTPError):
         try:
-            return exc.read().decode("utf-8", errors="replace")[:1_000]
+            message = exc.read().decode("utf-8", errors="replace")
+            try:
+                body = json.loads(message)
+                if isinstance(body, dict) and isinstance(body.get("detail"), str):
+                    message = body["detail"]
+            except ValueError:
+                pass
+            return " ".join(message.split())[:1_000]
         except OSError:
             pass
     return " ".join(str(exc).split())[:1_000]

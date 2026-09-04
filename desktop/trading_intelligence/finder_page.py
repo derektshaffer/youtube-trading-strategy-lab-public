@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .display_time import format_timestamp
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
@@ -39,7 +41,7 @@ class StockFinderPage(QWidget):
 
         header = QHBoxLayout()
         copy = QVBoxLayout()
-        eyebrow = QLabel("STOCK STRATEGY FINDER")
+        eyebrow = QLabel("FIND A STRATEGY")
         eyebrow.setObjectName("Eyebrow")
         title = QLabel("Find the strongest strategy for one stock")
         title.setObjectName("PageTitle")
@@ -161,18 +163,48 @@ class StockFinderPage(QWidget):
             }
         )
 
-    def set_working(self, title: str, detail: str, fraction: float) -> None:
+    def set_working(self, title: str, detail: str, fraction: float, *, progress_text: str = "%p%") -> None:
         self.run.setEnabled(False)
         self.symbol.setEnabled(False)
         self.profile.setEnabled(False)
-        self.banner.setProperty("state", "working")
-        self.banner.style().unpolish(self.banner)
-        self.banner.style().polish(self.banner)
-        self.status.setText(title)
-        self.detail.setText(detail)
-        self.progress.setValue(round(max(0.0, min(1.0, fraction)) * 1000))
+        if self.banner.property("state") != "working":
+            self.banner.setProperty("state", "working")
+            self.banner.style().unpolish(self.banner)
+            self.banner.style().polish(self.banner)
+        if self.status.text() != title:
+            self.status.setText(title)
+        if self.detail.text() != detail:
+            self.detail.setText(detail)
+        if self.progress.format() != progress_text:
+            self.progress.setFormat(progress_text)
+        value = round(max(0.0, min(1.0, fraction)) * 1000)
+        if self.progress.value() != value:
+            self.progress.setValue(value)
+
+    def set_queued(self, symbol: str, blockers: list[dict]) -> None:
+        symbol = symbol or "Stock"
+        details = []
+        names = []
+        for blocker in blockers:
+            name = f"{blocker.get('symbol') or 'Stock'} {blocker.get('profile') or ''}".strip()
+            names.append(name)
+            stage = str(blocker.get("stage") or "running").replace("_", " ")
+            fraction = blocker.get("progress")
+            percent = f" · {round(float(fraction) * 100)}%" if fraction is not None else ""
+            total = int(blocker.get("shards_total") or 0)
+            shards = f" · {int(blocker.get('shards_completed') or 0)}/{total} batches complete" if total else ""
+            updated = format_timestamp(blocker.get("updated_at"), "")
+            timestamp = f" (updated {updated} UTC)" if updated else ""
+            message = str(blocker.get("message") or "").strip()
+            details.append(f"{name} — last reported: {stage}{percent}{shards}{timestamp}. {message}".strip())
+        title = f"{symbol} queued"
+        if names:
+            title += " · waiting for " + ", ".join(names)
+        detail = "\n".join(details + [f"{symbol} has not started. It is waiting for the shared cloud Finder worker."])
+        self.set_working(title, detail, 0.0, progress_text=f"Queued — {symbol} has not started")
 
     def set_error(self, message: str) -> None:
+        self.progress.setFormat("%p%")
         self.run.setEnabled(True)
         self.symbol.setEnabled(True)
         self.profile.setEnabled(True)
@@ -185,6 +217,14 @@ class StockFinderPage(QWidget):
 
     def set_waiting(self, message: str, fraction: float = 0.01) -> None:
         self.set_working("Stock Finder is waiting for cloud access", message, fraction)
+
+    def set_submission_failed(self, message: str) -> None:
+        self.set_error(
+            message + "\nAddress the issue above, then click Run Finder in Cloud to retry. Your symbol and search depth are preserved. "
+            "Retry checks the saved request in the cloud before publishing again."
+        )
+        self.status.setText("Cloud Finder · Submission failed — retry")
+        self.progress.setFormat("Submission failed — retry available")
 
     @staticmethod
     def _number(value: Any, digits: int = 2) -> str:
@@ -210,6 +250,7 @@ class StockFinderPage(QWidget):
         ).replace("_", " ")
 
     def render_result(self, result: dict[str, Any]) -> None:
+        self.progress.setFormat("%p%")
         self.run.setEnabled(True)
         self.symbol.setEnabled(True)
         self.profile.setEnabled(True)

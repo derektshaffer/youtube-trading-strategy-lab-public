@@ -156,11 +156,17 @@ class MainWindow(EnhancedMainWindow):
                 profile=profile,
             )
             if existing is not None:
+                retrying = existing.get("stage") == "cloud_submission_failed"
+                if retrying:
+                    self.runtime.request_json(
+                        "POST", f"/v1/jobs/{existing['id']}/retry-cloud-submission", {},
+                    )
                 self.finder_job_id = str(existing.get("id") or "")
                 self._last_finder_poll_at = 0.0
                 self.finder.set_working(
-                    f"Attached to {symbol} · {profile}",
-                    "The matching distributed cloud search was already active; no duplicate work was submitted.",
+                    f"{'Retrying' if retrying else 'Attached to'} {symbol} · {profile}",
+                    ("Retrying the saved request. Checking the cloud before publishing again."
+                     if retrying else "The matching distributed cloud search was already active; no duplicate work was submitted."),
                     float(existing.get("progress") or 0.0),
                 )
                 return
@@ -188,7 +194,8 @@ class MainWindow(EnhancedMainWindow):
             self.refresh_jobs()
         except BaseException as exc:
             self.finder_job_id = ""
-            self.finder.set_error(clean_error(exc))
+            self.finder_route = {}
+            self.finder.set_submission_failed(clean_error(exc))
 
     def run_profit_first_validation(self) -> None:
         if self.profit_validation_job_id:
@@ -282,13 +289,27 @@ class MainWindow(EnhancedMainWindow):
         job_id = self.finder_job_id
         try:
             job = self.runtime.request_json("GET", f"/v1/jobs/{job_id}")
+            if job.get("stage") == "cloud_submission_failed":
+                self.finder_job_id = ""
+                self.finder_route = {}
+                self.finder.set_submission_failed(
+                    (job.get("error") or {}).get("message") or "Cloud publication failed."
+                )
+                self.refresh_jobs()
+                return
             link = self._cloud_link(job_id)
             metadata = link.get("metadata") if isinstance(link.get("metadata"), dict) else {}
             progress = float(job.get("progress") or link.get("remote_progress") or 0.0)
             stage = str(job.get("stage") or link.get("remote_stage") or "cloud_queued").replace("_", " ")
             error = str(link.get("dispatch_error") or "").strip()
-            if error:
-                detail = "Cloud connection required: " + error
+            if job.get("stage") == "cloud_submission_retry_queued":
+                stage = "retry saved"
+                detail = "Retry saved; waiting for cloud sync. Your existing request will be checked before publishing again."
+            elif error:
+                detail = ("Cloud sync warning: " + error if link.get("remote_job_id")
+                          else "Cloud connection required: " + error)
+                if link.get("remote_job_id"):
+                    detail += " The published cloud job remains attached; no duplicate submission is needed."
             else:
                 detail = str(metadata.get("distributed_message") or "").strip()
                 total = int(metadata.get("distributed_shards_total") or 0)
@@ -298,14 +319,33 @@ class MainWindow(EnhancedMainWindow):
                     detail = f"{detail} · {shard_text}" if detail else shard_text
                 if not detail:
                     detail = "Waiting for the existing distributed Stock Finder workers."
-            self.finder.set_working(
-                f"Cloud Finder · {stage.title()}",
-                detail,
-                progress,
-            )
+            monitor = getattr(self, "search_monitor", None)
+            cancellation = monitor.finder_cancellation(job_id, link) if monitor else None
+            if cancellation and not job.get("terminal"):
+                notice = cancellation["message"]
+                if cancellation["state"] == "confirmed":
+                    notice += " Waiting for desktop status to catch up before starting another search."
+                self.finder.set_working(
+                    cancellation["title"], notice, progress,
+                    progress_text=cancellation["title"],
+                )
+                return
+            if (not error and not job.get("terminal")
+                    and str(link.get("remote_status") or "") in {"queued", "pending", "retry", "retry_wait"}):
+                blockers = [entry for entry in metadata.get("queue_blockers") or [] if isinstance(entry, dict)]
+                self.finder.set_queued(str(metadata.get("symbol") or self.finder.symbol.text()), blockers)
+            elif not job.get("terminal"):
+                self.finder.set_working(f"Cloud Finder · {stage.title()}", detail, progress)
             if not bool(job.get("terminal")):
                 return
             self.finder_job_id = ""
+            self.finder_route = {}
+            if job.get("status") == "cancelled":
+                self.finder.set_error("Cancellation confirmed. Your symbol and search depth are preserved.")
+                self.finder.status.setText("Cloud Finder · Cancelled")
+                self.finder.progress.setFormat("Cancelled")
+                self.refresh_jobs()
+                return
             if job.get("status") != "complete":
                 message = (job.get("error") or {}).get("message") or str(job.get("status"))
                 raise RuntimeError(message)
@@ -317,6 +357,7 @@ class MainWindow(EnhancedMainWindow):
             self.refresh_jobs()
         except BaseException as exc:
             self.finder_job_id = ""
+            self.finder_route = {}
             self.finder.set_error(clean_error(exc))
             self.refresh_jobs()
 

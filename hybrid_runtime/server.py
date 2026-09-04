@@ -22,6 +22,7 @@ from .security import (
 from .service import HybridService
 from .storage import HybridStore
 from .worker import LocalWorker
+from .search_monitor import SearchMonitor
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -115,6 +116,8 @@ def main(argv: list[str] | None = None) -> int:
         expected_token=token,
         cloud_link_lookup=cloud_links.get,
         cloud_reconnect=cloud_worker.reconnect_failed_finder,
+        cloud_submission_retry=cloud_worker.retry_finder_submission,
+        search_monitor=SearchMonitor(cloud_worker),
     )
     try:
         for thread in threads:
