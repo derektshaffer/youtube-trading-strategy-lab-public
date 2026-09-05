@@ -1,32 +1,40 @@
-"""Stamp stable numeric macOS bundle metadata before distribution signing."""
+"""Stamp stable macOS bundle metadata before distribution signing."""
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
-import plistlib
-
-from scripts.package_desktop_beta import APP_NAME, build_number, bundle_short_version
+import sys
 
 
-def stamp(app: Path, *, version: str, build: str) -> dict[str, str]:
-    info = app / "Contents" / "Info.plist"
-    if not info.is_file():
-        raise FileNotFoundError(f"Missing Info.plist: {info}")
-    with info.open("rb") as handle:
-        data = plistlib.load(handle)
-    short_version = bundle_short_version(version)
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from hybrid_runtime.build_identity import stamp_bundle_identity
+from scripts.package_desktop_beta import APP_NAME, build_number, bundle_short_version, clean_version
+
+
+def stamp(
+    app: Path,
+    *,
+    version: str,
+    build: str,
+    commit: str = "",
+    channel: str = "notarized_candidate",
+) -> dict[str, str]:
+    clean_label = clean_version(version)
+    short_version = bundle_short_version(clean_label)
     bundle_build = build_number(build)
-    data["CFBundleDisplayName"] = APP_NAME
-    data["CFBundleName"] = APP_NAME
-    data["CFBundleShortVersionString"] = short_version
-    data["CFBundleVersion"] = bundle_build
-    with info.open("wb") as handle:
-        plistlib.dump(data, handle, sort_keys=True)
-    return {
-        "bundle_short_version": short_version,
-        "bundle_build": bundle_build,
-    }
+    return stamp_bundle_identity(
+        app,
+        version_label=clean_label,
+        channel=channel,
+        commit=commit,
+        bundle_short_version=short_version,
+        bundle_build=bundle_build,
+        display_name=APP_NAME,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -34,13 +42,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--app", required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--build-number", required=True)
+    parser.add_argument("--commit", default="")
+    parser.add_argument("--channel", default="notarized_candidate")
     args = parser.parse_args(argv)
     app = Path(args.app).expanduser().resolve()
     if not app.is_dir() or app.suffix != ".app":
         raise SystemExit(f"Missing macOS app bundle: {app}")
-    values = stamp(app, version=args.version, build=args.build_number)
+    values = stamp(
+        app,
+        version=args.version,
+        build=args.build_number,
+        commit=args.commit,
+        channel=args.channel,
+    )
     print(values["bundle_short_version"])
-    print(values["bundle_build"])
+    print(values["build_number"])
+    print(values["version_label"])
+    print(values["channel"])
     return 0
 
 

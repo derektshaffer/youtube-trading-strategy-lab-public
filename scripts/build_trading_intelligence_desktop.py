@@ -10,13 +10,22 @@ import subprocess
 import sys
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from hybrid_runtime.build_identity import stamp_bundle_identity
+
+
 APP_NAME = "Trading Intelligence"
 BUNDLE_ID = "com.derektshaffer.trading-intelligence"
+DEFAULT_BUILD_VERSION = "0.1.0-dev"
+DEFAULT_BUILD_CHANNEL = "development_candidate"
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
+    parser.add_argument("--repo-root", default=str(REPO_ROOT))
     parser.add_argument("--sidecar", default="")
     args = parser.parse_args(argv)
     root = Path(args.repo_root).expanduser().resolve()
@@ -77,6 +86,20 @@ def main(argv: list[str] | None = None) -> int:
     if not app.is_dir():
         raise SystemExit(f"PyInstaller did not create the expected app: {app}")
     if sys.platform == "darwin":
+        # Stamp before the final signature. Beta/notarized packaging deliberately
+        # overwrites this development identity with its exact release identity.
+        stamp_bundle_identity(
+            app,
+            version_label=os.environ.get(
+                "TRADING_INTELLIGENCE_BUILD_VERSION",
+                DEFAULT_BUILD_VERSION,
+            ),
+            channel=os.environ.get(
+                "TRADING_INTELLIGENCE_BUILD_CHANNEL",
+                DEFAULT_BUILD_CHANNEL,
+            ),
+            commit=os.environ.get("GITHUB_SHA", ""),
+        )
         subprocess.run(
             ["codesign", "--force", "--deep", "--sign", "-", str(app)],
             check=True,
