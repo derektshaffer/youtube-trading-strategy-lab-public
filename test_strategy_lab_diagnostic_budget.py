@@ -4,11 +4,11 @@ from datetime import datetime, timedelta, timezone
 import json
 import multiprocessing
 from pathlib import Path
+import re
 import time
 from unittest.mock import Mock
 
 import pytest
-import yaml
 
 import cloud_strategy_lab_worker as worker
 from hybrid_runtime.cloud_bridge import CloudBridgeWorker, DesktopCloudSettings
@@ -224,20 +224,32 @@ def test_dispatch_mismatch_fails_before_claim(queue, monkeypatch):
 
 def test_workflow_has_executable_timeout_and_exact_finalization():
     path = Path(__file__).parent / ".github/workflows/cloud-strategy-lab.yml"
-    workflow = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
-    inputs = workflow["on"]["workflow_dispatch"]["inputs"]
-    assert inputs["diagnostic_mode"]["default"] == "false"
-    assert inputs["diagnostic_max_attempts"]["default"] == "1"
-    assert inputs["diagnostic_timeout_minutes"]["default"] == "20"
-    job = workflow["jobs"]["strategy-lab"]
-    assert job["timeout-minutes"] == "${{ inputs.diagnostic_mode && 45 || 330 }}"
-    steps = {step.get("id", step.get("name")): step for step in job["steps"]}
-    assert steps["budget"]["run"] == "python -m hybrid_runtime.diagnostic_budget"
-    assert steps["validation"]["timeout-minutes"] == "${{ fromJSON(steps.budget.outputs.execution_timeout_minutes) }}"
-    assert '--job-id "$EXACT_STRATEGY_LAB_JOB_ID"' in steps["validation"]["run"]
-    assert "${{ inputs.job_id }}" not in steps["validation"]["run"]
-    finalizer = steps["Finalize interrupted diagnostic without retry"]
-    assert "always()" in finalizer["if"] and "--finalize-diagnostic" in finalizer["run"]
+    workflow = path.read_text()
+    # Assert this workflow's scoped contract using only the standard library.
+    # GitHub validates YAML syntax; no undeclared YAML parser is needed in CI.
+    for name, default in (("diagnostic_mode", "false"), ("diagnostic_max_attempts", '"1"'),
+                          ("diagnostic_timeout_minutes", '"20"')):
+        block = re.search(rf"(?m)^      {name}:\n((?:        [^\n]*\n)+)", workflow)
+        assert block is not None, name
+        assert f"        default: {default}\n" in block.group(1)
+    assert "    timeout-minutes: ${{ inputs.diagnostic_mode && 45 || 330 }}\n" in workflow
+
+    def step(name):
+        block = re.search(rf"(?m)^      - name: {re.escape(name)}\n((?:        [^\n]*(?:\n|$))+)", workflow)
+        assert block is not None, name
+        return block.group(1)
+
+    budget = step("Resolve execution budget")
+    assert "        id: budget\n" in budget
+    assert "        run: python -m hybrid_runtime.diagnostic_budget\n" in budget
+    validation = step("Run queued Strategy Lab job")
+    assert "        id: validation\n" in validation
+    assert "        timeout-minutes: ${{ fromJSON(steps.budget.outputs.execution_timeout_minutes) }}\n" in validation
+    assert '--job-id "$EXACT_STRATEGY_LAB_JOB_ID"' in validation
+    assert "${{ inputs.job_id }}" not in validation
+    finalizer = step("Finalize interrupted diagnostic without retry")
+    assert "always() && inputs.diagnostic_mode && steps.validation.outcome != 'success'" in finalizer
+    assert "--finalize-diagnostic" in finalizer
     assert workflow_execution_minutes(True, 1, 20) == 22
     with pytest.raises(ValueError):
         workflow_execution_minutes(True, 2, 20)
