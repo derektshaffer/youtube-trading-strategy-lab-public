@@ -325,6 +325,7 @@ def save_strategy_lab_checkpoint(
     optimizer_state: dict[str, Any] | None = None,
     attempt: int | None = None,
     started_at: str = "",
+    execution_error: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Persist one Strategy Lab status/result without touching the large main library.
 
@@ -367,6 +368,13 @@ def save_strategy_lab_checkpoint(
         record["stage"] = str(stage).strip()
     if job is not None:
         record["job"] = deepcopy(job)
+        from hybrid_runtime.diagnostic_budget import diagnostic_budget
+        record.update(diagnostic_budget(job))
+        for key in ("diagnostic_attempt_started_at", "diagnostic_deadline_at"):
+            if key in job:
+                record[key] = job[key]
+    if execution_error is not None:
+        record["execution_error"] = deepcopy(execution_error)
     if optimizer_state is not None:
         record["optimizer_state"] = deepcopy(optimizer_state)
     if attempt is not None:
@@ -410,6 +418,7 @@ def load_latest_strategy_lab_checkpoint(
     store: StrategyStore,
     *,
     reconcile_cloud: bool = True,
+    run_id: str = "",
 ) -> dict[str, Any]:
     """Return the newest durable Strategy Lab checkpoint, if one exists."""
 
@@ -418,6 +427,7 @@ def load_latest_strategy_lab_checkpoint(
         if (
             isinstance(item, dict)
             and str(item.get("record_type") or "") == STRATEGY_LAB_RECORD_TYPE
+            and (not run_id or str(item.get("id") or "") == run_id)
         ):
             restored = deepcopy(item)
             if (

@@ -1037,9 +1037,10 @@ class CloudBridgeWorker:
             try:
                 if job.job_type == "strategy.strategy_lab":
                     from .strategy_lab_bridge import CLOUD_STRATEGY_LAB_WORKFLOW
+                    from .diagnostic_budget import strategy_lab_dispatch_inputs
 
                     dispatched = client.dispatch_workflow(
-                        {"job_id": str(item.get("id") or "")},
+                        strategy_lab_dispatch_inputs(item),
                         workflow_file=CLOUD_STRATEGY_LAB_WORKFLOW,
                     )
                 elif job.job_type == "strategy.stock_finder":
