@@ -12,8 +12,11 @@ from __future__ import annotations
 from copy import deepcopy
 import argparse
 import json
+import multiprocessing
 import os
+import signal
 import socket
+import time
 from typing import Any
 
 from distributed_stock_finder import build_cloud_backup, build_market, mutate_remote_library
@@ -25,6 +28,10 @@ from hybrid_runtime.strategy_lab_bridge import (
 )
 from strategy_lab_jobs import execute_strategy_lab_job_once
 from strategy_lab_persistence import restore_strategy_lab_result
+from strategy_lab_persistence import load_latest_strategy_lab_checkpoint, save_strategy_lab_checkpoint
+from hybrid_runtime.diagnostic_budget import (
+    diagnostic_budget, remaining_diagnostic_seconds, stamp_diagnostic_deadline,
+)
 from stock_strategy_finder import apply_holdout_reuse_guard, record_holdout_exposure
 from trading_intelligence_core import effective_strategy_for_research, strategy_integrity_report
 from trading_research_orchestrator import (
@@ -78,6 +85,29 @@ def _claim(preferred_job_id: str = "") -> dict[str, Any] | None:
     worker_id = f"{WORKER_ID_PREFIX}:{socket.gethostname()}:{os.getpid()}"
 
     def mutation(data: dict[str, Any]) -> dict[str, Any] | None:
+        data = deepcopy(data)
+        changed = False
+        holder["expired"] = []
+        for item in data.get("research_queue", []):
+            if item.get("type") != REMOTE_STRATEGY_LAB_TYPE or (preferred_job_id and item.get("id") != preferred_job_id):
+                continue
+            payload = item.get("payload") or {}
+            bounds = diagnostic_budget(payload)
+            if not bounds:
+                continue
+            if item.get("max_attempts") != 1:
+                item["max_attempts"] = 1
+                changed = True
+            expired = bool(payload.get("diagnostic_deadline_at")) and remaining_diagnostic_seconds(payload) <= 0
+            exhausted = int(item.get("attempts") or 0) >= 1
+            if ((item.get("status") == "running" and expired)
+                    or (item.get("status") in {"queued", "retry"} and exhausted)):
+                kind = "execution_timeout" if expired else "execution_interrupted"
+                item.update(status="failed", stage=kind, failure_kind=kind,
+                            failure_step="diagnostic_execution", next_attempt_at=None,
+                            worker_id=None, status_message="Diagnostic execution stopped; automatic retry is disabled.")
+                holder["expired"].append(deepcopy(item))
+                changed = True
         if preferred_job_id:
             matches = [row for row in data.get("research_queue", []) if row.get("id") == preferred_job_id]
             if len(matches) != 1:
@@ -85,9 +115,10 @@ def _claim(preferred_job_id: str = "") -> dict[str, Any] | None:
             row = matches[0]
             if row.get("status") not in {"queued", "retry"}:
                 holder["job"] = None
-                return None
+                return data if changed else None
             if int(row.get("attempts") or 0) >= int(row.get("max_attempts") or 3):
                 raise AppError("Exact Strategy Lab job has exhausted its retry budget.")
+            _check_dispatch_budget(row.get("payload") or {})
             _, claimed = claim_research_job_by_id(
                 {"research_queue": [deepcopy(row)]},
                 worker_id,
@@ -104,10 +135,16 @@ def _claim(preferred_job_id: str = "") -> dict[str, Any] | None:
                 worker_id,
                 allowed_types={REMOTE_STRATEGY_LAB_TYPE},
             )
+        if claimed is not None:
+            stamp_diagnostic_deadline(claimed.setdefault("payload", {}))
+            updated["research_queue"] = [claimed if item.get("id") == claimed.get("id") else item
+                                         for item in updated["research_queue"]]
         holder["job"] = deepcopy(claimed) if isinstance(claimed, dict) else None
-        return updated if claimed is not None else None
+        return updated if claimed is not None or changed else None
 
     mutate_remote_library(mutation)
+    for expired in holder.get("expired", []):
+        _diagnostic_terminal(expired, str(expired["failure_kind"]))
     return holder.get("job")
 
 
@@ -185,6 +222,8 @@ def _job_spec(remote_job: dict[str, Any], library: dict[str, Any]) -> dict[str, 
         "wf_folds": int(payload.get("wf_folds") or 3),
         "compared_all": bool(payload.get("compared_all")),
         "candidates": candidates,
+        **diagnostic_budget(payload),
+        **{key: payload[key] for key in ("diagnostic_attempt_started_at", "diagnostic_deadline_at") if key in payload},
     }
 
 
@@ -221,10 +260,14 @@ def _complete_queue(
     mutate_remote_library(mutation)
 
 
-def _fail_queue(job_id: str, message: str) -> str:
+def _fail_queue(job_id: str, message: str, *, failure_kind: str = "") -> str:
     holder = {"status": "failed"}
 
     def mutation(data: dict[str, Any]) -> dict[str, Any]:
+        data = deepcopy(data)
+        for item in data.get("research_queue", []):
+            if item.get("id") == job_id and diagnostic_budget(item.get("payload") or {}):
+                item["max_attempts"] = 1
         updated = fail_research_job(
             data,
             job_id,
@@ -234,6 +277,10 @@ def _fail_queue(job_id: str, message: str) -> str:
         )
         for item in updated.get("research_queue") or []:
             if str(item.get("id") or "") == job_id:
+                if item.get("status") == "failed" and diagnostic_budget(item.get("payload") or {}):
+                    kind = failure_kind or item.get("failure_kind") or "execution_error"
+                    item.update(failure_kind=kind, failure_step="diagnostic_execution", stage=kind,
+                                next_attempt_at=None)
                 holder["status"] = str(item.get("status") or "failed")
                 break
         return updated
@@ -257,11 +304,7 @@ def _saved_cloud_result(checkpoint_store: StrategyStore, run_id: str, ticker: st
     return result
 
 
-def run_once(preferred_job_id: str = "") -> dict[str, Any]:
-    remote_job = _claim(str(preferred_job_id or "").strip())
-    if remote_job is None:
-        return {"status": "idle", "message": "No queued Strategy Lab cloud job is ready."}
-
+def _run_claimed_job(remote_job: dict[str, Any]) -> dict[str, Any]:
     job_id = str(remote_job.get("id") or "")
     payload = dict(remote_job.get("payload") or {})
     run_id = str(payload.get("run_id") or job_id)
@@ -328,11 +371,157 @@ def run_once(preferred_job_id: str = "") -> dict[str, Any]:
         }
 
 
+def _check_dispatch_budget(payload: dict[str, Any]) -> None:
+    """Inputs may tighten dispatch identity, never replace the persisted budget."""
+    if env("DIAGNOSTIC_MODE") == "true":
+        expected = diagnostic_budget({
+            "diagnostic_mode": True,
+            "diagnostic_max_attempts": int(env("DIAGNOSTIC_MAX_ATTEMPTS", "1") or 1),
+            "diagnostic_timeout_minutes": int(env("DIAGNOSTIC_TIMEOUT_MINUTES", "20") or 20),
+        })
+        if diagnostic_budget(payload) != expected:
+            raise AppError("Workflow diagnostic inputs do not match the persisted job budget.")
+
+
+def _diagnostic_terminal(remote_job: dict[str, Any], kind: str) -> dict[str, Any]:
+    """Finalize infrastructure failure without generating a strategy verdict."""
+    payload = dict(remote_job.get("payload") or {})
+    if not diagnostic_budget(payload):
+        raise AppError("Diagnostic finalization requires a diagnostic job.")
+    job_id = str(remote_job["id"])
+    run_id = str(payload.get("run_id") or job_id)
+    ticker = str(payload.get("ticker") or "").upper()
+    message = ("VALIDATION EXECUTION TIMED OUT" if kind == "execution_timeout"
+               else "VALIDATION EXECUTION INTERRUPTED") + "; no strategy validation verdict was produced."
+    warning = ""
+    try:
+        store = build_checkpoint_store()
+        checkpoint = load_latest_strategy_lab_checkpoint(store, run_id=run_id)
+        if checkpoint.get("status") == "complete":
+            saved = _saved_cloud_result(store, run_id, ticker)
+            if saved:
+                _complete_queue(job_id, run_id=run_id,
+                                result_summary=strategy_lab_result_summary(saved, run_id=run_id))
+                return {"status": "complete", "job_id": job_id, "recovered_from_checkpoint": True}
+        save_strategy_lab_checkpoint(
+            store, run_id=run_id, ticker=ticker, status="failed", message=message,
+            stage=kind, progress=float(checkpoint.get("progress") or 0),
+            job=dict(checkpoint.get("job") or payload), attempt=1,
+            execution_error={"category": "infrastructure", "kind": kind,
+                             "last_execution_stage": checkpoint.get("stage", "preparing")},
+        )
+    except Exception as exc:
+        # Still terminalize the queue if checkpoint I/O is unavailable. Workflow
+        # finalization can repair the checkpoint later without another attempt.
+        warning = f"Diagnostic checkpoint finalization unavailable ({type(exc).__name__})."
+    status = _fail_queue(job_id, message, failure_kind=kind)
+    return {"status": status, "job_id": job_id, "run_id": run_id,
+            "failure_kind": kind if status == "failed" else "", "message": message,
+            "warning": warning}
+
+
+def _diagnostic_child(remote_job: dict[str, Any], connection: Any) -> None:
+    os.setsid()
+    try:
+        outcome = _run_claimed_job(remote_job)
+        # Keep the supervision channel small. Results remain in the existing
+        # verified cloud checkpoint, not in a second result store.
+        connection.send({key: outcome[key] for key in (
+            "status", "job_id", "run_id", "ticker", "message", "warning",
+            "recovered_from_checkpoint") if key in outcome})
+    finally:
+        connection.close()
+
+
+def _stop_diagnostic_process(process: Any) -> None:
+    if process.is_alive():
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            process.terminate()
+        process.join(2)
+    if process.is_alive():
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            process.kill()
+        process.join(2)
+    if process.is_alive():
+        raise AppError("Diagnostic worker could not be stopped; workflow cancellation is required.")
+
+
+def _run_diagnostic(remote_job: dict[str, Any]) -> dict[str, Any]:
+    payload = remote_job["payload"]
+    _check_dispatch_budget(payload)
+    if int(remote_job.get("attempts") or 0) != 1:
+        return _diagnostic_terminal(remote_job, "execution_interrupted")
+    remaining = remaining_diagnostic_seconds(payload)
+    if remaining <= 0:
+        return _diagnostic_terminal(remote_job, "execution_timeout")
+    context = multiprocessing.get_context("fork")
+    receive, send = context.Pipe(duplex=False)
+    process = context.Process(target=_diagnostic_child, args=(remote_job, send))
+    deadline = time.monotonic() + remaining
+    outcome = None
+    kind = "execution_interrupted"
+    try:
+        process.start()
+        send.close()
+        while time.monotonic() < deadline:
+            if receive.poll(min(0.1, max(0, deadline - time.monotonic()))):
+                try:
+                    outcome = receive.recv()
+                except EOFError:
+                    pass
+                break
+            if not process.is_alive():
+                break
+        if outcome is None and time.monotonic() >= deadline:
+            kind = "execution_timeout"
+    finally:
+        if process.pid is not None:
+            _stop_diagnostic_process(process)
+        receive.close()
+        send.close()
+    return outcome if outcome is not None else _diagnostic_terminal(remote_job, kind)
+
+
+def finalize_diagnostic(job_id: str) -> dict[str, Any]:
+    if not job_id:
+        raise AppError("Diagnostic finalization requires an exact job ID.")
+    holder: dict[str, Any] = {}
+    def inspect(data: dict[str, Any]) -> None:
+        rows = [row for row in data.get("research_queue", []) if row.get("id") == job_id]
+        if len(rows) != 1 or rows[0].get("type") != REMOTE_STRATEGY_LAB_TYPE:
+            raise AppError("Diagnostic finalization requires one existing Strategy Lab job.")
+        holder["job"] = deepcopy(rows[0])
+    mutate_remote_library(inspect)
+    job = holder["job"]
+    payload = job.get("payload") or {}
+    if not diagnostic_budget(payload):
+        raise AppError("Refusing to finalize a non-diagnostic job.")
+    if job.get("status") in {"complete", "cancelled"} or int(job.get("attempts") or 0) == 0:
+        return {"status": job.get("status"), "job_id": job_id}
+    kind = job.get("failure_kind") or (
+        "execution_timeout" if remaining_diagnostic_seconds(payload) <= 0 else "execution_interrupted")
+    return _diagnostic_terminal(job, str(kind))
+
+
+def run_once(preferred_job_id: str = "") -> dict[str, Any]:
+    remote_job = _claim(str(preferred_job_id or "").strip())
+    if remote_job is None:
+        return {"status": "idle", "message": "No queued Strategy Lab cloud job is ready."}
+    if diagnostic_budget(remote_job.get("payload") or {}):
+        return _run_diagnostic(remote_job)
+    return _run_claimed_job(remote_job)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--job-id", default="")
+    parser.add_argument("--finalize-diagnostic", action="store_true")
     args = parser.parse_args(argv)
-    result = run_once(args.job_id)
+    result = finalize_diagnostic(args.job_id) if args.finalize_diagnostic else run_once(args.job_id)
     print(result, flush=True)
     # A durable retry is a successfully handled worker cycle; the scheduled
     # workflow will pick it up again after next_attempt_at.

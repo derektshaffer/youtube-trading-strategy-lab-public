@@ -90,7 +90,10 @@ def test_cloud_strategy_lab_workflow_has_durable_recovery_without_long_global_lo
 
     assert "workflow_dispatch:" in workflow
     assert "schedule:" in workflow
-    assert "timeout-minutes: 330" in workflow
+    assert "timeout-minutes: ${{ inputs.diagnostic_mode && 45 || 330 }}" in workflow
+    from hybrid_runtime.diagnostic_budget import workflow_execution_minutes
+    assert workflow_execution_minutes(False) == 330
+    assert workflow_execution_minutes(True, 1, 20) == 22
     assert "group: strategy-lab-cloud-worker" in workflow
     assert "group: trading-intelligence-library-writer" not in workflow
     assert "cloud_strategy_lab_worker.py" in workflow

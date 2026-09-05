@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .diagnostic_budget import diagnostic_budget
+
 from copy import deepcopy
 from hashlib import sha256
 import re
@@ -123,6 +125,7 @@ def normalized_strategy_lab_payload(job: JobRecord) -> dict[str, Any]:
         "strategy_ids": strategy_ids,
         "checkpoint_path": STRATEGY_LAB_CHECKPOINT_PATH,
         "continue_after_app_exit": True,
+        **diagnostic_budget(source),
     }
 
 
@@ -184,7 +187,7 @@ def prepare_strategy_lab_publication(
         "priority": max(85, min(100, int(job.priority))),
         "attempt": 0,
         "attempts": 0,
-        "max_attempts": 3,
+        "max_attempts": diagnostic_budget(payload).get("diagnostic_max_attempts", 3),
         "dedupe_key": dedupe,
         "origin": "trading_intelligence_desktop",
         "source": "trading_intelligence_desktop",
@@ -254,6 +257,11 @@ def overlay_strategy_lab_checkpoint(
                 f"strategy-lab-checkpoint:{str(checkpoint.get('id') or '')}"
             )
     elif checkpoint_status == "failed":
+        if diagnostic_budget(payload) and (checkpoint.get("execution_error") or {}).get("category") == "infrastructure":
+            result["status"] = "failed"
+            result["failure_kind"] = checkpoint["execution_error"].get("kind", "execution_error")
+            payload["strategy_lab_checkpoint_status"] = "failed"
+            return result
         # A checkpoint describes one execution attempt, not the durable queue's
         # final decision. The main queue may already have moved this job to
         # `retry`, so never terminalize the desktop from checkpoint failure alone.

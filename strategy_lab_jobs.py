@@ -52,18 +52,22 @@ def _run_job(
 ) -> dict[str, Any]:
     ticker = str(job.get("ticker") or "").strip().upper()
     started_at = str(job.get("started_at") or utc_now().isoformat())
-    checkpoint = load_latest_strategy_lab_checkpoint(checkpoint_store)
+    checkpoint = load_latest_strategy_lab_checkpoint(checkpoint_store, run_id=run_id)
     previous_attempts = (
         int(checkpoint.get("attempt") or 0)
         if str(checkpoint.get("id") or "") == run_id
         else 0
     )
-    if previous_attempts >= MAX_AUTOMATIC_ATTEMPTS:
+    from hybrid_runtime.diagnostic_budget import diagnostic_budget
+    bounds = diagnostic_budget(job)
+    if previous_attempts >= bounds.get("diagnostic_max_attempts", MAX_AUTOMATIC_ATTEMPTS):
         message = (
             "Very Deep stopped unexpectedly on three separate process attempts. "
             "The app will not restart it again automatically; review the server resource "
             "limit or the last recorded stage, then start a new run."
         )
+        if bounds:
+            message = "Diagnostic execution attempt limit reached; automatic restart is disabled."
         try:
             save_strategy_lab_checkpoint(
                 checkpoint_store,
