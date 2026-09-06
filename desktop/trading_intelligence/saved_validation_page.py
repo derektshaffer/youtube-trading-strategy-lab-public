@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QTableWidget, QTableWidgetItem, QTabWidget, QHeaderView
 
 from .display_time import format_timestamp
+from .workflow_widgets import Disclosure, readable_table
 
 PERIODS = (("Historical training", "training_metrics"), ("Validation", "validation_metrics"),
            ("Holdout", "holdout_metrics"), ("Stress", "stress_metrics"), ("Full history (descriptive)", "full_metrics"))
@@ -44,7 +45,7 @@ def table(headers, rows):
             item.setToolTip(str(value))
             widget.setItem(i, j, item)
     widget.resizeColumnsToContents()
-    widget.setMinimumHeight(180)
+    readable_table(widget, height=300)
     return widget
 
 
@@ -54,12 +55,17 @@ class SavedValidationPage(QWidget):
         root = QVBoxLayout(self)
         result = response.get("result") or {}
         self.identity = plain(f"Job: {response['job_id']}\nCloud job: {response.get('cloud_job_id') or 'not recorded'}\nRun: {response['run_id']}\nTicker: {response['ticker']}\nStrategy ID: {', '.join(response['strategy_ids'])}")
-        root.addWidget(self.identity)
+        title = plain(response["ticker"] + " / SAVED VALIDATION")
+        title.setObjectName("ContextTicker")
+        root.addWidget(title)
+        provenance = Disclosure("Exact job, run and strategy identity", self.identity)
+        root.addWidget(provenance)
         self.timestamp = plain("Saved evidence: " + format_timestamp(
             result.get("saved_at") or (response.get("error") or {}).get("last_checkpoint_saved_at") or response.get("updated_at"),
             "not recorded", naive_utc=True))
         root.addWidget(self.timestamp)
         self.verdict = plain("")
+        self.verdict.setObjectName("ValidationVerdict")
         root.addWidget(self.verdict)
         if response["status"] == "failed":
             error = response.get("error") or {}
@@ -72,7 +78,19 @@ class SavedValidationPage(QWidget):
         self.verdict.setText(outcome + str(verdict.get("label") or "No saved strategy verdict") + "\n" + str(verdict.get("reason") or ""))
         strength = result.get("strength") or {}
         self.strength = plain("Validation strength: " + (number(strength["score"]) + "/100" if strength.get("score") is not None else "Not recorded") + " | " + str(strength.get("label") or "Not recorded") + "\nNot a probability of profit.")
+        self.strength.setObjectName("ValidationStrength")
         root.addWidget(self.strength)
+        stability = result.get("parameter_stability") or {}
+        stability = stability.get("summary") or stability
+        walk = result.get("walk_forward") or {}
+        walk = walk.get("summary") or walk
+        counts = [number((result.get(key) or {}).get("trade_count")) for _, key in PERIODS[:3]]
+        self.evidence_summary = plain(
+            "Parameter stability: " + str(stability.get("label") or stability.get("classification") or "Not recorded")
+            + "\nTraining trades: " + counts[0] + "  |  Validation trades: " + counts[1] + "  |  Holdout trades: " + counts[2]
+            + "\nWalk-forward folds: " + number(walk.get("fold_count")) + "  |  Stability checks: " + number(stability.get("tested")))
+        self.evidence_summary.setObjectName("EvidenceSummary")
+        root.addWidget(self.evidence_summary)
         self.selected_title = plain(str(result.get("winner_strategy_name") or "Saved selected strategy") + "\nStrategy ID: " + str(result.get("winner_strategy_id") or "not recorded"))
         root.addWidget(self.selected_title)
         self.tabs = QTabWidget()
@@ -95,7 +113,19 @@ class SavedValidationPage(QWidget):
             details = "; ".join(f"{k.replace('_', ' ')}: {v}" for k, v in check.items() if k not in {"status", "label", "classification"} and not isinstance(v, (dict, list)))
             rows.append((label, status, details))
         self.checks = table(["Check", "Saved status", "Details"], rows)
-        self.tabs.addTab(self.checks, "Robustness && safeguards")
+        self.checks.setColumnHidden(2, True)
+        checks_page = QWidget()
+        checks_layout = QVBoxLayout(checks_page)
+        checks_layout.setContentsMargins(0, 0, 0, 0)
+        checks_layout.addWidget(self.checks)
+        self.check_detail = plain("Select a safeguard to read its full saved explanation.")
+        checks_layout.addWidget(self.check_detail)
+        def explain():
+            row = self.checks.currentRow()
+            if row >= 0:
+                self.check_detail.setText(self.checks.item(row, 2).text())
+        self.checks.itemSelectionChanged.connect(explain)
+        self.tabs.addTab(checks_page, "Robustness && safeguards")
         rows = [("Strength", number(strength.get("score")) + "/100" if strength.get("score") is not None else "Not recorded"),
                 ("Classification", strength.get("label") or "Not recorded")]
         rows.extend(("Reason", x) for x in strength.get("reasons") or [])
