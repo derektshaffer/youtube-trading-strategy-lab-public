@@ -44,6 +44,8 @@ class MainWindow(RecoveryMainWindow):
         self._order_navigation_like_web_app()
         from .search_monitor import SearchMonitorController
         self.search_monitor = SearchMonitorController(self, [self.strategy_lab, self.research_ml, self.finder])
+        from .saved_validation_controller import SavedValidationController
+        self.saved_validation = SavedValidationController(self, self.search_monitor)
 
     def _button(self, caption: str) -> QPushButton | None:
         return next((button for button in self.nav_buttons if button.text() == caption), None)
@@ -122,6 +124,13 @@ class MainWindow(RecoveryMainWindow):
 
     def show_page(self, index: int) -> None:
         super().show_page(index)
+        if (
+            hasattr(self, "strategy_lab")
+            and index == self.stack.indexOf(self.strategy_lab)
+            and not self.strategy_lab.options_loaded
+            and not self.active_job_id
+        ):
+            QTimer.singleShot(50, self.refresh_strategy_lab_options)
         if (
             hasattr(self, "market_discovery")
             and index == self.stack.indexOf(self.market_discovery)
@@ -230,6 +239,8 @@ class MainWindow(RecoveryMainWindow):
             self.active_purpose = ""
             if purpose == "market_discovery_options":
                 self.market_discovery.render_options(result)
+                if not self.strategy_lab_job_id:
+                    self.strategy_lab.set_options(result)
                 self.top_status.setText(
                     f"Find Stocks ready · {int(result.get('faithful_count') or 0):,} faithful strategies"
                 )
@@ -251,6 +262,14 @@ class MainWindow(RecoveryMainWindow):
         if not ticker:
             return
         self.analysis.symbol.setText(ticker)
+        context = next((item for item in self.market_discovery._results
+                        if str(item.get("symbol") or "").upper() == ticker), {})
+        self.analysis.set_discovery_context(context)
+        if not self.finder_job_id:
+            self.finder.symbol.setText(ticker)
+        if not self.strategy_lab_job_id:
+            self.strategy_lab.ticker.setText(ticker)
+            self.strategy_lab.select_strategy_id(str(context.get("best_strategy_id") or ""))
         self.show_page(self.stack.indexOf(self.analysis))
         self.analysis.emit_analysis()
 

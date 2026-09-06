@@ -39,6 +39,8 @@ class StrategyLabPage(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
+        self.options_loaded = False
+        self._context_strategy_id = ""
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(14)
@@ -220,6 +222,20 @@ class StrategyLabPage(QWidget):
         root.addWidget(self.result_card)
         root.addStretch(1)
 
+    def select_strategy_id(self, strategy_id: str) -> None:
+        """Carry a discovery identity without substituting a different family."""
+        self._context_strategy_id = strategy_id
+        self.compare_all.setChecked(False)
+        index = self.strategy.findData(strategy_id) if strategy_id else -1
+        self.strategy.setCurrentIndex(index)
+        if index >= 0:
+            self._context_strategy_id = ""
+        else:
+            self.run.setEnabled(False)
+            if self.options_loaded:
+                self.status.setText("Selected discovery strategy is not available")
+                self.detail.setText("No substitute strategy was selected. Refresh strategies or explicitly choose an eligible strategy.")
+
     def set_options(self, result: dict[str, Any]) -> None:
         current = self.strategy.currentData()
         self.strategy.clear()
@@ -245,6 +261,9 @@ class StrategyLabPage(QWidget):
         )
         self.run.setEnabled(faithful > 0)
         self.refresh_options.setEnabled(True)
+        self.options_loaded = True
+        if self._context_strategy_id:
+            self.select_strategy_id(self._context_strategy_id)
 
     def set_working(self, title: str, detail: str, progress: float = 0.0) -> None:
         self.banner.setProperty("state", "working")

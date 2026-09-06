@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from .display_time import format_timestamp
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -118,6 +119,18 @@ class AnalysisPage(QWidget):
             metrics.addWidget(widget, 0, index)
         root.addLayout(metrics)
 
+        self.discovery_context = {}
+        self.signal_card = Card()
+        signal_layout = QVBoxLayout(self.signal_card)
+        self.signal_summary = QLabel()
+        self.signal_summary.setTextFormat(Qt.TextFormat.PlainText)
+        self.signal_summary.setWordWrap(True)
+        self.signal_summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        signal_layout.addWidget(self.signal_summary)
+        root.addWidget(self.signal_card)
+        self.signal_card.hide()
+        self.symbol.textChanged.connect(self._sync_discovery_context)
+
         chart_card = Card()
         chart_layout = QVBoxLayout(chart_card)
         chart_top = QHBoxLayout()
@@ -137,6 +150,34 @@ class AnalysisPage(QWidget):
 
         self.vwap.toggled.connect(self._toggle_indicators)
         self.ema.toggled.connect(self._toggle_indicators)
+
+    def set_discovery_context(self, context: dict[str, Any]) -> None:
+        """Display the selected scan's evidence, never recompute or invent rules."""
+        self.discovery_context = dict(context)
+        self._sync_discovery_context()
+
+    def _sync_discovery_context(self, *_args) -> None:
+        context = self.discovery_context
+        matching = bool(context) and str(context.get("symbol") or "").upper() == self.symbol.text().strip().upper()
+        self.signal_card.setVisible(matching)
+        if not matching:
+            self.signal_summary.clear()
+            return
+        signal = context.get("signal") or {}
+        metrics = context.get("metrics") or {}
+        lines = [
+            "Current Signal / Why Matched - discovery snapshot",
+            f"{context.get('best_strategy_name') or 'Unknown strategy'} | ID: {context.get('best_strategy_id') or 'not recorded'}",
+            f"Setup: {signal.get('status') or 'UNKNOWN'} | Rule match: {signal.get('score', 'not recorded')}%",
+            f"Library validation status: {context.get('validation_status') or 'not recorded'} (separate from this rule match; inspect saved validation results).",
+            f"Market snapshot timestamp: {format_timestamp(metrics.get('trade_timestamp') or metrics.get('quote_timestamp'), 'not recorded')}",
+        ]
+        for check in signal.get("checks") or []:
+            lines.append(f"{check.get('label') or 'Check'}: {check.get('status') or 'unknown'} | actual: {check.get('actual')} | required: {check.get('required')}")
+        if not signal.get("checks"):
+            lines.append("No rule-check breakdown was saved for this discovery result.")
+        lines.append("Saved scan context, not a freshly recomputed signal or a trading approval. Analysis candles below are a separate data view.")
+        self.signal_summary.setText("\n".join(lines))
 
     def _toggle_indicators(self) -> None:
         self.chart.show_vwap = self.vwap.isChecked()
@@ -220,7 +261,7 @@ class AnalysisPage(QWidget):
             else f"Incremental Alpaca refresh merged {provider_rows:,} returned candles into the persistent cache."
         )
         self.detail.setText(
-            f"{result.get('price_label') or 'Latest completed candle'} · as of {summary.get('as_of') or 'unknown'} · "
+            f"{result.get('price_label') or 'Latest completed candle'} · as of {format_timestamp(summary.get('as_of'), 'unknown', naive_utc=True)} · "
             f"data age {age:,.0f}s. {cache_copy}"
         )
         self.progress.setValue(1000)

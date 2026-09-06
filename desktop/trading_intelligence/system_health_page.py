@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from .error_sanitizer import sanitize_display_text
-from .time_utils import format_local_timestamp
+from .display_time import format_timestamp as format_local_timestamp
 from .pages import Card, MetricCard
 
 

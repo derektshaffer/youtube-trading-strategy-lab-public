@@ -117,6 +117,17 @@ def create_app(
             raise HTTPException(status_code=409, detail="Restart the source-dev app to load search monitoring.")
         return search_monitor.snapshot(force=refresh)
 
+    @app.post("/v1/saved-validations/result", dependencies=[Depends(require_token)])
+    def saved_validation_result(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        from .saved_validation_reader import read_saved_validation
+        from .security import redact_text
+        if search_monitor is None:
+            raise HTTPException(status_code=409, detail="Saved validation access is not configured")
+        try:
+            return read_saved_validation(search_monitor.worker, body)
+        except Exception as exc:
+            raise HTTPException(status_code=409, detail=redact_text(exc)) from exc
+
     @app.post("/v1/searches/cancel", dependencies=[Depends(require_token)])
     def cancel_search(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
         from .security import redact_text
