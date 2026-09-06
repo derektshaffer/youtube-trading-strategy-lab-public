@@ -9,6 +9,7 @@ import time
 from typing import Any, Callable
 
 from research_cached_market import CachedResearchMarket
+from strategy_lab_progress import PROGRESS_FORMAT, progress_store, save_progress
 from strategy_lab_execution import execute_strategy_lab_run
 from strategy_lab_persistence import (
     load_latest_strategy_lab_checkpoint,
@@ -98,6 +99,8 @@ def _run_job(
     )
     last_stage = str(checkpoint.get("stage") or "preparing")
     persistence_warnings: list[str] = []
+    sidecar = progress_store(checkpoint_store, run_id)
+    save_failed = False
 
     def save_running(
         fraction: float,
@@ -108,7 +111,7 @@ def _run_job(
         force: bool = False,
     ) -> None:
         nonlocal last_saved_at, last_saved_fraction, last_saved_stage
-        nonlocal last_fraction, last_stage
+        nonlocal last_fraction, last_stage, save_failed
         last_fraction = max(last_fraction, max(0.0, min(0.999, float(fraction))))
         last_stage = str(stage or last_stage)
         now = time.monotonic()
@@ -119,27 +122,38 @@ def _run_job(
             or last_fraction - last_saved_fraction >= PROGRESS_SAVE_DELTA
             or now - last_saved_at >= PROGRESS_SAVE_SECONDS
         )
-        if not should_save:
+        if not should_save or (save_failed and not force and now - last_saved_at < PROGRESS_SAVE_SECONDS):
             return
         try:
-            save_strategy_lab_checkpoint(
-                checkpoint_store,
-                run_id=run_id,
-                status="running",
-                ticker=ticker,
-                message=message,
-                progress=last_fraction,
-                stage=last_stage,
-                job=job if not last_saved_stage else None,
-                optimizer_state=optimizer_state,
-                attempt=attempt,
-                started_at=started_at,
-            )
+            # Only metadata changed: do not rewrite other runs' results or our
+            # last resumable optimizer state. Family commits and terminal saves
+            # remain synchronous and durable; progress never grants completion.
+            if sidecar is not None and not force and optimizer_state is None:
+                save_progress(sidecar, run_id=run_id, ticker=ticker, attempt=attempt,
+                              started_at=started_at, fraction=last_fraction,
+                              stage=last_stage, message=message)
+            else:
+                save_strategy_lab_checkpoint(
+                    checkpoint_store,
+                    run_id=run_id,
+                    status="running",
+                    ticker=ticker,
+                    message=message,
+                    progress=last_fraction,
+                    stage=last_stage,
+                    job=job if not last_saved_stage else None,
+                    optimizer_state=optimizer_state,
+                    attempt=attempt,
+                    started_at=started_at,
+                    progress_storage=PROGRESS_FORMAT if sidecar is not None else "",
+                )
+            save_failed = False
         except AppError as exc:
+            save_failed = True
             warning = str(exc)
             if warning not in persistence_warnings:
                 persistence_warnings.append(warning)
-        last_saved_at = now
+        last_saved_at = time.monotonic()
         last_saved_fraction = last_fraction
         last_saved_stage = last_stage
 

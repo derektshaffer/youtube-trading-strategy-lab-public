@@ -181,9 +181,12 @@ def test_real_process_timeout_is_terminal_preserves_progress_and_never_retries(t
     item = queue["research_queue"][0]
     assert item["status"] == "failed" and item["attempts"] == 1 and item["next_attempt_at"] is None
     checkpoint = load_latest_strategy_lab_checkpoint(store, run_id=claimed["payload"]["run_id"])
-    assert checkpoint["status"] == "failed" and checkpoint["stage"] == "execution_timeout"
-    assert checkpoint["execution_error"] == {"category": "infrastructure", "kind": "execution_timeout",
-                                              "last_execution_stage": "optimization"}
+    assert checkpoint["status"] == "failed" and checkpoint["stage"] == "optimization"
+    assert checkpoint["terminal_reason"] == "execution_timeout"
+    assert checkpoint["execution_error"]["category"] == "infrastructure"
+    assert checkpoint["execution_error"]["kind"] == "execution_timeout"
+    assert checkpoint["execution_error"]["last_execution_stage"] == "optimization"
+    assert checkpoint["execution_error"]["diagnostic_timeout_minutes"] == 20
     assert checkpoint["progress"] == 0.37
     assert checkpoint["optimizer_state"]["completed_strategy_ids"] == [SID]
     assert "result" not in checkpoint and "evidence_verdict" not in checkpoint

@@ -260,7 +260,8 @@ def _complete_queue(
     mutate_remote_library(mutation)
 
 
-def _fail_queue(job_id: str, message: str, *, failure_kind: str = "") -> str:
+def _fail_queue(job_id: str, message: str, *, failure_kind: str = "",
+                execution_error: dict[str, Any] | None = None) -> str:
     holder = {"status": "failed"}
 
     def mutation(data: dict[str, Any]) -> dict[str, Any]:
@@ -281,6 +282,11 @@ def _fail_queue(job_id: str, message: str, *, failure_kind: str = "") -> str:
                     kind = failure_kind or item.get("failure_kind") or "execution_error"
                     item.update(failure_kind=kind, failure_step="diagnostic_execution", stage=kind,
                                 next_attempt_at=None)
+                    if execution_error:
+                        item["execution_error"] = deepcopy(execution_error)
+                        item["terminal_reason"] = kind
+                        item["progress"] = max(float(item.get("progress") or 0),
+                                               float(execution_error.get("last_progress") or 0))
                 holder["status"] = str(item.get("status") or "failed")
                 break
         return updated
@@ -394,6 +400,12 @@ def _diagnostic_terminal(remote_job: dict[str, Any], kind: str) -> dict[str, Any
     message = ("VALIDATION EXECUTION TIMED OUT" if kind == "execution_timeout"
                else "VALIDATION EXECUTION INTERRUPTED") + "; no strategy validation verdict was produced."
     warning = ""
+    execution_error = {
+        "category": "infrastructure", "kind": kind,
+        "terminal_reason": kind, "message": message,
+        **diagnostic_budget(payload),
+        **{key: payload[key] for key in ("diagnostic_attempt_started_at", "diagnostic_deadline_at") if key in payload},
+    }
     try:
         store = build_checkpoint_store()
         checkpoint = load_latest_strategy_lab_checkpoint(store, run_id=run_id)
@@ -403,18 +415,27 @@ def _diagnostic_terminal(remote_job: dict[str, Any], kind: str) -> dict[str, Any
                 _complete_queue(job_id, run_id=run_id,
                                 result_summary=strategy_lab_result_summary(saved, run_id=run_id))
                 return {"status": "complete", "job_id": job_id, "recovered_from_checkpoint": True}
+        previous_error = checkpoint.get("execution_error") or {}
+        last_stage = str(previous_error.get("last_execution_stage") or checkpoint.get("stage") or "unknown")
+        if last_stage in {"execution_timeout", "execution_interrupted", "failed", "aborted"}:
+            last_stage = "unknown"  # Never invent execution history lost by old code.
+        execution_error.update(
+            last_execution_stage=last_stage,
+            last_progress=float(checkpoint.get("progress") or 0),
+            last_checkpoint_saved_at=str(previous_error.get("last_checkpoint_saved_at")
+                                         or checkpoint.get("saved_at") or ""),
+        )
         save_strategy_lab_checkpoint(
             store, run_id=run_id, ticker=ticker, status="failed", message=message,
-            stage=kind, progress=float(checkpoint.get("progress") or 0),
+            stage=last_stage, progress=float(checkpoint.get("progress") or 0),
             job=dict(checkpoint.get("job") or payload), attempt=1,
-            execution_error={"category": "infrastructure", "kind": kind,
-                             "last_execution_stage": checkpoint.get("stage", "preparing")},
+            execution_error=execution_error,
         )
     except Exception as exc:
         # Still terminalize the queue if checkpoint I/O is unavailable. Workflow
         # finalization can repair the checkpoint later without another attempt.
         warning = f"Diagnostic checkpoint finalization unavailable ({type(exc).__name__})."
-    status = _fail_queue(job_id, message, failure_kind=kind)
+    status = _fail_queue(job_id, message, failure_kind=kind, execution_error=execution_error)
     return {"status": status, "job_id": job_id, "run_id": run_id,
             "failure_kind": kind if status == "failed" else "", "message": message,
             "warning": warning}

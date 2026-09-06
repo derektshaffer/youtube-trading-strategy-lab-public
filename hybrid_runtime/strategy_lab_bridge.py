@@ -221,11 +221,58 @@ def strategy_lab_checkpoint_record(
     return {}
 
 
+def strategy_lab_execution_error(item: Mapping[str, Any], checkpoint: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Allowlisted diagnostic details, bound to the exact queue run and ticker."""
+    payload = item.get("payload") or {}
+    if not diagnostic_budget(payload):
+        return {}
+    cp = checkpoint if isinstance(checkpoint, Mapping) else {}
+    if cp and (cp.get("id") != payload.get("run_id")
+               or str(cp.get("ticker") or "").upper() != str(payload.get("ticker") or "").upper()
+               or (item.get("attempts") and cp.get("attempt") != item.get("attempts"))):
+        cp = {}
+    source = cp.get("execution_error") if cp.get("status") == "failed" else None
+    source = source if isinstance(source, Mapping) else item.get("execution_error") or {}
+    kind = str(source.get("kind") or item.get("failure_kind") or "")
+    if kind not in {"execution_timeout", "execution_interrupted"}:
+        return {}
+    stage = str(source.get("last_execution_stage") or cp.get("stage") or "unknown")
+    if stage in {"execution_timeout", "execution_interrupted", "failed", "aborted"}:
+        stage = "unknown"
+    details = {
+        "type": "CloudStrategyLabExecutionError", "category": "infrastructure",
+        "kind": kind, "terminal_reason": kind,
+        "message": ("VALIDATION EXECUTION TIMED OUT" if kind == "execution_timeout"
+                    else "VALIDATION EXECUTION INTERRUPTED") + "; no strategy validation verdict was produced.",
+        "last_execution_stage": stage,
+        "last_progress": _clean_float(source.get("last_progress", cp.get("progress", item.get("progress"))), 0.0, 0.0, 1.0),
+        "last_checkpoint_saved_at": str(source.get("last_checkpoint_saved_at") or cp.get("saved_at") or ""),
+        **diagnostic_budget(payload),
+    }
+    for key in ("diagnostic_attempt_started_at", "diagnostic_deadline_at"):
+        value = payload.get(key) or source.get(key) or cp.get(key)
+        if value:
+            details[key] = str(value)
+    return details
+
+
 def overlay_strategy_lab_checkpoint(
     item: Mapping[str, Any],
     checkpoint: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     result = deepcopy(dict(item))
+    current_status = str(result.get("status") or "").strip().lower()
+    error = strategy_lab_execution_error(result, checkpoint)
+    if error and current_status not in {"complete", "cancelled", "canceled"}:
+        result.update(status="failed", error=error, failure_kind=error["kind"],
+                      terminal_reason=error["kind"], stage=error["last_execution_stage"],
+                      progress=max(_clean_float(result.get("progress"), 0, 0, 1), error["last_progress"]))
+        payload = dict(result.get("payload") or {})
+        payload.update(distributed_progress=result["progress"], distributed_stage=result["stage"],
+                       distributed_message=error["message"], strategy_lab_checkpoint_status="failed",
+                       strategy_lab_checkpoint_saved_at=error["last_checkpoint_saved_at"])
+        result["payload"] = payload
+        return result
     if not isinstance(checkpoint, Mapping) or not checkpoint:
         return result
     current_status = str(result.get("status") or "").strip().lower()
@@ -377,3 +424,28 @@ def strategy_lab_result_from_checkpoint(
         run_id=str(checkpoint.get("id") or ""),
         saved_at=str(checkpoint.get("saved_at") or ""),
     )
+
+
+def read_strategy_lab_progress(library, base_config, token, client_factory):
+    """Read optional lightweight progress while preserving the full checkpoint."""
+    from dataclasses import replace
+    from strategy_lab_progress import PROGRESS_FORMAT, progress_path, merge_progress
+    result = dict(library)
+    records = []
+    for record in library.get("validation_runs") or []:
+        if not isinstance(record, dict):
+            records.append(record)
+            continue
+        merged = record
+        if record.get("progress_storage") == PROGRESS_FORMAT and record.get("status") == "running":
+            try:
+                config = replace(strategy_lab_checkpoint_config(base_config),
+                    path=progress_path(STRATEGY_LAB_CHECKPOINT_PATH, str(record["id"])))
+                document = client_factory(config, token).read().data
+                merged = merge_progress(record, document)
+            except Exception:
+                # Progress is optional; its absence cannot become completion.
+                pass
+        records.append(merged)
+    result["validation_runs"] = records
+    return result
