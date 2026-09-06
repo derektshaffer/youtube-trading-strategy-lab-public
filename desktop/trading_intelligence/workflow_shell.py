@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
     QComboBox, QLineEdit, QTableWidget, QScrollArea, QSizePolicy,
 )
 from .display_time import format_timestamp
+from .market_data_labels import snapshot_label
 from .workflow_widgets import Disclosure, WorkflowPageStack, PageWheelRouter, readable_table, ResponsiveAnalysisToolbar
 from .workflow_style import STYLESHEET
 
@@ -327,9 +328,9 @@ class WorkflowShell(QObject):
             self.context_status.setText("Stock-specific evidence: no saved result opened for this selection")
         if self.snapshot.get("symbol", "").upper() == self.ticker:
             metrics = self.snapshot.get("metrics") or {}
-            stamp = format_timestamp(metrics.get("trade_timestamp") or metrics.get("quote_timestamp"), "time not recorded")
+            stamp = snapshot_label(metrics)
             price = metrics.get("price")
-            self.context_ticker.setToolTip(f"Discovery snapshot price: {price if price is not None else 'not recorded'}\nAs of {stamp}. Not a live quote.")
+            self.context_ticker.setToolTip(f"Discovery snapshot price: {price if price is not None else 'not recorded'}\n{stamp}")
         self.strategy_summary.setText(f"{self.strategy_name or 'No strategy selected'}\nStrategy ID: {self.strategy_id or 'not selected'}\nStrategy library status: {self.library_state} (not a ticker-specific validation verdict).\n\n" + (w.analysis.signal_summary.text() if self.snapshot.get("symbol", "").upper() == self.ticker else "No saved match explanation for this ticker."))
         self.next.setText("Analyze " + self.ticker if page is w.market_discovery and self.ticker else
                           "View Strategy" if page is w.analysis else

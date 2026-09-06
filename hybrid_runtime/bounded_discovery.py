@@ -9,7 +9,8 @@ import time
 from .engine_adapter import JobCancelled
 
 
-DISCOVERY_TIMEOUTS = {"market.discovery": 900.0, "library.strategy_lab_options": 300.0}
+DISCOVERY_TIMEOUTS = {"market.discovery": 900.0, "library.strategy_lab_options": 300.0,
+                      "analysis.stock": 180.0}
 
 
 def run_bounded(handler, payload, progress, cancelled, heartbeat, *, timeout):
@@ -45,7 +46,7 @@ def run_bounded(handler, payload, progress, cancelled, heartbeat, *, timeout):
                 raise JobCancelled("Discovery cancellation requested")
             now = time.monotonic()
             if now - started >= timeout:
-                raise TimeoutError(f"Discover Stocks operation exceeded {timeout:g} seconds; run it again.")
+                raise TimeoutError(f"Local market-data operation exceeded {timeout:g} seconds; run it again.")
             if now - last_heartbeat >= 5:
                 heartbeat()
                 last_heartbeat = now

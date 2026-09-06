@@ -117,7 +117,7 @@ def normalize_provider_bars(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             volume = max(0, int(_finite_number(_first(raw, "v", "volume") or 0, field="volume")))
         except (ValueError, TypeError, OSError):
             continue
-        if high < low or max(opening, close) > high + 1e-9 or min(opening, close) < low - 1e-9:
+        if min(opening, high, low, close) <= 0 or high < low or max(opening, close) > high + 1e-9 or min(opening, close) < low - 1e-9:
             continue
         epoch = int(stamp.timestamp())
         provider_vwap = _first(raw, "vw", "vwap", "provider_vwap")
@@ -224,6 +224,8 @@ def analysis_summary(candles: list[dict[str, Any]], *, now: datetime | None = No
     current_time = (now or _utc_now()).astimezone(UTC)
     latest = candles[-1]
     latest_time = datetime.fromtimestamp(int(latest["time"]), tz=UTC)
+    if latest_time > current_time:
+        raise MarketCacheError("Latest candle has an invalid future timestamp")
     latest_session = str(latest.get("session") or "")
     prior_session_close: float | None = None
     for row in reversed(candles[:-1]):
@@ -391,7 +393,9 @@ class PersistentMarketDataCache:
         history_days = max(2, min(120, int(history_days)))
         max_cache_age_seconds = max(0, min(300, int(max_cache_age_seconds)))
         cached = self.load(symbol, timeframe, feed, adjustment)
-        cached_candles = list((cached or {}).get("candles") or [])
+        completed_cutoff = int(current_time.timestamp()) - SUPPORTED_TIMEFRAMES[timeframe]
+        cached_candles = [row for row in (cached or {}).get("candles") or []
+                          if isinstance(row, Mapping) and int(row.get("time", 0)) <= completed_cutoff]
 
         if cancelled and cancelled():
             raise MarketCacheError("Market-data refresh was cancelled")
@@ -400,7 +404,7 @@ class PersistentMarketDataCache:
                 refreshed_at = _parse_time(cached.get("refreshed_at"))
             except ValueError:
                 refreshed_at = datetime.fromtimestamp(0, tz=UTC)
-            if (current_time - refreshed_at).total_seconds() <= max_cache_age_seconds:
+            if 0 <= (current_time - refreshed_at).total_seconds() <= max_cache_age_seconds:
                 enriched = enrich_candles(cached_candles)
                 result = dict(cached)
                 result["candles"] = enriched
@@ -439,9 +443,14 @@ class PersistentMarketDataCache:
             max_pages=25,
         )
         provider_rows = response.get(symbol) if isinstance(response, Mapping) else None
-        normalized_new = normalize_provider_bars(
-            [dict(row) for row in provider_rows or [] if isinstance(row, Mapping)]
-        )
+        if not isinstance(provider_rows, list):
+            raise MarketCacheError(f"Alpaca returned missing or malformed candles for {symbol}")
+        if any(not isinstance(row, Mapping) or not normalize_provider_bars([row]) for row in provider_rows):
+            raise MarketCacheError(f"Alpaca returned incomplete or invalid candles for {symbol}")
+        normalized_new = normalize_provider_bars(provider_rows)
+        if any(row["time"] > current_time.timestamp() for row in normalized_new):
+            raise MarketCacheError("Alpaca returned a candle with an invalid future timestamp")
+        normalized_new = [row for row in normalized_new if row["time"] <= completed_cutoff]
         merged: dict[int, dict[str, Any]] = {
             int(row["time"]): dict(row)
             for row in cached_candles
@@ -460,6 +469,16 @@ class PersistentMarketDataCache:
         if cancelled and cancelled():
             raise MarketCacheError("Market-data refresh was cancelled")
         enriched = enrich_candles(merged_rows)
+        if cancelled and cancelled():
+            raise MarketCacheError("Market-data refresh was cancelled")
+        if not normalized_new and cached:
+            # An empty overlap does not make existing history freshly acquired.
+            # Keep useful closed-market history, explicitly labeled, without
+            # advancing its refresh timestamp or modifying the cached artifact.
+            return {**cached, "candles": enriched, "cache_hit": True,
+                    "network_request": True, "provider_rows": 0,
+                    "refresh_warning": "No new completed candles returned; previous historical cache retained, not live.",
+                    "summary": analysis_summary(enriched, now=current_time)}
         saved = self.save(
             symbol=symbol,
             timeframe=timeframe,
@@ -510,7 +529,7 @@ def run_stock_analysis(
     history_days = max(2, min(120, int(payload.get("history_days") or 20)))
     max_cache_age_seconds = max(
         0,
-        min(300, int(payload.get("max_cache_age_seconds") or 20)),
+        min(300, int(payload.get("max_cache_age_seconds", 20))),
     )
     progress(0.05, "downloading_data", "Loading secure Alpaca credentials")
     api_key, secret_key = load_alpaca_credentials()
@@ -524,6 +543,8 @@ def run_stock_analysis(
         live_feed=feed,
         historical_feed=feed,
     )
+    from .desktop_market_data import DesktopMarketData
+    provider = DesktopMarketData(provider, cancelled=cancelled)
     cache = PersistentMarketDataCache(data_dir)
     refreshed = cache.refresh(
         provider,
@@ -556,4 +577,5 @@ def run_stock_analysis(
         "research_only": True,
         "affects_execution": False,
         "price_label": "Latest completed Alpaca candle close",
+        "refresh_warning": str(refreshed.get("refresh_warning") or ""),
     }

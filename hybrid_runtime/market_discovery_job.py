@@ -137,6 +137,8 @@ def run_market_discovery(
         live_feed=feed,
         historical_feed=feed,
     )
+    from .desktop_market_data import DesktopMarketData
+    market = DesktopMarketData(market, cancelled=cancelled)
 
     universe = str(payload.get("universe") or "momentum").strip().lower()
     count = _bounded_count(payload.get("candidate_count"))
@@ -186,6 +188,11 @@ def run_market_discovery(
     )
     _check_cancelled(cancelled)
     progress(0.95, "saving", "Preparing ranked stock matches")
+    for item in results:
+        metrics = dict(item.get("metrics") or {})
+        metrics.update(market.snapshot_provenance.get(str(item.get("symbol") or ""), {}))
+        metrics.setdefault("feed", feed)
+        item["metrics"] = metrics
     matches = [
         item
         for item in results
