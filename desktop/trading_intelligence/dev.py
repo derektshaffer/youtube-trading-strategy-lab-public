@@ -6,7 +6,6 @@ import fcntl
 import json
 import os
 from pathlib import Path
-import signal
 import sys
 
 from .runtime import DesktopRuntime
@@ -86,14 +85,14 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["TRADING_INTELLIGENCE_DESKTOP_DATA_DIR"] = str(data_dir)
         runtime = SourceRuntime(data_dir=data_dir)
 
-        def stop_on_signal(signum: int, _frame: object) -> None:
-            runtime.stop()
-            raise SystemExit(128 + signum)
+        from PySide6.QtWidgets import QApplication
+        from .dev_signals import QtSignalShutdown
 
-        for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-            signal.signal(signum, stop_on_signal)
+        application = QApplication.instance() or QApplication([])
         try:
-            return run_gui(runtime, smoke=args.smoke, metrics_output=args.metrics_output)
+            with QtSignalShutdown(application) as shutdown:
+                result = run_gui(runtime, smoke=args.smoke, metrics_output=args.metrics_output)
+                return shutdown.exit_code or result
         finally:
             runtime.stop()
 
