@@ -430,11 +430,13 @@ class CloudBridgeWorker:
             return reconnect_finder(self, job_id)
 
     def _jobs(self) -> list[JobRecord]:
+        from .strategy_lab_result_projection import needs_projection
         return [
             job
             for job in self.service.list(limit=1_000)
             if job.execution_target == ExecutionTarget.CLOUD
-            and (job.status not in TERMINAL_JOB_STATUSES or self._needs_diagnostic_details(job))
+            and (job.status not in TERMINAL_JOB_STATUSES or self._needs_diagnostic_details(job)
+                 or (needs_projection(job) and job.id not in getattr(self, "_projection_checked_ids", set())))
             and job.job_type in SUPPORTED_CLOUD_JOB_TYPES
             and not (job.status == JobStatus.RETRY_WAIT and job.stage == "cloud_submission_failed")
         ]
@@ -710,6 +712,17 @@ class CloudBridgeWorker:
         self._link(job, item, settings, revision=revision, library=library)
         current = self.service.get(job.id)
         if current.status in TERMINAL_JOB_STATUSES:
+            from .strategy_lab_result_projection import PROJECTION_VERSION, needs_projection
+            remote_result = item.get("result") if isinstance(item.get("result"), Mapping) else {}
+            if (needs_projection(current) and status == "complete"
+                    and remote_result.get("projection_version") == PROJECTION_VERSION):
+                self.service.store.enrich_completed_strategy_lab(
+                    job.id, result={**dict(remote_result), "job_id": job.id,
+                        "remote_job_id": str(item.get("id") or ""),
+                        "remote_dedupe_key": str(item.get("dedupe_key") or ""),
+                        "result_ref": str(item.get("result_ref") or ""),
+                        "research_library_revision": revision},
+                    expected_result=current.result)
             if (current.status == JobStatus.FAILED and job.job_type == "strategy.strategy_lab"
                     and status == "failed" and isinstance(item.get("error"), Mapping)
                     and item["error"].get("type") == "CloudStrategyLabExecutionError"
@@ -795,6 +808,7 @@ class CloudBridgeWorker:
                     job.id,
                     {
                         **dict(remote_result),
+                        "job_id": job.id,
                         "remote_job_id": str(item.get("id") or ""),
                         "remote_dedupe_key": str(item.get("dedupe_key") or ""),
                         "result_ref": str(item.get("result_ref") or ""),
@@ -1008,6 +1022,10 @@ class CloudBridgeWorker:
                     )
             plan: dict[str, Any] | None = None
             if job.status in TERMINAL_JOB_STATUSES:
+                # One read-only historical projection pass per backend lifetime.
+                # Missing/evicted checkpoints never cause endless polling or execution.
+                self._projection_checked_ids = getattr(self, "_projection_checked_ids", set())
+                self._projection_checked_ids.add(job.id)
                 # Historical failure detail repair is a read-only attachment.
                 # A missing exact queue row must never create/dispatch a job.
                 remote_id = str((link or {}).get("remote_job_id") or "")

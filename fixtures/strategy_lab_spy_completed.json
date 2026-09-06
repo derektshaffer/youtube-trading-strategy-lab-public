@@ -1,0 +1,693 @@
+{
+  "checkpoint": {
+    "id": "spy-diagnostic-2-20260906T012943Z-c1e52265",
+    "record_type": "strategy_lab_checkpoint",
+    "status": "complete",
+    "ticker": "SPY",
+    "saved_at": "2026-09-06T01:37:29.531357+00:00",
+    "attempt": 1
+  },
+  "result": {
+    "ticker": "SPY",
+    "timeframe": "5Min",
+    "history_days": 30,
+    "report": {
+      "symbol": "SPY",
+      "generated_at": "2026-09-06T01:32:50.987874Z",
+      "automatic_slippage_enabled": true,
+      "session_count": 23,
+      "strategies_tested": 1,
+      "resumed_strategy_count": 0,
+      "resume_fingerprint": "b1ce99a99ecbeab5b6a5a364",
+      "variants_tested": 202,
+      "rule_variants_tested": 44,
+      "execution_variants_tested": 158,
+      "adaptive_refinement_tests": 40,
+      "unique_configurations_tested": 194,
+      "training_sessions": [
+        "2026-08-05",
+        "2026-08-06",
+        "2026-08-07",
+        "2026-08-10",
+        "2026-08-11",
+        "2026-08-12",
+        "2026-08-13",
+        "2026-08-14",
+        "2026-08-17",
+        "2026-08-18",
+        "2026-08-19",
+        "2026-08-20",
+        "2026-08-21"
+      ],
+      "validation_sessions": [
+        "2026-08-24",
+        "2026-08-25",
+        "2026-08-26",
+        "2026-08-27",
+        "2026-08-28"
+      ],
+      "holdout_sessions": [
+        "2026-08-31",
+        "2026-09-01",
+        "2026-09-02",
+        "2026-09-03",
+        "2026-09-04"
+      ],
+      "backtest_settings": {
+        "starting_cash": 2000.0,
+        "risk_per_trade_pct": 0.5,
+        "max_position_pct": 20.0,
+        "default_stop_pct": 2.0,
+        "default_reward_risk": 2.0,
+        "spread_bps": 12.0,
+        "slippage_bps": 8.0,
+        "fee_per_order": 0.0,
+        "train_fraction": 0.7,
+        "max_concurrent_positions": 4,
+        "allow_extended_hours": true,
+        "extended_hours_position_scale": 0.25,
+        "ignore_strategy_session_end": true,
+        "allow_price_extension_after_qualification": true,
+        "require_pullback_breakout_for_pullback_strategies": true
+      },
+      "optimization_settings": {
+        "max_variants_per_strategy": 12,
+        "finalists_per_strategy": 6,
+        "minimum_training_trades": 5,
+        "minimum_validation_trades": 2,
+        "enforce_historical_minimum_trades": true,
+        "minimum_historical_trades": 8,
+        "training_fraction": 0.6,
+        "validation_fraction": 0.2,
+        "stress_cost_multiplier": 1.75,
+        "execution_sensitivity_multipliers": [
+          1.25,
+          1.5,
+          1.75,
+          2.0
+        ],
+        "optimize_position_sizing": true,
+        "automatic_slippage": true,
+        "max_execution_variants_per_finalist": 7,
+        "maximum_drawdown_pct": 15.0,
+        "selection_mode": "validated"
+      },
+      "winner": {
+        "source_strategy_id": "webresearch-c238a2839213bb33d9",
+        "strategy_name": "Pivot-Confirmed Swing High AVWAP Dynamic Trend Filter",
+        "symbol": "SPY",
+        "automatic_slippage_enabled": true,
+        "estimated_slippage_bps": 8.0,
+        "variants_tested": 202,
+        "rule_variants_tested": 44,
+        "execution_variants_tested": 158,
+        "adaptive_refinement_tests": 40,
+        "finalists_tested": 6,
+        "training_metrics": {
+          "trade_count": 0,
+          "win_rate_pct": 0.0,
+          "net_pnl": 0.0,
+          "return_pct": 0.0,
+          "average_trade": 0.0,
+          "profit_factor": null,
+          "max_drawdown_pct": 0.0,
+          "average_winner": 0.0,
+          "average_loser": 0.0
+        },
+        "validation_metrics": {
+          "trade_count": 0,
+          "win_rate_pct": 0.0,
+          "net_pnl": 0.0,
+          "return_pct": 0.0,
+          "average_trade": 0.0,
+          "profit_factor": null,
+          "max_drawdown_pct": 0.0,
+          "average_winner": 0.0,
+          "average_loser": 0.0
+        },
+        "stress_metrics": {
+          "trade_count": 0,
+          "win_rate_pct": 0.0,
+          "net_pnl": 0.0,
+          "return_pct": 0.0,
+          "average_trade": 0.0,
+          "profit_factor": null,
+          "max_drawdown_pct": 0.0,
+          "average_winner": 0.0,
+          "average_loser": 0.0
+        },
+        "execution_sensitivity_tests": 4,
+        "score": -1.88,
+        "status": "LIMITED DATA",
+        "adequate_sample": false,
+        "baseline_training_metrics": {
+          "trade_count": 0,
+          "win_rate_pct": 0.0,
+          "net_pnl": 0.0,
+          "return_pct": 0.0,
+          "average_trade": 0.0,
+          "profit_factor": null,
+          "max_drawdown_pct": 0.0,
+          "average_winner": 0.0,
+          "average_loser": 0.0
+        },
+        "limitations": [
+          "Optimal pivot confirmation lookback window (e.g., 3-bar vs 5-bar vs 10-bar lag) based on specific market volatility profiles.",
+          "Minimum AVWAP slope angle or percentage change threshold to minimize whipsawing in ranging markets.",
+          "Time decay limits (how many bars after the pivot before the anchor loses significance).",
+          "The video did not specify an exact stop; the editable default stop is a research assumption.",
+          "The video did not specify an exact target; the editable reward/risk setting is a research assumption."
+        ],
+        "pre_holdout_status": "LIMITED DATA",
+        "holdout_metrics": {
+          "trade_count": 0,
+          "win_rate_pct": 0.0,
+          "net_pnl": 0.0,
+          "return_pct": 0.0,
+          "average_trade": 0.0,
+          "profit_factor": null,
+          "max_drawdown_pct": 0.0,
+          "average_winner": 0.0,
+          "average_loser": 0.0
+        },
+        "full_metrics": {
+          "trade_count": 0,
+          "win_rate_pct": 0.0,
+          "net_pnl": 0.0,
+          "return_pct": 0.0,
+          "average_trade": 0.0,
+          "profit_factor": null,
+          "max_drawdown_pct": 0.0,
+          "average_winner": 0.0,
+          "average_loser": 0.0
+        },
+        "holdout_execution_sensitivity_tests": 0,
+        "execution_sensitivity": {
+          "score": 0.0,
+          "label": "NOT APPLICABLE",
+          "passes_validation_gate": false,
+          "baseline_net_pnl": 0.0,
+          "profitable_multiplier_pct": 0.0,
+          "median_pnl_retention_pct": null,
+          "first_unprofitable_multiplier": null,
+          "points": [
+            {
+              "multiplier": 1.25,
+              "spread_bps": 15.0,
+              "slippage_bps": 10.0,
+              "metrics": {
+                "trade_count": 0,
+                "win_rate_pct": 0.0,
+                "net_pnl": 0.0,
+                "return_pct": 0.0,
+                "average_trade": 0.0,
+                "profit_factor": null,
+                "max_drawdown_pct": 0.0,
+                "average_winner": 0.0,
+                "average_loser": 0.0
+              },
+              "profitable": false,
+              "pnl_change": 0.0,
+              "pnl_retention_pct": null
+            },
+            {
+              "multiplier": 1.5,
+              "spread_bps": 18.0,
+              "slippage_bps": 12.0,
+              "metrics": {
+                "trade_count": 0,
+                "win_rate_pct": 0.0,
+                "net_pnl": 0.0,
+                "return_pct": 0.0,
+                "average_trade": 0.0,
+                "profit_factor": null,
+                "max_drawdown_pct": 0.0,
+                "average_winner": 0.0,
+                "average_loser": 0.0
+              },
+              "profitable": false,
+              "pnl_change": 0.0,
+              "pnl_retention_pct": null
+            },
+            {
+              "multiplier": 1.75,
+              "spread_bps": 21.0,
+              "slippage_bps": 14.0,
+              "metrics": {
+                "trade_count": 0,
+                "win_rate_pct": 0.0,
+                "net_pnl": 0.0,
+                "return_pct": 0.0,
+                "average_trade": 0.0,
+                "profit_factor": null,
+                "max_drawdown_pct": 0.0,
+                "average_winner": 0.0,
+                "average_loser": 0.0
+              },
+              "profitable": false,
+              "pnl_change": 0.0,
+              "pnl_retention_pct": null
+            },
+            {
+              "multiplier": 2.0,
+              "spread_bps": 24.0,
+              "slippage_bps": 16.0,
+              "metrics": {
+                "trade_count": 0,
+                "win_rate_pct": 0.0,
+                "net_pnl": 0.0,
+                "return_pct": 0.0,
+                "average_trade": 0.0,
+                "profit_factor": null,
+                "max_drawdown_pct": 0.0,
+                "average_winner": 0.0,
+                "average_loser": 0.0
+              },
+              "profitable": false,
+              "pnl_change": 0.0,
+              "pnl_retention_pct": null
+            }
+          ],
+          "note": "Execution-cost sensitivity is only meaningful after the baseline validation period has positive simulated P/L."
+        },
+        "holdout_execution_sensitivity": {
+          "score": 0.0,
+          "label": "NOT APPLICABLE",
+          "passes_validation_gate": false,
+          "baseline_net_pnl": 0.0,
+          "profitable_multiplier_pct": 0.0,
+          "median_pnl_retention_pct": null,
+          "first_unprofitable_multiplier": null,
+          "points": [],
+          "note": "Execution-cost sensitivity is only meaningful after the baseline validation period has positive simulated P/L."
+        }
+      },
+      "warnings": [
+        "The highest-ranked setup has too few trades to support a reliable conclusion.",
+        "No tested strategy earned a positive simulated result in the separate validation period.",
+        "The final untouched holdout contains too few trades to confirm this strategy."
+      ],
+      "recommended_backtest_settings": {
+        "starting_cash": 2000.0,
+        "risk_per_trade_pct": 0.05,
+        "max_position_pct": 20.0,
+        "default_stop_pct": 2.0,
+        "default_reward_risk": 2.0,
+        "spread_bps": 12.0,
+        "slippage_bps": 8.0,
+        "fee_per_order": 0.0,
+        "train_fraction": 0.7,
+        "max_concurrent_positions": 4,
+        "allow_extended_hours": true,
+        "extended_hours_position_scale": 0.25,
+        "ignore_strategy_session_end": true,
+        "allow_price_extension_after_qualification": true,
+        "require_pullback_breakout_for_pullback_strategies": true
+      },
+      "winning_backtest": {
+        "limitations": [
+          "Optimal pivot confirmation lookback window (e.g., 3-bar vs 5-bar vs 10-bar lag) based on specific market volatility profiles.",
+          "Minimum AVWAP slope angle or percentage change threshold to minimize whipsawing in ranging markets.",
+          "Time decay limits (how many bars after the pivot before the anchor loses significance)."
+        ]
+      }
+    },
+    "walk_forward": {
+      "symbol": "SPY",
+      "summary": {
+        "score": 10.0,
+        "label": "WEAK",
+        "fold_count": 3,
+        "active_fold_count": 0,
+        "profitable_fold_count": 0,
+        "profitable_fold_pct": 0.0,
+        "temporal_coverage_pct": 0.0,
+        "profitable_scheduled_fold_pct": 0.0,
+        "external_trade_count": 0,
+        "external_net_pnl": 0.0,
+        "external_return_pct": 0.0,
+        "external_profit_factor": null,
+        "max_fold_drawdown_pct": 0.0,
+        "median_fold_return_pct": 0.0,
+        "average_fold_return_pct": 0.0,
+        "selected_strategy_counts": {
+          "Pivot-Confirmed Swing High AVWAP Dynamic Trend Filter": 3
+        },
+        "embargo_sessions": 1,
+        "adaptive_learning_enabled": true,
+        "adaptive_experience_count": 3,
+        "adaptive_profitable_experience_count": 0,
+        "broad_profitable_neighborhood_fold_count": 0,
+        "incomplete_neighborhood_fold_count": 0
+      },
+      "warnings": [
+        "3 walk-forward fold(s) produced no trades in the external test block.",
+        "Fewer than half of the active walk-forward folds were profitable.",
+        "No unseen fold established a broad profitable parameter neighborhood; adaptation is still relying mainly on exact completed-fold winners."
+      ],
+      "note": "Each external fold is unseen by that fold's optimizer, with 1 whole session(s) deliberately omitted immediately before the test block. Nearby parameter candidates are also frozen before external scoring. Results remain historical simulations and do not establish future profitability.",
+      "folds": [
+        {
+          "fold": 1,
+          "history_start": "2026-08-05",
+          "history_end": "2026-08-24",
+          "external_test_start": "2026-08-26",
+          "external_test_end": "2026-08-27",
+          "history_session_count": 14,
+          "embargo_session_count": 1,
+          "embargo_start": "2026-08-25",
+          "embargo_end": "2026-08-25",
+          "test_session_count": 2,
+          "selected_strategy_id": "webresearch-c238a2839213bb33d9",
+          "selected_strategy_name": "Pivot-Confirmed Swing High AVWAP Dynamic Trend Filter",
+          "optimizer_status": "LIMITED DATA",
+          "external_metrics": {
+            "trade_count": 0,
+            "win_rate_pct": 0.0,
+            "net_pnl": 0.0,
+            "return_pct": 0.0,
+            "average_trade": 0.0,
+            "profit_factor": null,
+            "max_drawdown_pct": 0.0,
+            "average_winner": 0.0,
+            "average_loser": 0.0
+          },
+          "adaptive_learning_enabled": true,
+          "adaptive_experience_count_before_fold": 0,
+          "adaptive_learning_cutoff": null,
+          "adaptive_seeded_rule_values": 0,
+          "adaptive_neighborhood_seeded_rule_values": 0,
+          "adaptive_seeded_setting_values": 0,
+          "validation_neighbor_candidate_count": 0,
+          "validation_neighbor_failure_count": 0,
+          "static_baseline_external_metrics": null
+        },
+        {
+          "fold": 2,
+          "history_start": "2026-08-05",
+          "history_end": "2026-08-27",
+          "external_test_start": "2026-08-31",
+          "external_test_end": "2026-09-01",
+          "history_session_count": 17,
+          "embargo_session_count": 1,
+          "embargo_start": "2026-08-28",
+          "embargo_end": "2026-08-28",
+          "test_session_count": 2,
+          "selected_strategy_id": "webresearch-c238a2839213bb33d9",
+          "selected_strategy_name": "Pivot-Confirmed Swing High AVWAP Dynamic Trend Filter",
+          "optimizer_status": "LIMITED DATA",
+          "external_metrics": {
+            "trade_count": 0,
+            "win_rate_pct": 0.0,
+            "net_pnl": 0.0,
+            "return_pct": 0.0,
+            "average_trade": 0.0,
+            "profit_factor": null,
+            "max_drawdown_pct": 0.0,
+            "average_winner": 0.0,
+            "average_loser": 0.0
+          },
+          "adaptive_learning_enabled": true,
+          "adaptive_experience_count_before_fold": 1,
+          "adaptive_learning_cutoff": "2026-08-27",
+          "adaptive_seeded_rule_values": 0,
+          "adaptive_neighborhood_seeded_rule_values": 0,
+          "adaptive_seeded_setting_values": 0,
+          "validation_neighbor_candidate_count": 0,
+          "validation_neighbor_failure_count": 0,
+          "static_baseline_external_metrics": null
+        },
+        {
+          "fold": 3,
+          "history_start": "2026-08-05",
+          "history_end": "2026-09-01",
+          "external_test_start": "2026-09-03",
+          "external_test_end": "2026-09-04",
+          "history_session_count": 20,
+          "embargo_session_count": 1,
+          "embargo_start": "2026-09-02",
+          "embargo_end": "2026-09-02",
+          "test_session_count": 2,
+          "selected_strategy_id": "webresearch-c238a2839213bb33d9",
+          "selected_strategy_name": "Pivot-Confirmed Swing High AVWAP Dynamic Trend Filter",
+          "optimizer_status": "LIMITED DATA",
+          "external_metrics": {
+            "trade_count": 0,
+            "win_rate_pct": 0.0,
+            "net_pnl": 0.0,
+            "return_pct": 0.0,
+            "average_trade": 0.0,
+            "profit_factor": null,
+            "max_drawdown_pct": 0.0,
+            "average_winner": 0.0,
+            "average_loser": 0.0
+          },
+          "adaptive_learning_enabled": true,
+          "adaptive_experience_count_before_fold": 2,
+          "adaptive_learning_cutoff": "2026-09-01",
+          "adaptive_seeded_rule_values": 0,
+          "adaptive_neighborhood_seeded_rule_values": 0,
+          "adaptive_seeded_setting_values": 0,
+          "validation_neighbor_candidate_count": 0,
+          "validation_neighbor_failure_count": 0,
+          "static_baseline_external_metrics": null
+        }
+      ]
+    },
+    "strength": {
+      "score": 13.0,
+      "raw_score_before_caps": 13.0,
+      "score_cap": 39.0,
+      "base_score": 15.0,
+      "walk_forward_score": 10.0,
+      "walk_forward_fold_count": 3,
+      "walk_forward_active_fold_count": 0,
+      "walk_forward_temporal_coverage_pct": 0.0,
+      "walk_forward_profitable_scheduled_pct": 0.0,
+      "execution_sensitivity_score": 0.0,
+      "execution_sensitivity_label": "NOT APPLICABLE",
+      "execution_sensitivity_scope": "untouched_holdout",
+      "optimizer_status": "LIMITED DATA",
+      "minimum_unseen_trades_for_high_confidence": 15,
+      "label": "WEAK",
+      "independently_positive": false,
+      "reasons": [
+        "Validation sample is small.",
+        "Validation P/L is not positive.",
+        "Final holdout sample is small.",
+        "Final untouched holdout P/L is not positive.",
+        "Untouched-holdout execution-cost robustness could not be established.",
+        "Optimizer status is LIMITED DATA; robustness is capped at 39/100.",
+        "Training P/L is not positive, so the setup is not stable across the anchor history.",
+        "Untouched-holdout execution-cost robustness is unavailable, so execution robustness fails closed.",
+        "High robustness requires at least 15 validation trades and 15 untouched holdout trades.",
+        "Too few scheduled walk-forward folds produced trades to establish temporal robustness.",
+        "Fewer than half of all scheduled walk-forward folds were profitable once inactive folds are counted.",
+        "Fewer than half of active walk-forward folds were profitable."
+      ],
+      "note": "Robustness summarizes anchor-stock historical validation. When available, execution-cost robustness is taken from the frozen winner's untouched holdout curve rather than the development validation curve. Walk-forward temporal coverage also counts inactive scheduled folds so sparse activity cannot masquerade as broad consistency. Stability caps prevent negative/unstable, undersized, or near-breakeven evidence from receiving a misleading high rating; it is not a probability of profit."
+    },
+    "parameter_stability": {
+      "status": "complete",
+      "label": "BRITTLE",
+      "tested": 12,
+      "active": 0,
+      "positive": 0,
+      "positive_pct": 0.0,
+      "median_net_pnl": 0.0,
+      "worst_net_pnl": 0.0,
+      "best_net_pnl": 0.0,
+      "note": "Nearby rule perturbations are evaluated only as a post-selection holdout diagnostic. Each variant retains the full pre-holdout causal warmup/context and only its holdout trades are scored; variants do not get to re-optimize the winner.",
+      "results": [
+        {
+          "signature": "551569d41097d5bdb0ac",
+          "net_pnl": 0.0,
+          "trade_count": 0,
+          "profit_factor": null,
+          "max_drawdown_pct": 0.0
+        },
+        {
+          "signature": "764c059b03520d735e63",
+          "net_pnl": 0.0,
+          "trade_count": 0,
+          "profit_factor": null,
+          "max_drawdown_pct": 0.0
+        },
+        {
+          "signature": "0b47002ca7f0f4e11eec",
+          "net_pnl": 0.0,
+          "trade_count": 0,
+          "profit_factor": null,
+          "max_drawdown_pct": 0.0
+        },
+        {
+          "signature": "725aef991e8771456031",
+          "net_pnl": 0.0,
+          "trade_count": 0,
+          "profit_factor": null,
+          "max_drawdown_pct": 0.0
+        },
+        {
+          "signature": "d1bb1c0b16f98f67a559",
+          "net_pnl": 0.0,
+          "trade_count": 0,
+          "profit_factor": null,
+          "max_drawdown_pct": 0.0
+        },
+        {
+          "signature": "478d91bbbf8e57d6c27a",
+          "net_pnl": 0.0,
+          "trade_count": 0,
+          "profit_factor": null,
+          "max_drawdown_pct": 0.0
+        },
+        {
+          "signature": "194582cb13456dce972a",
+          "net_pnl": 0.0,
+          "trade_count": 0,
+          "profit_factor": null,
+          "max_drawdown_pct": 0.0
+        },
+        {
+          "signature": "4f5100d82ee00c9d2215",
+          "net_pnl": 0.0,
+          "trade_count": 0,
+          "profit_factor": null,
+          "max_drawdown_pct": 0.0
+        },
+        {
+          "signature": "2c0c086fd8040f475fae",
+          "net_pnl": 0.0,
+          "trade_count": 0,
+          "profit_factor": null,
+          "max_drawdown_pct": 0.0
+        },
+        {
+          "signature": "c660d70d9b4929019487",
+          "net_pnl": 0.0,
+          "trade_count": 0,
+          "profit_factor": null,
+          "max_drawdown_pct": 0.0
+        },
+        {
+          "signature": "628e2f3dbdc2f0ed81fd",
+          "net_pnl": 0.0,
+          "trade_count": 0,
+          "profit_factor": null,
+          "max_drawdown_pct": 0.0
+        },
+        {
+          "signature": "c706e9a9be0e7a80ce7b",
+          "net_pnl": 0.0,
+          "trade_count": 0,
+          "profit_factor": null,
+          "max_drawdown_pct": 0.0
+        }
+      ]
+    },
+    "evidence_verdict": {
+      "code": "no_robust_strategy",
+      "label": "NO RELIABLE EDGE FOUND",
+      "tone": "error",
+      "research_tier": "no_reliable_edge",
+      "paper_ready": false,
+      "reason": "The broad search tested historical candidates, but the strongest configuration did not show enough positive evidence to justify even a promising stock-specific classification."
+    },
+    "paper_execution_fidelity": {
+      "status": "blocked",
+      "label": "PAPER EXECUTION DOES NOT FULLY MATCH BACKTEST",
+      "unsupported_management": [
+        "Anchored VWAP signal/management parity",
+        "Guaranteed end-of-session flattening"
+      ],
+      "reason": "The current Paper Auto path is an entry helper, not a persistent trade manager. It cannot yet guarantee the same intraday position lifecycle used by the backtester, including mandatory session-end flattening and the strategy-specific management listed above.",
+      "research_backtest_forces_session_flat": true,
+      "paper_runner_persistent_manager": false
+    },
+    "historical_spread_audit": {
+      "status": "NO_TRADES",
+      "label": "NO HOLDOUT ENTRIES TO AUDIT",
+      "symbol": "SPY",
+      "holdout_trade_count": 0,
+      "sampled_entry_count": 0,
+      "quote_count": 0,
+      "quote_feeds": [],
+      "consolidated_sip_quotes": false,
+      "coverage_pct": 0.0,
+      "maximum_quote_age_seconds": 5.0,
+      "modeled_spread_bps": 12.0,
+      "maximum_stress_multiplier": 2.0,
+      "tested_spread_ceiling_bps": 24.0,
+      "median_observed_spread_bps": null,
+      "p90_observed_spread_bps": null,
+      "max_observed_spread_bps": null,
+      "provider_error": null,
+      "observations": [],
+      "post_selection_diagnostic": true,
+      "note": "Real historical quotes are sampled only at the frozen winner's untouched-holdout entry moments, and stale quotes do not count toward coverage. SIP quotes are required for a fully covered/conservative verdict; non-consolidated feeds remain limited evidence. This checks whether the modeled spread stress range covered observed execution conditions; it does not make max_spread_pct an optimized historical rule."
+    },
+    "holdout_reuse_audit": {
+      "status": "PRISTINE",
+      "pristine": true,
+      "symbol": "SPY",
+      "timeframe": "5Min",
+      "holdout_sessions": [
+        "2026-08-31",
+        "2026-09-01",
+        "2026-09-02",
+        "2026-09-03",
+        "2026-09-04"
+      ],
+      "holdout_fingerprint": "ec6942f654eb1c94c0c80f71",
+      "prior_material_exposure_count": 0,
+      "material_overlap_threshold_pct": 0.0,
+      "prior_exposures": [],
+      "note": "This holdout has not appeared materially in a prior saved Finder run."
+    },
+    "market_data_integrity": {
+      "mode": "raw_prices",
+      "corporate_action_reset_detected": false,
+      "latest_price_reset_date": null,
+      "reset_action_types": [],
+      "split_detected": false,
+      "latest_split_date": null,
+      "rows_before": 4214,
+      "rows_after": 4214,
+      "discarded_pre_split_rows": 0,
+      "note": "Raw historical prices retained; no split boundary was detected in the research window."
+    },
+    "compared_all": false,
+    "catalyst_summary": null,
+    "research_history_cache": {
+      "requests": [
+        {
+          "cache_hit": false,
+          "network_request": true,
+          "reuse_mode": "network_full",
+          "finalized": true,
+          "fingerprint": "4c9fdf38e06b9a08cc801fdc9c64534cf125a74fd6f6f370f7c8b83036d6fafd",
+          "rows_sha256": "18c33995f20de2636d1882184c4106cb2c7583877ef75d65b001ebbe49688aff",
+          "row_count": 4214,
+          "reused_row_count": 0,
+          "provider_row_count": 4214,
+          "provider_start": "2026-08-05T23:44:00Z",
+          "fetched_at": "2026-09-06T01:32:00.941654Z",
+          "identity": {
+            "cache_version": 2,
+            "provider": "youtube_strategy_engine.AlpacaMarketData",
+            "historical_feed": "sip",
+            "symbol": "SPY",
+            "start": "2026-08-05T23:44:00Z",
+            "end": "2026-09-04T23:44:00Z",
+            "timeframe": "5Min",
+            "adjustment": "raw"
+          }
+        }
+      ],
+      "request_count": 1,
+      "reused_request_count": 0,
+      "network_request_count": 1,
+      "exact_window_only": true
+    }
+  }
+}

@@ -362,51 +362,9 @@ def strategy_lab_result_summary(
     run_id: str = "",
     saved_at: str = "",
 ) -> dict[str, Any]:
-    raw = result if isinstance(result, Mapping) else {}
-    report = raw.get("report") if isinstance(raw.get("report"), Mapping) else {}
-    winner = report.get("winner") if isinstance(report.get("winner"), Mapping) else {}
-    strength = raw.get("strength") if isinstance(raw.get("strength"), Mapping) else {}
-    evidence = raw.get("evidence_verdict") if isinstance(raw.get("evidence_verdict"), Mapping) else {}
-    stability = raw.get("parameter_stability") if isinstance(raw.get("parameter_stability"), Mapping) else {}
-    walk = raw.get("walk_forward") if isinstance(raw.get("walk_forward"), Mapping) else {}
-    walk_summary = walk.get("summary") if isinstance(walk.get("summary"), Mapping) else {}
-    return {
-        "outcome": "strategy_lab_complete",
-        "run_id": str(run_id or raw.get("run_id") or ""),
-        "saved_at": str(saved_at or ""),
-        "ticker": str(raw.get("ticker") or "").upper(),
-        "timeframe": str(raw.get("timeframe") or ""),
-        "history_days": int(raw.get("history_days") or 0),
-        "winner_strategy_id": str(winner.get("source_strategy_id") or ""),
-        "winner_strategy_name": str(winner.get("strategy_name") or winner.get("source_strategy_name") or ""),
-        "evidence_verdict": {
-            key: evidence.get(key)
-            for key in ("code", "label", "status", "reason")
-            if evidence.get(key) is not None
-        },
-        "strength": {
-            key: strength.get(key)
-            for key in ("score", "label", "status", "reason")
-            if strength.get(key) is not None
-        },
-        "training_metrics": _metric_block(winner.get("training_metrics")),
-        "validation_metrics": _metric_block(winner.get("validation_metrics")),
-        "holdout_metrics": _metric_block(winner.get("holdout_metrics")),
-        "stress_metrics": _metric_block(winner.get("stress_metrics")),
-        "walk_forward_summary": {
-            key: walk_summary.get(key)
-            for key in ("folds", "profitable_folds", "positive_fold_ratio", "total_pnl", "status")
-            if walk_summary.get(key) is not None
-        },
-        "parameter_stability": {
-            key: stability.get(key)
-            for key in ("status", "score", "profitable_neighbor_ratio", "tested_neighbor_count")
-            if stability.get(key) is not None
-        },
-        "research_only": True,
-        "affects_live_ranking": False,
-        "affects_execution": False,
-    }
+    """Single canonical compact mapping shared by worker, bridge and results."""
+    from .strategy_lab_result_projection import project_strategy_lab_result
+    return project_strategy_lab_result(result, run_id=run_id, saved_at=saved_at)
 
 
 def strategy_lab_result_from_checkpoint(
@@ -416,7 +374,8 @@ def strategy_lab_result_from_checkpoint(
         return {}
     if str(checkpoint.get("status") or "").strip().lower() != "complete":
         return {}
-    raw = checkpoint.get("result") if isinstance(checkpoint.get("result"), Mapping) else {}
+    from strategy_lab_persistence import restore_strategy_lab_result
+    raw = restore_strategy_lab_result(dict(checkpoint))
     if not raw:
         return {}
     return strategy_lab_result_summary(

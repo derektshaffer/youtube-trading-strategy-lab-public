@@ -20,6 +20,37 @@ from .storage_base import HybridStoreError, InvalidJobTransition, JobNotFound
 
 
 class JobStoreMixin:
+    def enrich_completed_strategy_lab(self, job_id: str, *, result: Mapping[str, Any],
+                                     expected_result: Mapping[str, Any] | None) -> JobRecord:
+        """CAS refresh of an exact completed result, without lifecycle/queue mutation."""
+        from .strategy_lab_result_projection import PROJECTION_VERSION
+        with self._transaction(immediate=True) as connection:
+            row = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if row is None:
+                raise JobNotFound(f"Unknown job: {job_id}")
+            current = self._record(row)
+            payload, old = current.payload, current.result or {}
+            ids = payload.get("strategy_ids") or []
+            if (current.status != JobStatus.COMPLETE or current.job_type != "strategy.strategy_lab"
+                    or current.execution_target != ExecutionTarget.CLOUD or current.result != expected_result
+                    or result.get("projection_version") != PROJECTION_VERSION
+                    or result.get("outcome") != "strategy_lab_complete"
+                    or result.get("job_id") != job_id
+                    or not payload.get("run_id") or result.get("run_id") != payload["run_id"]
+                    or result.get("ticker") != str(payload.get("ticker") or "").upper()
+                    or not result.get("winner_strategy_id")
+                    or (not payload.get("compared_all") and result["winner_strategy_id"] not in ids)
+                    or not old.get("remote_job_id") or result.get("remote_job_id") != old["remote_job_id"]
+                    or result.get("result_ref") != "strategy-lab-checkpoint:" + payload["run_id"]):
+                raise InvalidJobTransition("Only the exact unchanged completed validation may receive projected evidence")
+            # Enrichment must not revise the previously saved verdict or numeric evidence.
+            for block in ("evidence_verdict", "strength", "training_metrics", "validation_metrics", "holdout_metrics", "stress_metrics"):
+                prior, fresh = old.get(block), result.get(block)
+                if isinstance(prior, Mapping) and any(k not in (fresh or {}) or fresh[k] != v for k, v in prior.items()):
+                    raise InvalidJobTransition("Projection cannot change existing validation evidence")
+            connection.execute("UPDATE jobs SET result_json = ? WHERE id = ?", (canonical_json(dict(result)), job_id))
+            return self._record(connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
+
     def enrich_failed_strategy_lab(self, job_id: str, *, error: Mapping[str, Any],
                                    expected_updated_at: str) -> JobRecord:
         """Metadata-only reconciliation. Never reopen a terminal execution."""
