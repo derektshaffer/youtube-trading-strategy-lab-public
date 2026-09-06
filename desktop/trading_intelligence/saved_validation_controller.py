@@ -3,14 +3,17 @@ from copy import deepcopy
 import queue
 import threading
 
-from PySide6.QtCore import QObject, QTimer
+from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QPushButton
 
 from .saved_validation_page import SavedValidationPage
+from .workflow_widgets import page_scroll, PageWheelRouter
 from .window import clean_error
 
 
 class SavedValidationController(QObject):
+    loaded = Signal(dict)
+
     def __init__(self, window, monitor):
         super().__init__(window)
         self.window = window
@@ -32,6 +35,7 @@ class SavedValidationController(QObject):
 
     def update_buttons(self):
         for panel, button in self.buttons:
+            button.setText("Loading validation evidence..." if self.busy else "Open Saved Validation")
             row = panel.selected() or {}
             button.setEnabled(not self.busy and row.get("kind") in {"Strategy Lab", "Strategy Validation"}
                               and row.get("status") in {"complete", "failed"})
@@ -41,6 +45,7 @@ class SavedValidationController(QObject):
             return
         request = deepcopy({k: row.get(k) for k in ("key", "id", "identity", "binding")})
         self.busy = True
+        self.window.top_status.setText("Loading validation evidence... No validation or backtest is being started.")
         self.update_buttons()
         runtime, results = self.window.runtime, self.results
         def read():
@@ -63,11 +68,15 @@ class SavedValidationController(QObject):
             return
         self.dialog = QDialog(self.window)
         self.dialog.setWindowTitle("Saved Validation - " + response["ticker"])
-        self.dialog.resize(1150, 780)
+        available = self.window.screen().availableGeometry()
+        self.dialog.resize(min(1100, available.width() - 60), min(780, available.height() - 80))
         layout = QVBoxLayout(self.dialog)
         self.page = SavedValidationPage(response)
-        layout.addWidget(self.page, 1)
+        layout.addWidget(page_scroll(self.page), 1)
+        self.wheel = PageWheelRouter(self.dialog)
         close = QPushButton("Close")
         close.clicked.connect(self.dialog.close)
         layout.addWidget(close)
+        self.window.top_status.setText("Saved validation evidence loaded (read-only).")
+        self.loaded.emit(response)
         self.dialog.show()

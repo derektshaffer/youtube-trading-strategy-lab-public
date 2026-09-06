@@ -46,6 +46,8 @@ class MainWindow(RecoveryMainWindow):
         self.search_monitor = SearchMonitorController(self, [self.strategy_lab, self.research_ml, self.finder])
         from .saved_validation_controller import SavedValidationController
         self.saved_validation = SavedValidationController(self, self.search_monitor)
+        from .workflow_shell import WorkflowShell
+        self.workflow = WorkflowShell(self)
 
     def _button(self, caption: str) -> QPushButton | None:
         return next((button for button in self.nav_buttons if button.text() == caption), None)

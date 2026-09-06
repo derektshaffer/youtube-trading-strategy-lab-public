@@ -76,7 +76,15 @@ def test_open_strategy_lab_automatically_lists_remote_runs_and_selection_survive
     p.refresh.click()
     settle(window, app)
     assert p.selected()["id"] == "running" and p.selected()["progress"] == .62
-    assert panel(window, window.research_ml).table.rowCount() == 2
+    results_panel = panel(window, window.results)
+    assert results_panel.table.rowCount() == 2
+    window.workflow.go(window.results)
+    assert window.stack.currentWidget() is window.results
+    assert results_panel.parentWidget() is window.results
+    assert {row['status'] for row in results_panel.rows} == {'running', 'queued'}
+    results_panel.table.selectRow(next(i for i, row in enumerate(results_panel.rows) if row['id'] == 'running'))
+    assert 'running' in results_panel.detail.text()
+    assert results_panel.selected()['id'] == 'running'
     assert panel(window, window.finder).table.rowCount() == 2
     assert s.cloud.write_count == 0 and s.cloud.dispatches == []
     assert not any(path == "/v1/jobs" for _, path, _ in window.monitor_calls)
