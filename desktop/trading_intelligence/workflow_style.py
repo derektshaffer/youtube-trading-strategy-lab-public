@@ -22,6 +22,7 @@ QPushButton:disabled, QPushButton#Primary:disabled { background: #0a1726; color:
 QToolButton { text-align: left; color: #8ea2b9; border: 0; padding: 8px 2px; min-height: 22px; }
 QToolButton:hover { color: #f2f6fb; }
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox { min-height: 24px; padding: 6px; background: #050c15; border: 1px solid #294057; border-radius: 6px; }
+QCheckBox { min-height: 23px; }
 QTableWidget { background: #0a1726; alternate-background-color: #0d1d2e; border: 0; selection-background-color: #164438; selection-color: #f2f6fb; }
 QHeaderView::section { background: #102033; color: #d7e1eb; padding: 8px; border: 0; font-weight: 600; }
 QScrollBar:vertical { background: #07111d; width: 14px; margin: 0; }
