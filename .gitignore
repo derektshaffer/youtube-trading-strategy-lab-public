@@ -9,6 +9,8 @@ trading-intelligence-lab/
 .trading_intelligence_live_learning_outbox/
 .cloud_live_learning_outbox/
 .desktop_build/
+.venv-dev/
+.desktop-dev/
 desktop/tauri_spike/node_modules/
 desktop/tauri_spike/src-tauri/target/
 desktop/tauri_spike/src-tauri/binaries/

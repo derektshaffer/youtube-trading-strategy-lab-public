@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import platform
 from typing import Any
 
@@ -21,6 +22,12 @@ class MacOSKeychain:
         self.service = str(service or "Trading Intelligence Lab").strip()
         if not self.service:
             raise ValueError("Keychain service name is required")
+        self._fallback_service = None
+        if os.environ.get("TRADING_INTELLIGENCE_DEV_MODE") == "1":
+            # Existing credentials remain readable; edits from Dev write only to
+            # a separate service and cannot replace the stable app's secrets.
+            self._fallback_service = self.service
+            self.service += " Dev"
 
     @staticmethod
     def _available() -> bool:
@@ -65,6 +72,8 @@ class MacOSKeychain:
         clean_account = self._account(account)
         try:
             value = self._backend().get_password(self.service, clean_account)
+            if value is None and self._fallback_service:
+                value = self._backend().get_password(self._fallback_service, clean_account)
         except KeychainError:
             raise
         except Exception as exc:
