@@ -369,8 +369,6 @@ class MainWindow(RecoveryMainWindow):
             self.scanner_launcher.set_error(clean_error(exc))
 
 
-__all__ = ["MainWindow", "clean_error", "write_metrics"]
-
     def _submit_market_discovery(self, request: dict[str, Any], purpose: str) -> None:
         self.submit_job(request, purpose)
         if not self.active_job_id or self.active_purpose != purpose:
@@ -409,3 +407,5 @@ __all__ = ["MainWindow", "clean_error", "write_metrics"]
         except Exception as exc:
             self._finish_market_discovery(f"Cancellation could not be confirmed for job {job_id}: {clean_error(exc)}. Check Runs & Jobs for its status.")
 
+
+__all__ = ["MainWindow", "clean_error", "write_metrics"]

@@ -80,7 +80,7 @@ def test_find_stocks_button_dispatches_payload_and_acknowledges_click(app):
     assert len(emitted) == 1
     assert emitted[0]["universe"] == "momentum"
     assert emitted[0]["candidate_count"] == 15
-    assert page.status.text() == "Starting Find Stocks scan…"
+    assert page.status.text() == "Starting stock discovery…"
     page.close()
 
 

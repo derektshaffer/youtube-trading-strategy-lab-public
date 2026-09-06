@@ -375,8 +375,6 @@ class MarketDiscoveryPage(QWidget):
             self.analyze_requested.emit(symbol)
 
 
-__all__ = ["MarketDiscoveryPage"]
-
     def begin_operation(self, operation: str, title: str, detail: str) -> None:
         self.operation = operation
         if operation == "scan":
@@ -388,3 +386,5 @@ __all__ = ["MarketDiscoveryPage"]
                 metric.value.setText("—")
         self.set_working(title, detail, 0.02)
 
+
+__all__ = ["MarketDiscoveryPage"]
