@@ -1,5 +1,9 @@
 # Desktop framework spikes
 
+For the current production PySide6 app, double-click **Trading Lab Dev.command**
+at the repository root. See [the source development workflow](DEVELOPMENT.md).
+The framework spikes below are historical comparison tools.
+
 These spikes call the same authenticated loopback API. They are not production
 applications and do not replace Streamlit yet.
 

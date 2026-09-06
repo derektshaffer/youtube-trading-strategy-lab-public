@@ -20,6 +20,10 @@ def run_gui(
     metrics_output: str = "",
 ) -> int:
     started = time.perf_counter()
+    # A native platform initialization failure can abort Python outright.
+    # Initialize Qt before spawning the sidecar so failed launches cannot leave
+    # orphan workers competing over the same development database.
+    application = QApplication.instance() or QApplication([])
     try:
         runtime.start()
     except BaseException as exc:
@@ -38,8 +42,8 @@ def run_gui(
         runtime.stop()
         return 1
 
-    application = QApplication.instance() or QApplication([])
-    application.setApplicationName("Trading Intelligence")
+    development = bool(getattr(runtime, "is_development", False))
+    application.setApplicationName("Trading Lab Dev" if development else "Trading Intelligence")
     application.setOrganizationName("Derek Shaffer")
     application.setFont(QFont("-apple-system", 12))
     application.aboutToQuit.connect(runtime.stop)
@@ -48,7 +52,14 @@ def run_gui(
         smoke=smoke,
         metrics_output=metrics_output,
     )
+    if development:
+        from .dev import DEV_NAME, ROOT
+        window.setWindowTitle(f"{DEV_NAME} — Local Source — {ROOT.name}")
+        window.statusBar().showMessage(f"DEVELOPMENT • {ROOT}")
     window.show()
+    if development:
+        from .dev import record_launch
+        record_launch(window, runtime)
     return_code = application.exec()
     if smoke:
         return window.smoke_return_code

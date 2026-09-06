@@ -5,6 +5,14 @@ extracts timestamped trading hypotheses, backtests their measurable rules with
 Alpaca historical candles, scans live candidates, and tracks editable practice
 positions.
 
+## Trading Intelligence Lab canonical source (for future code work)
+
+All code changes should target this canonical checkout:
+`/Users/Derek_1/Documents/Codex/2026-09-03/referenced-chatgpt-conversation-this-is-an/work/trading-lab-dev`
+
+If you need the full runbook and duplicate-source audit checklist, use
+[`TRADING_LAB_CANONICAL_SOURCE_AND_RECOVERY_RUNBOOK.md`](TRADING_LAB_CANONICAL_SOURCE_AND_RECOVERY_RUNBOOK.md).
+
 This is a **separate application**. Do not replace the existing stock scanner or
 single-stock analyzer. Deploy this project from a new GitHub repository and it
 will have its own Streamlit URL, secrets, and saved strategy library.
