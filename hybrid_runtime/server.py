@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import asynccontextmanager
 import json
 import os
 from pathlib import Path
@@ -119,16 +120,38 @@ def main(argv: list[str] | None = None) -> int:
         cloud_submission_retry=cloud_worker.retry_finder_submission,
         search_monitor=SearchMonitor(cloud_worker),
     )
-    try:
-        for thread in threads:
-            thread.start()
-        uvicorn.run(app, host=host, port=int(args.port), log_level="warning")
-    finally:
+    cleaned_up = False
+
+    def cleanup() -> None:
+        nonlocal cleaned_up
+        if cleaned_up:
+            return
+        cleaned_up = True
         stop_event.set()
         for thread in threads:
             if thread.is_alive():
                 thread.join(timeout=2.0)
         runtime_path.unlink(missing_ok=True)
+
+    original_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def owned_lifespan(application):
+        try:
+            async with original_lifespan(application) as state:
+                yield state
+        finally:
+            # Uvicorn can re-raise SIGTERM with the default OS handler after
+            # lifespan shutdown, bypassing Python's outer finally entirely.
+            cleanup()
+
+    app.router.lifespan_context = owned_lifespan
+    try:
+        for thread in threads:
+            thread.start()
+        uvicorn.run(app, host=host, port=int(args.port), log_level="warning")
+    finally:
+        cleanup()
     return 0
 
 

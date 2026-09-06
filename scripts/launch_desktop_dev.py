@@ -6,6 +6,7 @@ import fcntl
 import hashlib
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import venv
@@ -131,6 +132,36 @@ def select_python() -> Path:
     return python
 
 
+def run_frontend(command: list[str], *, environment: dict[str, str]) -> int:
+    """Keep launcher ownership/lock until the signalled frontend is reaped."""
+    child = None
+    requested_signal = None
+
+    def forward_signal(signum: int, _frame: object) -> None:
+        nonlocal requested_signal
+        if requested_signal is None:
+            requested_signal = signum
+            if child is not None and child.poll() is None:
+                child.send_signal(signum)
+
+    previous = {}
+    try:
+        for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            previous[signum] = signal.signal(signum, forward_signal)
+        child = subprocess.Popen(command, cwd=ROOT, env=environment)
+        if requested_signal is not None and child.poll() is None:
+            child.send_signal(requested_signal)
+        return child.wait()
+    finally:
+        try:
+            if child is not None and child.poll() is None:
+                child.terminate()
+                child.wait()
+        finally:
+            for signum, handler in previous.items():
+                signal.signal(signum, handler)
+
+
 def main() -> int:
     os.chdir(ROOT)
     os.umask(0o077)
@@ -156,9 +187,9 @@ def main() -> int:
         environment.pop("TRADING_INTELLIGENCE_SIDECAR_PATH", None)
         environment["TRADING_INTELLIGENCE_DEV_MODE"] = "1"
         environment["PYTHONUNBUFFERED"] = "1"
-        return subprocess.call(
+        return run_frontend(
             [str(python), "-m", "desktop.trading_intelligence.dev", *sys.argv[1:]],
-            cwd=ROOT, env=environment,
+            environment=environment,
         )
 
 
