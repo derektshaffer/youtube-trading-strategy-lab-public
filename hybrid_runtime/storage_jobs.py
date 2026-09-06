@@ -20,6 +20,28 @@ from .storage_base import HybridStoreError, InvalidJobTransition, JobNotFound
 
 
 class JobStoreMixin:
+    def enrich_failed_strategy_lab(self, job_id: str, *, error: Mapping[str, Any],
+                                   expected_updated_at: str) -> JobRecord:
+        """Metadata-only reconciliation. Never reopen a terminal execution."""
+        from .diagnostic_budget import diagnostic_budget
+        with self._transaction(immediate=True) as connection:
+            row = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if row is None:
+                raise JobNotFound(f"Unknown job: {job_id}")
+            current = self._record(row)
+            if (current.status != JobStatus.FAILED or current.job_type != "strategy.strategy_lab"
+                    or current.execution_target != ExecutionTarget.CLOUD or current.result
+                    or not diagnostic_budget(current.payload) or current.updated_at != expected_updated_at
+                    or error.get("kind") not in {"execution_timeout", "execution_interrupted"}):
+                raise InvalidJobTransition("Only an unchanged failed diagnostic can receive terminal details")
+            connection.execute("UPDATE jobs SET error_json = ?, progress = ? WHERE id = ?",
+                               (canonical_json(dict(error)),
+                                max(current.progress, normalized_progress(error.get("last_progress") or 0)), job_id))
+            self._append_event(connection, job_id=job_id, status=current.status, stage=current.stage,
+                               progress=max(current.progress, normalized_progress(error.get("last_progress") or 0)),
+                               message="Reconciled diagnostic infrastructure failure details", created_at=utc_now_text())
+            return self._record(connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
+
     def cloud_recovery(self, job_id: str) -> dict[str, Any] | None:
         with self._reader() as connection:
             row = connection.execute(

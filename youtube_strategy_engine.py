@@ -33,6 +33,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+from strategy_lab_telemetry import timed_checkpoint_io
 
 from anchored_vwap_engine import (
     SUPPORTED_AVWAP_ANCHOR_MODES,
@@ -1970,6 +1971,7 @@ class GitHubCloudBackup:
         owner, repository = self.repository.split("/", 1)
         return f"{GITHUB_API_URL}/repos/{quote(owner, safe='')}/{quote(repository, safe='')}"
 
+    @timed_checkpoint_io("remote_seconds")
     def _request(
         self,
         url: str,
@@ -2029,6 +2031,7 @@ class GitHubCloudBackup:
             raise AppError("GitHub returned an unexpected cloud-backup response.")
         return decoded
 
+    @timed_checkpoint_io("remote_seconds")
     def _request_bytes(
         self,
         url: str,
@@ -2118,6 +2121,7 @@ class GitHubCloudBackup:
             "size": int(safe_float(record.get("size"), 0) or 0),
         }
 
+    @timed_checkpoint_io("remote_seconds")
     def _save_large_library(
         self,
         serialized: bytes,
@@ -2344,7 +2348,8 @@ class GitHubCloudBackup:
         # This is a machine-owned library, not a hand-edited document. Compact
         # JSON materially reduces large-library transfer, disk I/O, and cold-start
         # parse pressure without changing any stored values.
-        serialized = json.dumps(
+        metric = getattr(self, "_checkpoint_telemetry", None)
+        serialized = metric.serialize(data) if metric is not None else json.dumps(
             data,
             separators=(",", ":"),
             default=str,
@@ -2708,6 +2713,7 @@ class StrategyStore:
         self._record_cloud_success(data)
         self._record_cloud_status(last_write_at=isoformat_utc(utc_now()))
 
+    @timed_checkpoint_io("local_write_seconds")
     def _write_local_bytes(self, raw: bytes, *, make_backup: bool = True) -> None:
         descriptor, temporary_name = tempfile.mkstemp(
             prefix="strategy_",
@@ -2727,6 +2733,12 @@ class StrategyStore:
                 os.unlink(temporary_name)
 
     def _write_local(self, value: dict[str, Any], *, make_backup: bool = True) -> None:
+        metric = getattr(self, "_checkpoint_telemetry", None)
+        if metric is not None:
+            # One serialization and one buffered write, with the same JSON,
+            # fsync, automatic backup and atomic replacement as the old path.
+            self._write_local_bytes(metric.serialize(value), make_backup=make_backup)
+            return
         descriptor, temporary_name = tempfile.mkstemp(prefix="strategy_", suffix=".json", dir=self.directory)
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as temporary:

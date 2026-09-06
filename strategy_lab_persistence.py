@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from youtube_strategy_engine import AppError, StrategyStore, utc_now
+from strategy_lab_telemetry import checkpoint_operation
 
 
 STRATEGY_LAB_RECORD_TYPE = "strategy_lab_checkpoint"
@@ -311,6 +312,7 @@ def _load_checkpoint_library(store: StrategyStore) -> dict[str, Any]:
     return compacted
 
 
+@checkpoint_operation("durable_save")
 def save_strategy_lab_checkpoint(
     store: StrategyStore,
     *,
@@ -325,6 +327,7 @@ def save_strategy_lab_checkpoint(
     optimizer_state: dict[str, Any] | None = None,
     attempt: int | None = None,
     started_at: str = "",
+    progress_storage: str = "",
     execution_error: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Persist one Strategy Lab status/result without touching the large main library.
@@ -375,12 +378,19 @@ def save_strategy_lab_checkpoint(
                 record[key] = job[key]
     if execution_error is not None:
         record["execution_error"] = deepcopy(execution_error)
+        if execution_error.get("category") == "infrastructure":
+            record["terminal_reason"] = str(execution_error.get("kind") or "execution_error")
     if optimizer_state is not None:
         record["optimizer_state"] = deepcopy(optimizer_state)
     if attempt is not None:
         record["attempt"] = max(0, int(attempt))
     if started_at:
         record["started_at"] = str(started_at).strip()
+    if progress_storage:
+        from strategy_lab_progress import PROGRESS_FORMAT
+        if progress_storage != PROGRESS_FORMAT:
+            raise AppError("Unsupported Strategy Lab progress storage format.")
+        record["progress_storage"] = progress_storage
     if normalized_status == "complete":
         if not isinstance(result, dict) or not result:
             raise AppError("A completed Strategy Lab checkpoint requires a result.")
@@ -414,6 +424,7 @@ def save_strategy_lab_checkpoint(
     return record
 
 
+@checkpoint_operation("checkpoint_load")
 def load_latest_strategy_lab_checkpoint(
     store: StrategyStore,
     *,
@@ -436,5 +447,6 @@ def load_latest_strategy_lab_checkpoint(
                 and restored.get("result_archive")
             ):
                 restored["result"] = restore_strategy_lab_result(restored)
-            return restored
+            from strategy_lab_progress import read_progress
+            return read_progress(store, restored, reconcile_cloud=reconcile_cloud)
     return {}

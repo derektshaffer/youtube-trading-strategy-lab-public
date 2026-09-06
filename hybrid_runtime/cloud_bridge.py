@@ -434,10 +434,16 @@ class CloudBridgeWorker:
             job
             for job in self.service.list(limit=1_000)
             if job.execution_target == ExecutionTarget.CLOUD
-            and job.status not in TERMINAL_JOB_STATUSES
+            and (job.status not in TERMINAL_JOB_STATUSES or self._needs_diagnostic_details(job))
             and job.job_type in SUPPORTED_CLOUD_JOB_TYPES
             and not (job.status == JobStatus.RETRY_WAIT and job.stage == "cloud_submission_failed")
         ]
+
+    def _needs_diagnostic_details(self, job: JobRecord) -> bool:
+        return bool(job.status == JobStatus.FAILED and job.job_type == "strategy.strategy_lab"
+                    and job.payload.get("diagnostic_mode") is True
+                    and (job.error or {}).get("type") == "CloudStrategyLabError"
+                    and (self.link_store.get(job.id) or {}).get("remote_job_id"))
 
     def retry_finder_submission(self, job_id: str) -> JobRecord:
         # Paused submissions are excluded from reconciliation. Queue this same
@@ -704,6 +710,12 @@ class CloudBridgeWorker:
         self._link(job, item, settings, revision=revision, library=library)
         current = self.service.get(job.id)
         if current.status in TERMINAL_JOB_STATUSES:
+            if (current.status == JobStatus.FAILED and job.job_type == "strategy.strategy_lab"
+                    and status == "failed" and isinstance(item.get("error"), Mapping)
+                    and item["error"].get("type") == "CloudStrategyLabExecutionError"
+                    and current.error != item["error"]):
+                self.service.store.enrich_failed_strategy_lab(
+                    job.id, error=item["error"], expected_updated_at=current.updated_at)
             return
 
         if status in {"cancelled", "canceled"}:
@@ -754,7 +766,7 @@ class CloudBridgeWorker:
                 progress=max(current.progress, progress),
                 error=error,
                 worker_id=self.worker_id,
-                message=default_message,
+                message=str(error.get("message") or default_message),
             )
             return
 
@@ -925,13 +937,15 @@ class CloudBridgeWorker:
         strategy_lab_checkpoint_library: dict[str, Any] = {}
         if any(job.job_type == "strategy.strategy_lab" for job in jobs):
             try:
-                from .strategy_lab_bridge import strategy_lab_checkpoint_config
+                from .strategy_lab_bridge import strategy_lab_checkpoint_config, read_strategy_lab_progress
 
                 checkpoint_client = self.client_factory(
                     strategy_lab_checkpoint_config(settings.github),
                     token,
                 )
-                strategy_lab_checkpoint_library = dict(checkpoint_client.read().data)
+                strategy_lab_checkpoint_library = read_strategy_lab_progress(
+                    dict(checkpoint_client.read().data), settings.github, token, self.client_factory,
+                )
             except (ValueError, GitHubLibraryError):
                 # The checkpoint may not exist until the remote worker writes its
                 # first progress record. The durable main queue remains authoritative.
@@ -993,6 +1007,13 @@ class CloudBridgeWorker:
                         dedupe_key=str(link.get("remote_dedupe_key") or ""),
                     )
             plan: dict[str, Any] | None = None
+            if job.status in TERMINAL_JOB_STATUSES:
+                # Historical failure detail repair is a read-only attachment.
+                # A missing exact queue row must never create/dispatch a job.
+                remote_id = str((link or {}).get("remote_job_id") or "")
+                if item is not None and str(item.get("id") or "") == remote_id:
+                    attached.append((job, item, plan))
+                continue
             if item is None:
                 try:
                     item, created, plan = self._publication_for(job, library)
