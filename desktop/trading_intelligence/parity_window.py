@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 import time
+from datetime import datetime, timezone
+from urllib.error import HTTPError
+from hybrid_runtime.bounded_discovery import DISCOVERY_TIMEOUTS
+from hybrid_runtime.contracts import JobStatus
 from typing import Any
 
-from PySide6.QtCore import QTimer, QUrl
+from PySide6.QtCore import QTimer, QUrl, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QFileDialog, QPushButton
 
@@ -32,6 +36,11 @@ class MainWindow(RecoveryMainWindow):
         self.market_discovery.options_requested.connect(self.refresh_market_discovery_options)
         self.market_discovery.run_requested.connect(self.run_market_discovery)
         self.market_discovery.analyze_requested.connect(self.analyze_discovery_symbol)
+        self.market_discovery.cancel_requested.connect(self.cancel_market_discovery)
+        self._discovery_job_id = ""
+        self._discovery_purpose = ""
+        self._discovery_started = 0.0
+        self._discovery_unreachable_at = None
 
         self.scanner_launcher = ScannerLauncherPage()
         self.stack.addWidget(self.scanner_launcher)
@@ -141,18 +150,22 @@ class MainWindow(RecoveryMainWindow):
         ):
             QTimer.singleShot(50, self.refresh_market_discovery_options)
 
+    @Slot()
     def refresh_market_discovery_options(self) -> None:
-        if not self._require_capabilities(("library",), "Find Stocks"):
+        if self._discovery_job_id:
+            self._poll_market_discovery_job()
+            return
+        if not self._require_capabilities(("library",), "Discover Stocks"):
             return
         if self.active_job_id:
             self.market_discovery.set_error(
                 "Another foreground task is active. Cloud research continues independently; try Refresh strategies again shortly."
             )
             return
-        self.market_discovery.set_working(
+        self.market_discovery.begin_operation(
+            "options",
             "Loading faithful strategies",
-            "Applying the same source-to-backtester integrity gate used by the web app.",
-            0.04,
+            "Loading strategy choices. A stock scan has not started yet.",
         )
         request = {
             "job_type": "library.strategy_lab_options",
@@ -162,23 +175,28 @@ class MainWindow(RecoveryMainWindow):
             "engine_version": "desktop-market-discovery-options-v1",
         }
         try:
-            self.submit_job(request, "market_discovery_options")
+            self._submit_market_discovery(request, "market_discovery_options")
         except BaseException as exc:
-            self.market_discovery.set_error(clean_error(exc))
+            self._finish_market_discovery(clean_error(exc))
 
+    @Slot(dict)
     def run_market_discovery(self, payload: dict[str, Any]) -> None:
-        if not self._require_capabilities(("library", "market"), "Find Stocks"):
+        if self._discovery_job_id:
+            self._poll_market_discovery_job()
+            return
+        if not self._require_capabilities(("library", "market"), "Discover Stocks"):
+            self.market_discovery.set_error("Discover Stocks needs verified library and market connections. Complete the checks in Settings, then try again.")
             return
         if self.active_job_id:
             self.market_discovery.set_error(
-                "Another foreground task is active. Wait for it to finish, then run Find Stocks again."
+                "Another foreground task is active. Wait for it to finish, then run Discover Stocks again."
             )
             return
         count = int(payload.get("candidate_count") or 50)
-        self.market_discovery.set_working(
+        self.market_discovery.begin_operation(
+            "scan",
             "Building the live stock universe",
             "Preparing one shared market-data pass before comparing current conditions with strategy rules.",
-            0.02,
         )
         request = {
             "job_type": "market.discovery",
@@ -188,12 +206,12 @@ class MainWindow(RecoveryMainWindow):
             "engine_version": "desktop-market-discovery-v1",
         }
         try:
-            self.submit_job(request, "market_discovery")
+            self._submit_market_discovery(request, "market_discovery")
             self.top_status.setText(
-                f"Find Stocks · scanning up to {count:,} current candidates in the local sidecar"
+                f"Discover Stocks · scanning up to {count:,} current candidates in the local sidecar"
             )
         except BaseException as exc:
-            self.market_discovery.set_error(clean_error(exc))
+            self._finish_market_discovery(clean_error(exc))
 
     def _poll_existing_cloud_work(self) -> None:
         now = time.monotonic()
@@ -215,48 +233,85 @@ class MainWindow(RecoveryMainWindow):
             getattr(self, callback_name)()
 
     def poll_active_job(self) -> None:
-        if self.active_purpose in {"market_discovery_options", "market_discovery"}:
-            self._poll_existing_cloud_work()
+        if (self._discovery_job_id or self.market_discovery.operation
+                or self.active_purpose in {"market_discovery_options", "market_discovery"}):
             self._poll_market_discovery_job()
+            self._poll_existing_cloud_work()
             return
         super().poll_active_job()
 
     def _poll_market_discovery_job(self) -> None:
-        if not self.active_job_id:
+        job_id = self._discovery_job_id
+        if not job_id:
+            self._finish_market_discovery("The Discover Stocks job attachment was lost.")
             return
-        purpose = self.active_purpose
+        purpose = self._discovery_purpose
+        job_type = "library.strategy_lab_options" if purpose == "market_discovery_options" else "market.discovery"
         try:
-            job = self.runtime.request_json("GET", f"/v1/jobs/{self.active_job_id}")
+            job = self.runtime.request_json("GET", f"/v1/jobs/{job_id}", timeout=1.0)
+        except Exception as exc:
+            now = time.monotonic()
+            if self._discovery_unreachable_at is None:
+                self._discovery_unreachable_at = now
+            missing = isinstance(exc, HTTPError) and exc.code == 404
+            if not missing and now - self._discovery_unreachable_at < 30:
+                self.market_discovery.set_working("Reconnecting to stock discovery", f"Job {job_id}: {clean_error(exc)}. Retrying for up to 30 seconds.", self.market_discovery.progress.value() / 1000)
+                return
+            self._finish_market_discovery(f"Lost contact with job {job_id}: {clean_error(exc)}. Its completion is unconfirmed; check Runs & Jobs.")
+            return
+        try:
+            self._discovery_unreachable_at = None
+            if job.get("id") != job_id or job.get("job_type") != job_type:
+                raise RuntimeError("The service returned a different job; scan attachment lost")
+            status = str(job.get("status") or "")
+            JobStatus(status)  # Reject unknown states instead of waiting forever.
+            terminal = status in {"complete", "failed", "cancelled"}
             progress = float(job.get("progress") or 0.0)
             stage = str(job.get("stage") or "working").replace("_", " ").title()
             message = str(job.get("message") or job.get("status") or "working").replace("_", " ")
+            if purpose == "market_discovery_options":
+                stage = "Loading faithful strategies · " + stage
+                message = "Loading strategy choices. A stock scan has not started yet."
             self.market_discovery.set_working(stage, message, progress)
-            if not bool(job.get("terminal")):
+            if not terminal:
+                if bool(job.get("terminal")) or not status:
+                    raise RuntimeError("The service returned an invalid scan status")
+                stale = False
+                heartbeat = job.get("heartbeat_at")
+                if heartbeat:
+                    age = (datetime.now(timezone.utc) - datetime.fromisoformat(str(heartbeat).replace("Z", "+00:00"))).total_seconds()
+                    stale = age > 60
+                if stale or time.monotonic() - self._discovery_started > DISCOVERY_TIMEOUTS[job_type] + 60:
+                    try:
+                        self.runtime.request_json("POST", f"/v1/jobs/{job_id}/cancel", {}, timeout=1.0)
+                    except Exception:
+                        pass
+                    raise TimeoutError("The scan worker stopped responding or exceeded its time limit. Cancellation requested; check Runs & Jobs")
                 return
-            if job.get("status") != "complete":
+            if status != "complete":
                 error = job.get("error") if isinstance(job.get("error"), dict) else {}
-                raise RuntimeError(error.get("message") or str(job.get("status")))
+                raise RuntimeError(f"{error.get('type') or status}: {error.get('message') or message}")
             result = job.get("result") if isinstance(job.get("result"), dict) else {}
-            self.active_job_id = ""
-            self.active_purpose = ""
+            required = "strategies" if purpose == "market_discovery_options" else "results"
+            if not isinstance(result.get(required), list):
+                raise RuntimeError("The scan completed without a valid result payload")
+            self._finish_market_discovery()
             if purpose == "market_discovery_options":
                 self.market_discovery.render_options(result)
                 if not self.strategy_lab_job_id:
                     self.strategy_lab.set_options(result)
                 self.top_status.setText(
-                    f"Find Stocks ready · {int(result.get('faithful_count') or 0):,} faithful strategies"
+                    f"Discover Stocks ready · {int(result.get('faithful_count') or 0):,} faithful strategies"
                 )
             else:
                 self.market_discovery.render_results(result)
                 self.top_status.setText(
-                    f"Find Stocks complete · {int(result.get('match_count') or 0):,} strong matches · "
+                    f"Discover Stocks complete · {int(result.get('match_count') or 0):,} strong matches · "
                     f"{int(result.get('validated_match_count') or 0):,} validated"
                 )
             self.refresh_jobs()
         except BaseException as exc:
-            self.active_job_id = ""
-            self.active_purpose = ""
-            self.market_discovery.set_error(clean_error(exc))
+            self._finish_market_discovery(f"Job {job_id}: {clean_error(exc)}")
             self.refresh_jobs()
 
     def analyze_discovery_symbol(self, symbol: str) -> None:
@@ -312,6 +367,45 @@ class MainWindow(RecoveryMainWindow):
             self.open_momentum_scanner(target)
         except (OSError, ValueError) as exc:
             self.scanner_launcher.set_error(clean_error(exc))
+
+
+    def _submit_market_discovery(self, request: dict[str, Any], purpose: str) -> None:
+        self.submit_job(request, purpose)
+        if not self.active_job_id or self.active_purpose != purpose:
+            raise RuntimeError("Discover Stocks was not attached to a submitted job. Try again.")
+        self._discovery_job_id = self.active_job_id
+        self._discovery_purpose = purpose
+        self._discovery_started = time.monotonic()
+        self._discovery_unreachable_at = None
+
+
+    def _finish_market_discovery(self, error: str = "") -> None:
+        if (not self.active_purpose
+                or self.active_purpose in {"market_discovery", "market_discovery_options"}
+                or self.active_job_id == self._discovery_job_id):
+            self.active_job_id = ""
+            self.active_purpose = ""
+            self.active_route = {}
+        self._discovery_job_id = ""
+        self._discovery_purpose = ""
+        self._discovery_started = 0.0
+        self._discovery_unreachable_at = None
+        if error:
+            self.market_discovery.set_error(error + " You can run Discover Stocks again.")
+            self.top_status.setText("Discover Stocks stopped · " + error)
+
+
+    @Slot()
+    def cancel_market_discovery(self) -> None:
+        job_id = self._discovery_job_id
+        if not job_id:
+            self._finish_market_discovery("The job attachment was lost.")
+            return
+        try:
+            self.runtime.request_json("POST", f"/v1/jobs/{job_id}/cancel", {}, timeout=1.0)
+            self.market_discovery.set_working("Cancelling stock discovery", "Waiting for the local worker to release the scan.", self.market_discovery.progress.value() / 1000)
+        except Exception as exc:
+            self._finish_market_discovery(f"Cancellation could not be confirmed for job {job_id}: {clean_error(exc)}. Check Runs & Jobs for its status.")
 
 
 __all__ = ["MainWindow", "clean_error", "write_metrics"]

@@ -59,7 +59,16 @@ class LocalWorker:
             )
 
         try:
-            result = dict(handler(job.payload, progress, cancelled))
+            from .bounded_discovery import DISCOVERY_TIMEOUTS, run_bounded
+
+            if job.job_type in DISCOVERY_TIMEOUTS:
+                result = dict(run_bounded(
+                    handler, job.payload, progress, cancelled,
+                    lambda: self.service.store.heartbeat(job.id, self.worker_id),
+                    timeout=DISCOVERY_TIMEOUTS[job.job_type],
+                ))
+            else:
+                result = dict(handler(job.payload, progress, cancelled))
             if cancelled():
                 raise JobCancelled("Job cancellation was requested")
             self.service.complete(job.id, result, worker_id=self.worker_id)
