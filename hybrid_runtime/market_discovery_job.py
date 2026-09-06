@@ -123,7 +123,7 @@ def run_market_discovery(
         )
     progress(
         0.18,
-        "preparing_features",
+        "downloading_data",
         f"Prepared {len(strategies):,} faithful strategy families",
     )
     _check_cancelled(cancelled)
@@ -164,10 +164,16 @@ def run_market_discovery(
     if not symbols:
         raise RuntimeError("No valid stocks were available for this Market Discovery scan.")
 
+    last_fraction = 0.38
+
     def scan_progress(message: str) -> None:
+        nonlocal last_fraction
         _check_cancelled(cancelled)
+        # Provider callbacks can revisit a phase within a batch. Durable job
+        # progress must remain monotonic even when the descriptive text changes.
+        last_fraction = max(last_fraction, _scan_fraction(message))
         progress(
-            _scan_fraction(message),
+            last_fraction,
             "preparing_features",
             str(message or "Comparing stocks with strategy rules"),
         )

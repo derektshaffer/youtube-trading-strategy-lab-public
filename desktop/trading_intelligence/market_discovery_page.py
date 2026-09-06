@@ -32,10 +32,12 @@ class MarketDiscoveryPage(QWidget):
     options_requested = Signal()
     run_requested = Signal(dict)
     analyze_requested = Signal(str)
+    cancel_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
         self.options_loaded = False
+        self.operation = ""
         self._results: list[dict[str, Any]] = []
 
         root = QVBoxLayout(self)
@@ -123,6 +125,10 @@ class MarketDiscoveryPage(QWidget):
         banner.addWidget(self.status)
         banner.addWidget(self.detail)
         banner.addWidget(self.progress)
+        self.cancel = QPushButton("Cancel scan")
+        self.cancel.clicked.connect(self.cancel_requested.emit)
+        self.cancel.setVisible(False)
+        banner.addWidget(self.cancel)
         root.addWidget(self.banner)
 
         metrics = QGridLayout()
@@ -200,6 +206,9 @@ class MarketDiscoveryPage(QWidget):
             self.count.setValue(maximum)
 
     def render_options(self, result: dict[str, Any]) -> None:
+        if self.operation == "scan":
+            return  # A delayed options response cannot replace a running scan.
+        self.operation = ""
         # Loading options uses set_working(), which disables every scan control.
         # Restore the complete control set before rendering the ready state.
         self._set_controls_enabled(True)
@@ -224,6 +233,7 @@ class MarketDiscoveryPage(QWidget):
         )
         self.progress.setValue(0)
         self.progress.setVisible(False)
+        self.cancel.setVisible(False)
 
     @Slot(bool)
     def _scan_clicked(self, _checked: bool = False) -> None:
@@ -241,6 +251,12 @@ class MarketDiscoveryPage(QWidget):
             if not custom:
                 self.set_error("Enter at least one ticker for the custom watchlist.")
                 return
+        # Mark the click before signal dispatch. The window's lifecycle poll
+        # can then expose a missing attachment instead of leaving a silent click.
+        self.begin_operation(
+            "scan", "Starting stock discovery…",
+            "Sending the selected strategy rules and stock universe to the local service.",
+        )
         self.run_requested.emit(
             {
                 "strategy_id": str(self.strategy.currentData() or ""),
@@ -265,6 +281,7 @@ class MarketDiscoveryPage(QWidget):
         self.status.setText(title)
         self.detail.setText(detail)
         self.progress.setVisible(True)
+        self.cancel.setVisible(bool(self.operation))
         self.progress.setValue(round(max(0.0, min(1.0, fraction)) * 1000))
 
     def _set_controls_enabled(self, enabled: bool) -> None:
@@ -277,11 +294,13 @@ class MarketDiscoveryPage(QWidget):
         self._sync_custom_state()
 
     def set_error(self, message: str) -> None:
+        self.operation = ""
+        self.cancel.setVisible(False)
         self._set_controls_enabled(True)
         self.banner.setProperty("state", "error")
         self.banner.style().unpolish(self.banner)
         self.banner.style().polish(self.banner)
-        self.status.setText("Find Stocks could not continue")
+        self.status.setText("Stock discovery could not continue")
         self.detail.setText(message)
         self.progress.setVisible(False)
         self.progress.setValue(0)
@@ -294,6 +313,8 @@ class MarketDiscoveryPage(QWidget):
             return "—"
 
     def render_results(self, result: dict[str, Any]) -> None:
+        self.operation = ""
+        self.cancel.setVisible(False)
         self._set_controls_enabled(True)
         self.banner.setProperty("state", "ready")
         self.banner.style().unpolish(self.banner)
@@ -355,3 +376,15 @@ class MarketDiscoveryPage(QWidget):
 
 
 __all__ = ["MarketDiscoveryPage"]
+
+    def begin_operation(self, operation: str, title: str, detail: str) -> None:
+        self.operation = operation
+        if operation == "scan":
+            self._results = []
+            self.table.setRowCount(0)
+            self._sync_selection()
+            for metric in (self.match_metric, self.validated_metric,
+                           self.stock_metric, self.strategy_metric):
+                metric.value.setText("—")
+        self.set_working(title, detail, 0.02)
+
