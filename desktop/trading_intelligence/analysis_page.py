@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Any
 from .display_time import format_timestamp
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
+from .market_data_labels import timestamp_label, snapshot_label
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -28,6 +29,7 @@ class AnalysisPage(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
+        self._analysis_result = {}
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(14)
@@ -150,6 +152,10 @@ class AnalysisPage(QWidget):
 
         self.vwap.toggled.connect(self._toggle_indicators)
         self.ema.toggled.connect(self._toggle_indicators)
+        self.freshness_timer = QTimer(self)
+        self.freshness_timer.setInterval(1000)
+        self.freshness_timer.timeout.connect(self._refresh_freshness)
+        self.freshness_timer.start()
 
     def set_discovery_context(self, context: dict[str, Any]) -> None:
         """Display the selected scan's evidence, never recompute or invent rules."""
@@ -157,6 +163,8 @@ class AnalysisPage(QWidget):
         self._sync_discovery_context()
 
     def _sync_discovery_context(self, *_args) -> None:
+        if self._analysis_result and str(self._analysis_result.get("symbol") or "").upper() != self.symbol.text().strip().upper():
+            self._clear_analysis()
         context = self.discovery_context
         matching = bool(context) and str(context.get("symbol") or "").upper() == self.symbol.text().strip().upper()
         self.signal_card.setVisible(matching)
@@ -170,7 +178,7 @@ class AnalysisPage(QWidget):
             f"{context.get('best_strategy_name') or 'Unknown strategy'} | ID: {context.get('best_strategy_id') or 'not recorded'}",
             f"Setup: {signal.get('status') or 'UNKNOWN'} | Rule match: {signal.get('score', 'not recorded')}%",
             f"Library validation status: {context.get('validation_status') or 'not recorded'} (separate from this rule match; inspect saved validation results).",
-            f"Market snapshot timestamp: {format_timestamp(metrics.get('trade_timestamp') or metrics.get('quote_timestamp'), 'not recorded')}",
+            "Market snapshot: " + snapshot_label(metrics),
         ]
         for check in signal.get("checks") or []:
             lines.append(f"{check.get('label') or 'Check'}: {check.get('status') or 'unknown'} | actual: {check.get('actual')} | required: {check.get('required')}")
@@ -188,6 +196,8 @@ class AnalysisPage(QWidget):
         self.chart.reset_view()
 
     def emit_analysis(self) -> None:
+        if not self.run.isEnabled():
+            return
         symbol = self.symbol.text().strip().upper()
         if not symbol:
             self.set_error("Enter a ticker first.")
@@ -203,6 +213,7 @@ class AnalysisPage(QWidget):
         )
 
     def set_working(self, stage: str, detail: str, progress: float) -> None:
+        self._clear_analysis()
         self.run.setEnabled(False)
         self.symbol.setEnabled(False)
         self.timeframe.setEnabled(False)
@@ -214,6 +225,7 @@ class AnalysisPage(QWidget):
         self.progress.setValue(round(max(0.0, min(1.0, progress)) * 1000))
 
     def set_error(self, message: str) -> None:
+        self._clear_analysis()
         self.run.setEnabled(True)
         self.symbol.setEnabled(True)
         self.timeframe.setEnabled(True)
@@ -248,7 +260,7 @@ class AnalysisPage(QWidget):
         symbol = str(result.get("symbol") or self.symbol.text()).upper()
         timeframe = str(result.get("timeframe") or self.timeframe.currentData() or "")
         feed = str(result.get("feed") or "").upper()
-        age = float(summary.get("data_age_seconds") or 0.0)
+        self._analysis_result = dict(result)
         self.banner.setProperty("state", "ready")
         self.banner.style().unpolish(self.banner)
         self.banner.style().polish(self.banner)
@@ -256,14 +268,12 @@ class AnalysisPage(QWidget):
         network = bool(cache.get("network_request"))
         provider_rows = int(cache.get("provider_rows") or 0)
         cache_copy = (
-            "Fresh cache reused with no Alpaca request."
+            "Previously refreshed cache reused with no Alpaca request."
             if not network
             else f"Incremental Alpaca refresh merged {provider_rows:,} returned candles into the persistent cache."
         )
-        self.detail.setText(
-            f"{result.get('price_label') or 'Latest completed candle'} · as of {format_timestamp(summary.get('as_of'), 'unknown', naive_utc=True)} · "
-            f"data age {age:,.0f}s. {cache_copy}"
-        )
+        self._cache_copy = cache_copy
+        self._refresh_freshness()
         self.progress.setValue(1000)
         self.price_metric.value.setText(self._money(summary.get("latest_bar_close")))
         self.change_metric.value.setText(self._number(summary.get("session_change_pct"), "%"))
@@ -278,3 +288,22 @@ class AnalysisPage(QWidget):
         )
         self.chart.set_candles(candles)
         self._toggle_indicators()
+
+    def _clear_analysis(self) -> None:
+        self._analysis_result = {}
+        for metric in (self.price_metric, self.change_metric, self.vwap_metric,
+                       self.rvol_metric, self.atr_metric, self.cache_metric):
+            metric.value.setText("—")
+        self.chart.set_candles([])
+        self.chart_title.setText("Market chart · no current analysis result")
+        self.structure.setText("Previous analysis cleared; wait for a successful refresh.")
+
+    def _refresh_freshness(self) -> None:
+        result = self._analysis_result
+        if result:
+            summary = result.get("summary") or {}
+            self.detail.setText(
+                f"{result.get('price_label') or 'Historical candle close'} · {timestamp_label(summary.get('as_of'))}. "
+                f"Historical candle data, not a live quote. {self._cache_copy} {result.get('refresh_warning') or ''}"
+            )
+        self._sync_discovery_context()

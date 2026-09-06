@@ -195,7 +195,7 @@ class MainWindow(RecoveryMainWindow):
         count = int(payload.get("candidate_count") or 50)
         self.market_discovery.begin_operation(
             "scan",
-            "Building the live stock universe",
+            "Building the stock universe",
             "Preparing one shared market-data pass before comparing current conditions with strategy rules.",
         )
         request = {

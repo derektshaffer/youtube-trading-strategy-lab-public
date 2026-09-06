@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from .pages import Card, MetricCard
+from .market_data_labels import snapshot_label
 
 
 class MarketDiscoveryPage(QWidget):
@@ -150,7 +151,7 @@ class MarketDiscoveryPage(QWidget):
         results_card = Card()
         results = QVBoxLayout(results_card)
         heading = QHBoxLayout()
-        title = QLabel("Live strategy matches")
+        title = QLabel("Discovery snapshot matches")
         title.setObjectName("SectionTitle")
         self.analyze = QPushButton("Analyze selected stock")
         self.analyze.setEnabled(False)
@@ -166,7 +167,7 @@ class MarketDiscoveryPage(QWidget):
                 "Validation",
                 "Setup",
                 "Rule match",
-                "Price",
+                "Snapshot price",
                 "Day move",
                 "RVOL",
             ]
@@ -327,7 +328,7 @@ class MarketDiscoveryPage(QWidget):
             f"{len(self._results):,} ranked stocks"
         )
         self.detail.setText(
-            "Each stock is paired with its strongest current rule match. "
+            "Each stock is paired with its saved snapshot rule match, not a live quote. "
             "Validated and research-only strategies remain labeled separately."
         )
         self.progress.setVisible(True)
@@ -354,6 +355,8 @@ class MarketDiscoveryPage(QWidget):
             )
             for column, value in enumerate(values):
                 cell = QTableWidgetItem(value)
+                if column == 5:
+                    cell.setToolTip(snapshot_label(metrics))
                 if column != 1:
                     cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.table.setItem(row, column, cell)
@@ -368,6 +371,9 @@ class MarketDiscoveryPage(QWidget):
 
     def _sync_selection(self) -> None:
         self.analyze.setEnabled(bool(self._selected_symbol()))
+        rows = sorted({item.row() for item in self.table.selectedItems()})
+        if rows and rows[0] < len(self._results):
+            self.detail.setText(snapshot_label(self._results[rows[0]].get("metrics") or {}))
 
     def _emit_selected_analysis(self) -> None:
         symbol = self._selected_symbol()

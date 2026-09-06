@@ -176,7 +176,8 @@ def test_incremental_refresh_requests_only_small_overlap_after_cached_tail():
         assert len(provider.calls) == 2
         requested_start = provider.calls[-1]["start"]
         assert requested_start == cached_last - timedelta(minutes=15)
-        assert second["candles"][-1]["close"] == pytest.approx(30.8)
+        # Alpaca labels bars by their start: the bar at `later` is still forming.
+        assert second["candles"][-1]["close"] == pytest.approx(30.6)
         assert second["provider_rows"] <= 6
 
 

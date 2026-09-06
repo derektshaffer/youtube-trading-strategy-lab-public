@@ -15,6 +15,9 @@ from PySide6.QtWidgets import (
 )
 
 from .error_sanitizer import sanitize_display_text
+from hybrid_runtime.bounded_discovery import DISCOVERY_TIMEOUTS
+from hybrid_runtime.contracts import JobStatus
+from urllib.error import HTTPError
 
 from hybrid_runtime.desktop_settings import (
     ALPACA_API_KEY_ACCOUNT,
@@ -43,6 +46,11 @@ class MainWindow(BaseMainWindow):
         self.analysis = AnalysisPage()
         self.stack.addWidget(self.analysis)
         self.analysis.analyze_requested.connect(self.run_stock_analysis)
+        self._analysis_job_id = ""
+        self._analysis_started = 0.0
+        self._analysis_unreachable_at = None
+        self._analysis_request = {}
+        self._analysis_cancel_requested = False
         self._install_analysis_navigation()
         self._install_market_connection_fields()
         self._install_profit_first_cloud_validation()
@@ -198,6 +206,9 @@ class MainWindow(BaseMainWindow):
             self.fail_smoke(exc)
 
     def run_stock_analysis(self, payload: dict[str, Any]) -> None:
+        if self._analysis_job_id:
+            self._poll_stock_analysis()
+            return
         if self.active_job_id:
             self.analysis.set_error(
                 "Another local job is active. The durable queue will be available here after it finishes."
@@ -219,6 +230,13 @@ class MainWindow(BaseMainWindow):
         }
         try:
             self.submit_job(request, "stock_analysis")
+            if not self.active_job_id or self.active_purpose != "stock_analysis":
+                raise RuntimeError("Analysis was not attached to a submitted job. Try again.")
+            self._analysis_job_id = self.active_job_id
+            self._analysis_request = dict(payload)
+            self._analysis_started = time.monotonic()
+            self._analysis_unreachable_at = None
+            self._analysis_cancel_requested = False
         except BaseException as exc:
             self.analysis.set_error(clean_error(exc))
 
@@ -259,6 +277,9 @@ class MainWindow(BaseMainWindow):
             self._sync_profit_first_validation_button()
 
     def poll_active_job(self) -> None:
+        if self._analysis_job_id:
+            self._poll_stock_analysis()
+            return
         if not self.active_job_id:
             return
         if self.active_purpose == "stock_analysis":
@@ -273,22 +294,50 @@ class MainWindow(BaseMainWindow):
             self._sync_profit_first_validation_button()
 
     def _poll_stock_analysis(self) -> None:
+        job_id = self._analysis_job_id or self.active_job_id
         try:
-            job = self.runtime.request_json("GET", f"/v1/jobs/{self.active_job_id}")
+            job = self.runtime.request_json("GET", f"/v1/jobs/{job_id}", timeout=1.0)
+        except Exception as exc:
+            if isinstance(exc, HTTPError) and exc.code == 404:
+                self._finish_stock_analysis("Analysis job is missing. Check Runs & Jobs before retrying.")
+                return
+            now = time.monotonic()
+            if self._analysis_unreachable_at is None:
+                self._analysis_unreachable_at = now
+            if now - self._analysis_unreachable_at < 30:
+                self.analysis.set_working("Reconnecting to analysis", clean_error(exc), self.analysis.progress.value()/1000)
+            else:
+                self.analysis.set_error("Analysis completion is unconfirmed. Analyze will reconnect to this same job, not submit another. " + clean_error(exc))
+                self.analysis.symbol.setEnabled(False)
+                self.analysis.timeframe.setEnabled(False)
+            return
+        try:
+            self._analysis_unreachable_at = None
+            if job.get("id") != job_id or job.get("job_type") != "analysis.stock":
+                raise RuntimeError("Analysis returned the wrong job identity; no result was displayed.")
+            status = str(job.get("status") or "")
+            JobStatus(status)
             progress = float(job.get("progress") or 0.0)
             self.analysis.set_working(
                 str(job.get("stage") or "working").replace("_", " ").title(),
                 str(job.get("status") or "working").replace("_", " "),
                 progress,
             )
-            if not bool(job.get("terminal")):
+            if status not in {"complete", "failed", "cancelled"}:
+                if bool(job.get("terminal")):
+                    raise RuntimeError("Analysis returned an inconsistent terminal state.")
+                if time.monotonic() - self._analysis_started > DISCOVERY_TIMEOUTS["analysis.stock"] + 60 and not self._analysis_cancel_requested:
+                    self.runtime.request_json("POST", f"/v1/jobs/{job_id}/cancel", {}, timeout=1.0)
+                    self._analysis_cancel_requested = True
                 return
             if job.get("status") != "complete":
                 message = (job.get("error") or {}).get("message") or str(job.get("status"))
                 raise RuntimeError(message)
             result = job.get("result") if isinstance(job.get("result"), dict) else {}
-            self.active_job_id = ""
-            self.active_purpose = ""
+            expected = str(self._analysis_request.get("symbol") or self.analysis.symbol.text()).strip().upper()
+            if str(result.get("symbol") or "").upper() != expected:
+                raise RuntimeError("Analysis returned the wrong ticker; no result was displayed.")
+            self._finish_stock_analysis()
             self.analysis.render_analysis(result)
             self.refresh_jobs()
             cache = result.get("cache") if isinstance(result.get("cache"), dict) else {}
@@ -297,10 +346,16 @@ class MainWindow(BaseMainWindow):
                 + ("persistent cache reused" if not cache.get("network_request") else "incremental cache refresh complete")
             )
         except BaseException as exc:
-            self.active_job_id = ""
-            self.active_purpose = ""
-            self.analysis.set_error(clean_error(exc))
+            self._finish_stock_analysis(clean_error(exc))
             self.refresh_jobs()
+
+    def _finish_stock_analysis(self, error="") -> None:
+        self.active_job_id = self.active_purpose = self._analysis_job_id = ""
+        self.active_route = {}
+        self._analysis_request = {}
+        self._analysis_unreachable_at = None
+        if error:
+            self.analysis.set_error(error)
 
     def _cloud_wait_detail(self, job_id: str) -> str:
         try:
