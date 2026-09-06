@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
+from .display_time import format_timestamp
 from typing import Any
 
 from PySide6.QtCore import QPointF, QRectF, Qt
@@ -107,7 +109,7 @@ class CandleChart(QWidget):
                 len(rows) - 1,
                 round(marker * (len(rows) - 1) / 4),
             )
-            stamp = time.strftime("%H:%M", time.localtime(int(rows[index]["time"])))
+            stamp = format_timestamp(datetime.fromtimestamp(int(rows[index]["time"]), timezone.utc), clock_only=True)
             painter.setPen(QColor("#63798f"))
             painter.drawText(int(max(2.0, x_at(index) - 18.0)), int(height - 9), stamp)
 

@@ -45,7 +45,7 @@ class SearchMonitorCard(Card):
         self.action_notice.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(self.action_notice)
         self.table = QTableWidget(0, 7)
-        self.table.setHorizontalHeaderLabels(["Stock", "Search", "Location", "Reported status", "Stage", "Progress", "Last update (UTC)"])
+        self.table.setHorizontalHeaderLabels(["Stock", "Search", "Location", "Reported status", "Stage", "Progress", "Last update"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -85,7 +85,7 @@ class SearchMonitorCard(Card):
                 f"{row['symbol']} · {row['kind']} · depth {row.get('profile') or '—'} · {row['target']}\n"
                 f"Run: {row.get('run_id') or row['id']}\n"
                 + (f"{action['title']}: {action['message']}\n" if action else f"{row.get('message') or ''}\n")
-                + (f"Saved checkpoint: {format_timestamp(row['checkpoint_at'])} UTC\n" if row.get("checkpoint_at") else "")
+                + (f"Saved checkpoint: {format_timestamp(row['checkpoint_at'], naive_utc=True)}\n" if row.get("checkpoint_at") else "")
                 + "Status and progress are last reported, not proof the worker is still alive.\n"
                 + (row.get("cancel_reason", "") if not action or action["state"] == "unconfirmed"
                    else "No further cancellation will be sent automatically.")
@@ -119,7 +119,7 @@ class SearchMonitorCard(Card):
         selected_index = -1
         for index, row in enumerate(self.rows):
             values = [row["symbol"], row["kind"], row["target"], row["status"].replace("_", " "),
-                      row["stage"].replace("_", " "), f"{row['progress'] * 100:.0f}%", format_timestamp(row["updated_at"], "Unknown")]
+                      row["stage"].replace("_", " "), f"{row['progress'] * 100:.0f}%", format_timestamp(row["updated_at"], "Unknown", naive_utc=True)]
             action = self.actions.get(action_key(row))
             if action and row["status"] not in {"cancelled", "complete", "completed", "failed", "worker_stopped"}:
                 values[3] = action["title"]
@@ -136,7 +136,7 @@ class SearchMonitorCard(Card):
             self.table.selectRow(selected_index)
         self.table.blockSignals(False)
         count = snapshot.get("active_count", 0)
-        checked = format_timestamp(snapshot.get("checked_at"), "not yet") + " UTC"
+        checked = format_timestamp(snapshot.get("checked_at"), "not yet", naive_utc=True)
         warning = snapshot.get("warning") or ""
         if snapshot.get("stale"):
             self.status.setText(f"Cloud status unavailable or stale · last successful check: {checked}. {warning}")

@@ -6,6 +6,7 @@ pytest.importorskip('PySide6')
 from PySide6.QtWidgets import QApplication
 from desktop.trading_intelligence.finder_page import StockFinderPage
 from desktop.trading_intelligence.finder_window import MainWindow
+from desktop.trading_intelligence.display_time import format_timestamp
 
 
 def test_finder_poll_names_sls_blocker_and_restores_chpt_progress_when_started(monkeypatch):
@@ -24,7 +25,7 @@ def test_finder_poll_names_sls_blocker_and_restores_chpt_progress_when_started(m
     MainWindow._poll_stock_finder(window)
     assert page.status.text() == 'CHPT queued · waiting for SLS Very Deep'
     assert '94%' in page.detail.text() and '12/12 batches complete' in page.detail.text()
-    assert 'walk forward' in page.detail.text() and '2026-09-04 00:10 UTC' in page.detail.text()
+    assert 'walk forward' in page.detail.text() and format_timestamp('2026-09-04T00:10:44Z', naive_utc=True) in page.detail.text()
     assert '2026-09-04T' not in page.detail.text()
     assert page.progress.value() == 0
     assert page.progress.format() == 'Queued — CHPT has not started'

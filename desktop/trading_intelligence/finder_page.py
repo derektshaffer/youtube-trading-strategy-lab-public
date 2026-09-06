@@ -193,8 +193,8 @@ class StockFinderPage(QWidget):
             percent = f" · {round(float(fraction) * 100)}%" if fraction is not None else ""
             total = int(blocker.get("shards_total") or 0)
             shards = f" · {int(blocker.get('shards_completed') or 0)}/{total} batches complete" if total else ""
-            updated = format_timestamp(blocker.get("updated_at"), "")
-            timestamp = f" (updated {updated} UTC)" if updated else ""
+            updated = format_timestamp(blocker.get("updated_at"), "", naive_utc=True)
+            timestamp = f" (updated {updated})" if updated else ""
             message = str(blocker.get("message") or "").strip()
             details.append(f"{name} — last reported: {stage}{percent}{shards}{timestamp}. {message}".strip())
         title = f"{symbol} queued"

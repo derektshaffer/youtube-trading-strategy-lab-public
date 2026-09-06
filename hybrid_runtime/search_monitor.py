@@ -69,6 +69,10 @@ def remote_snapshot(library, settings, revision, checkpoints=None):
         message = str(item.get("status_message") or payload.get("distributed_message") or item.get("last_error") or "")
         if status == "running" and checkpoint:
             message = str(checkpoint.get("message") or message)
+        if status == "complete":
+            stage, progress = "complete", 1.0
+        elif status in TERMINAL:
+            stage = status
         stoppable = supports_stop(item, settings.github.action_repository)
         can_cancel = (status in QUEUED and not item.get("cancel_requested")) or (
             status in {"running", "cancelling"} and stoppable)

@@ -25,7 +25,8 @@ from PySide6.QtWidgets import (
 )
 
 from hybrid_runtime.desktop_settings import DesktopSettings
-from .time_utils import format_local_timestamp, format_local_timestamp_with_utc_tooltip
+from .display_time import format_timestamp as format_local_timestamp
+from .time_utils import format_local_timestamp_with_utc_tooltip
 
 
 class Card(QFrame):
@@ -329,9 +330,10 @@ class JobsPage(QWidget):
         for row, job in enumerate(jobs):
             if not bool(job.get("terminal")):
                 active += 1
-            updated_label, updated_tooltip = format_local_timestamp_with_utc_tooltip(
+            _, updated_tooltip = format_local_timestamp_with_utc_tooltip(
                 job.get("updated_at")
             )
+            updated_label = format_local_timestamp(job.get("updated_at"), naive_utc=True)
             values = (
                 str(job.get("job_type") or ""),
                 str(job.get("status") or ""),
