@@ -104,7 +104,7 @@ def test_production_shell_exposes_setup_profit_first_finder_results_research_ml_
     assert "Strategy Lab" in ui
     assert "Run Strategy Lab in Cloud" in ui
     assert "Research + ML" in ui
-    assert "Refresh Research + ML" in ui
+    assert "Refresh Research" in ui
     assert "library.research_ml_summary" in ui
     assert "System Health" in ui
     assert "Refresh Health" in ui

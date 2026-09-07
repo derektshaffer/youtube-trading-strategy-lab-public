@@ -20,12 +20,27 @@ from PySide6.QtWidgets import (
 )
 
 from .pages import Card, MetricCard
+from .workflow_widgets import readable_table
 from .error_sanitizer import sanitize_display_text
 from .display_time import format_timestamp as format_local_timestamp
 
 
 def _display(value: Any, fallback: str = "—") -> str:
     return sanitize_display_text(value or fallback)
+
+
+def _detail_display(field: str, value: Any) -> str:
+    """Preserve scalar zero/False in details without changing table contracts."""
+    if value is None:
+        return "Not recorded"
+    # The bounded summary uses negative confidence as its missing-value sentinel.
+    if field == "confidence" and isinstance(value, (int, float)) and value < 0:
+        return "Not recorded"
+    if isinstance(value, (bool, int, float)):
+        return sanitize_display_text(str(value))
+    # Summary detail fields have no meaningful empty-collection contract.
+    # Retain existing string/collection missing behavior rather than redefining it.
+    return _display(value, "Not recorded")
 
 
 def _display_when(value: Any, fallback: str = "—") -> str:
@@ -54,38 +69,41 @@ class ResearchMLPage(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
+        self.load_state = "unloaded"
+        self.sections = {}
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(14)
 
         header = QHBoxLayout()
         copy = QVBoxLayout()
-        eyebrow = QLabel("RESEARCH + ML")
+        eyebrow = QLabel("RESEARCH LIBRARY")
         eyebrow.setObjectName("Eyebrow")
-        title = QLabel("Autonomous research and model status")
+        title = QLabel("Explore the research library")
         title.setObjectName("PageTitle")
         subtitle = QLabel(
-            "A bounded read-only view of the durable cloud queue, research history, "
-            "hypotheses, sources, and predictive shadow models. It never launches compute or changes trading decisions."
+            "Library-wide records, not filtered by the stock or strategy selected elsewhere. "
+            "Refresh reads saved evidence; it never launches compute or changes trading decisions."
         )
         subtitle.setObjectName("Subtle")
         subtitle.setWordWrap(True)
         copy.addWidget(eyebrow)
         copy.addWidget(title)
         copy.addWidget(subtitle)
-        self.refresh = QPushButton("Refresh Research + ML")
+        self.refresh = QPushButton("Refresh Research")
         self.refresh.setObjectName("Primary")
         self.refresh.clicked.connect(self.refresh_requested.emit)
-        header.addLayout(copy, 1)
-        header.addWidget(self.refresh, 0, Qt.AlignmentFlag.AlignTop)
+        root.addLayout(copy)
+        header.addWidget(self.refresh)
+        header.addStretch(1)
         root.addLayout(header)
 
         self.banner = Card()
         banner = QVBoxLayout(self.banner)
-        self.status = QLabel("Research and ML status has not been loaded yet.")
+        self.status = QLabel("Load your saved research")
         self.status.setObjectName("BannerTitle")
         self.detail = QLabel(
-            "Refresh to read the current private research library. Cloud workers continue independently of this page."
+            "Choose Refresh Research to read the connected library. No research, model training, validation or backtest will be started."
         )
         self.detail.setObjectName("Subtle")
         self.detail.setWordWrap(True)
@@ -94,21 +112,19 @@ class ResearchMLPage(QWidget):
         root.addWidget(self.banner)
 
         metrics = QGridLayout()
-        self.active = MetricCard("Active cloud jobs")
+        self.active = MetricCard("Active queue records")
         self.hypotheses_metric = MetricCard("Hypotheses")
         self.experiments_metric = MetricCard("Experiments")
         self.sources_metric = MetricCard("Sources")
-        self.models_metric = MetricCard("Shadow-ready models")
-        for index, widget in enumerate(
-            (
-                self.active,
-                self.hypotheses_metric,
-                self.experiments_metric,
-                self.sources_metric,
-                self.models_metric,
-            )
-        ):
-            metrics.addWidget(widget, 0, index)
+        self.models_metric = MetricCard("ML runs")
+        self.metric_cards = {
+            "active_cloud_jobs": self.active, "hypotheses": self.hypotheses_metric,
+            "experiments": self.experiments_metric, "sources": self.sources_metric,
+            "predictive_ml_runs": self.models_metric,
+        }
+        for index, widget in enumerate(self.metric_cards.values()):
+            widget.value.setText("Not loaded")
+            metrics.addWidget(widget, index // 3, index % 3)
         root.addLayout(metrics)
 
         self.tabs = QTabWidget()
@@ -140,21 +156,69 @@ class ResearchMLPage(QWidget):
             ["When", "Source", "Type", "Status", "URL"],
             stretch_column=1,
         )
-        self.tabs.addTab(self._card_for(self.queue_table), "Cloud Queue")
-        self.tabs.addTab(self._card_for(self.run_table), "Research Runs")
-        self.tabs.addTab(self._card_for(self.hypothesis_table), "Hypotheses")
-        self.tabs.addTab(self._card_for(self.experiment_table), "Experiments")
-        self.tabs.addTab(self._ml_card(), "Predictive ML")
-        self.tabs.addTab(self._card_for(self.source_table), "Sources")
-        root.addWidget(self.tabs, 1)
-
-        safety = QLabel(
-            "Research-only status · predictive models shown here are shadow models and do not place trades, "
-            "change live ranking, or bypass validation gates."
+        self.tabs.tabBar().setExpanding(False)
+        self.tabs.setUsesScrollButtons(True)
+        self.tabs.addTab(self._section(
+            self.run_table, "research_runs", "Research runs",
+            "Topic-led findings and worker activity across the library. Sources can inform hypotheses; "
+            "worker records may only record processing status.",
+            "No research runs saved yet.",
+            "Runs are saved by the existing web research/autopilot and cloud workers. "
+            "This desktop view cannot start a research cycle."), "Research Runs")
+        self.tabs.addTab(self._section(
+            self.source_table, "sources", "Sources",
+            "Library-wide books, documents and other ingested material. A source can support multiple strategies; "
+            "it is not evidence for the currently selected stock by default.",
+            "No sources saved yet.",
+            "Sources appear after the existing web document/book ingestion flow saves them. "
+            "Standalone native source import is not available here."), "Sources")
+        self.tabs.addTab(self._section(
+            self.hypothesis_table, "hypotheses", "Hypotheses",
+            "Unproven ideas derived from research. They may link to a research run and later to a strategy; "
+            "confidence is not a validation verdict.",
+            "No hypotheses saved yet.",
+            "The research worker derives hypotheses from grounded research. Its review can queue further work; "
+            "manual creation is not exposed on this read-only page."), "Hypotheses")
+        self.tabs.addTab(self._section(
+            self.experiment_table, "experiments", "Experiments",
+            "Strategy-linked records of deterministic testing, stage outcomes and eligibility decisions. "
+            "They are not a separate manual experiment runner.",
+            "No experiments saved yet.",
+            "Existing validation workflows create these records as candidates are tested. "
+            "Viewing this tab never starts or retries that work."), "Experiments")
+        ml = QWidget()
+        ml_layout = QVBoxLayout(ml)
+        ml_layout.setContentsMargins(0, 0, 0, 0)
+        ml_layout.addWidget(self._section(
+            self.ml_run_table, "predictive_ml_runs", "Predictive ML runs",
+            "Saved training/evaluation runs use their own symbol sets and datasets, not the selected stock. "
+            "Models are a separate branch of research, not an automatic next step for every experiment.",
+            "No predictive ML runs saved yet.",
+            "Runs are saved by the existing web ML workflow or cloud backfill worker. "
+            "Training is not launched here."))
+        ml_layout.addWidget(self._section(
+            self.shadow_table, "ready_shadow_models", "Shadow model summaries",
+            "Up to 12 eligible model summaries. Shadow scoring flags describe saved model configuration, "
+            "not live deployment or production approval.",
+            "No shadow model summaries available.",
+            "Models appear after the existing model registry's eligibility checks. "
+            "This view cannot activate a model or change live ranking."))
+        self.tabs.addTab(ml, "Predictive ML")
+        self.tabs.addTab(self._section(
+            self.queue_table, "queue", "Cloud queue",
+            "Last-reported queue records across job types. Active counts are recorded states, "
+            "not proof of a live worker or a ticker-specific research run.",
+            "No queue records saved yet.",
+            "Existing web workflows and workers enqueue jobs. This view only reads status; "
+            "it cannot dispatch, cancel or retry them."), "Cloud Queue")
+        root.addWidget(self.tabs)
+        self.safety = QLabel(
+            "Research only. This view cannot place trades, change live ranking or bypass validation. "
+            "Predictive models are shadow models and do not place trades; they are not production-approved."
         )
-        safety.setObjectName("Subtle")
-        safety.setWordWrap(True)
-        root.addWidget(safety)
+        self.safety.setObjectName("Subtle")
+        self.safety.setWordWrap(True)
+        root.addWidget(self.safety)
 
     @staticmethod
     def _table(headers: list[str], *, stretch_column: int) -> QTableWidget:
@@ -168,30 +232,49 @@ class ResearchMLPage(QWidget):
             table.horizontalHeader().setSectionResizeMode(
                 stretch_column, QHeaderView.ResizeMode.Stretch
             )
-        table.setMinimumHeight(330)
+        readable_table(table)
+        table.setMinimumWidth(0)
         return table
 
-    @staticmethod
-    def _card_for(table: QTableWidget) -> Card:
+    def _section(self, table, key, title, description, empty, next_step):
         card = Card()
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(10, 10, 10, 10)
+        heading = QLabel(title)
+        heading.setObjectName("BannerTitle")
+        note = QLabel(description)
+        note.setWordWrap(True)
+        state = QLabel("Not loaded. Choose Refresh Research to read saved records.")
+        state.setWordWrap(True)
+        state.setObjectName("Subtle")
+        details = QLabel("Select a row for its saved details and identity.")
+        details.setWordWrap(True)
+        details.setTextFormat(Qt.TextFormat.PlainText)
+        details.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(heading)
+        layout.addWidget(note)
+        layout.addWidget(state)
         layout.addWidget(table)
+        layout.addWidget(details)
+        table.hide()
+        details.hide()
+        self.sections[key] = {
+            "table": table, "state": state, "details": details,
+            "empty": empty, "next": next_step, "rows": [],
+        }
+        table.itemSelectionChanged.connect(lambda: self._row_details(key))
         return card
 
-    def _ml_card(self) -> Card:
-        card = Card()
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(10, 10, 10, 10)
-        title = QLabel("Recent predictive ML runs")
-        title.setObjectName("BannerTitle")
-        layout.addWidget(title)
-        layout.addWidget(self.ml_run_table)
-        shadow_title = QLabel("Shadow-ready probability models")
-        shadow_title.setObjectName("BannerTitle")
-        layout.addWidget(shadow_title)
-        layout.addWidget(self.shadow_table)
-        return card
+    def _row_details(self, key):
+        section = self.sections[key]
+        row = section["table"].currentRow()
+        if not 0 <= row < len(section["rows"]):
+            section["details"].setText("Select a row for its saved details and identity.")
+            return
+        record = section["rows"][row]
+        section["details"].setText("\n".join(
+            str(field).replace("_", " ").title() + ": " + _detail_display(field, value)
+            for field, value in record.items()
+        ))
 
     @staticmethod
     def _fill(table: QTableWidget, rows: list[tuple[str, ...]]) -> None:
@@ -199,8 +282,20 @@ class ResearchMLPage(QWidget):
         for row_index, values in enumerate(rows):
             for column, value in enumerate(values):
                 table.setItem(row_index, column, QTableWidgetItem(value))
+        table.setFixedHeight(min(260, max(80, 46 + len(rows) * 38)))
+
+    def _pending(self, message):
+        for card in self.metric_cards.values():
+            card.show()
+            card.value.setText(message)
+        for section in self.sections.values():
+            section["table"].hide()
+            section["details"].hide()
+            section["state"].setText(message + ". Choose Refresh Research when available.")
 
     def set_working(self, title: str, detail: str) -> None:
+        self.load_state = "loading"
+        self._pending("Loading")
         self.refresh.setEnabled(False)
         self.banner.setProperty("state", "working")
         self.banner.style().unpolish(self.banner)
@@ -209,14 +304,17 @@ class ResearchMLPage(QWidget):
         self.detail.setText(detail)
 
     def set_error(self, message: str) -> None:
+        self.load_state = "error"
+        self._pending("Unavailable")
         self.refresh.setEnabled(True)
         self.banner.setProperty("state", "error")
         self.banner.style().unpolish(self.banner)
         self.banner.style().polish(self.banner)
-        self.status.setText("Research + ML status could not load")
-        self.detail.setText(message)
+        self.status.setText("Research library could not load")
+        self.detail.setText(sanitize_display_text(message))
 
     def render_summary(self, result: dict[str, Any]) -> None:
+        self.load_state = "ready"
         self.refresh.setEnabled(True)
         self.banner.setProperty("state", "ready")
         self.banner.style().unpolish(self.banner)
@@ -226,15 +324,29 @@ class ResearchMLPage(QWidget):
         source = _display(library.get("source"), "authoritative library").replace("_", " ")
         system = result.get("research_system") if isinstance(result.get("research_system"), dict) else {}
         system_status = _display(system.get("status"), "durable queue available")
-        self.status.setText(f"Research + ML ready · {source}")
+        self.status.setText(f"Research library loaded · {source}")
         self.detail.setText(
-            f"Research system: {system_status}. Showing bounded summaries only; full evidence and model artifacts remain in durable storage."
+            f"Recorded system status: {system_status}. Recent rows only (up to {result.get('limit_per_section', 30)} per section); "
+            "counts describe the loaded library, not just visible rows. Full artifacts stay in storage. "
+            + sanitize_display_text(library.get("warning") or "")
         )
-        self.active.value.setText(f"{int(counts.get('active_cloud_jobs') or 0):,}")
-        self.hypotheses_metric.value.setText(f"{int(counts.get('hypotheses') or 0):,}")
-        self.experiments_metric.value.setText(f"{int(counts.get('experiments') or 0):,}")
-        self.sources_metric.value.setText(f"{int(counts.get('sources') or 0):,}")
-        self.models_metric.value.setText(f"{int(counts.get('ready_shadow_models') or 0):,}")
+        for key, card in self.metric_cards.items():
+            value = counts.get(key)
+            known = isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            card.setVisible(known)
+            card.value.setText(f"{value:,}" if known else "Unavailable")
+        for key, section in self.sections.items():
+            raw = result.get(key)
+            section["rows"] = [row for row in raw if isinstance(row, dict)] if isinstance(raw, list) else []
+            present = bool(section["rows"])
+            section["table"].setVisible(present)
+            section["details"].setVisible(present)
+            section["details"].setText("Select a row for its saved details and identity.")
+            section["state"].setText(
+                f"{len(section['rows'])} recent records. Select a row to inspect details." if present else
+                (section["empty"] if isinstance(raw, list) else "This section was not reported by the library summary.")
+                + "\n" + section["next"]
+            )
 
         self._fill(
             self.queue_table,
