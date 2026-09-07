@@ -109,10 +109,12 @@ class WorkflowShell(QObject):
                 copy.clicked.connect(lambda _=False, p=page: self.go(p))
                 utility_layout.addWidget(copy)
                 self.navigation.append((copy, page))
-        self.utilities = Disclosure("Tools & connections", utility)
+        self.utilities = Disclosure("Tools && Connections", utility)
+        self.utilities.toggle.setAccessibleName("Tools & Connections")
         layout.addWidget(self.utilities)
         layout.addStretch(1)
-        layout.addWidget(label("Research only.\nNo trading approval.", "Subtle"))
+        self.sidebar_safety = label("Research only.\nNo trading approval.", "Subtle")
+        layout.addWidget(self.sidebar_safety)
 
     def _header(self):
         w = self.window
@@ -187,7 +189,6 @@ class WorkflowShell(QObject):
         self.strategy_details = self._disclose_body(w.finder, "Optional: search other strategies (starts cloud research)", set())
         self.strategy_summary = label("Select a stock to inspect its matched strategy.", "ContextStrategy")
         w.finder.layout().insertWidget(1, self.strategy_summary)
-        w.research_ml.layout().insertWidget(1, label("RESEARCH CONTEXT ONLY\nIdeas and hypotheses are not holdout, walk-forward or validated trading evidence.", "SectionTitle"))
         # Keep source controls and their callbacks, but avoid a five-column scan form.
         d = w.market_discovery
         grid = d.strategy.parentWidget().layout()
@@ -340,3 +341,11 @@ class WorkflowShell(QObject):
                              (page is not w.market_discovery or w.market_discovery.analyze.isEnabled()))
         if w.finder_job_id:
             self.strategy_details.set_expanded(True)
+        research = page is w.research_ml
+        self.sidebar_safety.setVisible(not research)
+        self.next.setVisible(not research)
+        if research:
+            self.context_ticker.setText("Research Library")
+            self.context_ticker.setToolTip("")
+            self.context_strategy.setText("Global library: records are not filtered by your selected stock or strategy.")
+            self.context_status.setText("Stock selection retained for other pages: " + (self.ticker or "none"))

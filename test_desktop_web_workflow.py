@@ -61,8 +61,12 @@ def test_navigation_preserves_exact_context_and_does_not_run(window, route):
     page = dict(window.workflow.routes)[route]
     window.workflow.go(page)
     assert window.stack.currentWidget() is page
-    assert window.workflow.context_ticker.text() == "SPY"
-    assert SID in window.workflow.context_strategy.text()
+    assert window.workflow.context_ticker.text() == ("Research Library" if route == "Research" else "SPY")
+    if route == "Research":
+        assert "not filtered" in window.workflow.context_strategy.text()
+        assert window.workflow.ticker == "SPY" and window.workflow.strategy_id == SID
+    else:
+        assert SID in window.workflow.context_strategy.text()
     assert window.strategy_lab.strategy.currentData() == SID
     assert not window.runtime.request_json.called
 

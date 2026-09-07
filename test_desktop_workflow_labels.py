@@ -30,8 +30,12 @@ def test_sidebar_is_grouped_once_in_workflow_order(window, app, monkeypatch):
         assert window.stack.currentWidget() is page
         assert button.property("active")
         assert sum(bool(b.property("active")) for b, _ in workflow.navigation) == 1
-        assert workflow.context_ticker.text() == "SPY"
-        assert SID in workflow.context_strategy.text()
+        assert workflow.context_ticker.text() == ("Research Library" if page is window.research_ml else "SPY")
+        if page is window.research_ml:
+            assert "not filtered" in workflow.context_strategy.text()
+            assert workflow.ticker == "SPY" and workflow.strategy_id == SID
+        else:
+            assert SID in workflow.context_strategy.text()
         assert window.strategy_lab.strategy.currentData() == SID
     # Exercise the original Find -> Analyze handoff without fetching market data.
     analysis_requests = []

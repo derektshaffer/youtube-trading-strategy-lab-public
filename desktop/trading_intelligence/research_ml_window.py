@@ -49,13 +49,13 @@ class MainWindow(StrategyLabMainWindow):
             )
             return
         self.research_ml.set_working(
-            "Reading autonomous research + ML state",
+            "Loading research library",
             "Loading bounded queue, research, source, and model summaries from durable storage.",
         )
         request = {
             "job_type": "library.research_ml_summary",
             "payload": {"limit": 30},
-            "requested_target": "auto",
+            "requested_target": "local",
             "idempotency_key": f"desktop-research-ml-{time.time_ns()}",
             "engine_version": "desktop-research-ml-v1",
         }
@@ -113,9 +113,7 @@ class MainWindow(StrategyLabMainWindow):
             self.refresh_jobs()
             counts = result.get("counts") if isinstance(result.get("counts"), dict) else {}
             self.top_status.setText(
-                "Research + ML ready · "
-                f"{int(counts.get('active_cloud_jobs') or 0):,} active jobs · "
-                f"{int(counts.get('ready_shadow_models') or 0):,} shadow-ready models"
+                "Research library loaded. Queue states are last reported; no execution started."
             )
         except BaseException as exc:
             self.active_job_id = ""
