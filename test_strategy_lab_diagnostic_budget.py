@@ -264,8 +264,9 @@ def test_workflow_has_executable_timeout_and_exact_finalization():
     assert "        timeout-minutes: ${{ fromJSON(steps.budget.outputs.execution_timeout_minutes) }}\n" in validation
     assert '--job-id "$EXACT_STRATEGY_LAB_JOB_ID"' in validation
     assert "${{ inputs.job_id }}" not in validation
+    assert "inputs.finalize_only && '--finalize-diagnostic'" in validation
     finalizer = step("Finalize interrupted diagnostic without retry")
-    assert "always() && inputs.diagnostic_mode && steps.validation.outcome != 'success'" in finalizer
+    assert "always() && inputs.diagnostic_mode && !inputs.finalize_only && steps.validation.outcome != 'success'" in finalizer
     assert "--finalize-diagnostic" in finalizer
     assert workflow_execution_minutes(True, 1, 20) == 22
     with pytest.raises(ValueError):
@@ -287,3 +288,26 @@ def test_finalizer_does_not_claim_or_retry(queue, tmp_path, monkeypatch):
     assert outcome["status"] == "failed" and outcome["failure_kind"] == "execution_timeout"
     assert queue["research_queue"][0]["attempts"] == claimed["attempts"] == 1
     assert worker.finalize_diagnostic("remote")["status"] == "failed"
+
+
+def test_finalizer_preserves_real_admission_failure_without_another_attempt(queue, tmp_path, monkeypatch):
+    store = StrategyStore(tmp_path / 'checkpoint')
+    monkeypatch.setattr(worker, 'build_checkpoint_store', lambda: store)
+    job = worker._claim('remote')
+    message = 'Selected strategy is not fully modeled; execution/admission incomplete; no strategy validation verdict was produced.'
+    worker._fail_queue('remote', message)
+    # Model metadata left by the old finalizer, which must not replace the real error.
+    queue['research_queue'][0]['execution_error'] = {'category': 'infrastructure', 'kind': 'execution_error',
+                                                    'message': 'VALIDATION EXECUTION INTERRUPTED'}
+    monkeypatch.setattr(worker, 'execute_strategy_lab_job_once', Mock(side_effect=AssertionError('must not execute')))
+    for _ in range(2):
+        outcome = worker.finalize_diagnostic('remote')
+        item = queue['research_queue'][0]
+        assert outcome['preserved_terminal_failure'] and outcome['new_execution_attempts'] == 0
+        assert item['status'] == 'failed' and item['attempts'] == 1
+        assert item['last_error'] == item['execution_error']['message'] == message
+        assert item['execution_error']['category'] == 'execution'
+        assert not item.get('result') and not item.get('next_attempt_at')
+        cp = load_latest_strategy_lab_checkpoint(store, run_id=job['payload']['run_id'])
+        assert cp['status'] == 'failed' and cp['attempt'] == 1
+        assert cp['execution_error']['message'] == message and 'result' not in cp

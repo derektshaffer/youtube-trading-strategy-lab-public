@@ -34,7 +34,7 @@
     ".github/workflows/apply-save-and-click-feedback.yml": "e349310faf8f40025b3c969e061e2fb5acef1164bd4af6c78fb124cffce2d519",
     ".github/workflows/clarify-optimizer-input-labels.yml": "a0a135b861193671aa54f6c99e45bb682e1bdfcc27429a0c54b3052f9ce0182d",
     ".github/workflows/cloud-research-smoke-test.yml": "2154aaf92130b632d842d9f3c801bf3d878fe14930841f8689cae9cf1ed89463",
-    ".github/workflows/cloud-strategy-lab.yml": "51ad3d23def3dcb081152a9bc79c5d32cf76a10e353fbff0f7450db71ffa6e67",
+    ".github/workflows/cloud-strategy-lab.yml": "ef931ed1fe52ff80777d27c183efa93cf7afa8fe976af60d9560ec3131a1c534",
     ".github/workflows/codex-apply-cloud-bridge-payload.yml": "1075d4a55c0ccae97ee0cf12d66a35d896bee9b1962fc9fc6bdca9bb4b9d5846",
     ".github/workflows/continuous-trading-research.yml": "93fda039f39ab92c5e9f4fbdfc684895c77a4e1558a6fe742e1433b40d1e5aeb",
     ".github/workflows/desktop-beta-package.yml": "f6e9b7ac72f177044bc1d512cc145847baecfd33a9391740fb46958701eb2c60",
@@ -91,7 +91,7 @@
     "cloud_research_smoke_test.py": "47d3a216c40c45ffcd189262d4f7729065d02a546c4e37355eb1324b93eb4cd0",
     "cloud_research_worker.py": "4974423ae6a216221cbd18547fc85cd3beada33dfa7ccd489d8204c48aebeadd",
     "cloud_search_control.py": "2bb8a6f7da04f955a0f4737bee0927bc6dc787531db4677d82813003420300ba",
-    "cloud_strategy_lab_worker.py": "dfdb08a6874956075810741a60988579fbc225d082c1211c0485643101410a46",
+    "cloud_strategy_lab_worker.py": "4c4a02f89e8fb286b892e140a4bf284e9014f724f30bae44713c03ce00fb0d09",
     "desktop/__init__.py": "a73614b9b4793066fecbdc21394db013ed4dbce58ebe0f1f9c1139b9a7c8c912",
     "desktop/pyside6_spike/app.py": "cb3f7c6010b8b776506e030c90d41ea6be31d56db47406845bd0e0ba7b1dcd14",
     "desktop/pyside6_spike/pyside_chart.py": "a46a855dde359d3987f2212b217bf8f27810abe166d2901554a30a9753804269",
@@ -382,5 +382,5 @@
     "youtube_strategy_app_core.py": "28ba744c2203a00c37dda062a5c433514ed4fbfbb4dddc8eab60d18a10755477",
     "youtube_strategy_engine.py": "14182e16dea3b4dda645ed1518029d9e0ab9bf6a2b978b94fa6a3dea7e344a47"
   },
-  "runtime_sha256": "2fa10045562d064151af75fb1e5fe1f6357e80852123e7ec99686a3f0fcec51a"
+  "runtime_sha256": "768110f37bd06e51a9e2400287528ae6ac675bc1794e3ba6a67bcdd286836224"
 }

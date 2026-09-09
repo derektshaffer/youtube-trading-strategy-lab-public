@@ -82,6 +82,22 @@ def build_checkpoint_store() -> StrategyStore:
     )
 
 
+def _worker_provenance(payload: dict[str, Any]) -> dict[str, Any]:
+    request = {k: v for k, v in payload.items()
+               if k not in {"hybrid_cloud_bridge", "diagnostic_attempt_started_at", "diagnostic_deadline_at"}}
+    return {
+        "source_revision": env("GITHUB_SHA"),
+        "workflow_run_id": env("GITHUB_RUN_ID"),
+        "workflow_attempt": env("GITHUB_RUN_ATTEMPT"),
+        "request_sha256": hashlib.sha256(json.dumps(request, sort_keys=True,
+            separators=(",", ":"), ensure_ascii=False).encode()).hexdigest(),
+        "source_sha256": {name: hashlib.sha256((Path(__file__).resolve().parent / name).read_bytes()).hexdigest()
+            for name in ("cloud_strategy_lab_worker.py", "youtube_strategy_engine.py",
+                         "strategy_lab_execution.py", "hybrid_runtime/strategy_lab_bridge.py",
+                         "hybrid_runtime/diagnostic_budget.py", "systematic_trader/preliminary_scope.py")},
+    }
+
+
 def _claim(preferred_job_id: str = "") -> dict[str, Any] | None:
     holder: dict[str, Any] = {}
     worker_id = f"{WORKER_ID_PREFIX}:{socket.gethostname()}:{os.getpid()}"
@@ -140,19 +156,7 @@ def _claim(preferred_job_id: str = "") -> dict[str, Any] | None:
         if claimed is not None:
             # Persist the actual pickup revision and immutable request before
             # admission, so a legitimate early failure still has durable provenance.
-            request = {k: v for k, v in (claimed.get("payload") or {}).items()
-                       if k not in {"hybrid_cloud_bridge", "diagnostic_attempt_started_at", "diagnostic_deadline_at"}}
-            claimed["worker_provenance"] = {
-                "source_revision": env("GITHUB_SHA"),
-                "workflow_run_id": env("GITHUB_RUN_ID"),
-                "workflow_attempt": env("GITHUB_RUN_ATTEMPT"),
-                "request_sha256": hashlib.sha256(json.dumps(request, sort_keys=True,
-                    separators=(",", ":"), ensure_ascii=False).encode()).hexdigest(),
-                "source_sha256": {name: hashlib.sha256((Path(__file__).resolve().parent / name).read_bytes()).hexdigest()
-                    for name in ("cloud_strategy_lab_worker.py", "youtube_strategy_engine.py",
-                                 "strategy_lab_execution.py", "hybrid_runtime/strategy_lab_bridge.py",
-                                 "hybrid_runtime/diagnostic_budget.py", "systematic_trader/preliminary_scope.py")},
-            }
+            claimed["worker_provenance"] = _worker_provenance(claimed.get("payload") or {})
             stamp_diagnostic_deadline(claimed.setdefault("payload", {}))
             updated["research_queue"] = [claimed if item.get("id") == claimed.get("id") else item
                                          for item in updated["research_queue"]]
@@ -296,7 +300,8 @@ def _complete_queue(
 
 
 def _fail_queue(job_id: str, message: str, *, failure_kind: str = "",
-                execution_error: dict[str, Any] | None = None) -> str:
+                execution_error: dict[str, Any] | None = None,
+                finalizer_provenance: dict[str, Any] | None = None) -> str:
     holder = {"status": "failed"}
 
     def mutation(data: dict[str, Any]) -> dict[str, Any]:
@@ -322,6 +327,8 @@ def _fail_queue(job_id: str, message: str, *, failure_kind: str = "",
                         item["terminal_reason"] = kind
                         item["progress"] = max(float(item.get("progress") or 0),
                                                float(execution_error.get("last_progress") or 0))
+                if finalizer_provenance:
+                    item["finalizer_provenance"] = deepcopy(finalizer_provenance)
                 holder["status"] = str(item.get("status") or "failed")
                 break
         return updated
@@ -566,6 +573,30 @@ def finalize_diagnostic(job_id: str) -> dict[str, Any]:
         raise AppError("Refusing to finalize a non-diagnostic job.")
     if job.get("status") in {"complete", "cancelled"} or int(job.get("attempts") or 0) == 0:
         return {"status": job.get("status"), "job_id": job_id}
+    if job.get("status") == "failed" and job.get("failure_kind") not in {"execution_timeout", "execution_interrupted"}:
+        # An already-persisted admission/execution failure is not an interrupted
+        # process. Preserve its actual error and repair legacy interruption metadata
+        # without claiming or executing the job again.
+        message = str(job.get("last_error") or "").strip()
+        if not message:
+            raise AppError("Terminal diagnostic failure lacks its original error; refusing to invent one.")
+        kind = str(job.get("failure_kind") or "execution_error")
+        error = {"category": "execution", "kind": kind, "terminal_reason": kind,
+                 "message": message, **diagnostic_budget(payload)}
+        store = build_checkpoint_store()
+        checkpoint = load_latest_strategy_lab_checkpoint(store, run_id=str(payload.get("run_id") or job_id))
+        if checkpoint.get("status") == "complete":
+            raise AppError("Terminal failure conflicts with a completed checkpoint; refusing to overwrite it.")
+        save_strategy_lab_checkpoint(
+            store, run_id=str(payload.get("run_id") or job_id), ticker=str(payload.get("ticker") or ""),
+            status="failed", message=message, stage=str(job.get("failure_step") or "strategy_lab_execution"),
+            progress=float(job.get("progress") or 0), job=payload,
+            attempt=int(job.get("attempts") or 1), execution_error=error,
+        )
+        status = _fail_queue(job_id, message, failure_kind=kind, execution_error=error,
+                             finalizer_provenance=_worker_provenance(payload))
+        return {"status": status, "job_id": job_id, "message": message,
+                "preserved_terminal_failure": True, "new_execution_attempts": 0}
     kind = job.get("failure_kind") or (
         "execution_timeout" if remaining_diagnostic_seconds(payload) <= 0 else "execution_interrupted")
     return _diagnostic_terminal(job, str(kind))

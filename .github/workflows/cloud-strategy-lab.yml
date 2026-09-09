@@ -10,6 +10,11 @@ on:
         description: "Exact queued Strategy Lab job to claim immediately"
         required: false
         type: string
+      finalize_only:
+        description: "Repair the exact existing diagnostic failure without claiming or executing it"
+        required: false
+        type: boolean
+        default: false
       diagnostic_mode:
         description: "Opt-in execution budget; does not weaken validation"
         required: false
@@ -106,9 +111,10 @@ jobs:
         run: >-
           python cloud_strategy_lab_worker.py
           --job-id "$EXACT_STRATEGY_LAB_JOB_ID"
+          ${{ inputs.finalize_only && '--finalize-diagnostic' || '' }}
 
       - name: Finalize interrupted diagnostic without retry
-        if: ${{ always() && inputs.diagnostic_mode && steps.validation.outcome != 'success' }}
+        if: ${{ always() && inputs.diagnostic_mode && !inputs.finalize_only && steps.validation.outcome != 'success' }}
         timeout-minutes: 5
         run: >-
           python cloud_strategy_lab_worker.py
