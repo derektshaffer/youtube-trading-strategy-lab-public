@@ -16,8 +16,11 @@ import json
 from statistics import median
 from time import perf_counter
 from typing import Any, Callable
+from hybrid_runtime.contracts import canonical_json
+from hybrid_runtime.strategy_lab_bridge import strategy_revision
 
 from finder_report_persistence import (
+    finder_result_fingerprint,
     finder_summary_to_report,
     latest_completed_finder_report,
 )
@@ -210,8 +213,15 @@ def diverse_strategy_order(
     """
     buckets: dict[str, list[dict[str, Any]]] = {}
     skipped: list[str] = []
+    revisions: dict[str, str] = {}
     for strategy in strategies:
         strategy_key = str(strategy.get("id") or strategy.get("name") or "")
+        revision = strategy_revision(strategy)
+        if strategy.get("id") and strategy_key in revisions:
+            if revisions[strategy_key] != revision:
+                raise AppError(f"Finder family {strategy_key} has conflicting source revisions; no search performed.")
+            continue
+        revisions[strategy_key] = revision
         eligible, reason = _technical_eligibility(
             strategy,
             symbol,
@@ -222,7 +232,7 @@ def diverse_strategy_order(
             ),
         )
         if not eligible:
-            skipped.append(f"{strategy.get('name') or 'Unnamed strategy'}: {reason}")
+            skipped.append(f"{strategy.get('name') or 'Unnamed strategy'} [{strategy_key}]: {reason}")
             continue
         buckets.setdefault(strategy_behavior_bucket(strategy), []).append(strategy)
 
@@ -256,6 +266,10 @@ def selected_strategies_for_profile(
         integrity_reports=integrity_reports,
     )
     if profile.quick_family_limit is not None:
+        skipped.extend(
+            f"{item.get('name') or 'Unnamed strategy'} [{item.get('id')}]: not searched; {profile.name} family budget {profile.quick_family_limit}"
+            for item in ordered[profile.quick_family_limit:]
+        )
         return ordered[: profile.quick_family_limit], skipped
     return ordered, skipped
 
@@ -508,14 +522,15 @@ def finder_evidence_verdict(
             "reason": "The Finder found a configuration with useful historical profitability, but it was not durable enough across the independent validation, walk-forward, stress, or nearby-parameter checks.",
         }
 
-    return {
+    from backtest_calibration import guarded_verdict
+    return guarded_verdict({
         "code": "no_robust_strategy",
         "label": "NO RELIABLE EDGE FOUND",
         "tone": "error",
         "research_tier": "no_reliable_edge",
         "paper_ready": False,
         "reason": "The broad search tested historical candidates, but the strongest configuration did not show enough positive evidence to justify even a promising stock-specific classification.",
-    }
+    })
 
 
 def apply_paper_fidelity_to_verdict(
@@ -799,6 +814,23 @@ def complete_stock_strategy_finder_from_optimization(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "symbol": str(symbol or "").strip().upper(),
         "profile": asdict(profile),
+        "search_scope": {
+            "selected_family_ids": [str(item.get("id")) for item in selected],
+            "strategy_revisions": {str(item.get("id")): strategy_revision(item) for item in selected},
+            "family_rule_inputs": {str(item.get("id")): {
+                "machine_rules": deepcopy(item.get("machine_rules") or {}),
+                "candidate_rule_options": deepcopy(item.get("candidate_rule_options") or {}),
+            } for item in selected},
+            "dataset_sha256": hashlib.sha256(canonical_json(one_minute_rows).encode()).hexdigest(),
+            "dataset_rows": len(one_minute_rows),
+            "dataset_first_timestamp": one_minute_rows[0].get("t") if one_minute_rows else None,
+            "dataset_last_timestamp": one_minute_rows[-1].get("t") if one_minute_rows else None,
+            "unique_configurations_tested": int(optimization.get("unique_configurations_tested") or 0),
+            "optimization_settings": asdict(optimizer),
+            "backtest_settings": asdict(settings),
+            "completed": True,
+            "strategy_conclusion_permitted": False,
+        },
         "search_policy": {
             "ai_may_prioritize": True,
             "ai_may_veto_valid_combinations": False,
@@ -858,7 +890,7 @@ def run_stock_strategy_finder(
     profile = search_profile(profile_name)
     selected, skipped = selected_strategies_for_profile(strategies, symbol, profile)
     if not selected:
-        raise AppError("No machine-testable long strategy families are available for this stock yet.")
+        raise AppError("No eligible family tested; no strategy conclusion permitted. " + "; ".join(skipped))
 
     settings = backtest_settings or BacktestSettings()
     settings.validate()
@@ -1383,6 +1415,8 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
         "symbol": symbol,
         "profile": (report.get("profile") or {}).get("name"),
         "profile_details": report.get("profile") or {},
+        "search_scope": report.get("search_scope") or {},
+        "validated_candidate": optimization.get("validated_candidate") or {},
         "strategy_fidelity_engine_version": int(report.get("strategy_fidelity_engine_version") or 0),
         "search_policy": report.get("search_policy") or {},
         "verdict": report.get("verdict") or {},
@@ -1453,6 +1487,12 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
     # family. This preserves the general research family while giving paper/live
     # workflows an explicit ticker-locked candidate to track.
     source_id = str(report.get("winner_source_strategy_id") or "")
+    expected_revision = ((report.get("search_scope") or {}).get("strategy_revisions") or {}).get(source_id)
+    matching_sources = [item for item in result.get("strategies") or [] if str(item.get("id") or "") == source_id]
+    if expected_revision and (
+        len(matching_sources) != 1 or strategy_revision(matching_sources[0]) != expected_revision
+    ):
+        raise AppError("Finder winner source revision changed before persistence; refusing to substitute current library content.")
     source = next(
         (
             item for item in result.get("strategies") or []
@@ -1538,6 +1578,7 @@ def merge_finder_report_into_library(data: dict[str, Any], report: dict[str, Any
         summary["stock_specific_strategy_id"] = child_id
         summary["paper_validation_status"] = child["paper_validation_status"]
 
+    summary["result_fingerprint"] = finder_result_fingerprint(summary)
     result = record_holdout_exposure(
         result,
         report,

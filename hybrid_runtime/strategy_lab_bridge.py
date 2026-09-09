@@ -9,7 +9,7 @@ from hashlib import sha256
 import re
 from typing import Any, Mapping
 
-from .contracts import JobRecord, utc_now_text
+from .contracts import JobRecord, utc_now_text, canonical_json
 from .github_library import GitHubLibraryConfig
 
 
@@ -20,6 +20,11 @@ STRATEGY_LAB_RECORD_TYPE = "strategy_lab_checkpoint"
 _ALLOWED_TIMEFRAMES = frozenset({"1Min", "5Min", "15Min"})
 _ALLOWED_DEPTHS = frozenset({12, 36, 96, 160})
 _SYMBOL = re.compile(r"^[A-Z][A-Z.\-]{0,9}$")
+
+
+def strategy_revision(strategy: Mapping[str, Any]) -> str:
+    """Pin the selected library record, including source/admission semantics."""
+    return sha256(canonical_json(dict(strategy)).encode("utf-8")).hexdigest()
 
 
 def strategy_lab_checkpoint_config(base: GitHubLibraryConfig) -> GitHubLibraryConfig:
@@ -123,6 +128,7 @@ def normalized_strategy_lab_payload(job: JobRecord) -> dict[str, Any]:
         "wf_folds": _clean_int(source.get("wf_folds"), 3, 2, 6),
         "compared_all": compare_all,
         "strategy_ids": strategy_ids,
+        "strategy_revisions": dict(source.get("strategy_revisions") or {}),
         "checkpoint_path": STRATEGY_LAB_CHECKPOINT_PATH,
         "continue_after_app_exit": True,
         **diagnostic_budget(source),
@@ -262,6 +268,25 @@ def overlay_strategy_lab_checkpoint(
 ) -> dict[str, Any]:
     result = deepcopy(dict(item))
     current_status = str(result.get("status") or "").strip().lower()
+    payload = dict(result.get("payload") or {})
+    if isinstance(checkpoint, Mapping) and checkpoint:
+        mismatch = (
+            not payload.get("run_id")
+            or checkpoint.get("id") != payload.get("run_id")
+            or (payload.get("ticker") and str(checkpoint.get("ticker") or "").upper()
+                != str(payload["ticker"]).upper())
+            or (result.get("attempts") and checkpoint.get("attempt") != result["attempts"])
+        )
+        if mismatch:
+            payload.update(strategy_lab_checkpoint_status="identity_mismatch",
+                           distributed_message="Checkpoint identity mismatch; no strategy validation verdict was produced.")
+            result["payload"] = payload
+            result.pop("result", None)
+            result.pop("result_ref", None)
+            if current_status == "complete":
+                result.update(status="failed", error={"type": "CloudStrategyLabIdentityMismatch",
+                    "message": payload["distributed_message"]})
+            return result
     error = strategy_lab_execution_error(result, checkpoint)
     if error and current_status not in {"complete", "cancelled", "canceled"}:
         result.update(status="failed", error=error, failure_kind=error["kind"],
@@ -294,11 +319,40 @@ def overlay_strategy_lab_checkpoint(
     result["progress"] = progress
     result["stage"] = stage
     if checkpoint_status == "complete":
-        result["status"] = "complete"
-        result["progress"] = 1.0
-        result["stage"] = "complete"
         summary = strategy_lab_result_from_checkpoint(checkpoint)
+        if not summary:
+            result.update(status="failed", stage="failed", error={
+                "type": "CloudStrategyLabResultMissing",
+                "message": "Completed checkpoint has no durable result; no strategy validation verdict was produced."})
+            result.pop("result", None)
+            return result
+        requested_ids = payload.get("strategy_ids") or []
+        pins = payload.get("strategy_revisions") or {}
+        identity = summary.get("identity") or {}
+        target = identity.get("validation_target") or {}
+        pinned_mismatch = bool(pins) and (
+            identity.get("strategy_revisions") != pins
+            or summary.get("winner_strategy_id") not in pins
+            or identity.get("run_id") != payload.get("run_id")
+            or target.get("strategy_id") != summary.get("winner_strategy_id")
+            or target.get("configuration_hash") != summary.get("winner_configuration_hash")
+            or not identity.get("execution_completed")
+            or not identity.get("input_sha256")
+        )
+        if ((payload.get("ticker") and summary.get("ticker") != str(payload["ticker"]).upper())
+                or pinned_mismatch
+                or (requested_ids and not payload.get("compared_all")
+                    and summary.get("winner_strategy_id") not in requested_ids)):
+            result.update(status="failed", stage="failed", error={
+                "type": "CloudStrategyLabIdentityMismatch",
+                "message": "Checkpoint result does not match the requested strategy revision or validated winner; no strategy validation verdict was produced."})
+            result.pop("result", None)
+            result.pop("result_ref", None)
+            return result
         if summary:
+            result["status"] = "complete"
+            result["progress"] = 1.0
+            result["stage"] = "complete"
             result["result"] = summary
             result["result_ref"] = (
                 f"strategy-lab-checkpoint:{str(checkpoint.get('id') or '')}"

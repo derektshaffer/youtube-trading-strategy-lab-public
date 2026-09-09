@@ -33,6 +33,7 @@ import time
 from typing import Any
 
 from stock_strategy_finder import (
+    StockSearchProfile,
     apply_historical_spread_integrity_guard,
     complete_stock_strategy_finder_from_optimization,
     merge_finder_report_into_library,
@@ -56,6 +57,7 @@ from youtube_strategy_engine import (
     AlpacaMarketData,
     AppError,
     BacktestSettings,
+    OptimizationSettings,
     DEFAULT_GITHUB_BACKUP_PATH,
     GitHubCloudBackup,
     StrategyStore,
@@ -75,6 +77,39 @@ UTC = timezone.utc
 MAX_FINALIZATION_RECOVERIES = 3
 DISTRIBUTED_PLAN_VERSION = 2
 DISTRIBUTED_SHARD_VERSION = 2
+
+
+def _plan_fingerprint(plan: dict[str, Any]) -> str:
+    from hybrid_runtime.contracts import canonical_json
+    return hashlib.sha256(canonical_json({
+        key: value for key, value in plan.items() if key != "input_fingerprint"
+    }).encode()).hexdigest()
+
+
+def _saved_search_settings(plan: dict[str, Any]) -> tuple[StockSearchProfile, OptimizationSettings]:
+    details = plan.get("profile_details")
+    if details:
+        values = dict(details)
+        values["timeframes"] = tuple(values["timeframes"])
+        profile = StockSearchProfile(**values)
+    else:
+        profile = search_profile(str(plan.get("profile_name") or "Deep"))
+    saved = plan.get("optimization_settings")
+    optimizer = OptimizationSettings(**saved) if saved is not None else stock_finder_optimizer_settings(profile)
+    return profile, optimizer
+
+
+def _validate_shard_identity(plan: dict[str, Any], spec: dict[str, Any], payload: dict[str, Any]) -> None:
+    if (payload.get("version") != DISTRIBUTED_SHARD_VERSION
+            or payload.get("run_id") != plan.get("run_id")
+            or payload.get("index") != spec.get("index")):
+        raise AppError("Distributed Finder shard identity does not match its plan.")
+    # Older artifacts remain recoverable under their original, weaker contract.
+    if plan.get("input_fingerprint") and (
+            payload.get("input_fingerprint") != plan["input_fingerprint"]
+            or payload.get("timeframe") != spec.get("timeframe")
+            or sorted(payload.get("family_ids") or []) != sorted(spec.get("family_ids") or [])):
+        raise AppError("Distributed Finder shard input identity does not match its saved snapshot.")
 
 
 def env(name: str, default: str = "") -> str:
@@ -312,6 +347,10 @@ def _plan_has_current_integrity(plan: dict[str, Any]) -> bool:
 
 
 def _require_current_integrity_plan(plan: dict[str, Any], run_id: str) -> None:
+    if str(plan.get("run_id") or "") != run_id:
+        raise AppError("Distributed Finder has a mismatched plan id.")
+    if plan.get("input_fingerprint") and plan["input_fingerprint"] != _plan_fingerprint(plan):
+        raise AppError("Distributed Finder saved input fingerprint mismatch; no strategy conclusion permitted.")
     if not _plan_has_current_integrity(plan):
         raise AppError(
             f"Distributed Finder run {run_id} predates the current market-data integrity "
@@ -359,6 +398,7 @@ def _resumable_plan_for_job(
         return None
 
     job_id = str(job.get("id") or "")
+    _require_current_integrity_plan(plan, run_id)
     if str(plan.get("run_id") or "") != run_id:
         raise AppError(f"Saved distributed run {run_id} has a mismatched plan id.")
     if str(plan.get("parent_job_id") or "") != job_id:
@@ -378,6 +418,10 @@ def _resumable_plan_for_job(
         for spec in specs
         if artifacts.exists(shard_path(run_id, int(spec.get("index") or 0)))
     }
+    if plan.get("input_fingerprint"):
+        for spec in specs:
+            if int(spec.get("index") or 0) in completed:
+                _validate_shard_identity(plan, spec, artifacts.read_json_gz(shard_path(run_id, int(spec["index"]))))
     return plan, completed
 
 
@@ -834,7 +878,7 @@ def command_prepare(preferred_job_id: str = "") -> int:
         )
         if not selected:
             raise AppError(
-                f"No machine-testable long strategy families are available for {symbol}."
+                f"No eligible family tested for {symbol}; no strategy conclusion permitted. " + "; ".join(skipped)
             )
 
         market = build_market()
@@ -932,6 +976,7 @@ def command_prepare(preferred_job_id: str = "") -> int:
             "parent_job_id": job_id,
             "symbol": symbol,
             "profile_name": profile.name,
+            "profile_details": asdict(profile),
             "research_start": start.isoformat(),
             "research_end": end.isoformat(),
             "created_at": isoformat_utc(utc_now()),
@@ -946,6 +991,7 @@ def command_prepare(preferred_job_id: str = "") -> int:
             ),
             "shards": matrix,
         }
+        plan["input_fingerprint"] = _plan_fingerprint(plan)
         artifacts.write_json_gz(plan_path(run_id), plan)
         _update_parent_distribution(
             job_id,
@@ -991,6 +1037,8 @@ def _command_shard(run_id: str, index: int) -> int:
     ]
     if not selected:
         raise AppError(f"Distributed Finder shard {index} has no strategy families.")
+    if len(selected) != len(wanted) or {str(item.get("id")) for item in selected} != wanted:
+        raise AppError(f"Distributed Finder shard {index} family identity is incomplete or ambiguous.")
 
     timeframe = str(spec.get("timeframe") or "")
     rows = resample_intraday_bars(
@@ -999,8 +1047,7 @@ def _command_shard(run_id: str, index: int) -> int:
         include_extended_hours=True,
     )
     settings = BacktestSettings(**dict(plan.get("backtest_settings") or {}))
-    profile = search_profile(str(plan.get("profile_name") or "Deep"))
-    optimizer = stock_finder_optimizer_settings(profile)
+    profile, optimizer = _saved_search_settings(plan)
     local_workers = max(
         1,
         min(
@@ -1047,6 +1094,7 @@ def _command_shard(run_id: str, index: int) -> int:
             "index": int(index),
             "timeframe": timeframe,
             "family_ids": sorted(wanted),
+            "input_fingerprint": plan.get("input_fingerprint"),
             "report": report,
         },
     )
@@ -1153,6 +1201,7 @@ def command_aggregate(run_id: str) -> int:
             index = int(spec.get("index") or 0)
             try:
                 payload = artifacts.read_json_gz(shard_path(run_id, index))
+                _validate_shard_identity(plan, spec, payload)
                 payload_index = payload.get("index")
                 if (
                     int(payload.get("version") or 0) != DISTRIBUTED_SHARD_VERSION
@@ -1187,9 +1236,8 @@ def command_aggregate(run_id: str) -> int:
         )
         one_minute_rows = list(plan.get("one_minute_rows") or [])
         symbol = str(plan.get("symbol") or "").strip().upper()
-        profile = search_profile(str(plan.get("profile_name") or "Deep"))
+        profile, optimizer = _saved_search_settings(plan)
         settings = BacktestSettings(**dict(plan.get("backtest_settings") or {}))
-        optimizer = stock_finder_optimizer_settings(profile)
 
         by_timeframe: dict[str, list[dict[str, Any]]] = {}
         for payload in shard_payloads:
@@ -1326,6 +1374,8 @@ def command_aggregate(run_id: str) -> int:
         report["distributed"] = {
             "enabled": True,
             "run_id": run_id,
+            "input_fingerprint": plan.get("input_fingerprint"),
+            "snapshot_identity_verified": bool(plan.get("input_fingerprint")),
             "shard_count": len(shard_payloads),
             "family_group_count": len(
                 {

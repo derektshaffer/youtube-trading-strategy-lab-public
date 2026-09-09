@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
+from hashlib import sha256
+from .contracts import canonical_json
 
-PROJECTION_VERSION = 1
+PROJECTION_VERSION = 2
 METRIC_FIELDS = "trade_count net_pnl return_pct win_rate_pct profit_factor max_drawdown_pct expectancy average_trade average_winner average_loser".split()
 METRIC_BLOCKS = "training_metrics validation_metrics holdout_metrics stress_metrics full_metrics baseline_training_metrics".split()
 WALK_FIELDS = "score label fold_count active_fold_count profitable_fold_count profitable_fold_pct temporal_coverage_pct profitable_scheduled_fold_pct external_trade_count external_net_pnl external_return_pct external_profit_factor max_fold_drawdown_pct median_fold_return_pct average_fold_return_pct selected_strategy_counts embargo_sessions adaptive_learning_enabled adaptive_experience_count adaptive_profitable_experience_count broad_profitable_neighborhood_fold_count incomplete_neighborhood_fold_count status note positive_fold_ratio".split()
@@ -84,9 +87,11 @@ def _walk(source):
 def project_strategy_lab_result(result, *, run_id="", saved_at=""):
     """Current engine field names are authoritative; only named legacy aliases apply."""
     raw = result if isinstance(result, Mapping) else {}
+    from backtest_calibration import guarded_verdict
     report = raw.get("report") if isinstance(raw.get("report"), Mapping) else {}
     winner = report.get("winner") if isinstance(report.get("winner"), Mapping) else {}
     projected = {
+        "identity": deepcopy(raw.get("identity") or {}),
         "projection_version": PROJECTION_VERSION,
         "outcome": "strategy_lab_complete",
         "run_id": str(run_id or raw.get("run_id") or ""),
@@ -95,8 +100,13 @@ def project_strategy_lab_result(result, *, run_id="", saved_at=""):
         "timeframe": raw.get("timeframe", ""),
         "history_days": raw.get("history_days", 0),
         "winner_strategy_id": winner.get("source_strategy_id", ""),
+        "winner_configuration_hash": sha256(canonical_json({
+            "strategy_id": winner.get("source_strategy_id", ""),
+            "rules": winner.get("optimized_rules"),
+            "settings": winner.get("optimized_backtest_settings"),
+        }).encode("utf-8")).hexdigest()[:24],
         "winner_strategy_name": winner.get("strategy_name", winner.get("source_strategy_name", "")),
-        "evidence_verdict": _pick(raw.get("evidence_verdict"), "code label status reason tone research_tier paper_ready".split()),
+        "evidence_verdict": guarded_verdict(_pick(raw.get("evidence_verdict"), "code label status reason tone research_tier paper_ready".split())),
         "strength": _pick(raw.get("strength"), "score raw_score_before_caps score_cap base_score walk_forward_score walk_forward_fold_count walk_forward_active_fold_count walk_forward_temporal_coverage_pct walk_forward_profitable_scheduled_pct execution_sensitivity_score execution_sensitivity_label execution_sensitivity_scope optimizer_status minimum_unseen_trades_for_high_confidence label independently_positive reasons note status reason".split()),
         "research_only": True, "affects_live_ranking": False, "affects_execution": False,
         "evidence_availability": {key: key in raw for key in ("walk_forward", "parameter_stability", "strength", "evidence_verdict", *GATES)},

@@ -89,21 +89,26 @@ class MainWindow(ResultsMainWindow):
             self.strategy_lab.set_working(
                 "Loading faithful strategies",
                 "Applying the same current source-to-backtester integrity gate used by the web Strategy Lab.",
+                loading_options=True,
             )
             self.submit_job(request, "strategy_lab_options")
         except BaseException as exc:
-            self.strategy_lab.set_error(clean_error(exc))
+            self.strategy_lab.set_error(clean_error(exc), options_error=True)
 
     def run_strategy_lab(self, payload: dict[str, Any]) -> None:
         if self.strategy_lab_job_id:
-            self.strategy_lab.set_error(
-                "A Strategy Lab cloud job is already attached. Its progress is shown here and in Durable Jobs."
+            self.strategy_lab.set_working(
+                "A Strategy Lab cloud job is already attached",
+                "Its progress is shown here and in Durable Jobs. No duplicate research was submitted.",
             )
             return
         try:
             jobs = self._recent_jobs()
             existing = self._matching_active_job(jobs, "strategy.strategy_lab")
             if existing is not None:
+                active_payload = existing.get("payload") or {}
+                if any(active_payload.get(key) != value for key, value in payload.items()):
+                    raise ValueError("A different Strategy Lab experiment is active. The requested configuration was not submitted or attached to that result.")
                 self.strategy_lab_job_id = str(existing.get("id") or "")
                 self.strategy_lab.set_working(
                     "Attached to existing Strategy Lab cloud run",
@@ -173,7 +178,7 @@ class MainWindow(ResultsMainWindow):
         except BaseException as exc:
             self.active_job_id = ""
             self.active_purpose = ""
-            self.strategy_lab.set_error(clean_error(exc))
+            self.strategy_lab.set_error(clean_error(exc), options_error=True)
             self.refresh_jobs()
 
     def _poll_strategy_lab(self) -> None:

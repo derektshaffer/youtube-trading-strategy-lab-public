@@ -242,6 +242,8 @@ class StockFinderPage(QWidget):
 
     @staticmethod
     def _verdict_text(verdict: dict[str, Any]) -> str:
+        from backtest_calibration import guarded_verdict
+        verdict = guarded_verdict(verdict)
         return str(
             verdict.get("label")
             or verdict.get("code")

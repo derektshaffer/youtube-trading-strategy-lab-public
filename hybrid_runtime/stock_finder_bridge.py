@@ -233,7 +233,9 @@ def finder_report_for_remote(
     symbol = str(payload.get("symbol") or local_job.payload.get("symbol") or "").strip().upper()
     profile = str(payload.get("profile") or local_job.payload.get("profile") or "").strip()
     expected_generated_at = _expected_generated_at(item, symbol, profile)
-    created_at = str(item.get("created_at") or item.get("queued_at") or "").strip()
+    if not expected_generated_at:
+        # Completion must point to its saved result, not the newest run for a ticker.
+        return {}
 
     candidates: list[dict[str, Any]] = []
     for raw in library.get("stock_strategy_finder_runs") or []:
@@ -246,8 +248,6 @@ def finder_report_for_remote(
             continue
         generated_at = str(summary.get("generated_at") or "").strip()
         if expected_generated_at and generated_at != expected_generated_at:
-            continue
-        if not expected_generated_at and created_at and generated_at and generated_at < created_at:
             continue
         candidates.append(summary)
 

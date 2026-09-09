@@ -77,8 +77,9 @@ def test_populated_tables_and_exact_details_are_read_only(page):
         assert "Option" in table.toolTip()
 
 
-def test_refresh_is_only_action_and_safety_is_explicit(page):
-    assert [button.text() for button in page.findChildren(QPushButton)] == ["Refresh Research"]
+def test_only_library_refresh_and_saved_file_read_actions_and_safety_is_explicit(page):
+    assert [button.text() for button in page.findChildren(QPushButton)] == [
+        "Refresh Research", "Open saved research result"]
     assert "cannot place trades" in page.safety.text()
     assert "change live ranking" in page.safety.text()
     assert "bypass validation" in page.safety.text()

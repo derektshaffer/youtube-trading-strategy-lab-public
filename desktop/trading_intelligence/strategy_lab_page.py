@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -41,6 +41,13 @@ class StrategyLabPage(QWidget):
         super().__init__()
         self.options_loaded = False
         self._context_strategy_id = ""
+        self._faithful_count = 0
+        self._blocked_count = 0
+        self._options_loading = False
+        self._options_error = ""
+        self._run_working_reason = ""
+        self._last_error = ""
+        self._connection_reason = "Cloud setup has not been checked. Refresh Strategies to check connections."
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(14)
@@ -196,6 +203,12 @@ class StrategyLabPage(QWidget):
         self.run.setMinimumHeight(44)
         self.run.clicked.connect(self._emit_run)
         root.addWidget(self.run)
+        self.run_status = QLabel()
+        self.run_status.setObjectName("Subtle")
+        self.run_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.run_status.setWordWrap(True)
+        self.run_status.setAccessibleName("Strategy Lab availability")
+        root.addWidget(self.run_status)
 
         metrics = QGridLayout()
         self.holdout = MetricCard("Holdout P/L")
@@ -221,6 +234,66 @@ class StrategyLabPage(QWidget):
         result_layout.addWidget(self.result_detail)
         root.addWidget(self.result_card)
         root.addStretch(1)
+        self.strategy.currentIndexChanged.connect(self._strategy_changed)
+        self.compare_all.toggled.connect(self._refresh_run_state)
+        self.ticker.textChanged.connect(self._refresh_run_state)
+        self.training.valueChanged.connect(self._refresh_run_state)
+        self.validation.valueChanged.connect(self._refresh_run_state)
+        self._refresh_run_state()
+
+    def set_capability_status(self, status: dict[str, Any], *, error: str = "") -> None:
+        capabilities = status.get("capabilities") or {}
+        reasons = []
+        for name, label in (("library", "Research library"), ("cloud", "GitHub/cloud research")):
+            if not capabilities.get(name):
+                state = "is not configured" if status.get(f"{name}_configured") is False else "has not passed verification for the current setup"
+                reasons.append(f"{label} {state}.")
+        self._connection_reason = (
+            f"Cannot verify cloud setup: {error}" if error else " ".join(reasons)
+        )
+        if self._connection_reason:
+            self._connection_reason += " Open Tools & Connections → Setup and choose Save securely + verify."
+        self._refresh_run_state()
+
+    def _blocking_reason(self) -> str:
+        if self._run_working_reason:
+            return self._run_working_reason
+        if self._connection_reason:
+            return self._connection_reason
+        if self._options_loading:
+            return "Loading current strategy eligibility. Wait for the library check to finish."
+        if self._options_error:
+            return f"Strategy eligibility could not be refreshed: {self._options_error} Refresh Strategies before running."
+        if not self.options_loaded:
+            return "Strategy eligibility has not loaded. Choose Refresh Strategies."
+        if self._faithful_count <= 0 or self.strategy.count() == 0:
+            return f"No Fully Modeled strategies are available in the loaded choices ({self._blocked_count} records excluded by the fidelity gate). Refresh Strategies after resolving source-modeling gaps."
+        if not self.compare_all.isChecked() and not self.strategy.currentData():
+            if self._context_strategy_id:
+                return f"Selected strategy {self._context_strategy_id} is absent from the loaded Fully Modeled choices. Refresh Strategies or explicitly choose an eligible strategy; no substitute has been selected."
+            return "Choose a Fully Modeled strategy or explicitly enable Compare All."
+        if not self.ticker.text().strip():
+            return "Enter a stock ticker first."
+        if self.training.value() + self.validation.value() > 0.90:
+            return "Training + validation must leave at least 10% untouched for final holdout."
+        return ""
+
+    def _refresh_run_state(self, *_args: Any) -> None:
+        reason = self._blocking_reason()
+        self.run.setEnabled(not reason)
+        self.run.setToolTip(reason)
+        self.run_status.setText(
+            f"Cannot run: {reason}" if reason else (
+                f"Last attempt: {self._last_error} Review and retry." if self._last_error else
+                f"Ready to submit {self.ticker.text().strip().upper()} for cloud validation. The worker rechecks strategy fidelity and data integrity."
+            )
+        )
+        self.refresh_options.setEnabled(not self._options_loading and not self._run_working_reason)
+
+    def _strategy_changed(self, *_args: Any) -> None:
+        if self.strategy.currentData():
+            self._context_strategy_id = str(self.strategy.currentData())
+        self._refresh_run_state()
 
     def select_strategy_id(self, strategy_id: str) -> None:
         """Carry a discovery identity without substituting a different family."""
@@ -228,16 +301,14 @@ class StrategyLabPage(QWidget):
         self.compare_all.setChecked(False)
         index = self.strategy.findData(strategy_id) if strategy_id else -1
         self.strategy.setCurrentIndex(index)
-        if index >= 0:
-            self._context_strategy_id = ""
-        else:
-            self.run.setEnabled(False)
-            if self.options_loaded:
-                self.status.setText("Selected discovery strategy is not available")
-                self.detail.setText("No substitute strategy was selected. Refresh strategies or explicitly choose an eligible strategy.")
+        self._refresh_run_state()
 
     def set_options(self, result: dict[str, Any]) -> None:
-        current = self.strategy.currentData()
+        self._strategy_revisions = {str(item.get("id")): str(item.get("revision") or "")
+            for item in result.get("strategies") or [] if isinstance(item, dict)}
+        self._options_truncated = int(result.get("faithful_count") or 0) > len(self._strategy_revisions)
+        current = self._context_strategy_id or self.strategy.currentData()
+        blocker = QSignalBlocker(self.strategy)
         self.strategy.clear()
         for item in result.get("strategies") or []:
             if not isinstance(item, dict):
@@ -250,42 +321,54 @@ class StrategyLabPage(QWidget):
             self.strategy.addItem(label, strategy_id)
         if current:
             index = self.strategy.findData(current)
-            if index >= 0:
-                self.strategy.setCurrentIndex(index)
+            self.strategy.setCurrentIndex(index)
+        del blocker
         faithful = int(result.get("faithful_count") or 0)
         blocked = int(result.get("blocked_count") or 0)
-        self.status.setText(f"{faithful:,} faithful strategies available")
-        self.detail.setText(
-            f"{blocked:,} strategy records are excluded because current source logic is not fully modeled. "
-            "The cloud worker checks this gate again before spending compute."
-        )
-        self.run.setEnabled(faithful > 0)
-        self.refresh_options.setEnabled(True)
+        self._faithful_count, self._blocked_count = faithful, blocked
+        self._options_loading = False
+        self._options_error = ""
+        if not self._run_working_reason:
+            self.status.setText(f"{faithful:,} faithful strategies available")
+            self.detail.setText(
+                f"{blocked:,} strategy records are excluded because current source logic is not fully modeled. "
+                "The cloud worker checks this gate again before spending compute."
+            )
         self.options_loaded = True
-        if self._context_strategy_id:
-            self.select_strategy_id(self._context_strategy_id)
+        self._refresh_run_state()
 
-    def set_working(self, title: str, detail: str, progress: float = 0.0) -> None:
+    def set_working(self, title: str, detail: str, progress: float = 0.0, *, loading_options: bool = False) -> None:
         self.banner.setProperty("state", "working")
         self.banner.style().unpolish(self.banner)
         self.banner.style().polish(self.banner)
         self.status.setText(title)
         self.detail.setText(detail + (f" · {progress * 100:.0f}%" if progress > 0 else ""))
-        self.run.setEnabled(False)
-        self.refresh_options.setEnabled(False)
+        self._last_error = ""
+        if loading_options:
+            self._options_loading = True
+        else:
+            self._run_working_reason = f"{title}. {detail}"
+        self._refresh_run_state()
 
-    def set_error(self, message: str) -> None:
+    def set_error(self, message: str, *, options_error: bool = False) -> None:
         self.banner.setProperty("state", "error")
         self.banner.style().unpolish(self.banner)
         self.banner.style().polish(self.banner)
         self.status.setText("Strategy Lab needs attention")
         self.detail.setText(message)
-        self.run.setEnabled(self.strategy.count() > 0)
-        self.refresh_options.setEnabled(True)
+        if options_error:
+            self._options_error = message
+            self._options_loading = False
+            self.options_loaded = False
+        else:
+            self._run_working_reason = ""
+            self._last_error = message
+        self._refresh_run_state()
 
     def render_result(self, result: dict[str, Any]) -> None:
-        self.run.setEnabled(self.strategy.count() > 0)
-        self.refresh_options.setEnabled(True)
+        self._run_working_reason = ""
+        self._last_error = ""
+        self._refresh_run_state()
         winner = str(result.get("winner_strategy_name") or "No winner")
         evidence = result.get("evidence_verdict") if isinstance(result.get("evidence_verdict"), dict) else {}
         strength = result.get("strength") if isinstance(result.get("strength"), dict) else {}
@@ -306,20 +389,20 @@ class StrategyLabPage(QWidget):
         self.detail.setText("The durable cloud checkpoint was reconciled successfully.")
 
     def _emit_run(self) -> None:
+        self._refresh_run_state()
+        if self._blocking_reason():
+            return
         strategy_id = str(self.strategy.currentData() or "")
         ticker = self.ticker.text().strip().upper()
-        if not ticker:
-            self.set_error("Enter a stock ticker first.")
-            return
-        if not strategy_id and not self.compare_all.isChecked():
-            self.set_error("Choose a faithful strategy or enable Compare All.")
-            return
-        if self.training.value() + self.validation.value() > 0.90:
-            self.set_error("Training + validation must leave at least 10% untouched for final holdout.")
+        revisions = getattr(self, "_strategy_revisions", {})
+        ids = list(revisions) if self.compare_all.isChecked() else [strategy_id]
+        if (self.compare_all.isChecked() and getattr(self, "_options_truncated", False)) or any(not revisions.get(i) for i in ids):
+            self.set_error("Exact strategy revisions are unavailable; refresh strategy options or select one strategy. No run was submitted.")
             return
         self.run_requested.emit(
             {
-                "strategy_ids": [strategy_id] if strategy_id else [],
+                "strategy_ids": ids,
+                "strategy_revisions": {i: revisions[i] for i in ids},
                 "compared_all": self.compare_all.isChecked(),
                 "ticker": ticker,
                 "timeframe": str(self.timeframe.currentData() or "5Min"),

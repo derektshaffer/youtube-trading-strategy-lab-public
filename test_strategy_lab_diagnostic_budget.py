@@ -31,12 +31,15 @@ from test_strategy_lab_cloud_bridge import FakeGitHub
 from youtube_strategy_engine import StrategyStore, AppError
 
 SID = "webresearch-c238a2839213bb33d9"
+TEST_STRATEGY = {"id": SID, "name": "Stored test definition", "machine_rules": {"avwap_pivot_confirm_bars": 5}}
 BOUNDS = {"diagnostic_mode": True, "diagnostic_max_attempts": 1, "diagnostic_timeout_minutes": 20}
 
 
-def request(diagnostic=True):
+def request(diagnostic=True, *, pinned=False):
+    from hybrid_runtime.strategy_lab_bridge import strategy_revision
     return JobRequest("strategy.strategy_lab", {
         "run_id": "diagnostic-offline-test", "ticker": "SPY", "strategy_ids": [SID],
+        **({"strategy_revisions": {SID: strategy_revision(TEST_STRATEGY)}} if pinned else {}),
         "compared_all": False, "search_depth": 12, "history_days": 30,
         "run_walk_forward": True, "training_fraction": 0.6, "validation_fraction": 0.2,
         **(BOUNDS if diagnostic else {}),
@@ -65,11 +68,11 @@ def queue(monkeypatch):
 @pytest.mark.parametrize("diagnostic", [False, True])
 def test_backend_serialization_normalization_publication_dispatch_and_worker(tmp_path, monkeypatch, diagnostic):
     service = HybridService(HybridStore(tmp_path / "jobs.sqlite3"))
-    record, created = service.submit(request(diagnostic).as_dict())
+    record, created = service.submit(request(diagnostic, pinned=True).as_dict())
     assert created
     reloaded = service.get(record.id)
     assert reloaded.payload == record.payload
-    assert JobRequest.from_mapping(json.loads(json.dumps(request(diagnostic).as_dict()))).payload == record.payload
+    assert JobRequest.from_mapping(json.loads(json.dumps(request(diagnostic, pinned=True).as_dict()))).payload == record.payload
     normalized = normalized_strategy_lab_payload(reloaded)
     fake = FakeGitHub()
     settings = DesktopCloudSettings(github=GitHubLibraryConfig(
@@ -83,7 +86,7 @@ def test_backend_serialization_normalization_publication_dispatch_and_worker(tmp
     assert item["payload"]["strategy_ids"] == [SID]
     monkeypatch.setattr(worker, "strategy_integrity_report", lambda _: {"status": "faithful"})
     monkeypatch.setattr(worker, "effective_strategy_for_research", deepcopy)
-    strategy = {"id": SID, "name": "Stored test definition", "machine_rules": {"avwap_pivot_confirm_bars": 5}}
+    strategy = deepcopy(TEST_STRATEGY)
     spec = worker._job_spec(item, {"strategies": [strategy, {"id": "not-selected"}]})
     assert spec["candidates"] == [strategy]
     assert spec["ticker"] == "SPY" and spec["compared_all"] is False
@@ -117,7 +120,18 @@ def test_invalid_or_ignored_budget_is_rejected(bad):
 @pytest.mark.parametrize("preferred", ["remote", ""])
 def test_claim_persists_deadline_and_cannot_claim_attempt_two(queue, monkeypatch, preferred):
     queue["research_queue"][0]["max_attempts"] = 3
+    import hashlib, json
+    monkeypatch.setenv("GITHUB_SHA", "a" * 40)
+    monkeypatch.setenv("GITHUB_RUN_ID", "123")
+    request = {k: v for k, v in queue["research_queue"][0]["payload"].items()
+               if k != "hybrid_cloud_bridge"}
     claimed = worker._claim(preferred)
+    proof = claimed["worker_provenance"]
+    assert proof["source_revision"] == "a" * 40 and proof["workflow_run_id"] == "123"
+    assert proof["request_sha256"] == hashlib.sha256(json.dumps(request, sort_keys=True,
+        separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+    assert proof["source_sha256"]["cloud_strategy_lab_worker.py"] == hashlib.sha256(Path(worker.__file__).read_bytes()).hexdigest()
+    assert queue["research_queue"][0]["worker_provenance"] == proof
     assert claimed["attempts"] == 1 and claimed["max_attempts"] == 1
     assert 1190 < remaining_diagnostic_seconds(claimed["payload"]) <= 1200
     assert queue["research_queue"][0]["payload"] == claimed["payload"]

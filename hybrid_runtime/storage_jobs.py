@@ -269,6 +269,8 @@ class JobStoreMixin:
             if ((expected_status is not None and current.status != expected_status)
                     or (expected_stage is not None and current.stage != expected_stage)):
                 raise InvalidJobTransition("The saved job changed; refresh before retrying.")
+            if current.job_type == 'research.independent_review' and status != JobStatus.CANCELLED:
+                raise InvalidJobTransition('Independent review jobs advance only through the frozen-packet review gate')
             if not transition_allowed(current.status, status):
                 raise InvalidJobTransition(
                     f"Cannot transition {current.status.value} -> {status.value}"

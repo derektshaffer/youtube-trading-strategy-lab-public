@@ -1,0 +1,3268 @@
+{
+  "schema_version": 1,
+  "authority": "inventory_only",
+  "baseline_checkpoint": "9dd2b2e",
+  "reports": [
+    {
+      "id": "R1",
+      "title": "#2Precursors to Explosive Stock Moves in U.S. Equities",
+      "filename": "#2Precursors to Explosive Stock Moves in U.S. Equities.pdf",
+      "sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+      "page_count": 45,
+      "extracted_text_sha256": "4dec80b2bc51251b783bc1408d562c01ab54a41f05228790a074d81a96e25b43",
+      "classification": "substantive",
+      "scope": "Initial extremes, continuation, failure, execution and regime as separate hypotheses",
+      "primary_purpose": "Source-grounded candidate library, not trading instructions",
+      "main_evidence_families": [
+        "news/volume/float",
+        "microstructure",
+        "issuance",
+        "peer/short/attention/regime"
+      ],
+      "key_recommendations": [
+        "Interactions and component ablations",
+        "continuous variables",
+        "PIT availability",
+        "tail and executable outcomes distinct"
+      ],
+      "explicit_cautions": [
+        "Component literature is not a direct +50/100/200 predictor",
+        "speculative sequences and unsupported fixed rules",
+        "no thresholds adopted"
+      ],
+      "machine_testable_hypothesis_ids": [
+        "hyp-report1-f52352a9d60574b70cce",
+        "hyp-report1-851a399c253c40d377f2",
+        "hyp-report1-d464c0a8b353141c9c3e",
+        "hyp-report1-6c466f39552649f2ca7a",
+        "hyp-report1-0eaf0ce01e6e4dc9f312",
+        "hyp-report1-c6f19341332c791d6993",
+        "hyp-report1-cf7449725378059e460b",
+        "hyp-report1-81d70a53c0d9a661d277",
+        "hyp-report1-be14baff8528edcd25e3",
+        "hyp-report1-fc0965d3252d4f17b66e",
+        "hyp-report1-3b969b2e4368992c939f",
+        "hyp-report1-9608e08ad39b239d6100",
+        "hyp-rmap-v1-participation-decay",
+        "hyp-rmap-v1-impact-proxy",
+        "hyp-rmap-v1-spread-quality",
+        "hyp-rmap-v1-second-leg",
+        "hyp-rmap-v1-regime",
+        "hyp-rmap-v1-compression",
+        "hyp-rmap-v1-attention",
+        "hyp-rmap-v1-clock-hazard",
+        "hyp-rmap-v1-luld-state",
+        "hyp-rmap-v1-trade-count",
+        "hyp-rmap-v1-high-distance",
+        "hyp-rmap-v1-ftd-alone"
+      ],
+      "required_data": "Historical bars/quotes/depth, dated float/actions/status, original news and peer mappings",
+      "methodological_safeguards": "Chronology, anti-survivorship, independent-event uncertainty, cost and failure controls",
+      "overlapping_ideas": "R2 temporal features; R3/R4 validation; exact extracted duplicate of earlier R1 import",
+      "contradictions": "conflict-scope; target-tail vs ordinary-momentum transfer uncertainty",
+      "implementation_relevance": "Reuse 12 existing canonical IDs; add explicitly distinct feature/label families, not new strategy rules",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 1,
+          "section_or_claim": "Precursors to Explosive Stock Moves in U.S. Equities Executive summary This report treats ",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "82dad475ac2cdaa680abb9f49e914771c10e8ae4d5f4ffae613e989aed61f607",
+          "literal_excerpt": "Precursors to Explosive Stock Moves in U.S. Equities Executive summary This report treats the uploaded Deep Research Project #1 — Precursors to Explosive Stock Moves as the governing scope: the objective is not to produce a scanner or trading rule, but to identify measurable, timestamp-sa"
+        }
+      ],
+      "underlying_studies_independently_verified": false
+    },
+    {
+      "id": "R2",
+      "title": "#4Deep Research Blueprint for Adaptive Walk-Forward Learning Systems in Quantitative Trading",
+      "filename": "#4Deep Research Blueprint for Adaptive Walk-Forward Learning Systems in Quantitative Trading.pdf",
+      "sha256": "0c61b251cee9c3226aa8f66f12172a1d36ba21a6dc578a31eb5b859711228d5c",
+      "page_count": 22,
+      "extracted_text_sha256": "567be10a9aa724fc850a6c186c970a0c2bb0a16ce2627d54fc2cda3f73d163c6",
+      "classification": "substantive",
+      "scope": "Causal adaptive walk-forward learning architecture",
+      "primary_purpose": "Specify adaptation meta-policy before unseen periods",
+      "main_evidence_families": [
+        "chronological evaluation",
+        "drift",
+        "pooling",
+        "online learning",
+        "champion/shadow"
+      ],
+      "key_recommendations": [
+        "Predict then observe then update",
+        "frozen paired comparator",
+        "distinguish completed adaptation data from vaults"
+      ],
+      "explicit_cautions": [
+        "Adaptation need not win",
+        "input drift is not edge loss",
+        "sparse groups and latency/costs matter",
+        "example budgets/statistics not adopted"
+      ],
+      "machine_testable_hypothesis_ids": [],
+      "required_data": "Event/available/label times, versioned features/model state, matched costs and outcomes",
+      "methodological_safeguards": "Nested chronology; frozen meta-policy; paired evaluation; revisions and seeds",
+      "overlapping_ideas": "R3/R4 leakage and lineage; adaptive details complementary",
+      "contradictions": "conflict-adaptation-vault; conflict-neighborhood-score; gap-static-comparator",
+      "implementation_relevance": "Inventory 12 capabilities; existing expanding/refit and shadow code partial; do not build new learners",
+      "sources": [
+        {
+          "report_id": "R2",
+          "page": 1,
+          "section_or_claim": "Deep Research Blueprint for Adaptive Walk- Forward Learning Systems in Quantitative Tradin",
+          "source_sha256": "0c61b251cee9c3226aa8f66f12172a1d36ba21a6dc578a31eb5b859711228d5c",
+          "page_text_sha256": "d8cd15f686fabbcdf1fcef08614ef4d4388eea99fc358b565a941f2a51ffc322",
+          "literal_excerpt": "Deep Research Blueprint for Adaptive Walk- Forward Learning Systems in Quantitative Trading Executive summary Although the chat request describes the research topic as unspecified, the attached project brief does specify a substantive topic: Adaptive Walk-Forward Learning Systems for Quant"
+        }
+      ],
+      "underlying_studies_independently_verified": false
+    },
+    {
+      "id": "R3",
+      "title": "#5Automated Strategy Discovery Without Self-Deception_ An Anti-Overfitting Architecture for a Quantita",
+      "filename": "#5Automated Strategy Discovery Without Self-Deception_ An Anti-Overfitting Architecture for a Quantita.pdf",
+      "sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+      "page_count": 13,
+      "extracted_text_sha256": "34ea386229a4029c04a54ad220443ec1b07c627a6796becced40e1960ea2ca08",
+      "classification": "substantive",
+      "scope": "Anti-overfitting architecture",
+      "primary_purpose": "Separate generation from falsification and enforce hard validity gates",
+      "main_evidence_families": [
+        "multiple testing",
+        "nested evaluation",
+        "search lineage",
+        "neighborhoods",
+        "execution"
+      ],
+      "key_recommendations": [
+        "Count literal trials",
+        "preserve graveyard",
+        "independent Red Team",
+        "exposure vault",
+        "dependent uncertainty"
+      ],
+      "explicit_cautions": [
+        "No single PBO/DSR/SPA diagnostic proves deployability",
+        "effective family count not a trial eraser",
+        "tail deletion not unbiased estimate"
+      ],
+      "machine_testable_hypothesis_ids": [],
+      "required_data": "Complete candidate history, immutable datasets/versions, prospective execution evidence",
+      "methodological_safeguards": "18 required controls plus PIT, dependence and full null pipeline",
+      "overlapping_ideas": "Substantially near-duplicates R4; one methodological evidence family",
+      "contradictions": "conflict-neighborhood-strength; conflict-funnel-order",
+      "implementation_relevance": "Map actual controls and gaps without implementing missing statistical machinery",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 1,
+          "section_or_claim": "Automated Strategy Discovery Without Self- Deception: An Anti-Overfitting Architecture for",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "0a608b97a2c8fa98c17df982091c910e932a63f7d2c04a594556e362546e7a66",
+          "literal_excerpt": "Automated Strategy Discovery Without Self- Deception: An Anti-Overfitting Architecture for a Quantitative Trading Lab Executive summary and research scope Assumptions. The uploaded project brief is treated as the authoritative research topic, so the originally unspecified topic is now reso"
+        }
+      ],
+      "underlying_studies_independently_verified": false
+    },
+    {
+      "id": "R4",
+      "title": "#6 Automated Strategy Discovery Without Statistical Self-Deception",
+      "filename": "#6 Automated Strategy Discovery Without Statistical Self-Deception.pdf",
+      "sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+      "page_count": 43,
+      "extracted_text_sha256": "630fb7dde9f3f0fbdeed9bab62af93e86d6d08ec19533888714196f499fbdf67",
+      "classification": "substantive",
+      "scope": "Expanded anti-self-deception architecture",
+      "primary_purpose": "Detailed lineage, hard gates and null-calibrated neighborhood proposals",
+      "main_evidence_families": [
+        "same anti-overfit family",
+        "tail concentration",
+        "mixed-parameter graph",
+        "revision provenance"
+      ],
+      "key_recommendations": [
+        "Preserve failed variants",
+        "entire-search null calibration",
+        "separate raw counts and behavioral families"
+      ],
+      "explicit_cautions": [
+        "NRS is proposed, not a standard proof",
+        "illustrative numeric examples are not Lab thresholds",
+        "no scoring around critical failures"
+      ],
+      "machine_testable_hypothesis_ids": [],
+      "required_data": "Search DAG, point-in-time master, event clusters, seeds and prospective receipts",
+      "methodological_safeguards": "Independent review; availability clocks; non-compensatory gates",
+      "overlapping_ideas": "Near-duplicate R3 with graph/null/rare-tail/seed detail; not independent corroboration",
+      "contradictions": "conflict-neighborhood-strength; conflict-neighborhood-score; conflict-funnel-order",
+      "implementation_relevance": "Complementary architecture backlog; expensive validation deferred pending certified data",
+      "sources": [
+        {
+          "report_id": "R4",
+          "page": 1,
+          "section_or_claim": "Automated Strategy Discovery Without Statistical Self-Deception Executive summary and rese",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "0dbaa2e1cc30bac23a58b2b7b7e4377f5fd40f7c93a670e427ecfe3360d67737",
+          "literal_excerpt": "Automated Strategy Discovery Without Statistical Self-Deception Executive summary and research scope The research problem is now fully specified by the uploaded project brief: design a quantitative Trading Lab that can search extremely large spaces of strategies, features, parameters, inte"
+        }
+      ],
+      "underlying_studies_independently_verified": false
+    },
+    {
+      "id": "R5",
+      "title": "#2 Research Scoping Report for an Unspecified Topic",
+      "filename": "#2 Research Scoping Report for an Unspecified Topic.pdf",
+      "sha256": "4974b05defe3f5b809bb40a0a958ad779e229686cdd62d505c1a5030336fd6cb",
+      "page_count": 13,
+      "extracted_text_sha256": "d202d65e377fd9016f6c713920fcabd047570d2f879ad3706e37fd56ff9f16c1",
+      "classification": "background_scoping_only",
+      "scope": "Unspecified topic with generic research-scoping examples",
+      "primary_purpose": "Review planning and evidence-provenance discipline",
+      "main_evidence_families": [
+        "search/inclusion protocol",
+        "source quality and inference boundaries"
+      ],
+      "key_recommendations": [
+        "Define scope and inclusion before outcomes",
+        "distinguish original observation from later interpretation"
+      ],
+      "explicit_cautions": [
+        "No active topic specified",
+        "generic budgets and industry examples do not validate alpha"
+      ],
+      "machine_testable_hypothesis_ids": [],
+      "required_data": "No new trading data implied; source/query provenance only",
+      "methodological_safeguards": "Counterevidence; measurement and source chain; do not pool incomparable effects",
+      "overlapping_ideas": "General protocol overlap only; no independent trading evidence",
+      "contradictions": "conflict-scope",
+      "implementation_relevance": "Low-value background; no canonical alpha hypothesis created",
+      "sources": [
+        {
+          "report_id": "R5",
+          "page": 1,
+          "section_or_claim": "Research Scoping Report for an Unspecified Topic Executive summary The active research top",
+          "source_sha256": "4974b05defe3f5b809bb40a0a958ad779e229686cdd62d505c1a5030336fd6cb",
+          "page_text_sha256": "6d1f2f13f3f09b75b8ea5b7fd6649aad581c86e2c4627a78c8bad14a9993d7e3",
+          "literal_excerpt": "Research Scoping Report for an Unspecified Topic Executive summary The active research topic is missing. The current instruction explicitly asks that the topic be treated as unspecified, so a defensible evidence synthesis cannot yet answer a substantive domain question. There is, however ,"
+        }
+      ],
+      "underlying_studies_independently_verified": false
+    }
+  ],
+  "hypotheses": [
+    {
+      "id": "hyp-report1-f52352a9d60574b70cce",
+      "name": "Fresh catalyst x abnormal participation",
+      "research_claim": "A fresh, material, company-specific catalyst combined with abnormal, accelerating participation may raise the probability of a future extreme upside move more than either component alone.",
+      "family_id": "catalyst-demand",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 9,
+          "section_or_claim": "Fresh, material",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "efb4f9aa8f2b36bc381da67623729acb1da9f9790d2c21883d7586e8c81da1fb",
+          "literal_excerpt": "tions, failures and confounders EXP- CAT-001 Fresh, material company-specific news may sharply increase extreme- upside probability. Evidence: Strong for price impact; moderate for extreme-tail continuation. News and institutional trading respond rapidly to th"
+        }
+      ],
+      "evidence_strength": "Strong component price-impact literature; moderate extreme-tail extrapolation; interaction unvalidated",
+      "target_universe": "PIT U.S. equities; small/microcap momentum stratum separately; current bounded panel is not representative",
+      "target_horizon": "Intraday 5–60 minutes or next session as a separately frozen design; no grid authorized",
+      "timing_boundary": "Only observations actually available at decision time. Freeze features before target interval; never use first-leg aftermath as a precursor.",
+      "required_raw_data": [
+        "timestamped original SEC releases/news",
+        "publication and ingest clocks",
+        "native intraday OHLCV"
+      ],
+      "required_derived_features": [
+        "news age/materiality",
+        "continuous seasonal participation",
+        "interaction versus components"
+      ],
+      "expected_interactions": "news age/materiality; continuous seasonal participation; interaction versus components",
+      "confounders": [
+        "pre-positioning, concurrent financing, endogenous attention"
+      ],
+      "known_failure_modes": [
+        "materiality misclassification and already-priced news"
+      ],
+      "prediction_class": "initial_move",
+      "testability": "NEEDS CHEAP/EXISTING PUBLIC DATA",
+      "missing_data": [
+        "filing freshness and materiality",
+        "historical security mapping",
+        "complete bars"
+      ],
+      "implementation_complexity": "medium",
+      "testing_cost": "public intake plus local computation; no quoted fee",
+      "leakage_risk": "High if revised references, eventual news, incomplete warmup or post-decision observations are backfilled.",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": false,
+      "independently_verified": false,
+      "existing_library_id": "hyp-report1-f52352a9d60574b70cce",
+      "existing_concept_fingerprint": "0d57de064e08b8d5d9d23f0a",
+      "existing_source_id": "research-report-b57fb7af90edb5e6e423",
+      "legacy_machine_rules_are_not_full_operationalization": true,
+      "related_existing_concepts": []
+    },
+    {
+      "id": "hyp-report1-851a399c253c40d377f2",
+      "name": "RVOL level vs slope vs acceleration",
+      "research_claim": "Time-of-day-normalized RVOL slope or acceleration may add more extreme-move information than RVOL level alone; no fixed RVOL threshold is assumed predictive.",
+      "family_id": "rvol-derivatives",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 10,
+          "section_or_claim": "RVOL acceleration",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "d94f7cec73c405b48c25ea46190eb36e497c712d7db1d6cec3f0ac3623d79a4a",
+          "literal_excerpt": "distribution/exhaustion volume. EXP- VOL-002 RVOL acceleration may outperform RVOL level. Evidence: Indirect but well motivated. Volume shocks, not merely high baseline volume, contain information. All Intraday volume; rvol_5m , rvol_slope , rvol_acceleration 1/"
+        }
+      ],
+      "evidence_strength": "Indirect, motivated by volume shocks; acceleration superiority unvalidated",
+      "target_universe": "PIT U.S. equities; small/microcap momentum stratum separately; current bounded panel is not representative",
+      "target_horizon": "Intraday 5–60 minutes or next session as a separately frozen design; no grid authorized",
+      "timing_boundary": "Only observations actually available at decision time. Freeze features before target interval; never use first-leg aftermath as a precursor.",
+      "required_raw_data": [
+        "native OHLCV plus completed prior same-clock sessions and availability clocks"
+      ],
+      "required_derived_features": [
+        "seasonal RVOL level, first difference, second difference"
+      ],
+      "expected_interactions": "seasonal RVOL level, first difference, second difference",
+      "confounders": [
+        "clock seasonality, denominator instability, attention and liquidity"
+      ],
+      "known_failure_modes": [
+        "sparse minutes or trade batching manufacture acceleration"
+      ],
+      "prediction_class": "initial_move",
+      "testability": "TESTABLE PRELIMINARILY ONLY",
+      "missing_data": [
+        "warmup coverage",
+        "native minute gaps",
+        "point-in-time reference certification"
+      ],
+      "implementation_complexity": "low",
+      "testing_cost": "owned-data computation only; runtime unmeasured",
+      "leakage_risk": "High if revised references, eventual news, incomplete warmup or post-decision observations are backfilled.",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": false,
+      "independently_verified": false,
+      "existing_library_id": "hyp-report1-851a399c253c40d377f2",
+      "existing_concept_fingerprint": "5f9727d5511c2313a71a6726",
+      "existing_source_id": "research-report-b57fb7af90edb5e6e423",
+      "legacy_machine_rules_are_not_full_operationalization": true,
+      "related_existing_concepts": []
+    },
+    {
+      "id": "hyp-report1-d464c0a8b353141c9c3e",
+      "name": "Low float x abnormal demand",
+      "research_claim": "Historically reconstructed low free float may matter when abnormal demand is large relative to float; low float alone is not asserted to predict explosive moves.",
+      "family_id": "float-demand",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 11,
+          "section_or_claim": "Low free float",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "26efdfae2ae82a0c8910a5513824b5d40446e7d5548f0c5bcb263e7e2dcb5fbb",
+          "literal_excerpt": "under: inaccurate/ stale float. EXP- FLT-001 Low free float should matter primarily when abnormal demand is large relative to float. Evidence: Moderate; mechanism strongly supported. Small/ microcaps, IPOs/ SPACs Float, volume/flow; log_free_float , demand_to"
+        }
+      ],
+      "evidence_strength": "Moderate mechanism; no universal low-float cutoff or validated tail effect",
+      "target_universe": "PIT U.S. equities; small/microcap momentum stratum separately; current bounded panel is not representative",
+      "target_horizon": "Intraday 5–60 minutes or next session as a separately frozen design; no grid authorized",
+      "timing_boundary": "Only observations actually available at decision time. Freeze features before target interval; never use first-leg aftermath as a precursor.",
+      "required_raw_data": [
+        "effective and available dated free float, share class, corporate actions, volume/flow"
+      ],
+      "required_derived_features": [
+        "log float and demand/float interaction"
+      ],
+      "expected_interactions": "log float and demand/float interaction",
+      "confounders": [
+        "stale float, hidden future issuance, contemporaneous float revisions"
+      ],
+      "known_failure_modes": [
+        "replenished supply absorbs demand"
+      ],
+      "prediction_class": "initial_move",
+      "testability": "NEEDS PREMIUM DATA",
+      "missing_data": [
+        "historical float vintages, hidden/exercisable supply and identity"
+      ],
+      "implementation_complexity": "high",
+      "testing_cost": "premium reference quote required; no purchase justified yet",
+      "leakage_risk": "High if revised references, eventual news, incomplete warmup or post-decision observations are backfilled.",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": false,
+      "independently_verified": false,
+      "existing_library_id": "hyp-report1-d464c0a8b353141c9c3e",
+      "existing_concept_fingerprint": "faece3abee3cb10dc072e0b9",
+      "existing_source_id": "research-report-b57fb7af90edb5e6e423",
+      "legacy_machine_rules_are_not_full_operationalization": true,
+      "related_existing_concepts": []
+    },
+    {
+      "id": "hyp-report1-6c466f39552649f2ca7a",
+      "name": "Free-float turnover and float rotation",
+      "research_claim": "Cumulative volume relative to contemporaneously knowable free float, plus its velocity, may help distinguish persistent demand from exhaustion, but no universal rotation count is assumed.",
+      "family_id": "float-rotation",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 11,
+          "section_or_claim": "float_rotation",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "26efdfae2ae82a0c8910a5513824b5d40446e7d5548f0c5bcb263e7e2dcb5fbb",
+          "literal_excerpt": " liquidity providers replenish. EXP- FLT-002 float_rotation = cumulative_volume/ free_float may measure exhaustion or demand persistence, but its effect is likely nonlinear. Evidence: Speculative but highly testable; no strong direct academic validation locat"
+        }
+      ],
+      "evidence_strength": "Speculative/nonlinear; repeated turnover is not unique ownership transfer",
+      "target_universe": "PIT U.S. equities; small/microcap momentum stratum separately; current bounded panel is not representative",
+      "target_horizon": "Intraday 5–60 minutes or next session as a separately frozen design; no grid authorized",
+      "timing_boundary": "Only observations actually available at decision time. Decision strictly after observed first leg/spike; predicts later continuation or failure.",
+      "required_raw_data": [
+        "dated free float, extended and regular native volume, revisions"
+      ],
+      "required_derived_features": [
+        "cumulative volume/float and its velocity"
+      ],
+      "expected_interactions": "cumulative volume/float and its velocity",
+      "confounders": [
+        "repeat trading of same shares",
+        "stale float"
+      ],
+      "known_failure_modes": [
+        "false inference that all available float changed hands"
+      ],
+      "prediction_class": "continuation",
+      "testability": "NEEDS PREMIUM DATA",
+      "missing_data": [
+        "historical float and complete sessions"
+      ],
+      "implementation_complexity": "medium",
+      "testing_cost": "premium float coverage unknown; local computation small",
+      "leakage_risk": "High if revised references, eventual news, incomplete warmup or post-decision observations are backfilled.",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": true,
+      "independently_verified": false,
+      "existing_library_id": "hyp-report1-6c466f39552649f2ca7a",
+      "existing_concept_fingerprint": "7923183002536e189d33fdc5",
+      "existing_source_id": "research-report-b57fb7af90edb5e6e423",
+      "legacy_machine_rules_are_not_full_operationalization": true,
+      "related_existing_concepts": []
+    },
+    {
+      "id": "hyp-report1-0eaf0ce01e6e4dc9f312",
+      "name": "Order-flow imbalance x liquidity/depth",
+      "research_claim": "Aggressive buy imbalance relative to available ask depth, especially when depth is depleting, may raise near-term upside-acceleration probability more than raw imbalance or low liquidity alone.",
+      "family_id": "ofi-depth",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 12,
+          "section_or_claim": "Aggressive buy",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "e55cc64339c35463bfe54b533ac5445993b5f67c6e4d7f46948dd477ca0fe25e",
+          "literal_excerpt": "financing may improve solvency. EXP- LIQ-001 Aggressive buy imbalance combined with shallow ask depth should increase near-term upside acceleration probability. Evidence: Strong microstructure support; direct extreme-tail test needed. Liquid tick-data univers"
+        }
+      ],
+      "evidence_strength": "Strong microstructure components; direct extreme-tail interaction unvalidated",
+      "target_universe": "PIT U.S. equities; small/microcap momentum stratum separately; current bounded panel is not representative",
+      "target_horizon": "Intraday 5–60 minutes or next session as a separately frozen design; no grid authorized",
+      "timing_boundary": "Only observations actually available at decision time. Freeze features before target interval; never use first-leg aftermath as a precursor.",
+      "required_raw_data": [
+        "sequenced trades, synchronized quotes and displayed ask depth, amendments"
+      ],
+      "required_derived_features": [
+        "signed flow/depth, depth change, spread change"
+      ],
+      "expected_interactions": "signed flow/depth, depth change, spread change",
+      "confounders": [
+        "hidden liquidity, spoof/cancel behavior, trade signing error"
+      ],
+      "known_failure_modes": [
+        "displayed depletion reverses before executable arrival"
+      ],
+      "prediction_class": "initial_move",
+      "testability": "NEEDS PREMIUM DATA",
+      "missing_data": [
+        "depth history, aggressor semantics and corrections",
+        "certified status"
+      ],
+      "implementation_complexity": "high",
+      "testing_cost": "premium depth quote plus storage/normalization; unknown cost",
+      "leakage_risk": "High if revised references, eventual news, incomplete warmup or post-decision observations are backfilled.",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": false,
+      "independently_verified": false,
+      "existing_library_id": "hyp-report1-0eaf0ce01e6e4dc9f312",
+      "existing_concept_fingerprint": "1c9b0c73fe144a124bb6ea0b",
+      "existing_source_id": "research-report-b57fb7af90edb5e6e423",
+      "legacy_machine_rules_are_not_full_operationalization": true,
+      "related_existing_concepts": []
+    },
+    {
+      "id": "hyp-report1-c6f19341332c791d6993",
+      "name": "Premarket participation x gap structure",
+      "research_claim": "Premarket gap/path information conditioned on normalized dollar volume, trade count, liquidity, and float turnover may forecast regular-session extremes better than gap size alone.",
+      "family_id": "premarket-structure",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 13,
+          "section_or_claim": "Premarket information",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "d74b3b5676b269bd19597eabf6fbb6d6625a38b28a5aa9f1c005b4300fc7c35d",
+          "literal_excerpt": " Next-5/15m acceleration hazard. EXP- PM-001 Premarket information becomes more reliable as premarket participation rises. Evidence: Moderate. Extended-hours and pre-open studies show volume-dependent price discovery. Nasdaq/ NYSE- listed, stratified by cap Extended"
+        }
+      ],
+      "evidence_strength": "Moderate price discovery; float-turnover extension speculative",
+      "target_universe": "PIT U.S. equities; small/microcap momentum stratum separately; current bounded panel is not representative",
+      "target_horizon": "Intraday 5–60 minutes or next session as a separately frozen design; no grid authorized",
+      "timing_boundary": "Only observations actually available at decision time. Freeze features before target interval; never use first-leg aftermath as a precursor.",
+      "required_raw_data": [
+        "extended-hours trades/quotes, native bars, prior close, historical float"
+      ],
+      "required_derived_features": [
+        "gap/path x dollar volume, trade count, liquidity and float turnover"
+      ],
+      "expected_interactions": "gap/path x dollar volume, trade count, liquidity and float turnover",
+      "confounders": [
+        "thin prints, corporate actions, sparse premarket"
+      ],
+      "known_failure_modes": [
+        "large gap on negligible executable participation"
+      ],
+      "prediction_class": "initial_move",
+      "testability": "NEEDS PREMIUM DATA",
+      "missing_data": [
+        "full hypothesis needs historical float and certified extended quotes",
+        "component available conditionally"
+      ],
+      "implementation_complexity": "medium",
+      "testing_cost": "narrow OHLCV component costs no new data; full claim needs quote",
+      "leakage_risk": "High if revised references, eventual news, incomplete warmup or post-decision observations are backfilled.",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": false,
+      "independently_verified": false,
+      "existing_library_id": "hyp-report1-c6f19341332c791d6993",
+      "existing_concept_fingerprint": "fcf6f552dadaa5669c477583",
+      "existing_source_id": "research-report-b57fb7af90edb5e6e423",
+      "legacy_machine_rules_are_not_full_operationalization": true,
+      "related_existing_concepts": []
+    },
+    {
+      "id": "hyp-report1-cf7449725378059e460b",
+      "name": "Dilution/supply overhang as a failure predictor",
+      "research_claim": "Point-in-time potential dilution or near-term supply capacity interacting with a large price spike may increase reversal risk or reduce continuation quality; financing can also improve solvency.",
+      "family_id": "supply-failure",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 12,
+          "section_or_claim": "Near-term dilution",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "e55cc64339c35463bfe54b533ac5445993b5f67c6e4d7f46948dd477ca0fe25e",
+          "literal_excerpt": "tions, failures and confounders EXP- SUP-001 Near-term dilution capacity may reduce continuation quality after a demand shock. Evidence: Moderate/ contradictory at longer horizons; direct intraday evidence limited. Equity issuance literature generally finds weak "
+        }
+      ],
+      "evidence_strength": "Moderate/contradictory longer-horizon issuance evidence; direct intraday evidence limited",
+      "target_universe": "PIT U.S. equities; small/microcap momentum stratum separately; current bounded panel is not representative",
+      "target_horizon": "Intraday 5–60 minutes or next session as a separately frozen design; no grid authorized",
+      "timing_boundary": "Only observations actually available at decision time. Decision strictly after observed first leg/spike; predicts later continuation or failure.",
+      "required_raw_data": [
+        "SEC accepted/disseminated filings S-1/S-3, ATM, warrants, convertibles, price path"
+      ],
+      "required_derived_features": [
+        "registered vs exercisable vs issued supply",
+        "overhang x spike size"
+      ],
+      "expected_interactions": "registered vs exercisable vs issued supply; overhang x spike size",
+      "confounders": [
+        "financing improves solvency",
+        "terms change after decision"
+      ],
+      "known_failure_modes": [
+        "registration mistaken for actual issuance"
+      ],
+      "prediction_class": "failure_reversal",
+      "testability": "NEEDS CHEAP/EXISTING PUBLIC DATA",
+      "missing_data": [
+        "dated filing lifecycle and quantities, float denominator, identity"
+      ],
+      "implementation_complexity": "high",
+      "testing_cost": "public filing subset first; full float portion may still need premium data",
+      "leakage_risk": "High if revised references, eventual news, incomplete warmup or post-decision observations are backfilled.",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": true,
+      "independently_verified": false,
+      "existing_library_id": "hyp-report1-cf7449725378059e460b",
+      "existing_concept_fingerprint": "09054cf15f5bb377f25a071f",
+      "existing_source_id": "research-report-b57fb7af90edb5e6e423",
+      "legacy_machine_rules_are_not_full_operationalization": true,
+      "related_existing_concepts": []
+    },
+    {
+      "id": "hyp-report1-81d70a53c0d9a661d277",
+      "name": "Fresh vs recycled catalyst",
+      "research_claim": "A genuinely fresh catalyst may support more durable continuation than semantically recycled or promotion-driven news, which may instead predict reversal when filing support and liquidity are weak.",
+      "family_id": "news-novelty",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 9,
+          "section_or_claim": "Stale/recycled",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "efb4f9aa8f2b36bc381da67623729acb1da9f9790d2c21883d7586e8c81da1fb",
+          "literal_excerpt": "nfounder: leak/pre-positioning. EXP- CAT-002 Stale/recycled news may create participation without durable continuation. Evidence: Moderate empirical evidence. Stale news has produced weaker return response and subsequent reversal despite retail trading. Retai"
+        }
+      ],
+      "evidence_strength": "Moderate stale-news evidence; not universal directional rule",
+      "target_universe": "PIT U.S. equities; small/microcap momentum stratum separately; current bounded panel is not representative",
+      "target_horizon": "Intraday 5–60 minutes or next session as a separately frozen design; no grid authorized",
+      "timing_boundary": "Only observations actually available at decision time. Decision strictly after observed first leg/spike; predicts later continuation or failure.",
+      "required_raw_data": [
+        "timestamped original and prior news archive with source provenance"
+      ],
+      "required_derived_features": [
+        "recycle similarity and age x participation, matched news materiality"
+      ],
+      "expected_interactions": "recycle similarity and age x participation, matched news materiality",
+      "confounders": [
+        "different materiality, prior market exposure, promotional provenance"
+      ],
+      "known_failure_modes": [
+        "apparently recycled text includes genuinely new facts"
+      ],
+      "prediction_class": "failure_reversal",
+      "testability": "NEEDS PREMIUM DATA",
+      "missing_data": [
+        "historical news coverage and initial release availability"
+      ],
+      "implementation_complexity": "high",
+      "testing_cost": "archive license/export quote needed; do not buy before bounded use case",
+      "leakage_risk": "High if revised references, eventual news, incomplete warmup or post-decision observations are backfilled.",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": true,
+      "independently_verified": false,
+      "existing_library_id": "hyp-report1-81d70a53c0d9a661d277",
+      "existing_concept_fingerprint": "d9b1a49a53134f7f2180fdc5",
+      "existing_source_id": "research-report-b57fb7af90edb5e6e423",
+      "legacy_machine_rules_are_not_full_operationalization": true,
+      "related_existing_concepts": []
+    },
+    {
+      "id": "hyp-report1-be14baff8528edcd25e3",
+      "name": "Peer-leader event x target participation",
+      "research_claim": "A material event or extreme move in a peer leader combined with abnormal target participation may raise the target's extreme-move probability beyond industry/factor momentum alone.",
+      "family_id": "peer-propagation",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 16,
+          "section_or_claim": "Peer/industry",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "a200ba718048f5de4eae49716fd2314988ce0f999d93bd99416cf1ef9bd7124e",
+          "literal_excerpt": "d outcomes; falsification test. EXP- SEC-001 Peer/industry leader shocks may increase extreme-move probability in related smaller stocks. Evidence: Moderate. Intra-industry big-to- small lead-lag is documented. Sector- linked stocks Peer returns/news/volume "
+        }
+      ],
+      "evidence_strength": "Moderate big-to-small lead-lag; factor momentum confounds target-tail extrapolation",
+      "target_universe": "PIT U.S. equities; small/microcap momentum stratum separately; current bounded panel is not representative",
+      "target_horizon": "Intraday 5–60 minutes or next session as a separately frozen design; no grid authorized",
+      "timing_boundary": "Only observations actually available at decision time. Freeze features before target interval; never use first-leg aftermath as a precursor.",
+      "required_raw_data": [
+        "dated peer/industry membership, leader/target bars and news availability"
+      ],
+      "required_derived_features": [
+        "leader event x target participation",
+        "factor controls"
+      ],
+      "expected_interactions": "leader event x target participation; factor controls",
+      "confounders": [
+        "common factor shock vs transmission",
+        "hindsight theme labels"
+      ],
+      "known_failure_modes": [
+        "post-event peer membership creates spurious propagation"
+      ],
+      "prediction_class": "initial_move",
+      "testability": "NEEDS CHEAP/EXISTING PUBLIC DATA",
+      "missing_data": [
+        "historical peer graph, event timing and paired coverage"
+      ],
+      "implementation_complexity": "medium",
+      "testing_cost": "public classification/filings feasibility first; news component may need premium archive",
+      "leakage_risk": "High if revised references, eventual news, incomplete warmup or post-decision observations are backfilled.",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": false,
+      "independently_verified": false,
+      "existing_library_id": "hyp-report1-be14baff8528edcd25e3",
+      "existing_concept_fingerprint": "d4a56dabca6c6ee62fb30867",
+      "existing_source_id": "research-report-b57fb7af90edb5e6e423",
+      "legacy_machine_rules_are_not_full_operationalization": true,
+      "related_existing_concepts": []
+    },
+    {
+      "id": "hyp-report1-fc0965d3252d4f17b66e",
+      "name": "Former-runner recurrence",
+      "research_claim": "Prior extreme movers may have a different future tail-event probability, but they must not be assumed to run again and their mean subsequent return may be lower.",
+      "family_id": "runner-recurrence",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 15,
+          "section_or_claim": "Prior extreme",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "fc71123a15596056e0cd82bc2f9e4b71335bc065f03dc3b12c6817ad3d0949e7",
+          "literal_excerpt": "tions, failures and confounders EXP- HIS-001 Prior extreme movers may have a different conditional probability of another extreme event. Evidence: Contradictory/ indirect. Jump clustering supports recurrence over short horizons; lottery-MAX evidence predicts"
+        }
+      ],
+      "evidence_strength": "Contradictory/indirect: tail recurrence and lower mean returns can coexist",
+      "target_universe": "PIT U.S. equities; small/microcap momentum stratum separately; current bounded panel is not representative",
+      "target_horizon": "Intraday 5–60 minutes or next session as a separately frozen design; no grid authorized",
+      "timing_boundary": "Only observations actually available at decision time. Freeze features before target interval; never use first-leg aftermath as a precursor.",
+      "required_raw_data": [
+        "native prior-session prices, identity and corporate actions, sufficient earlier development history"
+      ],
+      "required_derived_features": [
+        "lagged runner count, days since runner",
+        "tail probability separated from mean"
+      ],
+      "expected_interactions": "lagged runner count, days since runner; tail probability separated from mean",
+      "confounders": [
+        "lottery preference, stock selection and split artifacts"
+      ],
+      "known_failure_modes": [
+        "repeat tail probability mistaken for positive expected payoff"
+      ],
+      "prediction_class": "initial_move",
+      "testability": "TESTABLE PRELIMINARILY ONLY",
+      "missing_data": [
+        "adequate lagged warmup",
+        "splits and survivor-free sampling"
+      ],
+      "implementation_complexity": "medium",
+      "testing_cost": "owned-data counts preflight first; longer legitimate history may be required",
+      "leakage_risk": "High if revised references, eventual news, incomplete warmup or post-decision observations are backfilled.",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": false,
+      "independently_verified": false,
+      "existing_library_id": "hyp-report1-fc0965d3252d4f17b66e",
+      "existing_concept_fingerprint": "1c96fef5c4ee6877a0de9c9c",
+      "existing_source_id": "research-report-b57fb7af90edb5e6e423",
+      "legacy_machine_rules_are_not_full_operationalization": true,
+      "related_existing_concepts": []
+    },
+    {
+      "id": "hyp-report1-3b969b2e4368992c939f",
+      "name": "Short-interest interaction, not standalone short interest",
+      "research_claim": "Lagged short exposure may amplify an independent positive shock when borrow friction, urgent buy flow, and illiquidity are present; high short interest alone is not a bullish predictor.",
+      "family_id": "short-demand",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 15,
+          "section_or_claim": "Short exposure",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "fc71123a15596056e0cd82bc2f9e4b71335bc065f03dc3b12c6817ad3d0949e7",
+          "literal_excerpt": "p standalone: negative or null. EXP- SHR-002 Short exposure may amplify a sufficiently strong independent positive demand shock. Evidence: Plausible but limited as a forward extreme predictor. High-SI equities SI, utilization/fees if historical, flow, catalys"
+        }
+      ],
+      "evidence_strength": "Plausible but limited; standalone high SI has contrary evidence",
+      "target_universe": "PIT U.S. equities; small/microcap momentum stratum separately; current bounded panel is not representative",
+      "target_horizon": "Intraday 5–60 minutes or next session as a separately frozen design; no grid authorized",
+      "timing_boundary": "Only observations actually available at decision time. Freeze features before target interval; never use first-leg aftermath as a precursor.",
+      "required_raw_data": [
+        "publication-dated SI, borrow/utilization if included, catalyst, flow and liquidity"
+      ],
+      "required_derived_features": [
+        "SI x independent catalyst x buy imbalance x illiquidity"
+      ],
+      "expected_interactions": "SI x independent catalyst x buy imbalance x illiquidity",
+      "confounders": [
+        "short sellers informed",
+        "settlement vs publication dates"
+      ],
+      "known_failure_modes": [
+        "stale SI mistaken for current squeeze pressure"
+      ],
+      "prediction_class": "initial_move",
+      "testability": "NEEDS PREMIUM DATA",
+      "missing_data": [
+        "SI vintages/publication lag, borrow history, news and liquidity"
+      ],
+      "implementation_complexity": "high",
+      "testing_cost": "premium borrow/news likely; public SI alone does not satisfy full hypothesis",
+      "leakage_risk": "High if revised references, eventual news, incomplete warmup or post-decision observations are backfilled.",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": false,
+      "independently_verified": false,
+      "existing_library_id": "hyp-report1-3b969b2e4368992c939f",
+      "existing_concept_fingerprint": "e35e19d61ffaacaf4cb63e29",
+      "existing_source_id": "research-report-b57fb7af90edb5e6e423",
+      "legacy_machine_rules_are_not_full_operationalization": true,
+      "related_existing_concepts": []
+    },
+    {
+      "id": "hyp-report1-9608e08ad39b239d6100",
+      "name": "Catalyst -> participation -> imbalance -> liquidity-depletion sequence",
+      "research_claim": "A timestamp-ordered sequence of fresh catalyst, abnormal participation, aggressive buy imbalance, and liquidity depletion may predict near-term acceleration better than a static score of the same components.",
+      "family_id": "ordered-sequence",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 17,
+          "section_or_claim": "fresh catalyst",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "ade36d80ec77c60a112696d9df6fbb9ebbdab1722686feac8830b564be48dbfe",
+          "literal_excerpt": "subsequent reversal separately. EXP- SEQ-001 fresh catalyst → abnormal volume → buy imbalance → liquidity depletion is a stronger predictor than any component alone. Evidence: Components empirically supported; sequence itself unvalidated. Event- driven equiti"
+        }
+      ],
+      "evidence_strength": "Components supported; ordered sequence itself unvalidated",
+      "target_universe": "PIT U.S. equities; small/microcap momentum stratum separately; current bounded panel is not representative",
+      "target_horizon": "Intraday 5–60 minutes or next session as a separately frozen design; no grid authorized",
+      "timing_boundary": "Only observations actually available at decision time. Freeze features before target interval; never use first-leg aftermath as a precursor.",
+      "required_raw_data": [
+        "news timestamps, native trades/quotes/depth and availability clocks"
+      ],
+      "required_derived_features": [
+        "ordered transitions catalyst to participation to imbalance to depletion"
+      ],
+      "expected_interactions": "ordered transitions catalyst to participation to imbalance to depletion",
+      "confounders": [
+        "same common shock drives simultaneous features",
+        "arbitrary sequence matching"
+      ],
+      "known_failure_modes": [
+        "event-time ordering ignores actual availability or future depletion"
+      ],
+      "prediction_class": "initial_move",
+      "testability": "NEEDS PREMIUM DATA",
+      "missing_data": [
+        "news/depth synchronization, corrections, ordering and certified coverage"
+      ],
+      "implementation_complexity": "high",
+      "testing_cost": "premium synchronized sources; defer until component evidence and coverage exist",
+      "leakage_risk": "High if revised references, eventual news, incomplete warmup or post-decision observations are backfilled.",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": false,
+      "independently_verified": false,
+      "existing_library_id": "hyp-report1-9608e08ad39b239d6100",
+      "existing_concept_fingerprint": "d449473cda83c005d3e7430f",
+      "existing_source_id": "research-report-b57fb7af90edb5e6e423",
+      "legacy_machine_rules_are_not_full_operationalization": true,
+      "related_existing_concepts": []
+    },
+    {
+      "id": "hyp-rmap-v1-participation-decay",
+      "name": "Post-spike participation decay",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 18,
+          "section_or_claim": "Rapid post-spike",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "74ff61d7ccaa0befe028170a9ffd2ac11fc7d852044f60eeed8239389a2a2e66",
+          "literal_excerpt": "e Continuation versus reversal. EXP- FAL-003 Rapid post-spike participation decay should distinguish fading spikes from continuing events. Evidence: Speculative but directly measurable. All Intraday volume/trades rvol_decay , trade_count_decay , flow reversal F"
+        }
+      ],
+      "research_claim": "After an observed first leg, falling participation may distinguish failure from continuation.",
+      "evidence_strength": "Speculative but measurable; not a proven trading edge",
+      "target_universe": "PIT U.S. equities; small-cap momentum separately; bounded archive alone cannot establish market-wide validity",
+      "target_horizon": "Next fixed intraday interval; select one horizon in a future preregistration",
+      "timing_boundary": "After the observed first leg; only later outcomes.",
+      "required_raw_data": [
+        "native completed minute volume and price path"
+      ],
+      "required_derived_features": [
+        "relative volume decay and elapsed time since first leg"
+      ],
+      "expected_interactions": "relative volume decay and elapsed time since first leg",
+      "confounders": [
+        "mechanical volume mean reversion; selecting only known failed spikes"
+      ],
+      "known_failure_modes": [
+        "sparse observations mimic declining interest"
+      ],
+      "prediction_class": "failure_reversal",
+      "testability": "TESTABLE PRELIMINARILY ONLY",
+      "missing_data": [
+        "complete post-leg observations; reference and session quality"
+      ],
+      "implementation_complexity": "low",
+      "testing_cost": "No acquisition authorized; local feasibility first. Premium/prospective coverage and runtime costs unquoted.",
+      "leakage_risk": "No future adjustment, later availability, reconstructed missing observation or eventual outcome may define a predictor.",
+      "family_id": "participation-decay",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": true,
+      "independently_verified": false,
+      "related_existing_concepts": [
+        {
+          "id": "hyp-ecadacff1f4195fb312e42",
+          "name": "Post-10:30 AM Expectancy Decay and Reversal in Small-Cap Micro Pullbacks",
+          "relationship": "Related family; narrower threshold, strategy, clock or sizing claim. Not equivalent and not independently validating this report claim."
+        },
+        {
+          "id": "hyp-45efcadc24673e50308b09",
+          "name": "midday_breakout_decay_and_afternoon_reacceleration",
+          "relationship": "Related family; narrower threshold, strategy, clock or sizing claim. Not equivalent and not independently validating this report claim."
+        }
+      ]
+    },
+    {
+      "id": "hyp-rmap-v1-impact-proxy",
+      "name": "Price response per dollar traded",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 12,
+          "section_or_claim": "Price impact",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "e55cc64339c35463bfe54b533ac5445993b5f67c6e4d7f46948dd477ca0fe25e",
+          "literal_excerpt": "vior , hidden liquidity. EXP- LIQ-002 Rising price impact per dollar traded may identify a supply shortage. Evidence: Moderate. Jump episodes show increased trading costs/demand for immediacy. All with quotes Returns, dollar volume, spreads; abs_return_per_"
+        }
+      ],
+      "research_claim": "Rising absolute price response per dollar may signal fragility; raw tail size and executable quality must be separated.",
+      "evidence_strength": "Moderate microstructure motivation; bar proxy is not signed causal impact",
+      "target_universe": "PIT U.S. equities; small-cap momentum separately; bounded archive alone cannot establish market-wide validity",
+      "target_horizon": "Next fixed intraday interval; select one horizon in a future preregistration",
+      "timing_boundary": "Use only observations available before the decision and target interval.",
+      "required_raw_data": [
+        "native OHLCV and VWAP with positive actual volume"
+      ],
+      "required_derived_features": [
+        "absolute return / observed dollar volume; participation interaction"
+      ],
+      "expected_interactions": "absolute return / observed dollar volume; participation interaction",
+      "confounders": [
+        "price and volume enter same denominator; microstructure noise"
+      ],
+      "known_failure_modes": [
+        "low dollar volume produces a large ratio without buy pressure"
+      ],
+      "prediction_class": "execution_quality",
+      "testability": "TESTABLE PRELIMINARILY ONLY",
+      "missing_data": [
+        "bar completeness, adjusted/unadjusted consistency; quote calibration for execution claim"
+      ],
+      "implementation_complexity": "low",
+      "testing_cost": "No acquisition authorized; local feasibility first. Premium/prospective coverage and runtime costs unquoted.",
+      "leakage_risk": "No future adjustment, later availability, reconstructed missing observation or eventual outcome may define a predictor.",
+      "family_id": "impact-proxy",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": false,
+      "independently_verified": false,
+      "related_existing_concepts": [
+        {
+          "id": "hyp-470f40435b8495d52e9bbc",
+          "name": "Square-Root Law Market Impact Sizing Capped Momentum Trend",
+          "relationship": "Related family; narrower threshold, strategy, clock or sizing claim. Not equivalent and not independently validating this report claim."
+        },
+        {
+          "id": "hyp-e50a80ddf7a5567d217fe1",
+          "name": "Volume_Scaled_Market_Impact_Cap_Breakout",
+          "relationship": "Related family; narrower threshold, strategy, clock or sizing claim. Not equivalent and not independently validating this report claim."
+        },
+        {
+          "id": "hyp-7989e8db443f3ee8738b74",
+          "name": "Square-Root Market Impact Constrained Scaled Momentum",
+          "relationship": "Related family; narrower threshold, strategy, clock or sizing claim. Not equivalent and not independently validating this report claim."
+        }
+      ]
+    },
+    {
+      "id": "hyp-rmap-v1-spread-quality",
+      "name": "Spread and executable move quality",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 13,
+          "section_or_claim": "Very wide spreads",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "d74b3b5676b269bd19597eabf6fbb6d6625a38b28a5aa9f1c005b4300fc7c35d",
+          "literal_excerpt": "tions, failures and confounders EXP- LIQ-003 Very wide spreads and very low depth may increase raw move size but reduce “quality” and executable continuation. Evidence: Strong microstructure plausibility; target- specific test required. Microcaps NBBO/depth; spr"
+        }
+      ],
+      "research_claim": "Wide spreads may increase apparent excursions while reducing executable continuation quality.",
+      "evidence_strength": "Strong mechanism; target-specific execution validation missing",
+      "target_universe": "PIT U.S. equities; small-cap momentum separately; bounded archive alone cannot establish market-wide validity",
+      "target_horizon": "Next fixed intraday interval; select one horizon in a future preregistration",
+      "timing_boundary": "Use only observations available before the decision and target interval.",
+      "required_raw_data": [
+        "sequenced contemporaneous NBBO quotes/trades, latency and correction receipts"
+      ],
+      "required_derived_features": [
+        "relative spread and quote age; raw versus executable excursion"
+      ],
+      "expected_interactions": "relative spread and quote age; raw versus executable excursion",
+      "confounders": [
+        "stale quotes, hidden depth, odd-lot prices"
+      ],
+      "known_failure_modes": [
+        "bar high cannot be achieved at executable size"
+      ],
+      "prediction_class": "execution_quality",
+      "testability": "NEEDS PROSPECTIVE DATA",
+      "missing_data": [
+        "prospective market events and certified quote/status/lot semantics"
+      ],
+      "implementation_complexity": "medium",
+      "testing_cost": "No acquisition authorized; local feasibility first. Premium/prospective coverage and runtime costs unquoted.",
+      "leakage_risk": "No future adjustment, later availability, reconstructed missing observation or eventual outcome may define a predictor.",
+      "family_id": "spread-quality",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": false,
+      "independently_verified": false,
+      "related_existing_concepts": [
+        {
+          "id": "hyp-ce415cd7b5aefb9d1c820c",
+          "name": "microstructure_spread_liquidity_regime_filtering",
+          "relationship": "Related family; narrower threshold, strategy, clock or sizing claim. Not equivalent and not independently validating this report claim."
+        },
+        {
+          "id": "hyp-765763aed4de227e2437c5",
+          "name": "Spread-to-ATR Friction Threshold for Breakout Portability",
+          "relationship": "Related family; narrower threshold, strategy, clock or sizing claim. Not equivalent and not independently validating this report claim."
+        },
+        {
+          "id": "hyp-51d2c17ba95d1958695785",
+          "name": "Spread Filtered Catalyst Breakout",
+          "relationship": "Related family; narrower threshold, strategy, clock or sizing claim. Not equivalent and not independently validating this report claim."
+        }
+      ]
+    },
+    {
+      "id": "hyp-rmap-v1-second-leg",
+      "name": "Jump clustering after first leg",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 18,
+          "section_or_claim": "A detected first jump",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "74ff61d7ccaa0befe028170a9ffd2ac11fc7d852044f60eeed8239389a2a2e66",
+          "literal_excerpt": "tions, failures and confounders EXP- JMP-001 A detected first jump may raise near-term probability of additional jumps/ legs. Evidence: Moderate/strong for jump clustering; applies only after initial move. Liquid names; separately small caps High-frequency prices Ju"
+        }
+      ],
+      "research_claim": "A first detected jump may change subsequent-leg probability; it cannot predict the already observed first jump.",
+      "evidence_strength": "Moderate/strong jump clustering in report; target strategy unvalidated",
+      "target_universe": "PIT U.S. equities; small-cap momentum separately; bounded archive alone cannot establish market-wide validity",
+      "target_horizon": "Next fixed intraday interval; select one horizon in a future preregistration",
+      "timing_boundary": "After the observed first leg; only later outcomes.",
+      "required_raw_data": [
+        "native intraday prices and prior volatility at decision time"
+      ],
+      "required_derived_features": [
+        "fixed jump event, elapsed time, later-leg label"
+      ],
+      "expected_interactions": "fixed jump event, elapsed time, later-leg label",
+      "confounders": [
+        "overlapping labels and conditioning on eventual maximum"
+      ],
+      "known_failure_modes": [
+        "first-jump returns leak into second-leg outcome"
+      ],
+      "prediction_class": "continuation",
+      "testability": "TESTABLE PRELIMINARILY ONLY",
+      "missing_data": [
+        "sufficient native observations and frozen non-hindsight jump definition"
+      ],
+      "implementation_complexity": "medium",
+      "testing_cost": "No acquisition authorized; local feasibility first. Premium/prospective coverage and runtime costs unquoted.",
+      "leakage_risk": "No future adjustment, later availability, reconstructed missing observation or eventual outcome may define a predictor.",
+      "family_id": "second-leg",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": true,
+      "independently_verified": false,
+      "related_existing_concepts": []
+    },
+    {
+      "id": "hyp-rmap-v1-regime",
+      "name": "Market regime conditioning",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 16,
+          "section_or_claim": "Signal efficacy",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "a200ba718048f5de4eae49716fd2314988ce0f999d93bd99416cf1ef9bd7124e",
+          "literal_excerpt": "event. Control factor momentum. EXP- REG-001 Signal efficacy is regime dependent. Evidence: Strong for momentum broadly; target-specific validation needed. Momentum crash risk changes after market declines/high volatility. All Index returns/VIX-style vol/ smal"
+        }
+      ],
+      "research_claim": "Prior market state may alter the calibration of candidate signals.",
+      "evidence_strength": "Strong broad momentum evidence; extreme-stock transfer unverified",
+      "target_universe": "PIT U.S. equities; small-cap momentum separately; bounded archive alone cannot establish market-wide validity",
+      "target_horizon": "Next fixed intraday interval; select one horizon in a future preregistration",
+      "timing_boundary": "Use only observations available before the decision and target interval.",
+      "required_raw_data": [
+        "lagged index prices, PIT small-cap breadth and volatility source if used"
+      ],
+      "required_derived_features": [
+        "continuous lagged return/volatility/breadth interactions"
+      ],
+      "expected_interactions": "continuous lagged return/volatility/breadth interactions",
+      "confounders": [
+        "hindsight regime labels; too few independent stress periods"
+      ],
+      "known_failure_modes": [
+        "regime cherry-picking removes losing periods"
+      ],
+      "prediction_class": "regime",
+      "testability": "NEEDS CHEAP/EXISTING PUBLIC DATA",
+      "missing_data": [
+        "complete historical breadth and declared volatility series; index-price subset owned"
+      ],
+      "implementation_complexity": "medium",
+      "testing_cost": "No acquisition authorized; local feasibility first. Premium/prospective coverage and runtime costs unquoted.",
+      "leakage_risk": "No future adjustment, later availability, reconstructed missing observation or eventual outcome may define a predictor.",
+      "family_id": "regime",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": false,
+      "independently_verified": false,
+      "related_existing_concepts": [
+        {
+          "id": "hyp-7909067b6f93bc54540bbd",
+          "name": "Market Trend Regime Filter for Intraday Short Momentum",
+          "relationship": "Related family; narrower threshold, strategy, clock or sizing claim. Not equivalent and not independently validating this report claim."
+        },
+        {
+          "id": "hyp-e5db73ad0beb82269aa5c6",
+          "name": "Idiosyncratic Volatility Regime Clustering for Trend vs Mean-Reversion Setups",
+          "relationship": "Related family; narrower threshold, strategy, clock or sizing claim. Not equivalent and not independently validating this report claim."
+        },
+        {
+          "id": "hyp-c028b264d1f0e71aed4e12",
+          "name": "Vol_Targeted_Intraday_Breakout_Regime_Conditioned",
+          "relationship": "Related family; narrower threshold, strategy, clock or sizing claim. Not equivalent and not independently validating this report claim."
+        }
+      ]
+    },
+    {
+      "id": "hyp-rmap-v1-compression",
+      "name": "Compression then participation expansion",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 14,
+          "section_or_claim": "Volatility/range",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "0340f0233e1d25dd78d7cfac291cd338e65ef9656b277d92d6e682a0f8abcacf",
+          "literal_excerpt": "els; interact sentiment/regime. EXP- PRC-002 Volatility/range compression followed by participation expansion may predict explosive transitions. Evidence: Speculative for extreme stocks; no strong direct validation located. Broad, stratified OHLCV atr5/atr20 , "
+        }
+      ],
+      "research_claim": "Prior range compression interacting with later observed participation expansion may precede a future move.",
+      "evidence_strength": "Speculative extreme-stock predictor; no strong direct validation reported",
+      "target_universe": "PIT U.S. equities; small-cap momentum separately; bounded archive alone cannot establish market-wide validity",
+      "target_horizon": "Next fixed intraday interval; select one horizon in a future preregistration",
+      "timing_boundary": "Use only observations available before the decision and target interval.",
+      "required_raw_data": [
+        "native prior-session and intraday OHLCV"
+      ],
+      "required_derived_features": [
+        "past range/volatility ratio x seasonal participation change"
+      ],
+      "expected_interactions": "past range/volatility ratio x seasonal participation change",
+      "confounders": [
+        "many interchangeable squeeze thresholds; generic momentum overlap"
+      ],
+      "known_failure_modes": [
+        "quiet stock stays quiet; post-move compression coding"
+      ],
+      "prediction_class": "initial_move",
+      "testability": "TESTABLE PRELIMINARILY ONLY",
+      "missing_data": [
+        "warmup and native coverage"
+      ],
+      "implementation_complexity": "low",
+      "testing_cost": "No acquisition authorized; local feasibility first. Premium/prospective coverage and runtime costs unquoted.",
+      "leakage_risk": "No future adjustment, later availability, reconstructed missing observation or eventual outcome may define a predictor.",
+      "family_id": "compression",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": false,
+      "independently_verified": false,
+      "related_existing_concepts": [
+        {
+          "id": "hyp-25d8608315112e536febf9",
+          "name": "Early-Stage Compression Breakout with Volume Acceleration",
+          "relationship": "Related family; narrower threshold, strategy, clock or sizing claim. Not equivalent and not independently validating this report claim."
+        },
+        {
+          "id": "hyp-f8a71e5a03cb2064559aff",
+          "name": "Base Range to ATR Compression Ratio as a Local Idiosyncratic Noise Filter",
+          "relationship": "Related family; narrower threshold, strategy, clock or sizing claim. Not equivalent and not independently validating this report claim."
+        }
+      ]
+    },
+    {
+      "id": "hyp-rmap-v1-attention",
+      "name": "Attention and overreaction",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 17,
+          "section_or_claim": "Attention shocks",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "ade36d80ec77c60a112696d9df6fbb9ebbdab1722686feac8830b564be48dbfe",
+          "literal_excerpt": "tions, failures and confounders EXP- ATT-001 Attention shocks can increase participation and price response but may also increase overreaction risk. Evidence: Moderate/ strong. Retail buys attention-grabbing names; media coverage alters momentum and social diff"
+        }
+      ],
+      "research_claim": "Attention-driven participation may accompany later reversal as well as larger initial moves.",
+      "evidence_strength": "Moderate/strong component evidence; target relationship ambiguous",
+      "target_universe": "PIT U.S. equities; small-cap momentum separately; bounded archive alone cannot establish market-wide validity",
+      "target_horizon": "Next fixed intraday interval; select one horizon in a future preregistration",
+      "timing_boundary": "After the observed first leg; only later outcomes.",
+      "required_raw_data": [
+        "legally available timestamped news/social/search archive"
+      ],
+      "required_derived_features": [
+        "source diversity, count growth, attention surprise"
+      ],
+      "expected_interactions": "source diversity, count growth, attention surprise",
+      "confounders": [
+        "price causes attention; source duplication"
+      ],
+      "known_failure_modes": [
+        "duplicate reposts counted as independent information"
+      ],
+      "prediction_class": "failure_reversal",
+      "testability": "NEEDS PREMIUM DATA",
+      "missing_data": [
+        "archive vintages, bot/source identification and timestamp rights"
+      ],
+      "implementation_complexity": "high",
+      "testing_cost": "No acquisition authorized; local feasibility first. Premium/prospective coverage and runtime costs unquoted.",
+      "leakage_risk": "No future adjustment, later availability, reconstructed missing observation or eventual outcome may define a predictor.",
+      "family_id": "attention",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": true,
+      "independently_verified": false,
+      "related_existing_concepts": []
+    },
+    {
+      "id": "hyp-rmap-v1-clock-hazard",
+      "name": "Time-of-day conditioning",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 19,
+          "section_or_claim": "Extreme-event",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "73bb5a71c38c1f43e62852c198c3a2b991d299e1bb14a8f3c1dd00bbfa38e8b4",
+          "literal_excerpt": "tions, failures and confounders EXP- TOD-001 Extreme-event probability and feature thresholds should be conditioned on time of day. Evidence: Strong structural motivation. Opening volatility and trading costs differ substantially from later periods. All Time"
+        }
+      ],
+      "research_claim": "Event probabilities and feature interpretations may differ by clock time.",
+      "evidence_strength": "Strong structural motivation; target hazard unestimated",
+      "target_universe": "PIT U.S. equities; small-cap momentum separately; bounded archive alone cannot establish market-wide validity",
+      "target_horizon": "Next fixed intraday interval; select one horizon in a future preregistration",
+      "timing_boundary": "Use only observations available before the decision and target interval.",
+      "required_raw_data": [
+        "native timestamps, session calendar, available prices/volumes"
+      ],
+      "required_derived_features": [
+        "exchange-local completed-minute clock, fixed clock strata"
+      ],
+      "expected_interactions": "exchange-local completed-minute clock, fixed clock strata",
+      "confounders": [
+        "opening volatility, sparse symbols and overlapping labels"
+      ],
+      "known_failure_modes": [
+        "changing intraday sampling looks like predictive signal"
+      ],
+      "prediction_class": "regime",
+      "testability": "TESTABLE PRELIMINARILY ONLY",
+      "missing_data": [
+        "complete same-clock denominator, session and DST checks"
+      ],
+      "implementation_complexity": "low",
+      "testing_cost": "No acquisition authorized; local feasibility first. Premium/prospective coverage and runtime costs unquoted.",
+      "leakage_risk": "No future adjustment, later availability, reconstructed missing observation or eventual outcome may define a predictor.",
+      "family_id": "clock-hazard",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": false,
+      "independently_verified": false,
+      "related_existing_concepts": [
+        {
+          "id": "hyp-ecadacff1f4195fb312e42",
+          "name": "Post-10:30 AM Expectancy Decay and Reversal in Small-Cap Micro Pullbacks",
+          "relationship": "Related family; narrower threshold, strategy, clock or sizing claim. Not equivalent and not independently validating this report claim."
+        },
+        {
+          "id": "hyp-b122eba7ad3461165f53c2",
+          "name": "Late-Session Intraday Momentum Spread-Tolerant Exploitation",
+          "relationship": "Related family; narrower threshold, strategy, clock or sizing claim. Not equivalent and not independently validating this report claim."
+        }
+      ]
+    },
+    {
+      "id": "hyp-rmap-v1-luld-state",
+      "name": "LULD and halt execution state",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 19,
+          "section_or_claim": "LULD proximity",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "73bb5a71c38c1f43e62852c198c3a2b991d299e1bb14a8f3c1dd00bbfa38e8b4",
+          "literal_excerpt": " in next N min) by clock time. EXP- HALT-001 LULD proximity/halts materially alter the path and executability of extreme moves. Evidence: Strong institutional fact; predictive sign unknown. LULD prevents transactions beyond moving price bands and can trigger "
+        }
+      ],
+      "research_claim": "Bands, pauses and resumptions alter feasible execution paths of extreme moves.",
+      "evidence_strength": "Institutional mechanism; predictive sign unknown",
+      "target_universe": "PIT U.S. equities; small-cap momentum separately; bounded archive alone cannot establish market-wide validity",
+      "target_horizon": "Next fixed intraday interval; select one horizon in a future preregistration",
+      "timing_boundary": "Use only observations available before the decision and target interval.",
+      "required_raw_data": [
+        "authoritative LULD bands, Trading Action/admin state and halt/resumption event history"
+      ],
+      "required_derived_features": [
+        "distance to band, current state, transition age"
+      ],
+      "expected_interactions": "distance to band, current state, transition age",
+      "confounders": [
+        "halt-selected sample and unobserved pre-halt liquidity"
+      ],
+      "known_failure_modes": [
+        "ordinary quotes falsely treated as proof of tradability"
+      ],
+      "prediction_class": "execution_quality",
+      "testability": "NEEDS PROSPECTIVE DATA",
+      "missing_data": [
+        "historical/live administrative completeness, initial state and resumptions"
+      ],
+      "implementation_complexity": "high",
+      "testing_cost": "No acquisition authorized; local feasibility first. Premium/prospective coverage and runtime costs unquoted.",
+      "leakage_risk": "No future adjustment, later availability, reconstructed missing observation or eventual outcome may define a predictor.",
+      "family_id": "luld-state",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": false,
+      "independently_verified": false,
+      "related_existing_concepts": []
+    },
+    {
+      "id": "hyp-rmap-v1-trade-count",
+      "name": "Trade-count acceleration",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 10,
+          "section_or_claim": "Trade-count",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "d94f7cec73c405b48c25ea46190eb36e497c712d7db1d6cec3f0ac3623d79a4a",
+          "literal_excerpt": "asonality, news already priced. EXP- VOL-003 Trade-count acceleration may identify participation expansion before price acceleration. Evidence: Moderate. Trade count is a major driver of realized volatility in microstructure studies. Tick-data universe Tra"
+        }
+      ],
+      "research_claim": "Observed trade-count acceleration may add information beyond share-volume acceleration.",
+      "evidence_strength": "Moderate participation/volatility component evidence; right-tail sign unverified",
+      "target_universe": "PIT U.S. equities; small-cap momentum separately; bounded archive alone cannot establish market-wide validity",
+      "target_horizon": "Next fixed intraday interval; select one horizon in a future preregistration",
+      "timing_boundary": "Use only observations available before the decision and target interval.",
+      "required_raw_data": [
+        "native bar trade_count, volume and clock-matched prior sessions"
+      ],
+      "required_derived_features": [
+        "seasonal count level and change; count-volume ablation"
+      ],
+      "expected_interactions": "seasonal count level and change; count-volume ablation",
+      "confounders": [
+        "trade splitting, changing average size and condition filtering"
+      ],
+      "known_failure_modes": [
+        "more small prints mistaken for more independent demand"
+      ],
+      "prediction_class": "initial_move",
+      "testability": "TESTABLE PRELIMINARILY ONLY",
+      "missing_data": [
+        "trade-count semantics, missing native minutes and sufficient warmup"
+      ],
+      "implementation_complexity": "low",
+      "testing_cost": "No acquisition authorized; local feasibility first. Premium/prospective coverage and runtime costs unquoted.",
+      "leakage_risk": "No future adjustment, later availability, reconstructed missing observation or eventual outcome may define a predictor.",
+      "family_id": "trade-count",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": false,
+      "independently_verified": false,
+      "related_existing_concepts": []
+    },
+    {
+      "id": "hyp-rmap-v1-high-distance",
+      "name": "Distance to prior 52-week high",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 14,
+          "section_or_claim": "Proximity to the 52-",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "0340f0233e1d25dd78d7cfac291cd338e65ef9656b277d92d6e682a0f8abcacf",
+          "literal_excerpt": "lure: excessive gap/exhaustion. EXP- PRC-001 Proximity to the 52- week high may increase continuation probability. Evidence: Strong for ordinary momentum; limited for extreme tails. Broad equities Daily adjusted OHLC distance_52w_high = P/ P_52w_high - 1 ; test 0– "
+        }
+      ],
+      "research_claim": "Past 52-week high proximity may condition continuation but does not establish an imminent explosion.",
+      "evidence_strength": "Strong ordinary momentum; limited extreme-tail evidence",
+      "target_universe": "PIT U.S. equities; small-cap momentum separately; bounded archive alone cannot establish market-wide validity",
+      "target_horizon": "Next fixed intraday interval; select one horizon in a future preregistration",
+      "timing_boundary": "Use only observations available before the decision and target interval.",
+      "required_raw_data": [
+        "at least 52 weeks of point-in-time adjusted daily prices and identity/actions"
+      ],
+      "required_derived_features": [
+        "distance to past-only annual high"
+      ],
+      "expected_interactions": "distance to past-only annual high",
+      "confounders": [
+        "future split adjustments, survivor selection and prior momentum"
+      ],
+      "known_failure_modes": [
+        "backfilled future adjustment changes prior signal"
+      ],
+      "prediction_class": "continuation",
+      "testability": "NEEDS PREMIUM DATA",
+      "missing_data": [
+        "owned development history too short; no authorized annual extract verified"
+      ],
+      "implementation_complexity": "medium",
+      "testing_cost": "No acquisition authorized; local feasibility first. Premium/prospective coverage and runtime costs unquoted.",
+      "leakage_risk": "No future adjustment, later availability, reconstructed missing observation or eventual outcome may define a predictor.",
+      "family_id": "high-distance",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": false,
+      "independently_verified": false,
+      "related_existing_concepts": []
+    },
+    {
+      "id": "hyp-rmap-v1-ftd-alone",
+      "name": "Standalone FTD squeeze narrative",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 16,
+          "section_or_claim": "FTDs should",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "a200ba718048f5de4eae49716fd2314988ce0f999d93bd99416cf1ef9bd7124e",
+          "literal_excerpt": "tions, failures and confounders EXP- SHR-003 FTDs should have little standalone predictive value once better short/liquidity variables are controlled. Evidence: Probably not useful as a fast standalone predictor. SEC says FTDs have multiple causes. All His"
+        }
+      ],
+      "research_claim": "Lagged FTD levels are not established standalone predictors of positive explosions.",
+      "evidence_strength": "Report argues against fast standalone predictive usefulness; multiple causes and lag",
+      "target_universe": "PIT U.S. equities; small-cap momentum separately; bounded archive alone cannot establish market-wide validity",
+      "target_horizon": "Next fixed intraday interval; select one horizon in a future preregistration",
+      "timing_boundary": "Use only observations available before the decision and target interval.",
+      "required_raw_data": [
+        "publication-dated historical FTD and security mapping"
+      ],
+      "required_derived_features": [
+        "lagged FTD ratio only if separately justified"
+      ],
+      "expected_interactions": "lagged FTD ratio only if separately justified",
+      "confounders": [
+        "multiple settlement causes; publication delays"
+      ],
+      "known_failure_modes": [
+        "FTDs equated with naked shorting or inevitable squeeze"
+      ],
+      "prediction_class": "initial_move",
+      "testability": "NOT CURRENTLY PRACTICAL",
+      "missing_data": [
+        "freshness and mechanism; no compelling incremental rationale"
+      ],
+      "implementation_complexity": "medium",
+      "testing_cost": "No acquisition authorized; local feasibility first. Premium/prospective coverage and runtime costs unquoted.",
+      "leakage_risk": "No future adjustment, later availability, reconstructed missing observation or eventual outcome may define a predictor.",
+      "family_id": "ftd-alone",
+      "research_status": "unrun_unvalidated",
+      "uses_first_leg": false,
+      "independently_verified": false,
+      "related_existing_concepts": []
+    }
+  ],
+  "method_controls": [
+    {
+      "id": "method-immutable-registry",
+      "name": "Immutable experiment registry",
+      "status": "partial",
+      "code_evidence": "systematic_trader/validation.py:ExperimentStore; systematic_trader/evidence_store.py",
+      "missing": "New-service journals immutable; legacy JSON history not a complete immutable global search log.",
+      "priority": "before certified strategy promotion",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 2,
+          "section_or_claim": "immutable",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "27c947063ec1625e2e6010a9e995bdfb93a0735727d8767fd65fab947e0e1766",
+          "literal_excerpt": "ity Tests Independent Strategy Red Team Immutable Registry + Strategy Graveyard Paper / Shadow Validation Deployment Eligible 0.05M M F W ER =1−(1−0.05) .M M 2"
+        },
+        {
+          "report_id": "R4",
+          "page": 9,
+          "section_or_claim": "created_record_hash",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "f28414396ba1f4a48f0fb1e858bf98c9465bb7e85a3341d1bc63fc0b2a00b411",
+          "literal_excerpt": "n red_team_results paper_shadow_results created_record_hash supersedes_experiment_id The lineage should be a DAG, not merely a table: 9"
+        }
+      ],
+      "evidence_family": "anti-overfit-overlap",
+      "independent_confirmations": 0,
+      "implementation_executed": false
+    },
+    {
+      "id": "method-literal-trials",
+      "name": "Literal trial count",
+      "status": "partial",
+      "code_evidence": "experiment_registry.py; systematic_trader/bounded_campaign.py",
+      "missing": "Preserve all generated, failed and abandoned attempts across engines; cannot reconstruct unrecorded historic trials.",
+      "priority": "before certified strategy promotion",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 4,
+          "section_or_claim": "be allowed to replace a final future-only test: combinatorial partitions can reuse eras in",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "4ae2b00ce79426741279abbfd24518d242d729fbf609d67aaf97f291e837402b",
+          "literal_excerpt": "be allowed to replace a final future-only test: combinatorial partitions can reuse eras in ways that do not reproduce the information chronology of an actual research process. The Deflated Sharpe Ratio addresses selection bias and non-normal returns, while finance-specific multiple- testin"
+        },
+        {
+          "report_id": "R4",
+          "page": 9,
+          "section_or_claim": "optimization_attempt_number",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "f28414396ba1f4a48f0fb1e858bf98c9465bb7e85a3341d1bc63fc0b2a00b411",
+          "literal_excerpt": "st_model_version optimization_algorithm optimization_attempt_number candidate_rank_before_validation performance_vector multiple_testing_family adjusted_inference_results PBO DSR neighborhood_results stress_results concentration_results promotion_status rej"
+        }
+      ],
+      "evidence_family": "anti-overfit-overlap",
+      "independent_confirmations": 0,
+      "implementation_executed": false
+    },
+    {
+      "id": "method-lineage",
+      "name": "Family and lineage DAG",
+      "status": "partial",
+      "code_evidence": "trading_research_orchestrator.py:hypothesis_concept_fingerprint; experiment_registry.py",
+      "missing": "Canonical concept IDs and family fields exist; full cross-run ancestry DAG and source-exposure inheritance missing.",
+      "priority": "before certified strategy promotion",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 4,
+          "section_or_claim": "lineage",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "4ae2b00ce79426741279abbfd24518d242d729fbf609d67aaf97f291e837402b",
+          "literal_excerpt": "n to all of them. Discovery, experiment lineage, and genuinely unseen evidence An immutable experiment_registry is not administrative overhead; it is part of the statistical instrument. Backtest-overfitting work explicitly emphasizes tha"
+        },
+        {
+          "report_id": "R4",
+          "page": 9,
+          "section_or_claim": "lineage should be a DAG",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "f28414396ba1f4a48f0fb1e858bf98c9465bb7e85a3341d1bc63fc0b2a00b411",
+          "literal_excerpt": "ecord_hash supersedes_experiment_id The lineage should be a DAG, not merely a table: 9"
+        }
+      ],
+      "evidence_family": "anti-overfit-overlap",
+      "independent_confirmations": 0,
+      "implementation_executed": false
+    },
+    {
+      "id": "method-graveyard",
+      "name": "Searchable strategy graveyard",
+      "status": "partial",
+      "code_evidence": "experiment_registry.py; systematic_trader/campaign_interpretation.py",
+      "missing": "Saved rejections retained; family-wide searchable reconsideration conditions not complete.",
+      "priority": "before certified strategy promotion",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 2,
+          "section_or_claim": "graveyard",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "27c947063ec1625e2e6010a9e995bdfb93a0735727d8767fd65fab947e0e1766",
+          "literal_excerpt": " Red Team Immutable Registry + Strategy Graveyard Paper / Shadow Validation Deployment Eligible 0.05M M F W ER =1−(1−0.05) .M M 2"
+        },
+        {
+          "report_id": "R4",
+          "page": 10,
+          "section_or_claim": "failed strategy remains",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "d9cd6e28ee6a95da6e533a545fd151680b29c286d01146a21326824c8379cccc",
+          "literal_excerpt": "Red-team result ↓ Paper/shadow result A failed strategy remains permanently searchable in a strategy graveyard. Otherwise a future Generator can rediscover the same failed idea under slightly different syntax and unintentionally reset its perceived tria"
+        }
+      ],
+      "evidence_family": "anti-overfit-overlap",
+      "independent_confirmations": 0,
+      "implementation_executed": false
+    },
+    {
+      "id": "method-duplicate-family",
+      "name": "Structural and behavioral duplicates",
+      "status": "partial",
+      "code_evidence": "trading_research_orchestrator.py:hypothesis_concept_fingerprint",
+      "missing": "Structural fingerprints reused; behavioral trade/position correlation and algebraic equivalence remain missing.",
+      "priority": "before certified strategy promotion",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 4,
+          "section_or_claim": "similarity",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "4ae2b00ce79426741279abbfd24518d242d729fbf609d67aaf97f291e837402b",
+          "literal_excerpt": "y cluster strategies by structural rule similarity and return/P&L correlation and compute an effective- dimensionality measure such as where is the strategy-return correlation matrix. This formula is an implementation inference, not a valid"
+        },
+        {
+          "report_id": "R4",
+          "page": 10,
+          "section_or_claim": "Duplicate detection",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "d9cd6e28ee6a95da6e533a545fd151680b29c286d01146a21326824c8379cccc",
+          "literal_excerpt": "onally reset its perceived trial count. Duplicate detection should use both semantic and behavioral similarity. Structural fingerprints can canonicalize algebraically similar rule expressions; parameterized family templates can recognize EMA-8/9/10 "
+        }
+      ],
+      "evidence_family": "anti-overfit-overlap",
+      "independent_confirmations": 0,
+      "implementation_executed": false
+    },
+    {
+      "id": "method-nested-chronology",
+      "name": "Nested chronological validation",
+      "status": "partial",
+      "code_evidence": "trading_validation_core.py:walk_forward_validate; systematic_trader/validation.py",
+      "missing": "Legacy nested chronology exists; new-service walk_forward is fixture-only; all feature/search choices must stay inner.",
+      "priority": "before certified strategy promotion",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 5,
+          "section_or_claim": "Search algorithms—grid search, random search, Bayesian optimization, evolutionary algorith",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "92de3191d9a0bab18e45bdda6e410e92cf5117bc8fb5a4c208351f704f7721be",
+          "literal_excerpt": "Search algorithms—grid search, random search, Bayesian optimization, evolutionary algorithms, genetic programming, symbolic regression, feature generation, successive halving and Hyperband—should be judged principally as candidate generators, not inferential procedures. Random search can s"
+        },
+        {
+          "report_id": "R4",
+          "page": 10,
+          "section_or_claim": "Nested chronological outer folds",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "d9cd6e28ee6a95da6e533a545fd151680b29c286d01146a21326824c8379cccc",
+          "literal_excerpt": "earchable. No final evidentiary status. Nested chronological outer folds. For each fold, all feature choices, model choices, hyperparameters, thresholds, and optimization decisions occur using past data only. The chosen strategy is then frozen and evaluated on t"
+        }
+      ],
+      "evidence_family": "anti-overfit-overlap",
+      "independent_confirmations": 0,
+      "implementation_executed": false
+    },
+    {
+      "id": "method-holdout-ledger",
+      "name": "Holdout exposure ledger",
+      "status": "implemented",
+      "code_evidence": "stock_strategy_finder.py:apply_holdout_reuse_guard; systematic_trader/research_split.py",
+      "missing": "Existing protected windows and exposure records remain unchanged; universal legacy lineage completeness is not certified.",
+      "priority": "before certified strategy promotion",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 3,
+          "section_or_claim": "holdout",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "754bf35793d946577dba33df7a47466cc84344069631ac9d2fd7dacdc41a8908",
+          "literal_excerpt": "t a substitute for future chronological holdout Deflated Sharpe Ratio Sharpe significance after selection and non- normality Candidate performance sanity check Depends on trial count/ effective trials and Sharpe relevance Haircut Sharpe "
+        },
+        {
+          "report_id": "R4",
+          "page": 9,
+          "section_or_claim": "holdout_access_count",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "f28414396ba1f4a48f0fb1e858bf98c9465bb7e85a3341d1bc63fc0b2a00b411",
+          "literal_excerpt": "ion_periods datasets_previously_exposed holdout_access_count objective_function cost_model_version optimization_algorithm optimization_attempt_number candidate_rank_before_validation performance_vector multiple_testing_family adjusted_inference_resul"
+        }
+      ],
+      "evidence_family": "anti-overfit-overlap",
+      "independent_confirmations": 0,
+      "implementation_executed": false
+    },
+    {
+      "id": "method-prospective",
+      "name": "Prospective confirmation",
+      "status": "blocked_by_data",
+      "code_evidence": "systematic_trader/prospective.py; systematic_trader/collection_service.py",
+      "missing": "Recorder implemented; current collector has no market events and feed/reference certification is missing.",
+      "priority": "before certified strategy promotion",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 1,
+          "section_or_claim": "prospective",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "0a608b97a2c8fa98c17df982091c910e932a63f7d2c04a594556e362546e7a66",
+          "literal_excerpt": "ting, complexity control, and genuinely prospective paper/ shadow evidence. PBO, Deflated Sharpe, Reality Check, SPA, FDR and related techniques are useful, but none is sufficient alone. The strongest design recommendation is not a single “S"
+        },
+        {
+          "report_id": "R4",
+          "page": 21,
+          "section_or_claim": "Prospective signal generation",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "d376fd4441b12261f21f1d0194172ea1984768d6bfae5ac7eae5e8c74e69edac",
+          "literal_excerpt": "jection examples PAPER/SHADOW VALIDATED Prospective signal generation, realistic fills, operational evidence Material fill/model mismatch or prospective decay DEPLOYMENT ELIGIBLE All hard gates passed; risk/capacity defined; monitoring/kill rules frozen Any u"
+        }
+      ],
+      "evidence_family": "anti-overfit-overlap",
+      "independent_confirmations": 0,
+      "implementation_executed": false
+    },
+    {
+      "id": "method-multiplicity",
+      "name": "Multiple-testing correction",
+      "status": "not_implemented",
+      "code_evidence": "experiment_registry.py (metadata only)",
+      "missing": "No complete family-adjusted inference pipeline found. Raw count and effective clusters are distinct diagnostics.",
+      "priority": "before certified strategy promotion",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 1,
+          "section_or_claim": "multiple testing",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "0a608b97a2c8fa98c17df982091c910e932a63f7d2c04a594556e362546e7a66",
+          "literal_excerpt": "d estimated that failing to account for multiple testing could produce false-rejection rates around 45%; Harvey, Liu, and Zhu likewise argue that ordinary significance thresholds become inadequate after extensive factor mining. The recommended ar"
+        },
+        {
+          "report_id": "R4",
+          "page": 9,
+          "section_or_claim": "multiple_testing_family",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "f28414396ba1f4a48f0fb1e858bf98c9465bb7e85a3341d1bc63fc0b2a00b411",
+          "literal_excerpt": "nk_before_validation performance_vector multiple_testing_family adjusted_inference_results PBO DSR neighborhood_results stress_results concentration_results promotion_status rejection_reason red_team_results paper_shadow_results created_record_hash supe"
+        }
+      ],
+      "evidence_family": "anti-overfit-overlap",
+      "independent_confirmations": 0,
+      "implementation_executed": false
+    },
+    {
+      "id": "method-pbo",
+      "name": "PBO / CSCV",
+      "status": "not_implemented",
+      "code_evidence": "systematic_trader/qualification.py (not PBO)",
+      "missing": "No implementation found; dependent CSCV assumptions and chronological deployment checks need separate validation.",
+      "priority": "before certified strategy promotion",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 3,
+          "section_or_claim": "PBO/CSCV estimates",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "754bf35793d946577dba33df7a47466cc84344069631ac9d2fd7dacdc41a8908",
+          "literal_excerpt": "d a sample-dependent null distribution. PBO/CSCV estimates how often the strategy selected as best in-sample ranks poorly out-of-sample across combinatorial partitions. It is therefore valuable evidence about selection instability, but CSCV should "
+        },
+        {
+          "report_id": "R4",
+          "page": 25,
+          "section_or_claim": "CSCV_PBO",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "e136a5cbe961cbb5f1cfca13e5cca38aad2567bf287fc7247d954374f8784f60",
+          "literal_excerpt": "riod_performance_matrix formula_method: CSCV_PBO parameters: partitions: sufficient_even_partition_count performance_metric: frozen expected_benefit: detects_selection_instability known_limitations: - not_a_prospective_holdout - sensitive"
+        }
+      ],
+      "evidence_family": "anti-overfit-overlap",
+      "independent_confirmations": 0,
+      "implementation_executed": false
+    },
+    {
+      "id": "method-dsr",
+      "name": "Deflated Sharpe Ratio",
+      "status": "not_implemented",
+      "code_evidence": "systematic_trader/qualification.py (not DSR)",
+      "missing": "No implementation found; trial dependence and skew/kurtosis estimation required, not magic promotion probability.",
+      "priority": "before certified strategy promotion",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 1,
+          "section_or_claim": "Deflated Sharpe",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "0a608b97a2c8fa98c17df982091c910e932a63f7d2c04a594556e362546e7a66",
+          "literal_excerpt": "rospective paper/ shadow evidence. PBO, Deflated Sharpe, Reality Check, SPA, FDR and related techniques are useful, but none is sufficient alone. The strongest design recommendation is not a single “Strategy Evidence Score.” No literature review"
+        },
+        {
+          "report_id": "R4",
+          "page": 25,
+          "section_or_claim": "ROBUST-DSR-002",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "e136a5cbe961cbb5f1cfca13e5cca38aad2567bf287fc7247d954374f8784f60",
+          "literal_excerpt": "inLopezDePradoZhu2017] - hypothesis_id: ROBUST-DSR-002 claim: > Sharpe evidence should be deflated for multiple selection and non-normal returns before promotion. evidence_strength: moderate_to_strong_finance_specific_support applicable_stage: "
+        }
+      ],
+      "evidence_family": "anti-overfit-overlap",
+      "independent_confirmations": 0,
+      "implementation_executed": false
+    },
+    {
+      "id": "method-spa",
+      "name": "Reality Check / SPA",
+      "status": "not_implemented",
+      "code_evidence": "systematic_trader/validation.py (not SPA)",
+      "missing": "No implementation found; matched candidate family, benchmark and dependent resampling required.",
+      "priority": "before certified strategy promotion",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 3,
+          "section_or_claim": "Hansen's SPA",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "754bf35793d946577dba33df7a47466cc84344069631ac9d2fd7dacdc41a8908",
+          "literal_excerpt": "chmark after accounting for the search; Hansen's SPA improves its power and reduces sensitivity to poor alternatives through studentization and a sample-dependent null distribution. PBO/CSCV estimates how often the strategy selected as best i"
+        },
+        {
+          "report_id": "R4",
+          "page": 1,
+          "section_or_claim": "Reality Check",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "0dbaa2e1cc30bac23a58b2b7b7e4377f5fd40f7c93a670e427ecfe3360d67737",
+          "literal_excerpt": "spective paper/shadow evidence. White's Reality Check, Hansen's SPA test, Romano– Wolf step-down inference, PBO/CSCV, the Deflated Sharpe Ratio, and false-discovery procedures each address different portions of this problem; none is a substitu"
+        }
+      ],
+      "evidence_family": "anti-overfit-overlap",
+      "independent_confirmations": 0,
+      "implementation_executed": false
+    },
+    {
+      "id": "method-neighborhood",
+      "name": "Parameter-neighborhood robustness",
+      "status": "partial",
+      "code_evidence": "trading_validation_core.py:_validation_neighbor_candidates; systematic_trader/qualification.py",
+      "missing": "Existing neighbors/stress reused; connected mixed-parameter graph and full-search null calibration missing.",
+      "priority": "before certified strategy promotion",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 5,
+          "section_or_claim": "A profitable parameter neighborhood",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "92de3191d9a0bab18e45bdda6e410e92cf5117bc8fb5a4c208351f704f7721be",
+          "literal_excerpt": "exity, execution stress, and tail edges A profitable parameter neighborhood should be treated as substantially stronger evidence than an isolated optimum. A recent quantitative-trading study explicitly frames robust parameter regions as “parameter plateaus,” consis"
+        },
+        {
+          "report_id": "R4",
+          "page": 3,
+          "section_or_claim": "neighborhood",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "4fc8bc0daee8a924099b73d725bd22b59fa8ae03991b393049916d08d5a78e0f",
+          "literal_excerpt": "cktesting on Development Data Parameter-Neighborhood Analysis Multiplicity / PBO / DSR / Family Tests Nested Chronological Walk-Forward Execution / Perturbation / Concentration Stress Independent Strategy Red Team Prospective Paper / Shadow D"
+        }
+      ],
+      "evidence_family": "anti-overfit-overlap",
+      "independent_confirmations": 0,
+      "implementation_executed": false
+    },
+    {
+      "id": "method-execution-stress",
+      "name": "Execution-cost stress",
+      "status": "partial",
+      "code_evidence": "systematic_trader/qualification.py; systematic_trader/performance_engine.py",
+      "missing": "Cost/delay stress exists; real fills, lot sizes, halts, queue capacity and quote fidelity remain uncalibrated.",
+      "priority": "before certified strategy promotion",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 1,
+          "section_or_claim": "execution stress",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "0a608b97a2c8fa98c17df982091c910e932a63f7d2c04a594556e362546e7a66",
+          "literal_excerpt": "ameter-neighborhood analysis, realistic execution stresses, concentration tests, point-in-time data auditing, complexity control, and genuinely prospective paper/ shadow evidence. PBO, Deflated Sharpe, Reality Check, SPA, FDR and related techniqu"
+        },
+        {
+          "report_id": "R4",
+          "page": 1,
+          "section_or_claim": "execution",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "0dbaa2e1cc30bac23a58b2b7b7e4377f5fd40f7c93a670e427ecfe3360d67737",
+          "literal_excerpt": " over isolated optima, stress realistic execution, measure concentration and tail dependence, penalize unnecessary complexity, and eventually require prospective paper/shadow evidence. White's Reality Check, Hansen's SPA test, Romano– Wolf"
+        }
+      ],
+      "evidence_family": "anti-overfit-overlap",
+      "independent_confirmations": 0,
+      "implementation_executed": false
+    },
+    {
+      "id": "method-concentration",
+      "name": "Concentration analysis",
+      "status": "implemented",
+      "code_evidence": "systematic_trader/qualification.py",
+      "missing": "Trade/session/ticker/regime concentration exists. Tail-event dependence and uncertainty still need richer samples; do not weaken thresholds.",
+      "priority": "before certified strategy promotion",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 1,
+          "section_or_claim": "concentration",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "0a608b97a2c8fa98c17df982091c910e932a63f7d2c04a594556e362546e7a66",
+          "literal_excerpt": "analysis, realistic execution stresses, concentration tests, point-in-time data auditing, complexity control, and genuinely prospective paper/ shadow evidence. PBO, Deflated Sharpe, Reality Check, SPA, FDR and related techniques are useful, bu"
+        },
+        {
+          "report_id": "R4",
+          "page": 1,
+          "section_or_claim": "Concentration",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "0dbaa2e1cc30bac23a58b2b7b7e4377f5fd40f7c93a670e427ecfe3360d67737",
+          "literal_excerpt": "ma, stress realistic execution, measure concentration and tail dependence, penalize unnecessary complexity, and eventually require prospective paper/shadow evidence. White's Reality Check, Hansen's SPA test, Romano– Wolf step-down inference, P"
+        }
+      ],
+      "evidence_family": "anti-overfit-overlap",
+      "independent_confirmations": 0,
+      "implementation_executed": false
+    },
+    {
+      "id": "method-independent-review",
+      "name": "Independent Red Team / second implementation",
+      "status": "partial",
+      "code_evidence": "ai_review/gate.py; systematic_trader/certified_runner.py",
+      "missing": "Independent review and deterministic checks exist; live GPT/Gemini not configured here, genuinely independent strategy engine parity missing.",
+      "priority": "before certified strategy promotion",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 1,
+          "section_or_claim": "Red Team",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "0a608b97a2c8fa98c17df982091c910e932a63f7d2c04a594556e362546e7a66",
+          "literal_excerpt": " maximizes discovery. The Validator and Red Team minimize self- deception. A strategy should never be promoted merely because it maximizes historical profit, Sharpe, expectancy, or any optimizer objective. It should accumulate independent"
+        },
+        {
+          "report_id": "R4",
+          "page": 3,
+          "section_or_claim": "Strategy Red Team",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "4fc8bc0daee8a924099b73d725bd22b59fa8ae03991b393049916d08d5a78e0f",
+          "literal_excerpt": "tion / Concentration Stress Independent Strategy Red Team Prospective Paper / Shadow Deployment Eligibility Validated Knowledge Immutable Experiment Registry 5 α= 0.05 m E[false positives]=mα P(at least one false positive)=1−(1−α) .m M =m max(Z ,…"
+        }
+      ],
+      "evidence_family": "anti-overfit-overlap",
+      "independent_confirmations": 0,
+      "implementation_executed": false
+    },
+    {
+      "id": "method-seeds",
+      "name": "Repeated stochastic-ML seeds",
+      "status": "intentionally_deferred",
+      "code_evidence": "predictive_ml_pipeline.py (existing ML, not repeated-seed gate)",
+      "missing": "No preregistered repeated-seed stability gate found. Defer ML work until simpler certified validation.",
+      "priority": "after first certified simple strategy",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 4,
+          "section_or_claim": "random seed",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "4ae2b00ce79426741279abbfd24518d242d729fbf609d67aaf97f291e837402b",
+          "literal_excerpt": "ommit/container hash, data-snapshot ID, random seed, search algorithm and acquisition history, point-in-time schema version, family ID, parent IDs, complete performance vector, all data partitions exposed, number and type of queries to each "
+        },
+        {
+          "report_id": "R4",
+          "page": 30,
+          "section_or_claim": "Stochastic ML strategies require repeated-seed",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "f2051729412a8b2153276433acb5e44ae3fc0481d760f26ccff57105f7149183",
+          "literal_excerpt": "] - hypothesis_id: ML-SEED-011 claim: > Stochastic ML strategies require repeated-seed evaluation because a single trained instance may materially misrepresent performance. evidence_strength: limited_recent_empirical_plus_general_methodological_support applicable_stage: [ML_s"
+        }
+      ],
+      "evidence_family": "anti-overfit-overlap",
+      "independent_confirmations": 0,
+      "implementation_executed": false,
+      "source_distinction": "R3 records seed provenance; R4 explicitly adds repeated-seed evaluation. This is complementary, not two independent repeated-seed recommendations."
+    },
+    {
+      "id": "method-hard-gates",
+      "name": "Non-compensatory promotion gates",
+      "status": "implemented",
+      "code_evidence": "ai_review/gate.py; systematic_trader/certification.py; systematic_trader/performance_consumer.py",
+      "missing": "Failed integrity cannot be overcome with a score. Report evidence never issues a certificate.",
+      "priority": "before certified strategy promotion",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 8,
+          "section_or_claim": "hard gate",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "34f13fd179e76cefa112a448042304913cfb915caa1db8350f4317d5328cde27",
+          "literal_excerpt": "rature supports an evidence vector plus hard gates more strongly than a universal scalar score. The proposed vector is: with confidence intervals and failure flags attached to each dimension. A Bayesian layer could eventually combine evide"
+        },
+        {
+          "report_id": "R4",
+          "page": 21,
+          "section_or_claim": "hard gate",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "d376fd4441b12261f21f1d0194172ea1984768d6bfae5ac7eae5e8c74e69edac",
+          "literal_excerpt": "ospective decay DEPLOYMENT ELIGIBLE All hard gates passed; risk/capacity defined; monitoring/kill rules frozen Any unresolved critical integrity or execution failure The ordering of neighborhood/multiplicity/robustness tests can be optimiz"
+        }
+      ],
+      "evidence_family": "anti-overfit-overlap",
+      "independent_confirmations": 0,
+      "implementation_executed": false
+    },
+    {
+      "id": "method-pit",
+      "name": "Point-in-time and revision provenance",
+      "status": "partial",
+      "code_evidence": "systematic_trader/events.py; systematic_trader/historical.py; systematic_trader/features.py",
+      "missing": "Availability and revisions implemented; historical identity/listing/admin/lot/action evidence incomplete.",
+      "priority": "before certified strategy promotion",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 1,
+          "section_or_claim": "point-in-time",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "0a608b97a2c8fa98c17df982091c910e932a63f7d2c04a594556e362546e7a66",
+          "literal_excerpt": "xecution stresses, concentration tests, point-in-time data auditing, complexity control, and genuinely prospective paper/ shadow evidence. PBO, Deflated Sharpe, Reality Check, SPA, FDR and related techniques are useful, but none is sufficient "
+        },
+        {
+          "report_id": "R4",
+          "page": 17,
+          "section_or_claim": "public_available_time",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "36af187ee34642414437249b650e0d8c3861014a3e93506498e32ec408dfe1fd",
+          "literal_excerpt": "uld carry at least: economic_event_time public_available_time vendor_ingest_time revision_time source version The backtester may use a value only if: For SEC filings, the relevant issue is not merely the fiscal period to which a filing relates; the La"
+        }
+      ],
+      "evidence_family": "anti-overfit-overlap",
+      "independent_confirmations": 0,
+      "implementation_executed": false
+    },
+    {
+      "id": "method-dependence",
+      "name": "Dependent uncertainty and event clustering",
+      "status": "partial",
+      "code_evidence": "systematic_trader/validation.py:session_statistics",
+      "missing": "Session resampling exists; not stationary block bootstrap or cluster dependence across overlapping tails.",
+      "priority": "before certified strategy promotion",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 7,
+          "section_or_claim": "dependence-aware bootstrap",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "0861d47f1b65fca0127e990cc7c6a7786c8fe20a91930005f0a60ea4c68696ea",
+          "literal_excerpt": "r; leave-one-stock/sector/regime tests; dependence-aware bootstrap; null-strategy simulations; PBO/CSCV; RC/SPA; DSR; multiplicity reconciliation against the experiment registry; point-in-time-data audits; independent implementation reproduction; trade-by-"
+        },
+        {
+          "report_id": "R4",
+          "page": 18,
+          "section_or_claim": "event clusters",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "fbf6e40af4312c302ac958e57b5368258608ba6bd7e3c859099542b64fbcc14c",
+          "literal_excerpt": "contribution number of distinct winning event clusters leave-largest-winner-out expectancy Expected Shortfall is a coherent tail-loss measure designed to represent losses beyond a tail quantile and is a useful complement to variance-based metri"
+        }
+      ],
+      "evidence_family": "anti-overfit-overlap",
+      "independent_confirmations": 0,
+      "implementation_executed": false
+    },
+    {
+      "id": "method-null-pipeline",
+      "name": "Whole-search null calibration",
+      "status": "not_implemented",
+      "code_evidence": "trading_validation_core.py (no full null pipeline)",
+      "missing": "Run the same complete search under dependence-preserving nulls eventually; do not simulate evidence in this inventory.",
+      "priority": "before certified strategy promotion",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 7,
+          "section_or_claim": "null-strategy simulations",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "0861d47f1b65fca0127e990cc7c6a7786c8fe20a91930005f0a60ea4c68696ea",
+          "literal_excerpt": "gime tests; dependence-aware bootstrap; null-strategy simulations; PBO/CSCV; RC/SPA; DSR; multiplicity reconciliation against the experiment registry; point-in-time-data audits; independent implementation reproduction; trade-by-trade fill reconciliation; "
+        },
+        {
+          "report_id": "R4",
+          "page": 39,
+          "section_or_claim": "complete search pipeline on null",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "79326bccd3fed7b01cf06109a7b64c61c52f1f5da6c2403b072a17f7694660d6",
+          "literal_excerpt": "a: measure false-discovery rates of the complete search pipeline on null/synthetic data; calibrate PBO and max-statistic corrections under realistic candidate correlations; determine whether proposed neighborhood statistics distinguish planted broad signals from"
+        }
+      ],
+      "evidence_family": "anti-overfit-overlap",
+      "independent_confirmations": 0,
+      "implementation_executed": false
+    }
+  ],
+  "adaptive_capabilities": [
+    {
+      "id": "adaptive-static",
+      "name": "Frozen static baseline",
+      "current_lab_support": "partial",
+      "code_evidence": "trading_validation_core.py:_adaptive_static_comparison",
+      "missing_components": "Existing static arm refits/optimizes expanding history. Need train-once frozen comparator with same stream/costs.",
+      "validation_requirements": "Identical timestamped stream, labels, cost/risk assumptions; frozen adaptation policy; paired static/adaptive chronological comparison and uncertainty; no tuning on outer feedback.",
+      "leakage_risks": "An outcome must be available before update. No retrospective rewriting, outer-fold meta-policy changes or locked-vault feedback.",
+      "prerequisites": "Certified point-in-time data, simple frozen comparator, complete trial/exposure ledger; predict first → observe outcome → update under pre-specified rules.",
+      "stage": "before first certified strategy validation",
+      "sources": [
+        {
+          "report_id": "R2",
+          "page": 11,
+          "section_or_claim": "This is where catastrophic forgetting becomes relevant. A purely short rolling window may ",
+          "source_sha256": "0c61b251cee9c3226aa8f66f12172a1d36ba21a6dc578a31eb5b859711228d5c",
+          "page_text_sha256": "78c9d605c44d23579ea22eca4a912ffd7d683e1546324f8a9860cad2f41017a3",
+          "literal_excerpt": "This is where catastrophic forgetting becomes relevant. A purely short rolling window may rapidly forget rare but valuable crisis or volatility regimes. Rather than assuming old data are worthless, compare three architectures: a long-memory model, a short-memory adaptive model, and an ens"
+        }
+      ],
+      "implementation_executed": false
+    },
+    {
+      "id": "adaptive-rolling",
+      "name": "Rolling window",
+      "current_lab_support": "not_implemented",
+      "code_evidence": "predictive_ml_pipeline.py; trading_validation_core.py",
+      "missing_components": "Rolling feature helpers exist, but they are not rolling model-training windows. No verified rolling-training controller or certified rolling-versus-fixed comparison with a frozen meta-policy.",
+      "validation_requirements": "Identical timestamped stream, labels, cost/risk assumptions; frozen adaptation policy; paired static/adaptive chronological comparison and uncertainty; no tuning on outer feedback.",
+      "leakage_risks": "An outcome must be available before update. No retrospective rewriting, outer-fold meta-policy changes or locked-vault feedback.",
+      "prerequisites": "Certified point-in-time data, simple frozen comparator, complete trial/exposure ledger; predict first → observe outcome → update under pre-specified rules.",
+      "stage": "after first certified strategy validation",
+      "sources": [
+        {
+          "report_id": "R2",
+          "page": 9,
+          "section_or_claim": "Rolling and expanding windows represent different assumptions about the useful memory of t",
+          "source_sha256": "0c61b251cee9c3226aa8f66f12172a1d36ba21a6dc578a31eb5b859711228d5c",
+          "page_text_sha256": "7592f1c207453569b026568ea741efcdf08218d18a977811c2d2d0f1892fcdbc",
+          "literal_excerpt": "Rolling and expanding windows represent different assumptions about the useful memory of the process: Property Rolling Expanding/anchored Hybrid/decayed Responsiveness to recent change Higher Lower Adjustable Preservation of rare old regimes Lower Higher Potentially high Exposure to obsole"
+        }
+      ],
+      "implementation_executed": false
+    },
+    {
+      "id": "adaptive-expanding",
+      "name": "Expanding window",
+      "current_lab_support": "partial",
+      "code_evidence": "trading_validation_core.py:_walk_forward_session_splits",
+      "missing_components": "Expanding chronology exists; lock fit choices inside each inner window and verify all delayed labels.",
+      "validation_requirements": "Identical timestamped stream, labels, cost/risk assumptions; frozen adaptation policy; paired static/adaptive chronological comparison and uncertainty; no tuning on outer feedback.",
+      "leakage_risks": "An outcome must be available before update. No retrospective rewriting, outer-fold meta-policy changes or locked-vault feedback.",
+      "prerequisites": "Certified point-in-time data, simple frozen comparator, complete trial/exposure ledger; predict first → observe outcome → update under pre-specified rules.",
+      "stage": "before first certified strategy validation",
+      "sources": [
+        {
+          "report_id": "R2",
+          "page": 8,
+          "section_or_claim": "# Inner optimization is entirely historical relative to this outer period. config = nested",
+          "source_sha256": "0c61b251cee9c3226aa8f66f12172a1d36ba21a6dc578a31eb5b859711228d5c",
+          "page_text_sha256": "bc3294178880adc5fff1e72b4266b3e683964ead0213201e6f6436344b99abe9",
+          "literal_excerpt": "# Inner optimization is entirely historical relative to this outer period. config = nested_walk_forward_select( data=available, candidate_windows=PREDECLARED_WINDOWS, candidate_models=PREDECLARED_MODELS, objective=PREDECLARED_INNER_OBJECTIVE, ) model = fit_model(available, config) # Simula"
+        }
+      ],
+      "implementation_executed": false
+    },
+    {
+      "id": "adaptive-recency",
+      "name": "Recency-weighted window",
+      "current_lab_support": "not_implemented",
+      "code_evidence": "predictive_ml_pipeline.py (no verified adaptive weighting contract)",
+      "missing_components": "Frozen decay schedule, effective sample uncertainty and cost-aware comparison.",
+      "validation_requirements": "Identical timestamped stream, labels, cost/risk assumptions; frozen adaptation policy; paired static/adaptive chronological comparison and uncertainty; no tuning on outer feedback.",
+      "leakage_risks": "An outcome must be available before update. No retrospective rewriting, outer-fold meta-policy changes or locked-vault feedback.",
+      "prerequisites": "Certified point-in-time data, simple frozen comparator, complete trial/exposure ledger; predict first → observe outcome → update under pre-specified rules.",
+      "stage": "after first certified strategy validation",
+      "sources": [
+        {
+          "report_id": "R2",
+          "page": 9,
+          "section_or_claim": "Rolling and expanding windows represent different assumptions about the useful memory of t",
+          "source_sha256": "0c61b251cee9c3226aa8f66f12172a1d36ba21a6dc578a31eb5b859711228d5c",
+          "page_text_sha256": "7592f1c207453569b026568ea741efcdf08218d18a977811c2d2d0f1892fcdbc",
+          "literal_excerpt": "Rolling and expanding windows represent different assumptions about the useful memory of the process: Property Rolling Expanding/anchored Hybrid/decayed Responsiveness to recent change Higher Lower Adjustable Preservation of rare old regimes Lower Higher Potentially high Exposure to obsole"
+        }
+      ],
+      "implementation_executed": false
+    },
+    {
+      "id": "adaptive-hybrid",
+      "name": "Hybrid long/short memory",
+      "current_lab_support": "not_implemented",
+      "code_evidence": "No verified hybrid-memory controller",
+      "missing_components": "Long and short model mixing, bounded state and frozen selection policy.",
+      "validation_requirements": "Identical timestamped stream, labels, cost/risk assumptions; frozen adaptation policy; paired static/adaptive chronological comparison and uncertainty; no tuning on outer feedback.",
+      "leakage_risks": "An outcome must be available before update. No retrospective rewriting, outer-fold meta-policy changes or locked-vault feedback.",
+      "prerequisites": "Certified point-in-time data, simple frozen comparator, complete trial/exposure ledger; predict first → observe outcome → update under pre-specified rules.",
+      "stage": "after first certified strategy validation",
+      "sources": [
+        {
+          "report_id": "R2",
+          "page": 11,
+          "section_or_claim": "This is where catastrophic forgetting becomes relevant. A purely short rolling window may ",
+          "source_sha256": "0c61b251cee9c3226aa8f66f12172a1d36ba21a6dc578a31eb5b859711228d5c",
+          "page_text_sha256": "78c9d605c44d23579ea22eca4a912ffd7d683e1546324f8a9860cad2f41017a3",
+          "literal_excerpt": "This is where catastrophic forgetting becomes relevant. A purely short rolling window may rapidly forget rare but valuable crisis or volatility regimes. Rather than assuming old data are worthless, compare three architectures: a long-memory model, a short-memory adaptive model, and an ens"
+        }
+      ],
+      "implementation_executed": false
+    },
+    {
+      "id": "adaptive-drift",
+      "name": "Drift-triggered adaptation",
+      "current_lab_support": "not_implemented",
+      "code_evidence": "No verified drift-trigger policy",
+      "missing_components": "Separate input drift, prediction calibration and edge decay; freeze trigger/cooldown and false-alarm budget.",
+      "validation_requirements": "Identical timestamped stream, labels, cost/risk assumptions; frozen adaptation policy; paired static/adaptive chronological comparison and uncertainty; no tuning on outer feedback.",
+      "leakage_risks": "An outcome must be available before update. No retrospective rewriting, outer-fold meta-policy changes or locked-vault feedback.",
+      "prerequisites": "Certified point-in-time data, simple frozen comparator, complete trial/exposure ledger; predict first → observe outcome → update under pre-specified rules.",
+      "stage": "after first certified strategy validation",
+      "sources": [
+        {
+          "report_id": "R2",
+          "page": 9,
+          "section_or_claim": "Rolling and expanding windows represent different assumptions about the useful memory of t",
+          "source_sha256": "0c61b251cee9c3226aa8f66f12172a1d36ba21a6dc578a31eb5b859711228d5c",
+          "page_text_sha256": "7592f1c207453569b026568ea741efcdf08218d18a977811c2d2d0f1892fcdbc",
+          "literal_excerpt": "Rolling and expanding windows represent different assumptions about the useful memory of the process: Property Rolling Expanding/anchored Hybrid/decayed Responsiveness to recent change Higher Lower Adjustable Preservation of rare old regimes Lower Higher Potentially high Exposure to obsole"
+        }
+      ],
+      "implementation_executed": false
+    },
+    {
+      "id": "adaptive-online",
+      "name": "Online/incremental updates",
+      "current_lab_support": "not_implemented",
+      "code_evidence": "Existing batch ML is not an online learning contract",
+      "missing_components": "Outcome availability queue, predict-observe-update ledger and reproducible state snapshots.",
+      "validation_requirements": "Identical timestamped stream, labels, cost/risk assumptions; frozen adaptation policy; paired static/adaptive chronological comparison and uncertainty; no tuning on outer feedback.",
+      "leakage_risks": "An outcome must be available before update. No retrospective rewriting, outer-fold meta-policy changes or locked-vault feedback.",
+      "prerequisites": "Certified point-in-time data, simple frozen comparator, complete trial/exposure ledger; predict first → observe outcome → update under pre-specified rules.",
+      "stage": "after first certified strategy validation",
+      "sources": [
+        {
+          "report_id": "R2",
+          "page": 7,
+          "section_or_claim": "The data-collection sheet should separately track event time, label-availability time, ing",
+          "source_sha256": "0c61b251cee9c3226aa8f66f12172a1d36ba21a6dc578a31eb5b859711228d5c",
+          "page_text_sha256": "2f39e4224f8114a85589976a22373f68c843f0b4e59dd194d0111d5cac8c4905",
+          "literal_excerpt": "The data-collection sheet should separately track event time, label-availability time, ingestion time, and data-vintage time. This is more rigorous than storing only a timestamp such as 2023-05-01 . Economic observations can be revised years later , as ALFRED's documented examples show, an"
+        }
+      ],
+      "implementation_executed": false
+    },
+    {
+      "id": "adaptive-challenger",
+      "name": "Champion/challenger",
+      "current_lab_support": "partial",
+      "code_evidence": "trading_intelligence_app.py:active_shadow_champion_id",
+      "missing_components": "Registry hints exist; paired shadow stream, promotion evidence, rollback and challenger budget missing.",
+      "validation_requirements": "Identical timestamped stream, labels, cost/risk assumptions; frozen adaptation policy; paired static/adaptive chronological comparison and uncertainty; no tuning on outer feedback.",
+      "leakage_risks": "An outcome must be available before update. No retrospective rewriting, outer-fold meta-policy changes or locked-vault feedback.",
+      "prerequisites": "Certified point-in-time data, simple frozen comparator, complete trial/exposure ledger; predict first → observe outcome → update under pre-specified rules.",
+      "stage": "after first certified strategy validation",
+      "sources": [
+        {
+          "report_id": "R2",
+          "page": 11,
+          "section_or_claim": "This is where catastrophic forgetting becomes relevant. A purely short rolling window may ",
+          "source_sha256": "0c61b251cee9c3226aa8f66f12172a1d36ba21a6dc578a31eb5b859711228d5c",
+          "page_text_sha256": "78c9d605c44d23579ea22eca4a912ffd7d683e1546324f8a9860cad2f41017a3",
+          "literal_excerpt": "This is where catastrophic forgetting becomes relevant. A purely short rolling window may rapidly forget rare but valuable crisis or volatility regimes. Rather than assuming old data are worthless, compare three architectures: a long-memory model, a short-memory adaptive model, and an ens"
+        }
+      ],
+      "implementation_executed": false
+    },
+    {
+      "id": "adaptive-shadow",
+      "name": "Shadow mode",
+      "current_lab_support": "partial",
+      "code_evidence": "predictive_ml_pipeline.py; trading_intelligence_app.py",
+      "missing_components": "Shadow flags exist; no certified prospective matching, fills or promotion.",
+      "validation_requirements": "Identical timestamped stream, labels, cost/risk assumptions; frozen adaptation policy; paired static/adaptive chronological comparison and uncertainty; no tuning on outer feedback.",
+      "leakage_risks": "An outcome must be available before update. No retrospective rewriting, outer-fold meta-policy changes or locked-vault feedback.",
+      "prerequisites": "Certified point-in-time data, simple frozen comparator, complete trial/exposure ledger; predict first → observe outcome → update under pre-specified rules.",
+      "stage": "after first certified strategy validation",
+      "sources": [
+        {
+          "report_id": "R2",
+          "page": 11,
+          "section_or_claim": "This is where catastrophic forgetting becomes relevant. A purely short rolling window may ",
+          "source_sha256": "0c61b251cee9c3226aa8f66f12172a1d36ba21a6dc578a31eb5b859711228d5c",
+          "page_text_sha256": "78c9d605c44d23579ea22eca4a912ffd7d683e1546324f8a9860cad2f41017a3",
+          "literal_excerpt": "This is where catastrophic forgetting becomes relevant. A purely short rolling window may rapidly forget rare but valuable crisis or volatility regimes. Rather than assuming old data are worthless, compare three architectures: a long-memory model, a short-memory adaptive model, and an ens"
+        }
+      ],
+      "implementation_executed": false
+    },
+    {
+      "id": "adaptive-uncertainty",
+      "name": "Uncertainty-aware promotion/retirement",
+      "current_lab_support": "partial",
+      "code_evidence": "systematic_trader/qualification.py",
+      "missing_components": "Sample/concentration gates exist; sequential dependent uncertainty, retirement hysteresis and fixed policies missing.",
+      "validation_requirements": "Identical timestamped stream, labels, cost/risk assumptions; frozen adaptation policy; paired static/adaptive chronological comparison and uncertainty; no tuning on outer feedback.",
+      "leakage_risks": "An outcome must be available before update. No retrospective rewriting, outer-fold meta-policy changes or locked-vault feedback.",
+      "prerequisites": "Certified point-in-time data, simple frozen comparator, complete trial/exposure ledger; predict first → observe outcome → update under pre-specified rules.",
+      "stage": "after first certified strategy validation",
+      "sources": [
+        {
+          "report_id": "R2",
+          "page": 10,
+          "section_or_claim": "trade may adapt quickly but also amplify noise; infrequent updates may stabilize estimates",
+          "source_sha256": "0c61b251cee9c3226aa8f66f12172a1d36ba21a6dc578a31eb5b859711228d5c",
+          "page_text_sha256": "45dba5da8a4d58180f79e3275549672d3cb442b4f578974aa483b292b1bc5dbb",
+          "literal_excerpt": "trade may adapt quickly but also amplify noise; infrequent updates may stabilize estimates but react too slowly to abrupt changes. Bayesian adaptation and partial pooling. Bayesian updating is especially attractive for strategy ranking because estimates automatically carry uncertainty. For"
+        }
+      ],
+      "implementation_executed": false
+    },
+    {
+      "id": "adaptive-pooling",
+      "name": "Hierarchical partial pooling",
+      "current_lab_support": "intentionally_deferred",
+      "code_evidence": "predictive_ml_pipeline.py (transfer tests are not hierarchical Bayes)",
+      "missing_components": "Group shrinkage, uncertainty and unseen-group validation missing.",
+      "validation_requirements": "Identical timestamped stream, labels, cost/risk assumptions; frozen adaptation policy; paired static/adaptive chronological comparison and uncertainty; no tuning on outer feedback.",
+      "leakage_risks": "An outcome must be available before update. No retrospective rewriting, outer-fold meta-policy changes or locked-vault feedback.",
+      "prerequisites": "Certified point-in-time data, simple frozen comparator, complete trial/exposure ledger; predict first → observe outcome → update under pre-specified rules.",
+      "stage": "after first certified strategy validation",
+      "sources": [
+        {
+          "report_id": "R2",
+          "page": 10,
+          "section_or_claim": "trade may adapt quickly but also amplify noise; infrequent updates may stabilize estimates",
+          "source_sha256": "0c61b251cee9c3226aa8f66f12172a1d36ba21a6dc578a31eb5b859711228d5c",
+          "page_text_sha256": "45dba5da8a4d58180f79e3275549672d3cb442b4f578974aa483b292b1bc5dbb",
+          "literal_excerpt": "trade may adapt quickly but also amplify noise; infrequent updates may stabilize estimates but react too slowly to abrupt changes. Bayesian adaptation and partial pooling. Bayesian updating is especially attractive for strategy ranking because estimates automatically carry uncertainty. For"
+        }
+      ],
+      "implementation_executed": false
+    },
+    {
+      "id": "adaptive-regime-memory",
+      "name": "Recurring-regime memory",
+      "current_lab_support": "intentionally_deferred",
+      "code_evidence": "No verified recurring-memory implementation",
+      "missing_components": "Causal state retrieval and forget/recall rules; prevent hindsight regime relabeling.",
+      "validation_requirements": "Identical timestamped stream, labels, cost/risk assumptions; frozen adaptation policy; paired static/adaptive chronological comparison and uncertainty; no tuning on outer feedback.",
+      "leakage_risks": "An outcome must be available before update. No retrospective rewriting, outer-fold meta-policy changes or locked-vault feedback.",
+      "prerequisites": "Certified point-in-time data, simple frozen comparator, complete trial/exposure ledger; predict first → observe outcome → update under pre-specified rules.",
+      "stage": "after first certified strategy validation",
+      "sources": [
+        {
+          "report_id": "R2",
+          "page": 11,
+          "section_or_claim": "This is where catastrophic forgetting becomes relevant. A purely short rolling window may ",
+          "source_sha256": "0c61b251cee9c3226aa8f66f12172a1d36ba21a6dc578a31eb5b859711228d5c",
+          "page_text_sha256": "78c9d605c44d23579ea22eca4a912ffd7d683e1546324f8a9860cad2f41017a3",
+          "literal_excerpt": "This is where catastrophic forgetting becomes relevant. A purely short rolling window may rapidly forget rare but valuable crisis or volatility regimes. Rather than assuming old data are worthless, compare three architectures: a long-memory model, a short-memory adaptive model, and an ens"
+        }
+      ],
+      "implementation_executed": false
+    }
+  ],
+  "gap_matrix": [
+    {
+      "recommendation": "Immutable experiment registry",
+      "already_implemented": "",
+      "partial": "systematic_trader/validation.py:ExperimentStore; systematic_trader/evidence_store.py",
+      "missing": "New-service journals immutable; legacy JSON history not a complete immutable global search log.",
+      "data_blocker": "None needed to inventory; data required before real validation",
+      "priority": "before certified strategy promotion",
+      "status": "partial"
+    },
+    {
+      "recommendation": "Literal trial count",
+      "already_implemented": "",
+      "partial": "experiment_registry.py; systematic_trader/bounded_campaign.py",
+      "missing": "Preserve all generated, failed and abandoned attempts across engines; cannot reconstruct unrecorded historic trials.",
+      "data_blocker": "None needed to inventory; data required before real validation",
+      "priority": "before certified strategy promotion",
+      "status": "partial"
+    },
+    {
+      "recommendation": "Family and lineage DAG",
+      "already_implemented": "",
+      "partial": "trading_research_orchestrator.py:hypothesis_concept_fingerprint; experiment_registry.py",
+      "missing": "Canonical concept IDs and family fields exist; full cross-run ancestry DAG and source-exposure inheritance missing.",
+      "data_blocker": "None needed to inventory; data required before real validation",
+      "priority": "before certified strategy promotion",
+      "status": "partial"
+    },
+    {
+      "recommendation": "Searchable strategy graveyard",
+      "already_implemented": "",
+      "partial": "experiment_registry.py; systematic_trader/campaign_interpretation.py",
+      "missing": "Saved rejections retained; family-wide searchable reconsideration conditions not complete.",
+      "data_blocker": "None needed to inventory; data required before real validation",
+      "priority": "before certified strategy promotion",
+      "status": "partial"
+    },
+    {
+      "recommendation": "Structural and behavioral duplicates",
+      "already_implemented": "",
+      "partial": "trading_research_orchestrator.py:hypothesis_concept_fingerprint",
+      "missing": "Structural fingerprints reused; behavioral trade/position correlation and algebraic equivalence remain missing.",
+      "data_blocker": "None needed to inventory; data required before real validation",
+      "priority": "before certified strategy promotion",
+      "status": "partial"
+    },
+    {
+      "recommendation": "Nested chronological validation",
+      "already_implemented": "",
+      "partial": "trading_validation_core.py:walk_forward_validate; systematic_trader/validation.py",
+      "missing": "Legacy nested chronology exists; new-service walk_forward is fixture-only; all feature/search choices must stay inner.",
+      "data_blocker": "None needed to inventory; data required before real validation",
+      "priority": "before certified strategy promotion",
+      "status": "partial"
+    },
+    {
+      "recommendation": "Holdout exposure ledger",
+      "already_implemented": "stock_strategy_finder.py:apply_holdout_reuse_guard; systematic_trader/research_split.py",
+      "partial": "",
+      "missing": "Existing protected windows and exposure records remain unchanged; universal legacy lineage completeness is not certified.",
+      "data_blocker": "None needed to inventory; data required before real validation",
+      "priority": "before certified strategy promotion",
+      "status": "implemented"
+    },
+    {
+      "recommendation": "Prospective confirmation",
+      "already_implemented": "",
+      "partial": "",
+      "missing": "Recorder implemented; current collector has no market events and feed/reference certification is missing.",
+      "data_blocker": "PIT reference/admin/float or prospective execution coverage as applicable",
+      "priority": "before certified strategy promotion",
+      "status": "blocked_by_data"
+    },
+    {
+      "recommendation": "Multiple-testing correction",
+      "already_implemented": "",
+      "partial": "",
+      "missing": "No complete family-adjusted inference pipeline found. Raw count and effective clusters are distinct diagnostics.",
+      "data_blocker": "None needed to inventory; data required before real validation",
+      "priority": "before certified strategy promotion",
+      "status": "not_implemented"
+    },
+    {
+      "recommendation": "PBO / CSCV",
+      "already_implemented": "",
+      "partial": "",
+      "missing": "No implementation found; dependent CSCV assumptions and chronological deployment checks need separate validation.",
+      "data_blocker": "None needed to inventory; data required before real validation",
+      "priority": "before certified strategy promotion",
+      "status": "not_implemented"
+    },
+    {
+      "recommendation": "Deflated Sharpe Ratio",
+      "already_implemented": "",
+      "partial": "",
+      "missing": "No implementation found; trial dependence and skew/kurtosis estimation required, not magic promotion probability.",
+      "data_blocker": "None needed to inventory; data required before real validation",
+      "priority": "before certified strategy promotion",
+      "status": "not_implemented"
+    },
+    {
+      "recommendation": "Reality Check / SPA",
+      "already_implemented": "",
+      "partial": "",
+      "missing": "No implementation found; matched candidate family, benchmark and dependent resampling required.",
+      "data_blocker": "None needed to inventory; data required before real validation",
+      "priority": "before certified strategy promotion",
+      "status": "not_implemented"
+    },
+    {
+      "recommendation": "Parameter-neighborhood robustness",
+      "already_implemented": "",
+      "partial": "trading_validation_core.py:_validation_neighbor_candidates; systematic_trader/qualification.py",
+      "missing": "Existing neighbors/stress reused; connected mixed-parameter graph and full-search null calibration missing.",
+      "data_blocker": "None needed to inventory; data required before real validation",
+      "priority": "before certified strategy promotion",
+      "status": "partial"
+    },
+    {
+      "recommendation": "Execution-cost stress",
+      "already_implemented": "",
+      "partial": "systematic_trader/qualification.py; systematic_trader/performance_engine.py",
+      "missing": "Cost/delay stress exists; real fills, lot sizes, halts, queue capacity and quote fidelity remain uncalibrated.",
+      "data_blocker": "PIT reference/admin/float or prospective execution coverage as applicable",
+      "priority": "before certified strategy promotion",
+      "status": "partial"
+    },
+    {
+      "recommendation": "Concentration analysis",
+      "already_implemented": "systematic_trader/qualification.py",
+      "partial": "",
+      "missing": "Trade/session/ticker/regime concentration exists. Tail-event dependence and uncertainty still need richer samples; do not weaken thresholds.",
+      "data_blocker": "None needed to inventory; data required before real validation",
+      "priority": "before certified strategy promotion",
+      "status": "implemented"
+    },
+    {
+      "recommendation": "Independent Red Team / second implementation",
+      "already_implemented": "",
+      "partial": "ai_review/gate.py; systematic_trader/certified_runner.py",
+      "missing": "Independent review and deterministic checks exist; live GPT/Gemini not configured here, genuinely independent strategy engine parity missing.",
+      "data_blocker": "None needed to inventory; data required before real validation",
+      "priority": "before certified strategy promotion",
+      "status": "partial"
+    },
+    {
+      "recommendation": "Repeated stochastic-ML seeds",
+      "already_implemented": "",
+      "partial": "",
+      "missing": "No preregistered repeated-seed stability gate found. Defer ML work until simpler certified validation.",
+      "data_blocker": "None needed to inventory; data required before real validation",
+      "priority": "after first certified simple strategy",
+      "status": "intentionally_deferred"
+    },
+    {
+      "recommendation": "Non-compensatory promotion gates",
+      "already_implemented": "ai_review/gate.py; systematic_trader/certification.py; systematic_trader/performance_consumer.py",
+      "partial": "",
+      "missing": "Failed integrity cannot be overcome with a score. Report evidence never issues a certificate.",
+      "data_blocker": "None needed to inventory; data required before real validation",
+      "priority": "before certified strategy promotion",
+      "status": "implemented"
+    },
+    {
+      "recommendation": "Point-in-time and revision provenance",
+      "already_implemented": "",
+      "partial": "systematic_trader/events.py; systematic_trader/historical.py; systematic_trader/features.py",
+      "missing": "Availability and revisions implemented; historical identity/listing/admin/lot/action evidence incomplete.",
+      "data_blocker": "PIT reference/admin/float or prospective execution coverage as applicable",
+      "priority": "before certified strategy promotion",
+      "status": "partial"
+    },
+    {
+      "recommendation": "Dependent uncertainty and event clustering",
+      "already_implemented": "",
+      "partial": "systematic_trader/validation.py:session_statistics",
+      "missing": "Session resampling exists; not stationary block bootstrap or cluster dependence across overlapping tails.",
+      "data_blocker": "None needed to inventory; data required before real validation",
+      "priority": "before certified strategy promotion",
+      "status": "partial"
+    },
+    {
+      "recommendation": "Whole-search null calibration",
+      "already_implemented": "",
+      "partial": "",
+      "missing": "Run the same complete search under dependence-preserving nulls eventually; do not simulate evidence in this inventory.",
+      "data_blocker": "None needed to inventory; data required before real validation",
+      "priority": "before certified strategy promotion",
+      "status": "not_implemented"
+    },
+    {
+      "recommendation": "GPT primary + Gemini independent review",
+      "already_implemented": "ai_review/gate.py; ai_review/providers.py",
+      "partial": "",
+      "missing": "Live provider review not configured/verified here; no calls made.",
+      "data_blocker": "Independent accepted evidence absent",
+      "priority": "preserve; never duplicate or bypass",
+      "status": "implemented_boundary_evidence_blocked"
+    },
+    {
+      "recommendation": "Deterministic admission",
+      "already_implemented": "systematic_trader/bounded_evidence.py; systematic_trader/certification.py",
+      "partial": "",
+      "missing": "V4 remains REJECTED 0/15; eight opening failures unchanged.",
+      "data_blocker": "Identity/listing/actions/admin/lot and bars",
+      "priority": "preserve; never duplicate or bypass",
+      "status": "implemented_boundary_evidence_blocked"
+    },
+    {
+      "recommendation": "Trusted certification",
+      "already_implemented": "systematic_trader/certificate_audit.py; systematic_trader/certification.py",
+      "partial": "",
+      "missing": "No inventory claim can issue certificate.",
+      "data_blocker": "Real admitted dataset absent",
+      "priority": "preserve; never duplicate or bypass",
+      "status": "implemented_boundary_evidence_blocked"
+    },
+    {
+      "recommendation": "Frozen experiments and trusted runner",
+      "already_implemented": "systematic_trader/certified_runner.py",
+      "partial": "",
+      "missing": "Existing pinned snapshots and verified handoff reused.",
+      "data_blocker": "Trusted admission remains required",
+      "priority": "preserve; never duplicate or bypass",
+      "status": "implemented_boundary_evidence_blocked"
+    },
+    {
+      "recommendation": "Performance consumer integration",
+      "already_implemented": "systematic_trader/performance_consumer.py",
+      "partial": "",
+      "missing": "Existing fail-closed certified boundary; no execution in this milestone.",
+      "data_blocker": "Real certificate absent",
+      "priority": "preserve; never duplicate or bypass",
+      "status": "implemented_boundary_evidence_blocked"
+    },
+    {
+      "recommendation": "Preliminary research isolation",
+      "already_implemented": "systematic_trader/preliminary.py; systematic_trader/preliminary_scope.py",
+      "partial": "",
+      "missing": "Conditional preliminary results never become certified evidence.",
+      "data_blocker": "Native gaps and quality still visible",
+      "priority": "preserve; never duplicate or bypass",
+      "status": "implemented_boundary_evidence_blocked"
+    },
+    {
+      "recommendation": "Prospective recorder and current collector",
+      "already_implemented": "systematic_trader/prospective.py; systematic_trader/collection_service.py",
+      "partial": "",
+      "missing": "Stopped IEX session: 3 control frames, zero market events; reference intake 5, gaps 8. Collector unchanged.",
+      "data_blocker": "Alpaca SIP blocked; Tradier unverified/missing local credentials",
+      "priority": "preserve; never duplicate or bypass",
+      "status": "implemented_boundary_evidence_blocked"
+    }
+  ],
+  "candidate_queue": [
+    {
+      "rank": 1,
+      "hypothesis_id": "hyp-report1-851a399c253c40d377f2",
+      "description": "Compare RVOL level, slope and acceleration",
+      "why_priority": "Best overlap with target and reusable intraday features; indirect evidence makes cheap falsification useful.",
+      "exact_data_needed": [
+        "native OHLCV plus completed prior same-clock sessions and availability clocks"
+      ],
+      "exact_fields_features": [
+        "seasonal RVOL level, first difference, second difference"
+      ],
+      "current_data_sufficient": false,
+      "coverage_status": "Conditional preliminary component only; counts confirm field presence, not usable independent sample size. Resolve gaps and warmup before preregistration.",
+      "preliminary_test_design": "Level-only vs level+slope vs level+slope+acceleration, same frozen candidate family and target; baseline clock and volume controls.",
+      "main_failure_mode": [
+        "sparse minutes or trade batching manufacture acceleration"
+      ],
+      "falsification": "No incremental held-out calibration/loss improvement after clock/liquidity controls; effect vanishes on complete native observations.",
+      "expected_sample_size": "Not estimated from outcomes. At most 10 inspected January dates × 17 observed symbols before targeting, gaps, warmup and dependence; small-cap subset far smaller. Count usable events prospectively under frozen metadata rules.",
+      "similarity_to_rejected": "No renamed threshold variants of prior rejected opening-range breakout, volume breakout, EMA trend or EMA pullback. Consult related existing concepts and frozen campaign fingerprint before registration.",
+      "ranking_basis": "ex_ante_evidence_data_chronology_cost_not_performance",
+      "execution_authorized": false,
+      "required_next_step": "Metadata-only feasibility, fixed labels/decision timing and data-completeness preflight; separate campaign authorization required.",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 10,
+          "section_or_claim": "RVOL acceleration",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "d94f7cec73c405b48c25ea46190eb36e497c712d7db1d6cec3f0ac3623d79a4a",
+          "literal_excerpt": "distribution/exhaustion volume. EXP- VOL-002 RVOL acceleration may outperform RVOL level. Evidence: Indirect but well motivated. Volume shocks, not merely high baseline volume, contain information. All Intraday volume; rvol_5m , rvol_slope , rvol_acceleration 1/"
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "hypothesis_id": "hyp-rmap-v1-participation-decay",
+      "description": "Distinguish fading from continuing first legs",
+      "why_priority": "Cheap, distinct failure label; avoids re-running equivalent entry-rule variants.",
+      "exact_data_needed": [
+        "native completed minute volume and price path"
+      ],
+      "exact_fields_features": [
+        "relative volume decay and elapsed time since first leg"
+      ],
+      "current_data_sufficient": false,
+      "coverage_status": "Conditional preliminary component only; counts confirm field presence, not usable independent sample size. Resolve gaps and warmup before preregistration.",
+      "preliminary_test_design": "Freeze first-leg definition from past observations, then compare later failure/continuation conditioned on decay versus matched no-decay; cluster overlapping events.",
+      "main_failure_mode": [
+        "sparse observations mimic declining interest"
+      ],
+      "falsification": "Decay adds no incremental discrimination beyond elapsed time and first-leg size, or reverses under completeness checks.",
+      "expected_sample_size": "Not estimated from outcomes. At most 10 inspected January dates × 17 observed symbols before targeting, gaps, warmup and dependence; small-cap subset far smaller. Count usable events prospectively under frozen metadata rules.",
+      "similarity_to_rejected": "No renamed threshold variants of prior rejected opening-range breakout, volume breakout, EMA trend or EMA pullback. Consult related existing concepts and frozen campaign fingerprint before registration.",
+      "ranking_basis": "ex_ante_evidence_data_chronology_cost_not_performance",
+      "execution_authorized": false,
+      "required_next_step": "Metadata-only feasibility, fixed labels/decision timing and data-completeness preflight; separate campaign authorization required.",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 18,
+          "section_or_claim": "Rapid post-spike",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "74ff61d7ccaa0befe028170a9ffd2ac11fc7d852044f60eeed8239389a2a2e66",
+          "literal_excerpt": "e Continuation versus reversal. EXP- FAL-003 Rapid post-spike participation decay should distinguish fading spikes from continuing events. Evidence: Speculative but directly measurable. All Intraday volume/trades rvol_decay , trade_count_decay , flow reversal F"
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "hypothesis_id": "hyp-report1-c6f19341332c791d6993",
+      "description": "Gap × premarket dollar participation (restricted component)",
+      "why_priority": "Owned extended bars support a cheaper component before purchasing float; NOT the full float/liquidity hypothesis.",
+      "exact_data_needed": [
+        "Native extended-hours OHLCV/VWAP/trade_count, prior close, session clock and PIT identity/actions; float/depth expressly excluded from this component only."
+      ],
+      "exact_fields_features": [
+        "past-only gap; premarket dollar volume=sum(volume_shares*vwap); trade_count; same-clock prior baseline"
+      ],
+      "current_data_sufficient": false,
+      "coverage_status": "Conditional preliminary component only; counts confirm field presence, not usable independent sample size. Resolve gaps and warmup before preregistration.",
+      "preliminary_test_design": "Separately identify this component under the existing parent ID; gap-only, participation-only and interaction comparison at a fixed pre-open cutoff, no post-open features.",
+      "main_failure_mode": [
+        "large gap on negligible executable participation"
+      ],
+      "falsification": "Interaction does not beat components on a frozen later development slice, or signal depends on sparse prints.",
+      "expected_sample_size": "Not estimated from outcomes. At most 10 inspected January dates × 17 observed symbols before targeting, gaps, warmup and dependence; small-cap subset far smaller. Count usable events prospectively under frozen metadata rules.",
+      "similarity_to_rejected": "No renamed threshold variants of prior rejected opening-range breakout, volume breakout, EMA trend or EMA pullback. Consult related existing concepts and frozen campaign fingerprint before registration.",
+      "ranking_basis": "ex_ante_evidence_data_chronology_cost_not_performance",
+      "execution_authorized": false,
+      "required_next_step": "Metadata-only feasibility, fixed labels/decision timing and data-completeness preflight; separate campaign authorization required.",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 13,
+          "section_or_claim": "Premarket information",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "d74b3b5676b269bd19597eabf6fbb6d6625a38b28a5aa9f1c005b4300fc7c35d",
+          "literal_excerpt": " Next-5/15m acceleration hazard. EXP- PM-001 Premarket information becomes more reliable as premarket participation rises. Evidence: Moderate. Extended-hours and pre-open studies show volume-dependent price discovery. Nasdaq/ NYSE- listed, stratified by cap Extended"
+        }
+      ]
+    },
+    {
+      "rank": 4,
+      "hypothesis_id": "hyp-rmap-v1-impact-proxy",
+      "description": "Check price response per observed dollar",
+      "why_priority": "Low computation burden, useful execution-fragility diagnostic; not evidence of signed flow or achievable returns.",
+      "exact_data_needed": [
+        "native OHLCV and VWAP with positive actual volume"
+      ],
+      "exact_fields_features": [
+        "absolute return / observed dollar volume; participation interaction"
+      ],
+      "current_data_sufficient": false,
+      "coverage_status": "Conditional preliminary component only; counts confirm field presence, not usable independent sample size. Resolve gaps and warmup before preregistration.",
+      "preliminary_test_design": "At a fixed clock, compare later raw excursion conditional on absolute return/dollar volume after controlling return and volume separately; quote-free result cannot establish executability.",
+      "main_failure_mode": [
+        "low dollar volume produces a large ratio without buy pressure"
+      ],
+      "falsification": "Effect is fully mechanical denominator/return exposure or disappears with minimum native coverage.",
+      "expected_sample_size": "Not estimated from outcomes. At most 10 inspected January dates × 17 observed symbols before targeting, gaps, warmup and dependence; small-cap subset far smaller. Count usable events prospectively under frozen metadata rules.",
+      "similarity_to_rejected": "No renamed threshold variants of prior rejected opening-range breakout, volume breakout, EMA trend or EMA pullback. Consult related existing concepts and frozen campaign fingerprint before registration.",
+      "ranking_basis": "ex_ante_evidence_data_chronology_cost_not_performance",
+      "execution_authorized": false,
+      "required_next_step": "Metadata-only feasibility, fixed labels/decision timing and data-completeness preflight; separate campaign authorization required.",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 12,
+          "section_or_claim": "Price impact",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "e55cc64339c35463bfe54b533ac5445993b5f67c6e4d7f46948dd477ca0fe25e",
+          "literal_excerpt": "vior , hidden liquidity. EXP- LIQ-002 Rising price impact per dollar traded may identify a supply shortage. Evidence: Moderate. Jump episodes show increased trading costs/demand for immediacy. All with quotes Returns, dollar volume, spreads; abs_return_per_"
+        }
+      ]
+    },
+    {
+      "rank": 5,
+      "hypothesis_id": "hyp-rmap-v1-clock-hazard",
+      "description": "Establish a time-of-day comparison baseline",
+      "why_priority": "A necessary confounder control for explosive-move claims; cheap and distinct from a trading rule.",
+      "exact_data_needed": [
+        "native timestamps, session calendar, available prices/volumes"
+      ],
+      "exact_fields_features": [
+        "exchange-local completed-minute clock, fixed clock strata"
+      ],
+      "current_data_sufficient": false,
+      "coverage_status": "Conditional preliminary component only; counts confirm field presence, not usable independent sample size. Resolve gaps and warmup before preregistration.",
+      "preliminary_test_design": "Freeze clock strata and one forward event definition; estimate development event hazard with session clusters and complete same-clock denominators.",
+      "main_failure_mode": [
+        "changing intraday sampling looks like predictive signal"
+      ],
+      "falsification": "No reproducible clock difference within uncertainty; incomplete-minute selection explains differences.",
+      "expected_sample_size": "Not estimated from outcomes. At most 10 inspected January dates × 17 observed symbols before targeting, gaps, warmup and dependence; small-cap subset far smaller. Count usable events prospectively under frozen metadata rules.",
+      "similarity_to_rejected": "No renamed threshold variants of prior rejected opening-range breakout, volume breakout, EMA trend or EMA pullback. Consult related existing concepts and frozen campaign fingerprint before registration.",
+      "ranking_basis": "ex_ante_evidence_data_chronology_cost_not_performance",
+      "execution_authorized": false,
+      "required_next_step": "Metadata-only feasibility, fixed labels/decision timing and data-completeness preflight; separate campaign authorization required.",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 19,
+          "section_or_claim": "Extreme-event",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "73bb5a71c38c1f43e62852c198c3a2b991d299e1bb14a8f3c1dd00bbfa38e8b4",
+          "literal_excerpt": "tions, failures and confounders EXP- TOD-001 Extreme-event probability and feature thresholds should be conditioned on time of day. Evidence: Strong structural motivation. Opening volatility and trading costs differ substantially from later periods. All Time"
+        }
+      ]
+    },
+    {
+      "rank": 6,
+      "hypothesis_id": "hyp-rmap-v1-trade-count",
+      "description": "Count acceleration versus volume acceleration",
+      "why_priority": "Native bar trade_count exists; tests a distinct participation dimension with small implementation burden.",
+      "exact_data_needed": [
+        "native bar trade_count, volume and clock-matched prior sessions"
+      ],
+      "exact_fields_features": [
+        "seasonal count level and change; count-volume ablation"
+      ],
+      "current_data_sufficient": false,
+      "coverage_status": "Conditional preliminary component only; counts confirm field presence, not usable independent sample size. Resolve gaps and warmup before preregistration.",
+      "preliminary_test_design": "Compare count level/change against volume level/change at same past-only cutoff and target, with condition semantics and average-size controls.",
+      "main_failure_mode": [
+        "more small prints mistaken for more independent demand"
+      ],
+      "falsification": "No incremental information after volume/size/clock controls; effect reflects batching or inconsistent provider counts.",
+      "expected_sample_size": "Not estimated from outcomes. At most 10 inspected January dates × 17 observed symbols before targeting, gaps, warmup and dependence; small-cap subset far smaller. Count usable events prospectively under frozen metadata rules.",
+      "similarity_to_rejected": "No renamed threshold variants of prior rejected opening-range breakout, volume breakout, EMA trend or EMA pullback. Consult related existing concepts and frozen campaign fingerprint before registration.",
+      "ranking_basis": "ex_ante_evidence_data_chronology_cost_not_performance",
+      "execution_authorized": false,
+      "required_next_step": "Metadata-only feasibility, fixed labels/decision timing and data-completeness preflight; separate campaign authorization required.",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 10,
+          "section_or_claim": "Trade-count",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "d94f7cec73c405b48c25ea46190eb36e497c712d7db1d6cec3f0ac3623d79a4a",
+          "literal_excerpt": "asonality, news already priced. EXP- VOL-003 Trade-count acceleration may identify participation expansion before price acceleration. Evidence: Moderate. Trade count is a major driver of realized volatility in microstructure studies. Tick-data universe Tra"
+        }
+      ]
+    },
+    {
+      "rank": 7,
+      "hypothesis_id": "hyp-report1-fc0965d3252d4f17b66e",
+      "description": "Test bounded prior-runner recurrence",
+      "why_priority": "Direct small-cap relevance but contradictory evidence; lower rank because lagged warmup and selection are difficult.",
+      "exact_data_needed": [
+        "native prior-session prices, identity and corporate actions, sufficient earlier development history"
+      ],
+      "exact_fields_features": [
+        "lagged runner count, days since runner",
+        "tail probability separated from mean"
+      ],
+      "current_data_sufficient": false,
+      "coverage_status": "Conditional preliminary component only; counts confirm field presence, not usable independent sample size. Resolve gaps and warmup before preregistration.",
+      "preliminary_test_design": "Freeze prior-runner definition and lag using only allowed earlier development sessions; analyze later tail incidence separately from mean payoff; no annual-history claim.",
+      "main_failure_mode": [
+        "repeat tail probability mistaken for positive expected payoff"
+      ],
+      "falsification": "No tail recurrence beyond matched volatility/attention, or result disappears with identity/corporate-action controls.",
+      "expected_sample_size": "Not estimated from outcomes. At most 10 inspected January dates × 17 observed symbols before targeting, gaps, warmup and dependence; small-cap subset far smaller. Count usable events prospectively under frozen metadata rules.",
+      "similarity_to_rejected": "No renamed threshold variants of prior rejected opening-range breakout, volume breakout, EMA trend or EMA pullback. Consult related existing concepts and frozen campaign fingerprint before registration.",
+      "ranking_basis": "ex_ante_evidence_data_chronology_cost_not_performance",
+      "execution_authorized": false,
+      "required_next_step": "Metadata-only feasibility, fixed labels/decision timing and data-completeness preflight; separate campaign authorization required.",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 15,
+          "section_or_claim": "Prior extreme",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "fc71123a15596056e0cd82bc2f9e4b71335bc065f03dc3b12c6817ad3d0949e7",
+          "literal_excerpt": "tions, failures and confounders EXP- HIS-001 Prior extreme movers may have a different conditional probability of another extreme event. Evidence: Contradictory/ indirect. Jump clustering supports recurrence over short horizons; lottery-MAX evidence predicts"
+        }
+      ]
+    },
+    {
+      "rank": 8,
+      "hypothesis_id": "hyp-report1-f52352a9d60574b70cce",
+      "description": "Fresh SEC catalyst × participation (public-source subset)",
+      "why_priority": "Strongest mechanism but intake missing; reserve rather than guess news coverage or buy full archive now.",
+      "exact_data_needed": [
+        "timestamped original SEC releases/news",
+        "publication and ingest clocks",
+        "native intraday OHLCV"
+      ],
+      "exact_fields_features": [
+        "news age/materiality",
+        "continuous seasonal participation",
+        "interaction versus components"
+      ],
+      "current_data_sufficient": false,
+      "coverage_status": "No. Filing provenance/intake and timing verification needed; no new public download authorized this milestone.",
+      "preliminary_test_design": "Pre-register a filing/event taxonomy with accepted/disseminated availability; compare matched catalyst-only, participation-only and interaction arms; do not generalize filings to all news.",
+      "main_failure_mode": [
+        "materiality misclassification and already-priced news"
+      ],
+      "falsification": "Freshness/materiality-controlled interaction adds no information beyond components, or publication timing cannot be independently established.",
+      "expected_sample_size": "Not estimated from outcomes. At most 10 inspected January dates × 17 observed symbols before targeting, gaps, warmup and dependence; small-cap subset far smaller. Count usable events prospectively under frozen metadata rules.",
+      "similarity_to_rejected": "No renamed threshold variants of prior rejected opening-range breakout, volume breakout, EMA trend or EMA pullback. Consult related existing concepts and frozen campaign fingerprint before registration.",
+      "ranking_basis": "ex_ante_evidence_data_chronology_cost_not_performance",
+      "execution_authorized": false,
+      "required_next_step": "Metadata-only feasibility, fixed labels/decision timing and data-completeness preflight; separate campaign authorization required.",
+      "sources": [
+        {
+          "report_id": "R1",
+          "page": 9,
+          "section_or_claim": "Fresh, material",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "efb4f9aa8f2b36bc381da67623729acb1da9f9790d2c21883d7586e8c81da1fb",
+          "literal_excerpt": "tions, failures and confounders EXP- CAT-001 Fresh, material company-specific news may sharply increase extreme- upside probability. Evidence: Strong for price impact; moderate for extreme-tail continuation. News and institutional trading respond rapidly to th"
+        }
+      ]
+    }
+  ],
+  "deferred_queue": [
+    {
+      "id": "deferred-1",
+      "name": "Fixed float/RVOL cutoffs",
+      "reason": "Unsupported universal thresholds; arbitrary variant multiplication.",
+      "reconsideration_condition": "Reconsider only a sourced, continuous interaction with dated float and preregistered comparison.",
+      "related_hypothesis_ids": [
+        "hyp-report1-d464c0a8b353141c9c3e",
+        "hyp-report1-851a399c253c40d377f2"
+      ],
+      "status": "deferred_no_execution"
+    },
+    {
+      "id": "deferred-2",
+      "name": "Bollinger/ATR squeezes, anchored VWAP, premarket-high breakout variants",
+      "reason": "Weak target-tail evidence; heavy overlap with generic technical families and rejected entry templates.",
+      "reconsideration_condition": "Specific new mechanism plus independent data/design rationale; do not merely change a threshold.",
+      "related_hypothesis_ids": [
+        "hyp-rmap-v1-compression"
+      ],
+      "status": "deferred_no_execution"
+    },
+    {
+      "id": "deferred-3",
+      "name": "Former runners always run again",
+      "reason": "Contradicts tail-versus-mean distinction; deterministic narrative unsupported.",
+      "reconsideration_condition": "Only bounded recurrence probability test with independent-event uncertainty.",
+      "related_hypothesis_ids": [
+        "hyp-report1-fc0965d3252d4f17b66e"
+      ],
+      "status": "deferred_no_execution"
+    },
+    {
+      "id": "deferred-4",
+      "name": "High SI alone / FTD squeeze narratives",
+      "reason": "Contrary standalone SI evidence; lag and nonunique FTD causes.",
+      "reconsideration_condition": "Do not promote narrative; consider independent demand interaction only if data becomes available.",
+      "related_hypothesis_ids": [
+        "hyp-report1-3b969b2e4368992c939f",
+        "hyp-rmap-v1-ftd-alone"
+      ],
+      "status": "deferred_no_execution"
+    },
+    {
+      "id": "deferred-5",
+      "name": "Full float rotation / hidden supply / depth sequence",
+      "reason": "Historical vintages and synchronized depth absent; potentially expensive.",
+      "reconsideration_condition": "Exact scope and quote decision after cheap components prove testability, with separate approval.",
+      "related_hypothesis_ids": [
+        "hyp-report1-6c466f39552649f2ca7a",
+        "hyp-report1-0eaf0ce01e6e4dc9f312",
+        "hyp-report1-9608e08ad39b239d6100"
+      ],
+      "status": "deferred_no_execution"
+    },
+    {
+      "id": "deferred-6",
+      "name": "Adaptive ML / hierarchical pooling / symbolic mass search",
+      "reason": "Sparse samples, multiplicity controls incomplete and no certified simple baseline.",
+      "reconsideration_condition": "Certified simple strategy, frozen static comparator, full-search lineage and correction first.",
+      "related_hypothesis_ids": [
+        "hyp-rmap-v1-regime"
+      ],
+      "status": "deferred_no_execution"
+    },
+    {
+      "id": "deferred-7",
+      "name": "Previously rejected strategy equivalents",
+      "reason": "Prior opening-range breakout, volume breakout, EMA trend and EMA pullback variants are not new report evidence.",
+      "reconsideration_condition": "Consult preserved campaign graveyard/fingerprints; unchanged equivalents stay rejected, not rerun.",
+      "related_hypothesis_ids": [
+        "hyp-report1-851a399c253c40d377f2"
+      ],
+      "status": "deferred_no_execution"
+    },
+    {
+      "id": "deferred-8",
+      "name": "Generic scoping report as alpha source",
+      "reason": "Active topic was unspecified; no applicable alpha claim.",
+      "reconsideration_condition": "Use only its research protocol/provenance cautions.",
+      "related_hypothesis_ids": [],
+      "status": "deferred_no_execution"
+    }
+  ],
+  "contradictions": [
+    {
+      "id": "conflict-neighborhood-strength",
+      "kind": "evidence_rating_disagreement",
+      "description": "R3 rates neighborhood robustness moderate with limited direct finance evidence; R4 calls the proposed graph/null implementation speculative. Neither establishes a universal robust score.",
+      "resolution": "Preserve both ratings; treat graph/null calibration as a proposed control, not validated alpha or promotion authority.",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 9,
+          "section_or_claim": "ID Claim Evidence Stage Implementation test ROBUST- PBO-003 Search procedures with high PB",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "cfb4f17c0d63360bc8f050aa65a176946dfc18a899f056e7ef5a2d2c27fbfaab",
+          "literal_excerpt": "ID Claim Evidence Stage Implementation test ROBUST- PBO-003 Search procedures with high PBO are unreliable even when their best IS candidate is excellent Moderate–strong Optimization CSCV rank-logit/PBO on candidate family; retain final chronological holdout ROBUST- DSR-004 Selected Sharpe"
+        },
+        {
+          "report_id": "R4",
+          "page": 27,
+          "section_or_claim": "- hypothesis_id: ROBUST-NBHD-005 claim: > A candidate supported by a broad, connected and ",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "3d09147049562f3ed5294a0fa22c0274573a41fb04ed0012fa7818b0277b154c",
+          "literal_excerpt": "- hypothesis_id: ROBUST-NBHD-005 claim: > A candidate supported by a broad, connected and temporally persistent profitable parameter neighborhood is more credible than an isolated optimum. evidence_strength: speculative_but_testable_design_inference applicable_stage: [robustness, walk_for"
+        }
+      ]
+    },
+    {
+      "id": "conflict-neighborhood-score",
+      "kind": "complementary_alternatives_not_equivalence",
+      "description": "R2 median performance minus MAD penalty and R4 worst-neighborhood/null-calibrated NRS are different proposed statistics.",
+      "resolution": "Do not merge numeric scores or adopt report example thresholds. A future frozen design must choose and calibrate a method.",
+      "sources": [
+        {
+          "report_id": "R2",
+          "page": 12,
+          "section_or_claim": "Question Diagnostic Does it react too aggressively? Parameter/model turnover Does it help ",
+          "source_sha256": "0c61b251cee9c3226aa8f66f12172a1d36ba21a6dc578a31eb5b859711228d5c",
+          "page_text_sha256": "e84a6177f3501279c27cf3512cf4f0a9b658d82f31a433cf8056a82ee4eb1286",
+          "literal_excerpt": "Question Diagnostic Does it react too aggressively? Parameter/model turnover Does it help only once? Outer-period contribution decomposition Does it improve prediction quality? Log loss/Brier/RMSE as appropriate Is it more reliable? Calibration and uncertainty coverage Does it survive rea"
+        },
+        {
+          "report_id": "R4",
+          "page": 14,
+          "section_or_claim": "This prevents a beautiful aggregate plateau produced entirely by one exceptional year . A ",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "33908bd1a4b5fece743f1d4392eea82fff5fc6ad8b1b13d34cf2edfdcfdd5248",
+          "literal_excerpt": "This prevents a beautiful aggregate plateau produced entirely by one exceptional year . A strong parameter region might therefore look like: profitability_fraction 0.86 validation_pass_fraction 0.73 connected_component_fraction 0.69 minimum_normalized_width 0.22 temporal_persistence 0.76 "
+        }
+      ]
+    },
+    {
+      "id": "conflict-adaptation-vault",
+      "kind": "apparent_conflict_resolved_by_data_role",
+      "description": "R2 permits completed periods to inform later updates; R3/R4 prohibit feedback from pristine confirmation vaults.",
+      "resolution": "Only preregistered adaptation-period labels may update future state. Locked confirmation evidence never trains the policy; historical decisions remain immutable.",
+      "sources": [
+        {
+          "report_id": "R2",
+          "page": 7,
+          "section_or_claim": "The data-collection sheet should separately track event time, label-availability time, ing",
+          "source_sha256": "0c61b251cee9c3226aa8f66f12172a1d36ba21a6dc578a31eb5b859711228d5c",
+          "page_text_sha256": "2f39e4224f8114a85589976a22373f68c843f0b4e59dd194d0111d5cac8c4905",
+          "literal_excerpt": "The data-collection sheet should separately track event time, label-availability time, ingestion time, and data-vintage time. This is more rigorous than storing only a timestamp such as 2023-05-01 . Economic observations can be revised years later , as ALFRED's documented examples show, an"
+        },
+        {
+          "report_id": "R3",
+          "page": 5,
+          "section_or_claim": "Search algorithms—grid search, random search, Bayesian optimization, evolutionary algorith",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "92de3191d9a0bab18e45bdda6e410e92cf5117bc8fb5a4c208351f704f7721be",
+          "literal_excerpt": "Search algorithms—grid search, random search, Bayesian optimization, evolutionary algorithms, genetic programming, symbolic regression, feature generation, successive halving and Hyperband—should be judged principally as candidate generators, not inferential procedures. Random search can s"
+        },
+        {
+          "report_id": "R4",
+          "page": 23,
+          "section_or_claim": "PASS FAIL_COST FAIL_TIMING FAIL_MULTIPLICITY FAIL_NEIGHBORHOOD FAIL_DATA FAIL_CONCENTRATIO",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "fabc2633cff991135edca2a92a1e1b59afe92b5a837e769a454b6f592d2de07f",
+          "literal_excerpt": "PASS FAIL_COST FAIL_TIMING FAIL_MULTIPLICITY FAIL_NEIGHBORHOOD FAIL_DATA FAIL_CONCENTRATION rather than showing exact lockbox equity curves. Restricting the information exposed by a holdout reduces the opportunity for adaptive tuning against it, an idea directly aligned with adaptive-holdo"
+        }
+      ]
+    },
+    {
+      "id": "conflict-funnel-order",
+      "kind": "procedural_variation",
+      "description": "The reports arrange neighborhood, walk-forward and multiplicity screens differently.",
+      "resolution": "Cheapest falsification may move earlier; all dependencies and hard gates still apply. No order chosen to improve apparent performance.",
+      "sources": [
+        {
+          "report_id": "R3",
+          "page": 8,
+          "section_or_claim": "Stage Evidence required for promotion RED-TEAM PASSED Independent audit finds no unresolve",
+          "source_sha256": "6fb69ce96c37b0d4f241ec697193bd080fa6df2ee9fa811c7f2b48e1236d6316",
+          "page_text_sha256": "34f13fd179e76cefa112a448042304913cfb915caa1db8350f4317d5328cde27",
+          "literal_excerpt": "Stage Evidence required for promotion RED-TEAM PASSED Independent audit finds no unresolved leakage, fill, multiplicity or concentration defect PAPER/SHADOW VALIDATED Positive genuinely prospective evidence after costs without tuning to that evidence DEPLOYMENT ELIGIBLE Replicated evidence"
+        },
+        {
+          "report_id": "R4",
+          "page": 21,
+          "section_or_claim": "State Minimum evidence for promotion Automatic demotion/rejection examples PAPER/SHADOW VA",
+          "source_sha256": "c58637a531545fb2d583c07fbd66a3541dadb6ce4e67f3d85aa4e276b95cfc29",
+          "page_text_sha256": "d376fd4441b12261f21f1d0194172ea1984768d6bfae5ac7eae5e8c74e69edac",
+          "literal_excerpt": "State Minimum evidence for promotion Automatic demotion/rejection examples PAPER/SHADOW VALIDATED Prospective signal generation, realistic fills, operational evidence Material fill/model mismatch or prospective decay DEPLOYMENT ELIGIBLE All hard gates passed; risk/capacity defined; monitor"
+        }
+      ]
+    },
+    {
+      "id": "conflict-scope",
+      "kind": "scope_mismatch",
+      "description": "R5 says the active research topic was unspecified, unlike the other reports that use a trading brief.",
+      "resolution": "R5 supplies background protocol guidance only. Current user scope governs; no new alpha claim inferred.",
+      "sources": [
+        {
+          "report_id": "R5",
+          "page": 1,
+          "section_or_claim": "Research Scoping Report for an Unspecified Topic Executive summary The active research top",
+          "source_sha256": "4974b05defe3f5b809bb40a0a958ad779e229686cdd62d505c1a5030336fd6cb",
+          "page_text_sha256": "6d1f2f13f3f09b75b8ea5b7fd6649aad581c86e2c4627a78c8bad14a9993d7e3",
+          "literal_excerpt": "Research Scoping Report for an Unspecified Topic Executive summary The active research topic is missing. The current instruction explicitly asks that the topic be treated as unspecified, so a defensible evidence synthesis cannot yet answer a substantive domain question. There is, however ,"
+        },
+        {
+          "report_id": "R1",
+          "page": 1,
+          "section_or_claim": "Precursors to Explosive Stock Moves in U.S. Equities Executive summary This report treats ",
+          "source_sha256": "036f06d89f2d224933bc211f949000a14a52dae6cef21b13d7453827801910c0",
+          "page_text_sha256": "82dad475ac2cdaa680abb9f49e914771c10e8ae4d5f4ffae613e989aed61f607",
+          "literal_excerpt": "Precursors to Explosive Stock Moves in U.S. Equities Executive summary This report treats the uploaded Deep Research Project #1 — Precursors to Explosive Stock Moves as the governing scope: the objective is not to produce a scanner or trading rule, but to identify measurable, timestamp-sa"
+        }
+      ]
+    },
+    {
+      "id": "gap-static-comparator",
+      "kind": "report_vs_implementation_gap",
+      "description": "R2 frozen static baseline differs from existing Lab static arm that still refits expanding history.",
+      "resolution": "Mark partial support; no duplicated engine or false adaptive-versus-frozen claim.",
+      "sources": [
+        {
+          "report_id": "R2",
+          "page": 11,
+          "section_or_claim": "This is where catastrophic forgetting becomes relevant. A purely short rolling window may ",
+          "source_sha256": "0c61b251cee9c3226aa8f66f12172a1d36ba21a6dc578a31eb5b859711228d5c",
+          "page_text_sha256": "78c9d605c44d23579ea22eca4a912ffd7d683e1546324f8a9860cad2f41017a3",
+          "literal_excerpt": "This is where catastrophic forgetting becomes relevant. A purely short rolling window may rapidly forget rare but valuable crisis or volatility regimes. Rather than assuming old data are worthless, compare three architectures: a long-memory model, a short-memory adaptive model, and an ens"
+        }
+      ],
+      "code_evidence": "trading_validation_core.py:_adaptive_static_comparison"
+    }
+  ],
+  "deduplication": [
+    {
+      "kind": "exact_extracted_text_duplicate_different_pdf_bytes",
+      "reports": [
+        "R1"
+      ],
+      "prior_source_id": "research-report-b57fb7af90edb5e6e423",
+      "prior_pdf_sha256": "b57fb7af90edb5e6e423b08872b4b0ba0eb37d2bc32ad88dd160aa8956b5a634",
+      "prior_filename": "#1 Precursors to Explosive Stock Moves in U.S. Equities.pdf",
+      "canonical_ids_reused": [
+        "hyp-report1-f52352a9d60574b70cce",
+        "hyp-report1-851a399c253c40d377f2",
+        "hyp-report1-d464c0a8b353141c9c3e",
+        "hyp-report1-6c466f39552649f2ca7a",
+        "hyp-report1-0eaf0ce01e6e4dc9f312",
+        "hyp-report1-c6f19341332c791d6993",
+        "hyp-report1-cf7449725378059e460b",
+        "hyp-report1-81d70a53c0d9a661d277",
+        "hyp-report1-be14baff8528edcd25e3",
+        "hyp-report1-fc0965d3252d4f17b66e",
+        "hyp-report1-3b969b2e4368992c939f",
+        "hyp-report1-9608e08ad39b239d6100"
+      ],
+      "scope": "All 45 pages identical extracted text, not byte-identical PDF. New receipt is provenance only, zero additional independent support.",
+      "verified_extracted_text_sha256": "4dec80b2bc51251b783bc1408d562c01ab54a41f05228790a074d81a96e25b43",
+      "identical_pages": 45
+    },
+    {
+      "kind": "near_duplicate_method_family",
+      "reports": [
+        "R3",
+        "R4"
+      ],
+      "canonical_method_ids": [
+        "method-immutable-registry",
+        "method-literal-trials",
+        "method-lineage",
+        "method-graveyard",
+        "method-duplicate-family",
+        "method-nested-chronology",
+        "method-holdout-ledger",
+        "method-prospective",
+        "method-multiplicity",
+        "method-pbo",
+        "method-dsr",
+        "method-spa",
+        "method-neighborhood",
+        "method-execution-stress",
+        "method-concentration",
+        "method-independent-review",
+        "method-seeds",
+        "method-hard-gates",
+        "method-pit",
+        "method-dependence",
+        "method-null-pipeline"
+      ],
+      "scope": "Shared Generator/Red Team, trial/lineage/graveyard, nested chronology, exposure, multiplicity and hard gates. Manual claim reconciliation; no independent-evidence multiplier.",
+      "complementary_additions": "R4 mixed discrete graph and full-search null calibration, detailed PIT/rare-tail/seed schema; R3 compact implementation priority inventory."
+    },
+    {
+      "kind": "complementary_new_inventory_not_new_alpha_validation",
+      "reports": [
+        "R2"
+      ],
+      "scope": "Explicit adaptation meta-policy, delayed labels, memory/pooling/drift inventory; existing Lab partially overlaps."
+    },
+    {
+      "kind": "background_only",
+      "reports": [
+        "R5"
+      ],
+      "scope": "No new alpha claim; protocol hygiene only."
+    },
+    {
+      "kind": "related_existing_library_families",
+      "existing_hypotheses_reviewed": 221,
+      "scope": "Read-only concept names/statements/fingerprints, no outcome ranking. Related legacy spread/impact/clock/compression/regime rules linked explicitly; threshold-free source claims remain distinct. Original library, hypotheses and queue untouched.",
+      "new_registry_items_mean": "12 new entries in this reconciled map, not a claim of globally novel research or independent evidence."
+    }
+  ],
+  "owned_data_assessment": {
+    "method": "SQL counts grouped by symbol/date/session segment only; no prices or outcomes evaluated",
+    "dates": [
+      "2025-01-02",
+      "2025-01-03",
+      "2025-01-06",
+      "2025-01-07",
+      "2025-01-08",
+      "2025-01-10",
+      "2025-01-13",
+      "2025-01-14",
+      "2025-01-15",
+      "2025-01-16"
+    ],
+    "observed_symbols": [
+      "AAPL",
+      "AMD",
+      "AMZN",
+      "ASPI",
+      "AVR",
+      "DGICB",
+      "FMBH",
+      "IWM",
+      "MDXH",
+      "META",
+      "MSFT",
+      "NVDA",
+      "POWL",
+      "QQQ",
+      "SPY",
+      "TSLA",
+      "WSBC"
+    ],
+    "native_fields": [
+      "open",
+      "high",
+      "low",
+      "close",
+      "volume_shares",
+      "vwap",
+      "trade_count",
+      "timestamp"
+    ],
+    "limitations": [
+      "Field presence and 463 count groups do not establish sufficient samples or data quality.",
+      "DGICB has no regular bars on Jan 3/6/7/8/15; other small-cap sessions sparse. No fill/interpolation allowed.",
+      "No complete PIT float, news archive, peer graph, depth or LULD/status proof.",
+      "Do not use December strategy data or March/April/May/June observations; warmup roles need explicit future reader authorization.",
+      "0 fully certified testable hypotheses; all preliminary classifications are conditional, not permission to run."
+    ]
+  },
+  "invariants": {
+    "v4": "REJECTED 0/15",
+    "opening_failures": 8,
+    "orders_enabled": false,
+    "new_performance_experiments": 0,
+    "provider_requests_changed": false,
+    "purchases": false,
+    "collector_changed": false,
+    "holdouts_unchanged": true
+  },
+  "next_milestone": "Metadata-only feasibility and frozen single-family design for RVOL level/slope/acceleration; reconcile exact native-minute/warmup coverage, freeze one target and chronology, count usable independent events without performance, then request separate bounded preliminary campaign authorization. Keep V4 and certified promotion locked."
+}

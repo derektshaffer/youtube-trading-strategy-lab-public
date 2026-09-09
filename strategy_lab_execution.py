@@ -8,6 +8,8 @@ state through callbacks so Very Deep work is not owned by a browser session.
 from __future__ import annotations
 
 from copy import deepcopy
+from hashlib import sha256
+from hybrid_runtime.contracts import canonical_json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -334,7 +336,7 @@ def execute_strategy_lab_run(
         list((report.get("winning_backtest") or {}).get("trades") or []),
         list(report.get("holdout_sessions") or []),
         modeled_spread_bps=(
-            safe_float(optimized_settings_for_spread.get("spread_bps"), 12.0) or 12.0
+            safe_float(optimized_settings_for_spread.get("spread_bps"), 12.0)
         ),
         maximum_stress_multiplier=max(
             [value for value in sensitivity_multipliers if value is not None] or [2.0]
@@ -399,6 +401,19 @@ def execute_strategy_lab_run(
     )
 
     result = {
+        "identity": {
+            "run_id": str(job.get("run_id") or ""),
+            "queue_job_id": str(job.get("queue_job_id") or ""),
+            "queue_attempt": int(job.get("queue_attempt") or 0),
+            "strategy_revisions": deepcopy(job.get("strategy_revisions") or {}),
+            "window_start": start_time.isoformat(), "window_end": end_time.isoformat(),
+            "input_sha256": sha256(canonical_json(rows).encode("utf-8")).hexdigest(),
+            "optimizer_fingerprint": report.get("resume_fingerprint"),
+            "validation_target": deepcopy(report.get("validated_candidate")),
+            "validation_procedure": "training_validation_selection_then_frozen_holdout",
+            "execution_completed": True,
+            "strategy_conclusion_permitted": bool(evidence_verdict.get("strategy_conclusion_permitted", False)),
+        },
         "ticker": ticker,
         "timeframe": timeframe,
         "history_days": history_days,

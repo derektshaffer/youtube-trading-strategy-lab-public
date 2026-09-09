@@ -25,6 +25,7 @@ class WorkerStoreMixin:
                 """
                 SELECT * FROM jobs
                 WHERE status = ? AND execution_target = ? AND cancel_requested = 0
+                  AND job_type != 'research.independent_review'
                 ORDER BY priority DESC, created_at ASC LIMIT 1
                 """,
                 (JobStatus.QUEUED.value, target.value),

@@ -12,6 +12,8 @@ from __future__ import annotations
 from copy import deepcopy
 import argparse
 import json
+import hashlib
+from pathlib import Path
 import multiprocessing
 import os
 import signal
@@ -136,6 +138,21 @@ def _claim(preferred_job_id: str = "") -> dict[str, Any] | None:
                 allowed_types={REMOTE_STRATEGY_LAB_TYPE},
             )
         if claimed is not None:
+            # Persist the actual pickup revision and immutable request before
+            # admission, so a legitimate early failure still has durable provenance.
+            request = {k: v for k, v in (claimed.get("payload") or {}).items()
+                       if k not in {"hybrid_cloud_bridge", "diagnostic_attempt_started_at", "diagnostic_deadline_at"}}
+            claimed["worker_provenance"] = {
+                "source_revision": env("GITHUB_SHA"),
+                "workflow_run_id": env("GITHUB_RUN_ID"),
+                "workflow_attempt": env("GITHUB_RUN_ATTEMPT"),
+                "request_sha256": hashlib.sha256(json.dumps(request, sort_keys=True,
+                    separators=(",", ":"), ensure_ascii=False).encode()).hexdigest(),
+                "source_sha256": {name: hashlib.sha256((Path(__file__).resolve().parent / name).read_bytes()).hexdigest()
+                    for name in ("cloud_strategy_lab_worker.py", "youtube_strategy_engine.py",
+                                 "strategy_lab_execution.py", "hybrid_runtime/strategy_lab_bridge.py",
+                                 "hybrid_runtime/diagnostic_budget.py", "systematic_trader/preliminary_scope.py")},
+            }
             stamp_diagnostic_deadline(claimed.setdefault("payload", {}))
             updated["research_queue"] = [claimed if item.get("id") == claimed.get("id") else item
                                          for item in updated["research_queue"]]
@@ -157,6 +174,19 @@ def _resolve_candidates(
         for item in library.get("strategies") or []
         if isinstance(item, dict) and str(item.get("id") or "").strip()
     ]
+    from hybrid_runtime.strategy_lab_bridge import strategy_revision
+    pins = payload.get("strategy_revisions") or {}
+    ids = [str(s.get("id") or "") for s in all_strategies]
+    requested = set(payload.get("strategy_ids") or pins)
+    if any(ids.count(i) > 1 for i in requested):
+        raise AppError("Strategy revision identity is ambiguous: duplicate library IDs; no strategy conclusion permitted.")
+    if pins:
+        if set(pins) != requested:
+            raise AppError("Strategy revision set does not match the requested strategies.")
+        by_id = {str(s.get("id")): s for s in all_strategies}
+        if any(i not in by_id or strategy_revision(by_id[i]) != h for i,h in pins.items()):
+            raise AppError("Selected strategy revision changed or is missing; no strategy conclusion permitted. Refresh the selection for a new experiment.")
+        all_strategies = [s for s in all_strategies if str(s.get("id")) in pins]
     faithful: list[dict[str, Any]] = []
     blocked_by_id: dict[str, str] = {}
     for strategy in all_strategies:
@@ -193,6 +223,8 @@ def _resolve_candidates(
         raise AppError(
             "No strategy is currently faithful enough for Strategy Lab cloud testing."
         )
+    if not pins:
+        raise AppError("Exact selected strategy revisions are missing; no strategy conclusion permitted. Refresh the selection for a new experiment.")
     return [effective_strategy_for_research(item) for item in selected]
 
 
@@ -222,6 +254,9 @@ def _job_spec(remote_job: dict[str, Any], library: dict[str, Any]) -> dict[str, 
         "wf_folds": int(payload.get("wf_folds") or 3),
         "compared_all": bool(payload.get("compared_all")),
         "candidates": candidates,
+        "strategy_revisions": dict(payload.get("strategy_revisions") or {}),
+        "queue_job_id": str(remote_job.get("id") or ""),
+        "queue_attempt": int(remote_job.get("attempts") or 0),
         **diagnostic_budget(payload),
         **{key: payload[key] for key in ("diagnostic_attempt_started_at", "diagnostic_deadline_at") if key in payload},
     }
@@ -295,7 +330,8 @@ def _fail_queue(job_id: str, message: str, *, failure_kind: str = "",
     return holder["status"]
 
 
-def _saved_cloud_result(checkpoint_store: StrategyStore, run_id: str, ticker: str) -> dict[str, Any]:
+def _saved_cloud_result(checkpoint_store: StrategyStore, run_id: str, ticker: str,
+                        remote_job: dict[str, Any] | None = None) -> dict[str, Any]:
     remote = checkpoint_store.cloud_backup.read_library()
     saved = strategy_lab_checkpoint_record((remote or {}).get("library") or {}, run_id=run_id)
     if saved.get("status") != "complete":
@@ -307,6 +343,13 @@ def _saved_cloud_result(checkpoint_store: StrategyStore, run_id: str, ticker: st
         result = restore_strategy_lab_result(saved)
     if not isinstance(result, dict) or not result:
         raise AppError("Completed cloud checkpoint has no verifiable result.")
+    if remote_job is not None:
+        from hybrid_runtime.strategy_lab_bridge import overlay_strategy_lab_checkpoint
+        if not (remote_job.get("payload") or {}).get("strategy_revisions"):
+            raise AppError("Completed cloud recovery lacks pinned strategy revisions; no strategy conclusion permitted.")
+        checked = overlay_strategy_lab_checkpoint(remote_job, saved)
+        if checked.get("status") != "complete":
+            raise AppError("Completed cloud recovery identity mismatch; no strategy conclusion permitted.")
     return result
 
 
@@ -320,7 +363,7 @@ def _run_claimed_job(remote_job: dict[str, Any]) -> dict[str, Any]:
     try:
         # Finish a queue-only recovery from exact durable evidence. A prior
         # successful upload followed by queue-save failure must not recompute.
-        saved_result = _saved_cloud_result(checkpoint_store, run_id, ticker)
+        saved_result = _saved_cloud_result(checkpoint_store, run_id, ticker, remote_job)
         if saved_result:
             summary = strategy_lab_result_summary(saved_result, run_id=run_id)
             _complete_queue(job_id, run_id=run_id, result_summary=summary)
@@ -363,7 +406,7 @@ def _run_claimed_job(remote_job: dict[str, Any]) -> dict[str, Any]:
             "warning": str(outcome.get("warning") or ""),
         }
     except BaseException as exc:
-        message = str(exc).strip() or type(exc).__name__
+        message = (str(exc).strip() or type(exc).__name__) + "; execution/admission incomplete; no strategy validation verdict was produced."
         try:
             queue_status = _fail_queue(job_id, message)
         except BaseException:

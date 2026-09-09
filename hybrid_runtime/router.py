@@ -93,6 +93,10 @@ class RoutingPolicy:
         return tuple(signals)
 
     def decide(self, request: JobRequest) -> RoutingDecision:
+        if request.job_type in {'research.preliminary','research.evidence_status'}:
+            if request.requested_target == ExecutionTarget.CLOUD:
+                raise ValueError('Preliminary research and prospective evidence remain local only')
+            return RoutingDecision(target=ExecutionTarget.LOCAL,reason='Isolated local evidence workflow',automatic=request.requested_target==ExecutionTarget.AUTO)
         heavy = self._heavy_signals(request)
         if request.job_type in self.cloud_only_job_types:
             return RoutingDecision(

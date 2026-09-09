@@ -254,7 +254,7 @@ def profit_first_validation_batch(
     Streamlit and the cloud worker both use this decision so the prominent UI
     action cannot select a different batch than the autonomous worker.  A
     terminal batch is not recreated unless new validation evidence changes its
-    candidate key.
+    candidate key. A queue record alone is not evidence of candidate execution.
     """
     ranking = profit_first_validation_candidates(
         library,
@@ -289,7 +289,12 @@ def profit_first_validation_batch(
         if isinstance(item, dict) and str(item.get("dedupe_key") or "") == dedupe_key:
             return {
                 **ranking,
-                "queue_status": "already-attempted",
+                # Candidates reaching this branch still lack a current-protocol
+                # validation record. Do not turn queue failure (or a completion
+                # marker without evidence) into a strategy rejection.
+                "queue_status": "execution-incomplete",
+                "strategy_conclusion_permitted": False,
+                "reason": "A matching queue job ended without reconciled validation evidence; no strategy conclusion permitted.",
                 "existing_job_id": item.get("id"),
                 "dedupe_key": dedupe_key,
             }

@@ -7,6 +7,7 @@ from typing import Any, Mapping
 
 def build_strategy_lab_options(library: Mapping[str, Any], *, limit: int = 300) -> dict[str, Any]:
     from trading_intelligence_core import strategy_integrity_report
+    from .strategy_lab_bridge import strategy_revision
 
     maximum = max(1, min(500, int(limit)))
     faithful: list[dict[str, Any]] = []
@@ -25,6 +26,7 @@ def build_strategy_lab_options(library: Mapping[str, Any], *, limit: int = 300) 
         faithful.append(
             {
                 "id": strategy_id,
+                "revision": strategy_revision(strategy),
                 "name": str(strategy.get("name") or "Unnamed strategy")[:180],
                 "category": str(strategy.get("category") or "")[:100],
                 "direction": str(strategy.get("direction") or "")[:40],

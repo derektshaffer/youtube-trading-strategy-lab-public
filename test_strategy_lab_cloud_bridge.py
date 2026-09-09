@@ -301,7 +301,9 @@ def test_cloud_worker_reapplies_fidelity_gate(integrity, effective):
     }
     effective.side_effect = lambda item: {**item, "effective": True}
 
-    selected = _resolve_candidates(library, {"strategy_ids": ["good"]})
+    from hybrid_runtime.strategy_lab_bridge import strategy_revision
+    selected = _resolve_candidates(library, {"strategy_ids": ["good"],
+        "strategy_revisions": {"good": strategy_revision(library["strategies"][0])}})
     assert selected == [{"id": "good", "name": "Good", "effective": True}]
 
     with pytest.raises(Exception, match="no longer fully modeled"):

@@ -73,7 +73,8 @@ class SavedValidationPage(QWidget):
             root.addWidget(plain("Failure kind: " + str(error.get("kind") or error.get("terminal_reason") or error.get("type") or "not recorded")))
             root.addStretch(1)
             return
-        verdict = result.get("evidence_verdict") or {}
+        from backtest_calibration import guarded_verdict
+        verdict = guarded_verdict(result.get("evidence_verdict") or {})
         outcome = "Strategy validation: FAILED (execution completed).\n" if verdict.get("code") == "no_robust_strategy" else "Validation execution completed.\n"
         self.verdict.setText(outcome + str(verdict.get("label") or "No saved strategy verdict") + "\n" + str(verdict.get("reason") or ""))
         strength = result.get("strength") or {}

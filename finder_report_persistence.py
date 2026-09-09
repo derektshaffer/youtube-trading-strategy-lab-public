@@ -6,9 +6,22 @@ from datetime import datetime, timezone
 from typing import Any
 
 
+def finder_result_fingerprint(summary: dict[str, Any]) -> str:
+    from hashlib import sha256
+    from hybrid_runtime.contracts import canonical_json
+    return sha256(canonical_json({
+        key: value for key, value in summary.items() if key != "result_fingerprint"
+    }).encode()).hexdigest()
+
+
 def finder_summary_to_report(summary: dict[str, Any]) -> dict[str, Any]:
     """Rebuild the compact UI report saved after a completed Finder run."""
+    from backtest_calibration import guarded_verdict
+    if summary.get("result_fingerprint") and summary["result_fingerprint"] != finder_result_fingerprint(summary):
+        return {}
     winner = {
+        "source_strategy_id": summary.get("winner_source_strategy_id"),
+        "strategy_name": summary.get("winner_strategy_name"),
         "status": summary.get("optimizer_status"),
         "optimized_rules": summary.get("optimized_rules") or {},
         "optimized_backtest_settings": summary.get("optimized_backtest_settings") or {},
@@ -27,6 +40,7 @@ def finder_summary_to_report(summary: dict[str, Any]) -> dict[str, Any]:
         "profile": summary.get("profile_details") or {"name": summary.get("profile")},
         "strategy_fidelity_engine_version": int(summary.get("strategy_fidelity_engine_version") or 0),
         "search_policy": summary.get("search_policy") or {},
+        "search_scope": summary.get("search_scope") or {},
         "strategies_considered": summary.get("strategies_considered"),
         "strategies_tested": summary.get("strategies_tested"),
         "tested_strategy_rankings": list(summary.get("tested_strategy_rankings") or []),
@@ -38,6 +52,7 @@ def finder_summary_to_report(summary: dict[str, Any]) -> dict[str, Any]:
         "distributed": summary.get("distributed") or {},
         "optimization": {
             "winner": winner,
+            "validated_candidate": summary.get("validated_candidate") or {},
             "holdout_sessions": list(summary.get("holdout_sessions") or []),
         },
         "walk_forward": {"summary": summary.get("walk_forward_summary") or {}},
@@ -48,7 +63,7 @@ def finder_summary_to_report(summary: dict[str, Any]) -> dict[str, Any]:
         "historical_spread_audit": summary.get("historical_spread_audit") or {},
         "market_data_integrity": summary.get("market_data_integrity") or {},
         "holdout_reuse_audit": summary.get("holdout_reuse_audit") or {},
-        "verdict": summary.get("verdict") or {},
+        "verdict": guarded_verdict(summary.get("verdict") or {}),
         "winner_source_strategy_id": summary.get("winner_source_strategy_id"),
         "stock_specific_strategy_id": summary.get("stock_specific_strategy_id"),
         "paper_validation_status": summary.get("paper_validation_status"),

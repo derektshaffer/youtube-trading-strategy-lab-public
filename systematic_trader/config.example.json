@@ -1,0 +1,9 @@
+{
+  "symbols": [],
+  "feed": "sip",
+  "heartbeat_seconds": 5,
+  "silence_seconds": 30,
+  "max_reconnects": 5,
+  "min_free_bytes": 1073741824,
+  "max_frame_bytes": 4194304
+}

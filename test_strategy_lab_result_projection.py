@@ -40,8 +40,9 @@ def test_actual_saved_zero_trade_verdict_and_identity(saved):
     assert p["parameter_stability"]["executed"] is True
     assert p["parameter_stability"]["label"] == p["parameter_stability"]["classification"] == "BRITTLE"
     assert p["parameter_stability"]["active"] == p["parameter_stability"]["positive"] == 0
-    assert p["evidence_verdict"]["code"] == "no_robust_strategy"
-    assert p["evidence_verdict"]["label"] == "NO RELIABLE EDGE FOUND"
+    assert p["evidence_verdict"]["code"] == "calibration_failed"
+    assert p["evidence_verdict"]["label"] == "DISCOVERY / BACKTESTER CALIBRATION FAILED"
+    assert p["evidence_verdict"]["candidate_test_verdict"]["code"] == "no_robust_strategy"
     assert p["evidence_verdict"]["paper_ready"] is False
     assert p["strength"]["score"] == 13 and p["strength"]["label"] == "WEAK"
     assert p["strength"]["independently_positive"] is False

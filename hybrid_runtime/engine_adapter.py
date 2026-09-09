@@ -278,6 +278,53 @@ def research_ml_summary_handler(
     )
     _check_cancelled(cancelled)
     progress(0.92, "saving", "Preparing bounded Research + ML payload")
+    from ai_review.storage import read_summary
+    from systematic_trader.certificate_status import read_status
+    try:
+        from pathlib import Path
+        review_dir = _desktop_data_dir()
+        result['independent_reviews'] = read_summary(Path(review_dir) / 'hybrid.sqlite3', limit) if review_dir else []
+        result['dataset_certificate'] = read_status(Path(review_dir) / 'systematic-certificate-authority') if review_dir else {}
+    except Exception:
+        result['independent_reviews'] = []
+        result['independent_review_status'] = 'Audit unavailable; no clearance inferred'
+    try:result['evidence_tracks']=evidence_status_handler({},progress,cancelled)
+    except Exception:result['evidence_tracks']={'unavailable':True,'orders_enabled':False}
+    try:
+        from systematic_trader.research_inventory import summary as research_inventory_summary
+        directory = _desktop_data_dir()
+        result['research_inventory'] = research_inventory_summary(Path(directory) / 'research-inventory') if directory else {}
+    except Exception:
+        result['research_inventory'] = {'status':'unavailable', 'orders_enabled':False}
+    return result
+
+
+def evidence_status_handler(payload, progress, cancelled):
+    from pathlib import Path
+    from systematic_trader.preliminary import summary as preliminary_summary
+    from systematic_trader.prospective import summary as prospective_summary
+    from systematic_trader.collection_service import status as collection_status
+    from systematic_trader.campaign_interpretation import summary as campaign_summary
+    from systematic_trader.target_status import summary as target_summary
+    _check_cancelled(cancelled)
+    directory=_desktop_data_dir()
+    if not directory:raise RuntimeError('Desktop evidence directory unavailable')
+    root=Path(directory)
+    return dict(preliminary=preliminary_summary(root/'preliminary-research'),
+                prospective=prospective_summary(root/'prospective-evidence'),
+                collection_service=collection_status(root/'collection-service'),
+                campaign=campaign_summary(root/'bounded-campaign-v1'),target_campaign=target_summary(root/'target-domain-campaign'),orders_enabled=False)
+
+
+def preliminary_research_handler(payload, progress, cancelled):
+    from pathlib import Path
+    from systematic_trader.preliminary import PreliminaryResearch
+    _check_cancelled(cancelled)
+    directory=_desktop_data_dir()
+    if not directory:raise RuntimeError('Desktop evidence directory unavailable')
+    progress(0.15,'preparing_features','Running preliminary research only; no certification')
+    result=PreliminaryResearch(Path(directory)/'preliminary-research').run(dict(payload))
+    progress(0.95,'saving','Saving preliminary result and provenance')
     return result
 
 
@@ -371,6 +418,8 @@ def market_discovery_handler(
 
 def default_handlers() -> dict[str, JobHandler]:
     return {
+        "research.preliminary": preliminary_research_handler,
+        "research.evidence_status": evidence_status_handler,
         "system.health": system_health_handler,
         "system.onboarding_probe": onboarding_probe_handler,
         "chart.framework_fixture": chart_framework_fixture_handler,

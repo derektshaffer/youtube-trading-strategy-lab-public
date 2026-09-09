@@ -5177,7 +5177,10 @@ def run_backtest(
     prepared_records: list[dict[str, Any]] | None = None,
     prepared_sessions: list[str] | None = None,
 ) -> dict[str, Any]:
+    from systematic_trader.preliminary_scope import require_preliminary
     settings = settings or BacktestSettings()
+    require_preliminary(rows, strategy, symbol, settings,
+                        (prepared_indicators, prepared_records, prepared_sessions))
     settings.validate()
     if str(strategy.get("direction", "long")).lower() not in {"long", "both"}:
         raise AppError("Short-only and unclear-direction strategies cannot be backtested in this long-only release.")
@@ -6053,29 +6056,22 @@ def generate_strategy_variants(
     )
     stop_iter = iter(stop_reward_pairs)
     other_iter = iter(other_pairs)
-    while len(variants) < limit:
-        added_before = len(variants)
-        try:
-            add(next(stop_iter))
-        except StopIteration:
-            pass
-        if len(variants) >= limit:
-            break
-        try:
-            add(next(other_iter))
-        except StopIteration:
-            pass
-        if len(variants) == added_before:
-            # Both iterators may be exhausted or producing only duplicates.
+    stop_exhausted = False
+    other_exhausted = False
+    while len(variants) < limit and not (stop_exhausted and other_exhausted):
+        if not stop_exhausted:
             try:
                 add(next(stop_iter))
             except StopIteration:
-                try:
-                    add(next(other_iter))
-                except StopIteration:
-                    break
-            if len(variants) == added_before:
-                break
+                stop_exhausted = True
+        if len(variants) >= limit:
+            break
+        if not other_exhausted:
+            try:
+                add(next(other_iter))
+            except StopIteration:
+                other_exhausted = True
+        # A duplicate is not exhaustion: later joint values can still be new.
 
     return variants[:limit]
 
@@ -7514,6 +7510,53 @@ def _optimize_stock_timeframes_historical(
         progress(985, 1000, "Deep optimizer finished; preparing results…")
     return deep_report
 
+def _remember_optimizer_configuration(
+    configuration_history: list[dict[str, Any]],
+    configuration_index: dict[str, int],
+    source_strategy: dict[str, Any],
+    phase: str,
+    rules: dict[str, Any],
+    chosen_settings: BacktestSettings,
+    metrics: dict[str, Any],
+) -> None:
+    normalized_rules = normalize_machine_rules(rules)
+    settings_payload = asdict(chosen_settings)
+    signature_payload = {
+        "strategy_id": str(source_strategy.get("id") or ""),
+        "rules": normalized_rules,
+        "settings": settings_payload,
+    }
+    signature = hashlib.sha256(
+        json.dumps(signature_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:24]
+    existing_index = configuration_index.get(signature)
+    if existing_index is not None:
+        existing = configuration_history[existing_index]
+        phases = list(existing.get("phases") or [])
+        if phase not in phases:
+            phases.append(phase)
+            existing["phases"] = phases
+        return
+    configuration_index[signature] = len(configuration_history)
+    configuration_history.append(
+        {
+            "signature": signature,
+            "strategy_id": str(source_strategy.get("id") or ""),
+            "strategy_name": str(source_strategy.get("name") or "Unnamed strategy"),
+            "phases": [phase],
+            "rules": normalized_rules,
+            "settings": settings_payload,
+            "metrics": {
+                "trade_count": int(safe_float(metrics.get("trade_count"), 0) or 0),
+                "net_pnl": safe_float(metrics.get("net_pnl"), 0.0) or 0.0,
+                "return_pct": safe_float(metrics.get("return_pct"), 0.0) or 0.0,
+                "win_rate_pct": safe_float(metrics.get("win_rate_pct"), 0.0) or 0.0,
+                "profit_factor": metrics.get("profit_factor"),
+                "max_drawdown_pct": safe_float(metrics.get("max_drawdown_pct"), 0.0) or 0.0,
+            },
+        }
+    )
+
 def optimize_stock_strategies(
     rows: list[dict[str, Any]],
     strategies: list[dict[str, Any]],
@@ -7596,7 +7639,14 @@ def optimize_stock_strategies(
     resume_fingerprint = hashlib.sha256(
         json.dumps(
             {
-                "version": 1,
+                "version": 3,  # Invalidate checkpoints with incomplete configuration accounting.
+                # IDs and endpoints alone do not identify an execution. A saved
+                # strategy can be edited in place, and providers can revise an
+                # interior candle without changing the window or row count.
+                "execution_inputs_sha256": hashlib.sha256(json.dumps(
+                    {"rows": rows, "strategies": eligible, "search_plan": search_plan},
+                    sort_keys=True, separators=(",", ":"), default=str,
+                ).encode("utf-8")).hexdigest(),
                 "symbol": target_symbol,
                 "sessions": sessions,
                 "row_count": len(frame),
@@ -7742,50 +7792,9 @@ def optimize_stock_strategies(
         if signature:
             configuration_index[signature] = config_index
 
-    def remember_configuration(
-        source_strategy: dict[str, Any],
-        phase: str,
-        rules: dict[str, Any],
-        chosen_settings: BacktestSettings,
-        metrics: dict[str, Any],
-    ) -> None:
-        normalized_rules = normalize_machine_rules(rules)
-        settings_payload = asdict(chosen_settings)
-        signature_payload = {
-            "strategy_id": str(source_strategy.get("id") or ""),
-            "rules": normalized_rules,
-            "settings": settings_payload,
-        }
-        signature = hashlib.sha256(
-            json.dumps(signature_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()[:24]
-        existing_index = configuration_index.get(signature)
-        if existing_index is not None:
-            existing = configuration_history[existing_index]
-            phases = list(existing.get("phases") or [])
-            if phase not in phases:
-                phases.append(phase)
-                existing["phases"] = phases
-            return
-        configuration_index[signature] = len(configuration_history)
-        configuration_history.append(
-            {
-                "signature": signature,
-                "strategy_id": str(source_strategy.get("id") or ""),
-                "strategy_name": str(source_strategy.get("name") or "Unnamed strategy"),
-                "phases": [phase],
-                "rules": normalized_rules,
-                "settings": settings_payload,
-                "metrics": {
-                    "trade_count": int(safe_float(metrics.get("trade_count"), 0) or 0),
-                    "net_pnl": safe_float(metrics.get("net_pnl"), 0.0) or 0.0,
-                    "return_pct": safe_float(metrics.get("return_pct"), 0.0) or 0.0,
-                    "win_rate_pct": safe_float(metrics.get("win_rate_pct"), 0.0) or 0.0,
-                    "profit_factor": metrics.get("profit_factor"),
-                    "max_drawdown_pct": safe_float(metrics.get("max_drawdown_pct"), 0.0) or 0.0,
-                },
-            }
-        )
+    def remember_configuration(source_strategy, phase, rules, chosen_settings, metrics):
+        _remember_optimizer_configuration(configuration_history, configuration_index,
+                                          source_strategy, phase, rules, chosen_settings, metrics)
 
     if completed_strategy_ids and progress:
         progress(
@@ -7962,6 +7971,8 @@ def optimize_stock_strategies(
             candidate_strategy = {**source_strategy, "machine_rules": refined_rules}
             metrics = evaluate(candidate_strategy, "training", candidate_settings)["metrics"]
             adaptive_final_rule_tests += 1
+            remember_configuration(source_strategy, "final_rule_refinement",
+                                   refined_rules, candidate_settings, metrics)
             sized_candidates.append({
                 **local_seed,
                 "variant_index": len(variants) + adaptive_rule_tests + adaptive_final_rule_tests,
@@ -7995,6 +8006,8 @@ def optimize_stock_strategies(
             candidate_strategy = {**source_strategy, "machine_rules": local_seed["rules"]}
             metrics = evaluate(candidate_strategy, "training", candidate_settings)["metrics"]
             adaptive_final_execution_tests += 1
+            remember_configuration(source_strategy, "final_execution_refinement",
+                                   local_seed["rules"], candidate_settings, metrics)
             sized_candidates.append({
                 **local_seed,
                 "execution_index": len(execution_variants) + adaptive_final_execution_tests,
@@ -8544,7 +8557,31 @@ def finalize_stock_optimization(
     pre_holdout_status = str(winner.get("status") or "")
     winner["pre_holdout_status"] = pre_holdout_status
 
+    history = report.setdefault("configuration_history", [])
+    timeframe = str(report.get("timeframe") or "")
+    # Identical rule/settings signatures on different candle intervals are separate
+    # configurations; repeated periods and A/B replays within an interval are not.
+    config_index = {str(item.get("signature") or ""): i for i, item in enumerate(history)
+                    if str(item.get("timeframe") or "") == timeframe}
+    unrecorded_count = max(0, int(report.get("unique_configurations_tested") or 0) - len(history))
+
+    def remember_final(phase, chosen, metrics):
+        before = len(history)
+        _remember_optimizer_configuration(history, config_index, source, phase,
+                                          strategy["machine_rules"], chosen, metrics)
+        if timeframe and len(history) > before:
+            history[-1]["timeframe"] = timeframe
+        report["unique_configurations_tested"] = unrecorded_count + len(history)
+
     full_result = run_backtest(rows, strategy, symbol, selected_settings)
+    remember_final("final_holdout", selected_settings, full_result["metrics"])
+    validation_target = {"strategy_id": str(source.get("id") or ""),
+                         "rules": strategy["machine_rules"], "settings": asdict(selected_settings)}
+    report["validated_candidate"] = {
+        **validation_target,
+        "configuration_hash": hashlib.sha256(json.dumps(validation_target, sort_keys=True,
+            separators=(",", ":")).encode("utf-8")).hexdigest()[:24],
+    }
     holdout = _period_metrics(
         full_result,
         holdout_sessions,
@@ -8559,6 +8596,11 @@ def finalize_stock_optimization(
         symbol,
         selected_settings,
     )
+    for behavior in ("legacy", "optimized"):
+        comparison = report["behavior_comparison"]
+        remember_final("behavior_comparison_" + behavior,
+                       BacktestSettings(**comparison[behavior + "_settings"]),
+                       comparison[behavior + "_metrics"])
     report["recommended_backtest_settings"] = asdict(selected_settings)
 
     # The development execution-cost curve is measured on validation data. Once the
@@ -8595,6 +8637,8 @@ def finalize_stock_optimization(
                 symbol,
                 sensitivity_settings,
             )
+            remember_final(f"holdout_cost_sensitivity_{cost_multiplier:.2f}x",
+                           sensitivity_settings, stressed_result["metrics"])
             sensitivity_metrics = _period_metrics(
                 stressed_result,
                 holdout_sessions,

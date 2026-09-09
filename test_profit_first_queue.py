@@ -235,7 +235,8 @@ class ProfitFirstQueueTests(unittest.TestCase):
 
         repeated = queue.profit_first_validation_batch(library)
 
-        self.assertEqual(repeated["queue_status"], "already-attempted")
+        self.assertEqual(repeated["queue_status"], "execution-incomplete")
+        self.assertFalse(repeated["strategy_conclusion_permitted"])
         self.assertEqual(repeated["existing_job_id"], "finished")
 
     @patch.object(queue, "research_readiness")

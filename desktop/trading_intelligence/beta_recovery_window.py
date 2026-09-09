@@ -17,6 +17,17 @@ from .onboarding_window import MainWindow as OnboardingMainWindow, clean_error, 
 class MainWindow(OnboardingMainWindow):
     """Route recoverable configuration gaps back to Setup instead of failed jobs."""
 
+    def _sync_strategy_lab_capabilities(self) -> None:
+        try:
+            self.strategy_lab.set_capability_status(self._capability_snapshot())
+        except Exception as exc:
+            self.strategy_lab.set_capability_status({}, error=clean_error(exc))
+
+    def show_page(self, index: int) -> None:
+        if hasattr(self, "strategy_lab") and index == self.stack.indexOf(self.strategy_lab):
+            self._sync_strategy_lab_capabilities()
+        super().show_page(index)
+
     def _capability_snapshot(self) -> dict[str, Any]:
         if self.smoke:
             return {
@@ -75,6 +86,7 @@ class MainWindow(OnboardingMainWindow):
             super().refresh_research_ml()
 
     def refresh_strategy_lab_options(self) -> None:
+        self._sync_strategy_lab_capabilities()
         if self._require_capabilities(("library",), "Strategy Lab"):
             super().refresh_strategy_lab_options()
 
@@ -87,6 +99,7 @@ class MainWindow(OnboardingMainWindow):
             super().run_stock_finder(payload)
 
     def run_strategy_lab(self, payload: dict[str, Any]) -> None:
+        self._sync_strategy_lab_capabilities()
         if self._require_capabilities(("library", "cloud"), "Strategy Lab"):
             super().run_strategy_lab(payload)
 
@@ -138,6 +151,7 @@ class MainWindow(OnboardingMainWindow):
             checks = result.get("checks") if isinstance(result.get("checks"), dict) else {}
             mark_setup_probe_result(self.runtime.data_dir, checks)
             refreshed_configuration = configuration_status(self.runtime.data_dir)
+            self.strategy_lab.set_capability_status(refreshed_configuration)
             result = dict(result)
             result["configuration"] = refreshed_configuration
             self.onboarding.render_probe(result)

@@ -14,3 +14,4 @@ trading-intelligence-lab/
 desktop/tauri_spike/node_modules/
 desktop/tauri_spike/src-tauri/target/
 desktop/tauri_spike/src-tauri/binaries/
+.systematic-trader/

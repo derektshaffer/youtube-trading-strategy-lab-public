@@ -211,7 +211,22 @@ class ResearchMLPage(QWidget):
             "No queue records saved yet.",
             "Existing web workflows and workers enqueue jobs. This view only reads status; "
             "it cannot dispatch, cancel or retry them."), "Cloud Queue")
+        from .research_map_section import ResearchMapSection
+        self.research_map = ResearchMapSection()
+        self.tabs.addTab(self.research_map, 'Research map')
+        from .short_horizon_section import ShortHorizonSection
+        self.short_horizon = ShortHorizonSection()
+        self.tabs.addTab(self.short_horizon, 'Short-Horizon & Microstructure')
         root.addWidget(self.tabs)
+        from .independent_review_section import IndependentReviewSection
+        self.independent_review = IndependentReviewSection()
+        root.addWidget(self.independent_review)
+        from .certificate_section import CertificateSection
+        self.certificate_status = CertificateSection()
+        root.addWidget(self.certificate_status)
+        from .evidence_tracks_section import EvidenceTracksSection
+        self.evidence_tracks = EvidenceTracksSection()
+        root.addWidget(self.evidence_tracks)
         self.safety = QLabel(
             "Research only. This view cannot place trades, change live ranking or bypass validation. "
             "Predictive models are shadow models and do not place trades; they are not production-approved."
@@ -285,6 +300,10 @@ class ResearchMLPage(QWidget):
         table.setFixedHeight(min(260, max(80, 46 + len(rows) * 38)))
 
     def _pending(self, message):
+        self.research_map.render({})
+        self.certificate_status.render({})
+        self.evidence_tracks.render({})
+        self.independent_review.render([])
         for card in self.metric_cards.values():
             card.show()
             card.value.setText(message)
@@ -314,6 +333,12 @@ class ResearchMLPage(QWidget):
         self.detail.setText(sanitize_display_text(message))
 
     def render_summary(self, result: dict[str, Any]) -> None:
+        self.research_map.render(result.get('research_inventory', {}))
+        self.certificate_status.render(result.get('dataset_certificate', {}))
+        self.evidence_tracks.render({**result.get('evidence_tracks', {}), 'certificate':result.get('dataset_certificate', {})})
+        self.independent_review.render(result.get('independent_reviews', []))
+        if result.get('independent_review_status'):
+            self.independent_review.detail.setText(sanitize_display_text(result['independent_review_status']))
         self.load_state = "ready"
         self.refresh.setEnabled(True)
         self.banner.setProperty("state", "ready")

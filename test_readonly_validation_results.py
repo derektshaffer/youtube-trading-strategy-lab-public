@@ -66,8 +66,9 @@ def test_saved_spy_repeated_read_is_canonical_and_has_no_side_effects(setup, clo
         p=result["result"]
         assert p==s.job.result
         assert p["winner_strategy_id"]==SID
-        assert p["evidence_verdict"]["code"]=="no_robust_strategy"
-        assert p["evidence_verdict"]["label"]=="NO RELIABLE EDGE FOUND"
+        assert p["evidence_verdict"]["code"]=="calibration_failed"
+        assert p["evidence_verdict"]["label"]=="DISCOVERY / BACKTESTER CALIBRATION FAILED"
+        assert p["evidence_verdict"]["candidate_test_verdict"]["code"]=="no_robust_strategy"
         assert p["strength"]["score"]==13 and p["strength"]["label"]=="WEAK"
         assert p["parameter_stability"]["label"]=="BRITTLE" and p["parameter_stability"]["tested"]==12
         assert p["walk_forward_summary"]["fold_count"]==3

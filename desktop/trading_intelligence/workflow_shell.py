@@ -323,7 +323,8 @@ class WorkflowShell(QObject):
         response = self.saved.get((self.ticker, (self.strategy_id,)))
         if response:
             result = response.get("result") or {}
-            state = "Infrastructure failure; no strategy verdict" if response["status"] == "failed" else str((result.get("evidence_verdict") or {}).get("label") or "No saved verdict")
+            from backtest_calibration import guarded_verdict
+            state = "Infrastructure failure; no strategy verdict" if response["status"] == "failed" else str(guarded_verdict(result.get("evidence_verdict") or {}).get("label") or "No saved verdict")
             self.context_status.setText(f"{self.ticker} saved validation: {state}")
         else:
             self.context_status.setText("Stock-specific evidence: no saved result opened for this selection")

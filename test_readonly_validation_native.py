@@ -27,7 +27,7 @@ def test_saved_native_evidence_and_no_execution_controls(app, setup):
     result=read_saved_validation(setup.worker,setup.request); before=deepcopy(result)
     page=SavedValidationPage(result)
     assert JID in page.identity.text() and SID in page.identity.text()
-    assert "FAILED" in page.verdict.text() and "NO RELIABLE EDGE FOUND" in page.verdict.text()
+    assert "CALIBRATION FAILED" in page.verdict.text() and "No strategy conclusion permitted" in page.verdict.text()
     assert "13/100" in page.strength.text() and "WEAK" in page.strength.text()
     assert page.checks.item(1,1).text()=="BRITTLE (complete)"
     assert "fold count: 3" in page.checks.item(0,2).text()
@@ -96,6 +96,7 @@ def test_context_handoff_without_validation_submission(app,active):
 
 def test_normal_validation_defaults_unchanged(app):
     page=StrategyLabPage();page.set_options({"strategies":[{"id":SID,"name":"Exact"}],"faithful_count":1})
+    page.set_capability_status({"capabilities": {"library": True, "cloud": True}})
     requests=[];page.run_requested.connect(requests.append);page._emit_run();p=requests[0]
     assert (p["training_fraction"],p["validation_fraction"])==(.6,.2)
     assert (p["minimum_training_trades"],p["minimum_validation_trades"])==(5,2)

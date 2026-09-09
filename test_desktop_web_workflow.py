@@ -82,7 +82,7 @@ def test_saved_context_is_keyed_to_exact_ticker_and_strategy(window, setup):
     select(window)
     response = read_saved_validation(setup.worker, setup.request)
     window.workflow._saved_loaded(response)
-    assert "NO RELIABLE EDGE" in window.workflow.context_status.text()
+    assert "CALIBRATION FAILED" in window.workflow.context_status.text()
     window.workflow.adopt("QQQ", SID, "Exact")
     assert "no saved result opened" in window.workflow.context_status.text()
 
@@ -144,7 +144,7 @@ def test_scrolling_at_page_end_does_not_hijack_table(app):
 def test_results_summary_keeps_canonical_numbers_and_no_execution(app, setup):
     response = read_saved_validation(setup.worker, setup.request); before = deepcopy(response)
     page = SavedValidationPage(response)
-    assert "FAILED" in page.verdict.text() and "NO RELIABLE EDGE FOUND" in page.verdict.text()
+    assert "CALIBRATION FAILED" in page.verdict.text() and "No strategy conclusion permitted" in page.verdict.text()
     assert "13/100" in page.strength.text() and "WEAK" in page.strength.text()
     assert "BRITTLE" in page.evidence_summary.text()
     assert "Walk-forward folds: 3" in page.evidence_summary.text()

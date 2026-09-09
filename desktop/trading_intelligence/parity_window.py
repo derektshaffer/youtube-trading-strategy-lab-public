@@ -50,6 +50,11 @@ class MainWindow(RecoveryMainWindow):
 
         self._rename_primary_workflow()
         self._install_parity_navigation()
+        from .manual_parity_page import ManualParityPage
+        self.manual_parity = ManualParityPage()
+        self.stack.addWidget(self.manual_parity)
+        self._new_navigation_button('Manual / Parity Backtest', self.manual_parity,
+                                    'Run one fixed historical configuration and compare archived/current execution')
         self._order_navigation_like_web_app()
         from .search_monitor import SearchMonitorController
         self.search_monitor = SearchMonitorController(self, [self.strategy_lab, self.research_ml, self.finder])
@@ -110,6 +115,7 @@ class MainWindow(RecoveryMainWindow):
             "Find Stocks",
             "Quick Analysis",
             "Strategy Lab",
+            "Manual / Parity Backtest",
             "Results",
             "Research + ML",
             "Open Momentum Scanner",

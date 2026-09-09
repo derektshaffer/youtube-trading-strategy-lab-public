@@ -1,0 +1,2 @@
+# Independent recorder transport. Offline journal and schema use the standard library.
+websockets==16.1.1

@@ -164,6 +164,13 @@ class MainWindow(BaseMainWindow):
         elif status == "already-attempted":
             self.profit_first.validation.setText("Already attempted")
             self.profit_first.validation.setEnabled(False)
+        elif status == "execution-incomplete":
+            self.profit_first.validation.setText("Validation not completed")
+            self.profit_first.validation.setEnabled(False)
+            self.profit_first.next_detail.setText(
+                "The matching queue job has no reconciled validation evidence. "
+                "No strategy conclusion is permitted; automatic duplicate work remains blocked."
+            )
         elif status == "no-eligible-candidates":
             self.profit_first.validation.setText("No eligible candidates")
             self.profit_first.validation.setEnabled(False)
