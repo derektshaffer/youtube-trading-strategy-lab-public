@@ -23,6 +23,7 @@ from urllib.request import Request, urlopen
 import zlib
 
 from .contracts import canonical_json
+from cloud_library_codec import decode_library_bytes, encode_library_bytes, LibraryEncodingError
 
 
 GITHUB_API_URL = "https://api.github.com"
@@ -238,8 +239,8 @@ class GitHubJSONFile:
         if digest.hexdigest() != blob_sha:
             raise GitHubLibraryError("The downloaded research library failed Git blob integrity verification.")
         try:
-            decoded = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            decoded = json.loads(decode_library_bytes(raw).decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
             raise GitHubLibraryError("The remote research library is not valid UTF-8 JSON.") from exc
         if not isinstance(decoded, dict):
             raise GitHubLibraryError("The remote research library must be a JSON object.")
@@ -261,6 +262,10 @@ class GitHubJSONFile:
 
         compact = canonical_json(dict(document))
         serialized = compact.encode("utf-8")
+        try:
+            serialized = encode_library_bytes(serialized)
+        except LibraryEncodingError as exc:
+            raise GitHubLibraryError(str(exc)) from exc
         if len(serialized) > GITHUB_LIBRARY_API_SAFE_BYTES:
             from .github_git_upload import write_large_library
 
@@ -278,7 +283,9 @@ class GitHubJSONFile:
         blob = self._request(
             self._api("git/blobs"),
             method="POST",
-            payload={"content": compact, "encoding": "utf-8"},
+            payload=({"content": compact, "encoding": "utf-8"}
+                     if serialized == compact.encode("utf-8") else
+                     {"content": base64.b64encode(serialized).decode("ascii"), "encoding": "base64"}),
             expected_statuses=(201,),
         )
         blob_sha = str((blob or {}).get("sha") or "").strip()

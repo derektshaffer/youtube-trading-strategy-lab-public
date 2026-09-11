@@ -47,3 +47,24 @@ test('foreign acknowledgement fails closed', async () => {
 test('artifact inventory failure blocks future computation', async () => {
   await assert.rejects(assertRecoveriesAcknowledged(async () => {throw new Error('unavailable')}, env));
 });
+const {destinationScope} = require('./index.cjs');
+test('fixture artifacts cannot block a different production destination', async () => {
+  const other = destinationScope({...env, GITHUB_BACKUP_PATH: 'fixture/library.json'}, 'fixture');
+  await assertRecoveriesAcknowledged(fakeRequest(null, [{name: `research-recovery-v2-${other}-1-${digest}`}]), env);
+});
+test('same-destination current-run recovery is not bypassed', async () => {
+  const scope = destinationScope(env, 'main');
+  await assert.rejects(assertRecoveriesAcknowledged(fakeRequest(null, [{
+    name: `research-recovery-v2-${scope}-1-${digest}`, workflow_run: {id: env.GITHUB_RUN_ID},
+  }]), env));
+});
+test('scoped receipt allows restart', async () => {
+  const scope = destinationScope(env, 'main');
+  await assertRecoveriesAcknowledged(fakeRequest({schema: 1, delta_sha256: digest,
+    library_path: 'library.json', library_sha: 'fixture-sha'}, [
+      {name: `research-recovery-v2-${scope}-1-${digest}`},
+    ]), env);
+});
+test('unknown recovery format fails closed', async () => {
+  await assert.rejects(assertRecoveriesAcknowledged(fakeRequest(null, [{name: 'research-recovery-v99-unknown'}]), env));
+});

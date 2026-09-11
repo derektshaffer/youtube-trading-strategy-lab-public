@@ -33,6 +33,14 @@ async function requestJSON(url, token, missingOK = false) {
   if (!response.ok) throw new Error('Recovery preflight service unavailable');
   return response.json();
 }
+function destinationScope(env = process.env, branch = env.GITHUB_BACKUP_BRANCH) {
+  if (!env.GITHUB_BACKUP_REPOSITORY || !branch || !env.GITHUB_BACKUP_PATH) {
+    throw new Error('Recovery destination missing');
+  }
+  return crypto.createHash('sha256').update(JSON.stringify([
+    env.GITHUB_BACKUP_REPOSITORY.toLowerCase(), branch, env.GITHUB_BACKUP_PATH,
+  ])).digest('hex');
+}
 async function assertRecoveriesAcknowledged(request = requestJSON, env = process.env) {
   const actionRepo = env.GITHUB_REPOSITORY, backupRepo = env.GITHUB_BACKUP_REPOSITORY;
   if (!actionRepo || !backupRepo || !env.RESEARCH_ACTIONS_TOKEN) throw new Error('Recovery preflight configuration missing');
@@ -41,13 +49,21 @@ async function assertRecoveriesAcknowledged(request = requestJSON, env = process
   const branch = env.GITHUB_BACKUP_BRANCH || backup.default_branch;
   const libraryPath = env.GITHUB_BACKUP_PATH;
   if (!branch || !libraryPath) throw new Error('Recovery destination missing');
+  const scope = destinationScope(env, branch);
   for (let page = 1; page <= 100; page++) {
     const listing = await request(`https://api.github.com/repos/${actionRepo}/actions/artifacts?per_page=100&page=${page}`, env.RESEARCH_ACTIONS_TOKEN);
     if (!Array.isArray(listing.artifacts)) throw new Error('Invalid artifact inventory');
     for (const artifact of listing.artifacts) {
-      const match = /^research-recovery-[0-9]+-([a-f0-9]{64})$/.exec(artifact.name);
-      if (!match || String(artifact.workflow_run?.id) === String(env.GITHUB_RUN_ID)) continue;
-      const digest = match[1];
+      const scoped = /^research-recovery-v2-([a-f0-9]{64})-[0-9]+-([a-f0-9]{64})$/.exec(artifact.name);
+      const legacy = /^research-recovery-[0-9]+-([a-f0-9]{64})$/.exec(artifact.name);
+      if (scoped && scoped[1] !== scope) continue;
+      if (!scoped && !legacy) {
+        if (String(artifact.name).startsWith('research-recovery-')) throw new Error('Unknown recovery artifact identity');
+        continue;
+      }
+      // Include the current run: restarting a worker/job is not permission to
+      // bypass an unresolved envelope. Legacy unscoped artifacts fail closed.
+      const digest = scoped ? scoped[2] : legacy[1];
       const receiptPath = `${libraryPath}.recovery-receipts/${digest}.json`.split('/').map(encodeURIComponent).join('/');
       const metadata = await request(`https://api.github.com/repos/${backupRepo}/contents/${receiptPath}?ref=${encodeURIComponent(branch)}`, env.GITHUB_BACKUP_TOKEN, true);
       if (!metadata) throw new Error('Unacknowledged recovery artifact');
@@ -70,7 +86,10 @@ async function main() {
   if (process.argv[2] === '--upload') {
     const [source, digest] = process.argv.slice(3);
     if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error('Invalid recovery digest');
-    const name = `research-recovery-${process.env.GITHUB_RUN_ATTEMPT}-${digest}`;
+    const branch = process.env.GITHUB_BACKUP_BRANCH || (await requestJSON(
+      `https://api.github.com/repos/${process.env.GITHUB_BACKUP_REPOSITORY}`,
+      process.env.GITHUB_BACKUP_TOKEN)).default_branch;
+    const name = `research-recovery-v2-${destinationScope(process.env, branch)}-${process.env.GITHUB_RUN_ATTEMPT}-${digest}`;
     const {DefaultArtifactClient} = require('@actions/artifact');
     const client = new DefaultArtifactClient();
     // A successful immutable artifact with this digest is an idempotent receipt.
@@ -94,12 +113,23 @@ async function main() {
     process.exitCode = 1;
     return;
   }
+  if (process.argv[2] === '--preflight') return;
+  if (process.env.RESEARCH_RECOVERY_SMOKE === '1') {
+    if (process.env.GITHUB_REF !== 'refs/heads/codex/cloud-backup-capacity-smoke') {
+      throw new Error('Recovery smoke requires its isolated source branch');
+    }
+    const result = cp.spawnSync('python', ['cloud_backup_capacity_smoke.py', 'retain'], {
+      stdio: 'inherit', env: {...process.env, RETAIN_CLOUD_RECOVERY: '1'},
+    });
+    process.exitCode = result.status === null ? 1 : result.status;
+    return;
+  }
   const result = cp.spawnSync('python', ['cloud_research_worker.py'], {
     stdio: 'inherit', env: {...process.env, RETAIN_CLOUD_RECOVERY: '1'},
   });
   process.exitCode = result.status === null ? 1 : result.status;
 }
-module.exports = {encrypt, decrypt, assertRecoveriesAcknowledged};
+module.exports = {encrypt, decrypt, assertRecoveriesAcknowledged, destinationScope};
 if (require.main === module) main().catch(() => {
   // Never print artifact service signed URLs, keys, or private library content.
   console.error('Research recovery operation failed. Local bundle retained; inspect service/configuration.');

@@ -14,6 +14,7 @@ from http.client import HTTPException
 import base64
 import binascii
 import hashlib
+from cloud_library_codec import decode_library_bytes, encode_library_bytes, LibraryEncodingError
 import json
 import math
 import os
@@ -2295,6 +2296,7 @@ class GitHubCloudBackup:
             digest = hashlib.sha1(f"blob {len(raw)}\0".encode("ascii") + raw).hexdigest()
             if digest != str(record.get("sha") or ""):
                 raise CloudBackupConflict("Cloud blob changed during download or failed integrity verification; no write attempted.")
+            raw = decode_library_bytes(raw)
             library = json.loads(raw.decode("utf-8"))
         except (binascii.Error, UnicodeDecodeError, ValueError) as exc:
             raise AppError("The GitHub cloud backup is damaged or is not a valid JSON strategy library.") from exc
@@ -2398,6 +2400,10 @@ class GitHubCloudBackup:
             default=str,
             allow_nan=False,
         ).encode("utf-8")
+        try:
+            serialized = encode_library_bytes(serialized)
+        except LibraryEncodingError as exc:
+            raise AppError(str(exc)) from exc
         if len(serialized) > GITHUB_CONTENTS_API_SAFE_BYTES:
             sha = self._save_large_library(
                 serialized,
@@ -2491,9 +2497,9 @@ class StrategyStore:
             self.restored_cloud_sha = str(remote.get("sha") or "")
             raw_remote = remote.get("_raw_bytes")
             if isinstance(raw_remote, (bytes, bytearray)):
-                # Preserve the exact Git blob on cold restore. This lets the
-                # next metadata-only revision check prove local == cloud without
-                # downloading the large file again.
+                # Local storage is always decoded JSON. Legacy JSON retains the
+                # exact Git blob; compressed backups use the normal full-content
+                # comparison rather than falsely equating decoded and wire SHAs.
                 self._write_local_bytes(bytes(raw_remote), make_backup=False)
             else:
                 self._write_local(remote_library, make_backup=False)

@@ -1,0 +1,5 @@
+name: Recover isolated storage fixture
+description: Test recovery without executing research or writing production
+runs:
+  using: node24
+  main: index.cjs

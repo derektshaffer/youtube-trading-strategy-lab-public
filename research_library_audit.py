@@ -289,7 +289,8 @@ def profit_first_validation_summary(
 
 
 def summarize(path: Path) -> dict[str, Any]:
-    data = json.loads(path.read_text(encoding="utf-8"))
+    from cloud_library_codec import read_library_file
+    data = json.loads(read_library_file(path))
     now = datetime.now(UTC)
     queue = [x for x in data.get("research_queue") or [] if isinstance(x, dict)]
     workers = [x for x in data.get("research_worker_runs") or [] if isinstance(x, dict)]

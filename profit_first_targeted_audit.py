@@ -216,7 +216,8 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    library = json.loads(Path(args.library).read_text(encoding="utf-8"))
+    from cloud_library_codec import read_library_file
+    library = json.loads(read_library_file(args.library))
     requested = next(
         (
             item

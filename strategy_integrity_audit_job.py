@@ -53,34 +53,11 @@ def load_private_library() -> dict[str, Any]:
         or "trading-intelligence-lab/intelligence_library.json"
     ).strip()
 
-    from urllib.parse import quote
-
-    owner_repo = "/".join(quote(piece, safe="") for piece in repository.split("/", 1))
-    path_encoded = "/".join(quote(piece, safe="") for piece in path.split("/"))
-    contents_url = (
-        f"https://api.github.com/repos/{owner_repo}/contents/{path_encoded}"
-        f"?ref={quote(branch, safe='')}"
-    )
-    metadata = _github_json(contents_url, token)
-    encoded = metadata.get("content")
-    encoding = str(metadata.get("encoding") or "").lower()
-
-    if isinstance(encoded, str) and encoded.strip() and encoding == "base64":
-        raw = base64.b64decode(encoded)
-    else:
-        git_url = str(metadata.get("git_url") or "").strip()
-        if not git_url:
-            raise RuntimeError("Backup metadata did not provide readable content or a Git blob URL.")
-        blob = _github_json(git_url, token)
-        blob_content = blob.get("content")
-        if not isinstance(blob_content, str) or not blob_content.strip():
-            raise RuntimeError("Git blob response did not contain backup content.")
-        raw = base64.b64decode(blob_content)
-
-    payload = json.loads(raw.decode("utf-8"))
-    if not isinstance(payload, dict):
-        raise RuntimeError("Private backup root is not a JSON object.")
-    return payload
+    from youtube_strategy_engine import GitHubCloudBackup
+    remote = GitHubCloudBackup(repository, token, branch=branch, path=path).read_library()
+    if remote is None:
+        raise RuntimeError("Private backup library is missing.")
+    return remote["library"]
 
 
 def strategy_text(strategy: dict[str, Any]) -> str:
