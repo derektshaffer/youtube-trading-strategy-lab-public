@@ -467,6 +467,12 @@ def recover_stale_research_jobs(
         if heartbeat is None or heartbeat > threshold:
             queue.append(item)
             continue
+        if item.get("cloud_persistence_protocol") == 1:
+            # A completed result may be awaiting synchronization outside this
+            # library. Artifact expiry/runner loss is never proof of no result.
+            # Preserve claim and ancestry until explicit recovery/review.
+            queue.append(item)
+            continue
         attempts = int(item.get("attempts") or 0)
         max_attempts = int(item.get("max_attempts") or 3)
         retry = attempts < max_attempts

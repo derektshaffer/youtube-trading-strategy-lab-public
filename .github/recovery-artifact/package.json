@@ -1,0 +1,8 @@
+{
+  "name": "trading-research-recovery",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "@actions/artifact": "6.2.1"
+  }
+}

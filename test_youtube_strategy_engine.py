@@ -1543,9 +1543,11 @@ class CloudBackupReadTests(unittest.TestCase):
             "strategies": [{"id": "s1", "name": "Test"}],
             "updated_at": "2026-08-31T00:00:00Z",
         }
+        raw = json.dumps(library).encode("utf-8")
+        sha = engine.hashlib.sha1(f"blob {len(raw)}\0".encode() + raw).hexdigest()
         record = {
             "type": "file",
-            "sha": "a" * 40,
+            "sha": sha,
             "size": 75_000_000,
             "encoding": "none",
         }
@@ -1557,7 +1559,7 @@ class CloudBackupReadTests(unittest.TestCase):
             restored = cloud.read_library()
 
         self.assertEqual(restored["library"], library)
-        self.assertEqual(restored["sha"], "a" * 40)
+        self.assertEqual(restored["sha"], sha)
         raw_request.assert_called_once_with(cloud._contents_url())
 
 

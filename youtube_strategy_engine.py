@@ -95,6 +95,10 @@ class AppError(RuntimeError):
     """An actionable error appropriate for displaying inside the application."""
 
 
+class CloudBackupConflict(AppError):
+    """A verified optimistic-concurrency rejection; safe to fetch and reconcile."""
+
+
 def provider_quota_reached(error: Exception | str) -> bool:
     message = str(error).lower()
     return any(
@@ -2016,7 +2020,7 @@ class GitHubCloudBackup:
                     "Create it with a README and grant the backup token access to that repository."
                 ) from exc
             if exc.code == 409:
-                raise AppError(
+                raise CloudBackupConflict(
                     "The GitHub cloud backup changed while this app was saving. "
                     "Restore or inspect the latest cloud backup before retrying so newer records are not overwritten."
                 ) from exc
@@ -2130,6 +2134,9 @@ class GitHubCloudBackup:
     ) -> str:
         """Commit an oversized library with a shallow, conflict-safe Git push."""
 
+        if len(serialized) > 100 * 1024 * 1024:
+            raise AppError(f"GitHub backup is {len(serialized)} bytes, exceeding the 100 MiB blob limit; local recovery retained. Reduce storage size losslessly before synchronization.")
+
         def run_git(arguments: list[str], *, cwd: Path | None, environment: dict[str, str]) -> str:
             try:
                 result = subprocess.run(
@@ -2149,12 +2156,15 @@ class GitHubCloudBackup:
                 raise AppError("The large GitHub cloud-backup push timed out; no force push was attempted.") from exc
             if result.returncode:
                 detail = f"{result.stderr}\n{result.stdout}".casefold()
-                if any(marker in detail for marker in ("non-fast-forward", "fetch first", "stale info", "rejected")):
-                    raise AppError(
+                if any(marker in detail for marker in ("non-fast-forward", "fetch first", "stale info")):
+                    raise CloudBackupConflict(
                         "The GitHub cloud backup changed while this app was saving. "
                         "Restore or inspect the latest cloud backup before retrying so newer records are not overwritten."
                     )
+                if any(marker in detail for marker in ("gh001", "exceeds github", "file size limit")):
+                    raise AppError("GitHub rejected an oversized backup blob; recovery is retained. No concurrency retry can fix the file size limit.")
                 raise AppError(
+                    "GitHub rejected the large backup (not a verified concurrency conflict). Check repository policy, size, and permissions. "
                     "The large GitHub cloud-backup Git push failed. The saved library and completed research shards were not discarded."
                 )
             return str(result.stdout or "").strip()
@@ -2206,7 +2216,7 @@ class GitHubCloudBackup:
             else:
                 cloned_sha = ""
             if cloned_sha != str(current_sha or ""):
-                raise AppError(
+                raise CloudBackupConflict(
                     "The GitHub cloud backup changed while this app was saving. "
                     "Restore or inspect the latest cloud backup before retrying so newer records are not overwritten."
                 )
@@ -2282,6 +2292,9 @@ class GitHubCloudBackup:
                     raise AppError("GitHub returned the cloud backup in an unsupported encoding.")
                 content = "".join(str(blob.get("content") or "").split())
                 raw = base64.b64decode(content, validate=True)
+            digest = hashlib.sha1(f"blob {len(raw)}\0".encode("ascii") + raw).hexdigest()
+            if digest != str(record.get("sha") or ""):
+                raise CloudBackupConflict("Cloud blob changed during download or failed integrity verification; no write attempted.")
             library = json.loads(raw.decode("utf-8"))
         except (binascii.Error, UnicodeDecodeError, ValueError) as exc:
             raise AppError("The GitHub cloud backup is damaged or is not a valid JSON strategy library.") from exc
@@ -2311,14 +2324,44 @@ class GitHubCloudBackup:
             result["_raw_bytes"] = raw
         return result
 
+    def acknowledge_recovery(self, digest: str, library_sha: str) -> None:
+        """Immutable receipt, written only after a reconciled canonical save."""
+        if not re.fullmatch(r"[a-f0-9]{64}", digest):
+            raise AppError("Invalid recovery receipt identity.")
+        self._verify_private_repository()
+        receipt_path = f"{self.path}.recovery-receipts/{digest}.json"
+        encoded = "/".join(quote(part, safe="") for part in receipt_path.split("/"))
+        url = f"{self._repository_url}/contents/{encoded}"
+        current = self._request(url + "?" + urlencode({"ref": self.branch}), missing_ok=True)
+        if current is not None:
+            try:
+                record = json.loads(base64.b64decode(current["content"]))
+                valid = (record.get("schema") == 1 and record.get("delta_sha256") == digest
+                         and record.get("library_path") == self.path and record.get("library_sha"))
+            except (KeyError, ValueError, TypeError):
+                valid = False
+            if not valid:
+                raise AppError("Recovery acknowledgement contains a conflicting identity; inspect it.")
+            return
+        receipt = {"schema": 1, "delta_sha256": digest, "library_path": self.path,
+                   "library_sha": library_sha}
+        self._request(url, method="PUT", payload={
+            "message": f"Acknowledge synchronized research delta {digest[:16]}",
+            "branch": self.branch,
+            "content": base64.b64encode(json.dumps(receipt, sort_keys=True).encode()).decode(),
+        })
+
     def save_library(
         self,
         data: dict[str, Any],
         *,
         previous_updated_at: str | None = None,
         force_write: bool = False,
+        expected_sha: str | None = None,
     ) -> dict[str, Any]:
         current = self.read_library()
+        if expected_sha is not None and str((current or {}).get("sha") or "") != expected_sha:
+            raise CloudBackupConflict("Cloud blob identity changed before compare-and-swap save.")
         if current is not None:
             remote_updated_at = current["library"].get("updated_at")
             local_updated_at = data.get("updated_at")
@@ -2340,7 +2383,7 @@ class GitHubCloudBackup:
                 # when the caller has no synchronization token.
                 conflict = bool(remote_previous)
             if conflict:
-                raise AppError(
+                raise CloudBackupConflict(
                     "The private GitHub backup contains a different or newer saved library. "
                     "Your local change was kept, but the cloud copy was not overwritten. "
                     "Restore the latest cloud backup before retrying so newer records are preserved."

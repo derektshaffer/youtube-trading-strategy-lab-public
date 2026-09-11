@@ -111,6 +111,10 @@ def env(name: str, default: str = "") -> str:
     return str(os.environ.get(name, default) or "").strip()
 
 
+from reconciled_strategy_store import ReconciledStrategyStore, PersistencePending
+from cloud_backup_reconciliation import claim_identity
+
+
 def persist_store(
     store: StrategyStore,
     data: dict[str, Any],
@@ -140,7 +144,7 @@ def persist_store(
     ) from last_error
 
 
-def build_store() -> StrategyStore:
+def build_store(*, reconcile_cloud: bool = False) -> StrategyStore:
     repository = env("GITHUB_BACKUP_REPOSITORY")
     token = env("GITHUB_BACKUP_TOKEN")
     if not repository or not token:
@@ -154,7 +158,8 @@ def build_store() -> StrategyStore:
         branch=env("GITHUB_BACKUP_BRANCH"),
         path=env("GITHUB_BACKUP_PATH", DEFAULT_GITHUB_BACKUP_PATH),
     )
-    return StrategyStore(cloud_backup=cloud)
+    store_type = ReconciledStrategyStore if reconcile_cloud else StrategyStore
+    return store_type(cloud_backup=cloud)
 
 
 def build_live_learning_outbox_store() -> StrategyStore:
@@ -934,6 +939,11 @@ def execute_job(
 
     if job_type == "predictive_ml_backfill":
         latest = store.load_latest()
+        current_claim = next((item for item in latest.get("research_queue", [])
+                              if item.get("id") == job.get("id")), None)
+        if (not current_claim or current_claim.get("status") != "running"
+                or claim_identity(current_claim) != claim_identity(job)):
+            raise PersistencePending("ML claim changed before execution; refresh ownership before recovery.")
         research_system = (
             dict(latest.get("research_system") or {})
             if isinstance(latest.get("research_system"), dict)
@@ -986,7 +996,9 @@ def execute_job(
             payload=worker_payload,
             progress=ml_progress,
         )
-        latest = store.load_latest()
+        result = dict(result)
+        result["origin_job_id"] = str(job.get("id") or "")
+        result["origin_claim"] = claim_identity(job)
         latest = merge_backfill_result_into_library(latest, result)
         result_ref = f"predictive-ml:{result.get('id')}"
         latest = finish_research_job(
@@ -1333,7 +1345,7 @@ def print_predictive_ml_router_summary(library: dict[str, Any]) -> None:
 
 
 def main() -> int:
-    store = build_store()
+    store = build_store(reconcile_cloud=True)
     outbox_store = build_live_learning_outbox_store()
     live_learning = drain_live_learning_outbox(store, outbox_store)
     if live_learning.get("queued"):
@@ -1510,6 +1522,13 @@ def main() -> int:
         if job is None:
             print("No research jobs are ready.", flush=True)
             break
+        # A later scheduler must inspect recovery, even if an artifact expired or
+        # the runner died before upload. Never automatically reclaim this attempt.
+        job["cloud_persistence_protocol"] = 1
+        data["research_queue"] = [
+            {**item, "cloud_persistence_protocol": 1} if item.get("id") == job.get("id") else item
+            for item in data["research_queue"]
+        ]
         persist_store(store, data)
         job_id = str(job.get("id") or "")
         job_type = str(job.get("type") or "")
@@ -1518,6 +1537,9 @@ def main() -> int:
             result_ref = execute_job(store, router, job, worker_id)
             completed += 1
             print(f"Completed {job_id}: {result_ref}", flush=True)
+        except PersistencePending as exc:
+            print(str(exc), file=sys.stderr, flush=True)
+            return 1
         except Exception as exc:
             latest = store.load_latest()
             failure_step = "job_execution"

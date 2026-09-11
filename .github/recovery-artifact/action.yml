@@ -1,0 +1,5 @@
+name: Retain completed research before synchronization
+description: Run research with encrypted, immutable recovery artifacts
+runs:
+  using: node24
+  main: index.cjs

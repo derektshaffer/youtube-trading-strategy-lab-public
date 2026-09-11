@@ -263,7 +263,9 @@ def test_exact_profit_failure_only_marks_owned_job():
 def test_workflow_exact_job_input_is_data_not_shell_source_and_broad_worker_is_conditional():
     text = (Path(__file__).parent / ".github/workflows/continuous-trading-research.yml").read_text()
     assert 'EXACT_PROFIT_FIRST_JOB_ID: ${{ inputs.job_id }}' in text
-    assert 'if: ${{ !inputs.job_id }}\n        run: python cloud_research_worker.py' in text
+    assert 'if: ${{ !inputs.job_id }}\n        uses: ./.github/recovery-artifact' in text
+    action = (Path(__file__).parent / '.github/recovery-artifact/index.cjs').read_text()
+    assert "spawnSync('python', ['cloud_research_worker.py']" in action
     assert 'if: ${{ inputs.job_id != \'\' }}' in text
     assert 'run: python cloud_profit_first_worker.py --job-id "$EXACT_PROFIT_FIRST_JOB_ID"' in text
     assert '--job-id "${{ inputs.job_id }}"' not in text

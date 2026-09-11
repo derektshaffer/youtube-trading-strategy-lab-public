@@ -27,10 +27,11 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  # Both workflows mutate the same durable Trading Intelligence library.
-  # A shared group prevents cross-workflow lost-update/retry races.
+  # Serialize Continuous Research and Distributed Finder computations.
+  # Desktop and Strategy Lab writers still require semantic CAS reconciliation.
   group: trading-intelligence-library-writer
   cancel-in-progress: false
 
@@ -39,6 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 330
     env:
+      RESEARCH_ACTIONS_TOKEN: ${{ github.token }}
       EXACT_PROFIT_FIRST_JOB_ID: ${{ inputs.job_id }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GEMINI_PAID_API_KEY: ${{ secrets.GEMINI_PAID_API_KEY }}
@@ -98,9 +100,13 @@ jobs:
             exit 1
           fi
 
+      - name: Install recovery artifact client
+        if: ${{ !inputs.job_id }}
+        run: npm ci --prefix .github/recovery-artifact --ignore-scripts
+
       - name: Run persistent autonomous research worker
         if: ${{ !inputs.job_id }}
-        run: python cloud_research_worker.py
+        uses: ./.github/recovery-artifact
 
       - name: Run only the requested Profit First job
         if: ${{ inputs.job_id != '' }}
