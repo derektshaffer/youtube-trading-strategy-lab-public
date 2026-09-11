@@ -1,8 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const cp = require('node:child_process');
-const {DefaultArtifactClient} = require('@actions/artifact');
-const {decrypt, destinationScope, assertRecoveriesAcknowledged} = require('./index.cjs');
+const {decrypt, destinationScope, assertRecoveriesAcknowledged, loadArtifactClient} = require('./index.cjs');
 
 function python(args) {
   const r = cp.spawnSync('python', args, {encoding: 'utf8', env: {...process.env, RETAIN_CLOUD_RECOVERY: '1'}});
@@ -22,7 +21,7 @@ async function main() {
   if (wrapper.status !== 1 || !wrapper.stderr.includes('New research blocked:')) throw new Error('Wrapper did not block before computation');
   const [repositoryOwner, repositoryName] = process.env.GITHUB_REPOSITORY.split('/');
   const findBy = {token: process.env.RESEARCH_ACTIONS_TOKEN, workflowRunId: Number(source), repositoryOwner, repositoryName};
-  const client = new DefaultArtifactClient();
+  const client = await loadArtifactClient();
   const {artifacts} = await client.listArtifacts({findBy});
   const matches = artifacts.filter(a => a.name.startsWith(`research-recovery-v2-${scope}-`));
   if (matches.length !== 1) throw new Error('Expected exactly one source envelope');

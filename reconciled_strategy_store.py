@@ -219,7 +219,7 @@ def retain_actions_artifact(path, digest):
                 try:
                     value = json.loads(line.removeprefix("RECOVERY_DIAGNOSTIC "))
                     stage, category = value.get("stage"), value.get("category")
-                    if (stage in {"startup", "upload_configuration", "artifact_list", "artifact_encrypt", "artifact_upload"}
+                    if (stage in {"startup", "upload_configuration", "artifact_client_load", "artifact_list", "artifact_encrypt", "artifact_upload"}
                             and category in {"runtime_configuration", "dependency", "authorization", "capacity", "network", "unclassified"}):
                         diagnostic = f" Stage={stage}; category={category}."
                 except (ValueError, TypeError, AttributeError):

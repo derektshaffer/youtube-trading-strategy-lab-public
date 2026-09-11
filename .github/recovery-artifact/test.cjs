@@ -75,3 +75,9 @@ test('diagnostics never include arbitrary URLs or secrets', () => {
   assert.equal(diagnostic.includes('private.invalid'), false);
   assert.equal(JSON.parse(diagnostic).category, 'network');
 });
+test('installed artifact SDK can be loaded through its real ESM export', async () => {
+  const {loadArtifactClient} = require('./index.cjs');
+  const client = await loadArtifactClient();
+  assert.equal(typeof client.uploadArtifact, 'function');
+  assert.equal(typeof client.downloadArtifact, 'function');
+});

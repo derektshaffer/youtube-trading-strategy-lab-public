@@ -9,12 +9,18 @@ function safeFailure(error) {
   const message = String(error?.message || '');
   const categories = [
     ['runtime_configuration', /ACTIONS_RUNTIME|ACTIONS_RESULTS|Unable to get.*(?:token|URL)|runtime token/i],
-    ['dependency', /Cannot find module|ERR_REQUIRE|not a function|not a constructor/i],
+    ['dependency', /Cannot find module|ERR_REQUIRE|not a function|not a constructor|No "exports" main defined/i],
     ['authorization', /unauthorized|forbidden|permission|401|403/i],
     ['capacity', /quota|storage limit|too large|artifact limit/i],
     ['network', /fetch failed|timeout|timed out|ECONN|ENOTFOUND/i],
   ];
   return {stage: operation, category: categories.find(([, pattern]) => pattern.test(message))?.[0] || 'unclassified'};
+}
+async function loadArtifactClient() {
+  // Artifact v6 only exports an ESM import entry. A CommonJS require fails
+  // before any upload, even on Node 24 (ERR_PACKAGE_PATH_NOT_EXPORTED).
+  const {DefaultArtifactClient} = await import('@actions/artifact');
+  return new DefaultArtifactClient();
 }
 
 function key(salt) {
@@ -104,9 +110,9 @@ async function main() {
       `https://api.github.com/repos/${process.env.GITHUB_BACKUP_REPOSITORY}`,
       process.env.GITHUB_BACKUP_TOKEN)).default_branch;
     const name = `research-recovery-v2-${destinationScope(process.env, branch)}-${process.env.GITHUB_RUN_ATTEMPT}-${digest}`;
-    const {DefaultArtifactClient} = require('@actions/artifact');
+    operation = 'artifact_client_load';
+    const client = await loadArtifactClient();
     operation = 'artifact_list';
-    const client = new DefaultArtifactClient();
     // A successful immutable artifact with this digest is an idempotent receipt.
     const {artifacts} = await client.listArtifacts();
     if (artifacts.some(a => a.name === name)) return;
@@ -146,7 +152,7 @@ async function main() {
   });
   process.exitCode = result.status === null ? 1 : result.status;
 }
-module.exports = {encrypt, decrypt, assertRecoveriesAcknowledged, destinationScope, safeFailure};
+module.exports = {encrypt, decrypt, assertRecoveriesAcknowledged, destinationScope, safeFailure, loadArtifactClient};
 if (require.main === module) main().catch((error) => {
   // Never print artifact service signed URLs, keys, or private library content.
   console.error('Research recovery operation failed. Local bundle retained; inspect service/configuration.');
