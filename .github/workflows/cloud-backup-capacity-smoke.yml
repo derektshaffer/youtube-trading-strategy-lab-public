@@ -2,6 +2,7 @@ name: Isolated cloud backup capacity and recovery
 on:
   push:
     branches: [codex/cloud-backup-capacity-smoke]
+    paths: [.github/cloud-backup-smoke-plan.json]
 permissions:
   contents: read
   actions: read

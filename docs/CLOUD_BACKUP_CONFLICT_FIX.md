@@ -1,5 +1,7 @@
 # Continuous Research persistence: local fix and deployment assessment
 
+> September 11 continuation: the assessment below records the original `3273f14` checkpoint. Subsequent lossless capacity work was published only to the isolated smoke branch and tested with synthetic private fixtures. See [the capacity and authenticated recovery report](CLOUD_BACKUP_CAPACITY_AND_RECOVERY.md) for current evidence and rollout status. Production main/data and V5 remain untouched; the original no-push/no-smoke statements below describe that earlier checkpoint.
+
 ## Result and scope
 
 This change is checkpointed locally on `codex/cloud-backup-conflict-fix`, in the isolated clone `/Users/Derek_1/Documents/cloud-backup-conflict-fix`, based on public main `d5eb766bf64f73997ef808391e9d62d8996f031c`. That is also run #104's source revision. No production backup was written, no code was pushed/deployed, no workflow was dispatched, and no research or live orders were run. The existing `/Users/Derek_1/Documents/New project` checkout and the separate V5 qualification repositories were not edited.
