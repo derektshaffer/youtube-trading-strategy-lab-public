@@ -177,7 +177,15 @@ def retain():
     cloud = FixtureBackup()
     baseline = manifest(cloud)
     def retain_then_interrupt(path, digest):
-        retain_actions_artifact(path, digest)
+        try:
+            retain_actions_artifact(path, digest)
+        except Exception as exc:
+            # Only propagate the retainer's allowlisted diagnostic, never child logs.
+            import re
+            found = re.search(r"Stage=([a-z_]+); category=([a-z_]+)\.", str(exc))
+            report("retain-failure", {"error_type": type(exc).__name__,
+                                     "diagnostic": found.group(0) if found else "unavailable"})
+            raise
         report("retained", {"artifact_acknowledged": True, "delta_sha256": digest,
                             "base_sha": baseline["base_sha"], "source_run_id": source_id(),
                             "intentional_exit": 75, "canonical_sync_started": False})

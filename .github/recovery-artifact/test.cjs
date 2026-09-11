@@ -68,3 +68,10 @@ test('scoped receipt allows restart', async () => {
 test('unknown recovery format fails closed', async () => {
   await assert.rejects(assertRecoveriesAcknowledged(fakeRequest(null, [{name: 'research-recovery-v99-unknown'}]), env));
 });
+test('diagnostics never include arbitrary URLs or secrets', () => {
+  const {safeFailure} = require('./index.cjs');
+  const diagnostic = JSON.stringify(safeFailure(new Error('fetch failed https://private.invalid/?token=secret-value')));
+  assert.equal(diagnostic.includes('secret-value'), false);
+  assert.equal(diagnostic.includes('private.invalid'), false);
+  assert.equal(JSON.parse(diagnostic).category, 'network');
+});

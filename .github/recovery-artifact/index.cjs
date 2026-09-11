@@ -3,6 +3,19 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const cp = require('node:child_process');
 const MAGIC = Buffer.from('TILREC01');
+let operation = 'startup';
+
+function safeFailure(error) {
+  const message = String(error?.message || '');
+  const categories = [
+    ['runtime_configuration', /ACTIONS_RUNTIME|ACTIONS_RESULTS|Unable to get.*(?:token|URL)|runtime token/i],
+    ['dependency', /Cannot find module|ERR_REQUIRE|not a function|not a constructor/i],
+    ['authorization', /unauthorized|forbidden|permission|401|403/i],
+    ['capacity', /quota|storage limit|too large|artifact limit/i],
+    ['network', /fetch failed|timeout|timed out|ECONN|ENOTFOUND/i],
+  ];
+  return {stage: operation, category: categories.find(([, pattern]) => pattern.test(message))?.[0] || 'unclassified'};
+}
 
 function key(salt) {
   const secret = process.env.GITHUB_BACKUP_TOKEN;
@@ -84,6 +97,7 @@ async function main() {
     return;
   }
   if (process.argv[2] === '--upload') {
+    operation = 'upload_configuration';
     const [source, digest] = process.argv.slice(3);
     if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error('Invalid recovery digest');
     const branch = process.env.GITHUB_BACKUP_BRANCH || (await requestJSON(
@@ -91,14 +105,17 @@ async function main() {
       process.env.GITHUB_BACKUP_TOKEN)).default_branch;
     const name = `research-recovery-v2-${destinationScope(process.env, branch)}-${process.env.GITHUB_RUN_ATTEMPT}-${digest}`;
     const {DefaultArtifactClient} = require('@actions/artifact');
+    operation = 'artifact_list';
     const client = new DefaultArtifactClient();
     // A successful immutable artifact with this digest is an idempotent receipt.
     const {artifacts} = await client.listArtifacts();
     if (artifacts.some(a => a.name === name)) return;
     const directory = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP, 'research-recovery-'));
     try {
+      operation = 'artifact_encrypt';
       const encrypted = path.join(directory, `${digest}.tilrec`);
       fs.writeFileSync(encrypted, encrypt(fs.readFileSync(source)), {mode: 0o600});
+      operation = 'artifact_upload';
       const receipt = await client.uploadArtifact(name, [encrypted], directory,
         {retentionDays: 30, compressionLevel: 0});
       if (!receipt.id) throw new Error('Artifact acknowledgement missing');
@@ -129,9 +146,10 @@ async function main() {
   });
   process.exitCode = result.status === null ? 1 : result.status;
 }
-module.exports = {encrypt, decrypt, assertRecoveriesAcknowledged, destinationScope};
-if (require.main === module) main().catch(() => {
+module.exports = {encrypt, decrypt, assertRecoveriesAcknowledged, destinationScope, safeFailure};
+if (require.main === module) main().catch((error) => {
   // Never print artifact service signed URLs, keys, or private library content.
   console.error('Research recovery operation failed. Local bundle retained; inspect service/configuration.');
+  console.error('RECOVERY_DIAGNOSTIC ' + JSON.stringify(safeFailure(error)));
   process.exitCode = 1;
 });
