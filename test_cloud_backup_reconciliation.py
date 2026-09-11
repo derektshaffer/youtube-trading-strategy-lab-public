@@ -307,6 +307,29 @@ def test_git_rejection_classification(marker, is_conflict):
         assert isinstance(raised.value, CloudBackupConflict) is is_conflict
 
 
+@pytest.mark.parametrize('ref,actual,expected,is_conflict', [
+    ('main', 'a' * 40, 'b' * 40, True),
+    ('main', 'a' * 64, 'b' * 64, True),
+    ('main', 'a' * 40, 'a' * 40, False),
+    ('other', 'a' * 40, 'b' * 40, False),
+    ('MAIN', 'a' * 40, 'b' * 40, False),
+    ('main', 'unknown', 'unknown', False),
+    ('main', 'a' * 40, 'b' * 64, False),
+])
+def test_server_ref_cas_rejection(ref, actual, expected, is_conflict):
+    import subprocess
+    marker = f"remote: error: cannot lock ref 'refs/heads/{ref}': is at {actual} but expected {expected}"
+    cloud = GitHubCloudBackup('fixture/private', 'fake-token', branch='main')
+    def git(args, **kwargs):
+        if args[1] == 'push':
+            return subprocess.CompletedProcess(args, 1, '', marker)
+        return subprocess.CompletedProcess(args, 0, 'f' * 40 if args[1] == 'hash-object' else '', '')
+    with patch('youtube_strategy_engine.subprocess.run', side_effect=git):
+        with pytest.raises(AppError) as caught:
+            cloud._save_large_library(b'{}')
+    assert isinstance(caught.value, CloudBackupConflict) is is_conflict
+
+
 def test_download_body_must_match_metadata_sha():
     cloud = GitHubCloudBackup('fixture/private', 'fake-token', branch='main')
     cloud._repository_checked = True

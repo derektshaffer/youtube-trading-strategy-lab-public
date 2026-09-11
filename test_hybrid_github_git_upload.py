@@ -248,6 +248,19 @@ def test_porcelain_non_fast_forward_is_still_a_conflict(tmp_path, monkeypatch):
         upload._run_git("git", ["push"], root=tmp_path, environment={}, operation="push")
 
 
+@pytest.mark.parametrize('detail,is_conflict', [
+    (f"cannot lock ref 'refs/heads/main': is at {'a' * 40} but expected {'b' * 40}", True),
+    ("cannot lock ref 'refs/heads/main': permission denied", False),
+])
+def test_server_ref_update_cas_classification(tmp_path, monkeypatch, detail, is_conflict):
+    response = subprocess.CompletedProcess([], 1, b'! [remote rejected] (failed to update ref)', detail.encode())
+    monkeypatch.setattr(upload.subprocess, 'run', lambda *a, **kw: response)
+    with pytest.raises(GitHubLibraryError) as caught:
+        upload._run_git('git', ['push', 'origin', 'f' * 40 + ':refs/heads/main'],
+                        root=tmp_path, environment={}, operation='push')
+    assert isinstance(caught.value, GitHubLibraryConflict) is is_conflict
+
+
 def test_blob_hash_mismatch_is_rejected_before_push(repository, monkeypatch):
     _, _, expected, calls, intercept = repository
 

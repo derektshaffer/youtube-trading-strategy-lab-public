@@ -76,6 +76,7 @@ class FixtureBackup(GitHubCloudBackup):
     race_barrier = None
     race_waited = False
     conflicts = 0
+    ref_update_conflicts = 0
 
     def __init__(self):
         super().__init__(os.environ["GITHUB_BACKUP_REPOSITORY"], os.environ["GITHUB_BACKUP_TOKEN"],
@@ -90,8 +91,10 @@ class FixtureBackup(GitHubCloudBackup):
             self.race_barrier.wait(timeout=120)
         try:
             return super()._save_large_library(*args, **kwargs)
-        except CloudBackupConflict:
+        except CloudBackupConflict as exc:
             self.conflicts += 1
+            if 'different expected branch revision' in str(exc):
+                self.ref_update_conflicts += 1
             raise
 
     def _request(self, url, **kwargs):
@@ -237,7 +240,19 @@ def race():
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = [pool.submit(stores[i].save, data[i]) for i in range(2)]
         for future in futures:
-            future.result(timeout=600)
+            try:
+                future.result(timeout=600)
+            except Exception as exc:
+                message = str(exc)
+                report('race-failure', {
+                    'error_type': type(exc).__name__,
+                    'unclassified_git_rejection': 'not a verified concurrency conflict' in message,
+                    'timestamp_collision': 'same saved timestamp' in message,
+                    'semantic_conflict': 'Cloud reconciliation conflict' in message,
+                    'artifact_upload_failed': 'artifact upload failed' in message,
+                    'real_conflicts': sum(c.conflicts for c in clouds),
+                })
+                raise
     remote = FixtureBackup().read_library()
     ids = [r["id"] for r in remote["library"]["research_runs"]]
     expected = {"fixture-seed", "fixture-computed-once", "fixture-racer-0", "fixture-racer-1"}
@@ -249,6 +264,7 @@ def race():
     if canonical(without_racers) != canonical(before):
         raise RuntimeError("Concurrent updates changed historical fixture content")
     report("race", {"real_conflicts": sum(c.conflicts for c in clouds), "all_four_results_retained": True,
+                     "server_ref_update_conflicts": sum(c.ref_update_conflicts for c in clouds),
                      "library_sha": remote["sha"], "peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss})
 
 

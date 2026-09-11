@@ -15,6 +15,7 @@ import base64
 import binascii
 import hashlib
 from cloud_library_codec import decode_library_bytes, encode_library_bytes, LibraryEncodingError
+from cloud_git_errors import ref_update_conflict
 import json
 import math
 import os
@@ -2156,7 +2157,10 @@ class GitHubCloudBackup:
             except subprocess.TimeoutExpired as exc:
                 raise AppError("The large GitHub cloud-backup push timed out; no force push was attempted.") from exc
             if result.returncode:
-                detail = f"{result.stderr}\n{result.stdout}".casefold()
+                raw_detail = f"{result.stderr}\n{result.stdout}"
+                detail = raw_detail.casefold()
+                if arguments[0] == 'push' and ref_update_conflict(raw_detail, f'refs/heads/{self.branch}'):
+                    raise CloudBackupConflict("GitHub rejected a concurrent ref update with a different expected branch revision.")
                 if any(marker in detail for marker in ("non-fast-forward", "fetch first", "stale info")):
                     raise CloudBackupConflict(
                         "The GitHub cloud backup changed while this app was saving. "

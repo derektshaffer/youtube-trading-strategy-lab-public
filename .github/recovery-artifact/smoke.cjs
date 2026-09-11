@@ -6,7 +6,14 @@ let stage = 'configuration';
 
 function python(args) {
   const r = cp.spawnSync('python', args, {encoding: 'utf8', env: {...process.env, RETAIN_CLOUD_RECOVERY: '1'}});
-  if (r.status !== 0) throw new Error('Fixture recovery process failed');
+  if (r.status !== 0) {
+    const kind = r.stderr?.match(/Controlled storage smoke failed \(([A-Za-z]+)\)/)?.[1];
+    console.error('SMOKE_PROCESS_DIAGNOSTIC ' + JSON.stringify({stage, exit: r.status, signal: r.signal, kind: kind || 'unavailable'}));
+    if (stage === 'cas_race' && fs.existsSync('capacity-smoke-output/race-failure.json')) {
+      console.error('SMOKE_RACE_DIAGNOSTIC ' + fs.readFileSync('capacity-smoke-output/race-failure.json', 'utf8'));
+    }
+    throw new Error('Fixture recovery process failed');
+  }
   // Recovery CLI only emits metadata/acknowledgement, but do not relay arbitrary output.
   return r.stdout;
 }
@@ -66,6 +73,9 @@ async function main() {
     reimport_idempotent: true, receipt_unblocks_preflight: true, real_cas_race_passed: true,
     production_writes: 0, research_executed: false,
   }, null, 2));
+  for (const name of ['recovered', 'race', 'recovery']) {
+    console.log('SMOKE_EVIDENCE ' + JSON.stringify({name, data: JSON.parse(fs.readFileSync(`capacity-smoke-output/${name}.json`))}));
+  }
   console.log('PASS: prior-run block, authenticated artifact recovery, idempotence, receipts, and real CAS race.');
 }
 module.exports = {main, failureStage: () => stage};

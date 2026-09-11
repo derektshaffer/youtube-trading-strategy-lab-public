@@ -17,6 +17,7 @@ import subprocess
 import tempfile
 
 from .github_library import GitHubLibraryConfig, GitHubLibraryConflict, GitHubLibraryError
+from cloud_git_errors import ref_update_conflict
 
 
 GIT_TRANSFER_TIMEOUT_SECONDS = 300
@@ -115,10 +116,11 @@ def _run_git(
     if result.returncode:
         # --porcelain reports per-ref rejection status on stdout; transport
         # diagnostics can be on stderr. Inspect both, but never expose either.
-        detail = (result.stdout + b"\n" + result.stderr).decode("utf-8", errors="replace").lower()
-        if operation == "push" and any(
+        raw_detail = (result.stdout + b"\n" + result.stderr).decode("utf-8", errors="replace")
+        detail = raw_detail.lower()
+        if operation == "push" and (any(
             marker in detail for marker in ("non-fast-forward", "fetch first")
-        ):
+        ) or ref_update_conflict(raw_detail, arguments[-1].rsplit(":", 1)[-1])):
             raise GitHubLibraryConflict("GitHub branch moved during the large-library push.")
         code, explanation = _failure_diagnostic(detail)
         raise GitHubLibraryError(
