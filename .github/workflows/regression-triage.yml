@@ -1,4 +1,4 @@
-name: Frozen regression source comparison
+name: Repaired combined regression verification
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  canonical:
+  repaired-combined:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
@@ -17,52 +17,13 @@ jobs:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: d5eb766bf64f73997ef808391e9d62d8996f031c
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install existing desktop test dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libegl1
-          python -m pip install -r requirements-desktop-pyside.txt 'pytest>=8,<9'
-          mkdir evidence
-          python -m pip freeze > evidence/dependencies.txt
-      - name: Freeze source and environment
-        run: |
-          git rev-parse HEAD HEAD^{tree} > evidence/source.txt
-          git status --porcelain --untracked-files=no >> evidence/source.txt
-          sha256sum youtube_strategy_engine.py strategy_lab_telemetry.py >> evidence/source.txt
-          python --version > evidence/python.txt
-          uname -a > evidence/platform.txt
-      - name: Full clean canonical suite
-        run: python -m pytest -q -p no:cacheprovider --junitxml=evidence/results.xml > evidence/tests.log 2>&1
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: canonical-a
-          path: evidence/
-
-  comparisons:
-    needs: canonical
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
-    strategy:
-      fail-fast: false
-      matrix:
-        state: [pr124-b, pr124-pr123-c]
-    env:
-      QT_QPA_PLATFORM: offscreen
-      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
-    steps:
+      - name: Retain frozen baseline dependency constraints
+        run: cp .github/regression-frozen-dependencies.txt /tmp/lab-frozen-dependencies.txt
       - uses: actions/checkout@v4
         with:
-          ref: 4fa377770254e8bfc7a09b49ecd09a72c63ccf6b
+          ref: c98ca72df97f7ee54427407d105605ee8b6ee310
           fetch-depth: 0
-      - name: Assemble C without a branch merge
-        if: matrix.state == 'pr124-pr123-c'
+      - name: Apply exact reviewed persistence patch without merging branches
         run: |
           git diff d5eb766bf64f73997ef808391e9d62d8996f031c a7e59078c79c298ea071a27ed63cdd91603ff98a -- youtube_strategy_engine.py strategy_lab_telemetry.py > /tmp/pr123.patch
           git apply --check /tmp/pr123.patch
@@ -70,19 +31,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - uses: actions/download-artifact@v4
-        with:
-          name: canonical-a
-          path: baseline-evidence
       - name: Install identical frozen dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libegl1
-          python -m pip install -r baseline-evidence/dependencies.txt
+          python -m pip install -r /tmp/lab-frozen-dependencies.txt
           mkdir evidence
           python -m pip freeze > evidence/dependencies.txt
-          diff baseline-evidence/dependencies.txt evidence/dependencies.txt
-      - name: Freeze source and environment
+          diff /tmp/lab-frozen-dependencies.txt evidence/dependencies.txt
+      - name: Freeze repaired source and environment
         run: |
           git rev-parse HEAD HEAD^{tree} > evidence/source.txt
           git status --porcelain --untracked-files=no >> evidence/source.txt
@@ -90,10 +47,10 @@ jobs:
           sha256sum youtube_strategy_engine.py strategy_lab_telemetry.py >> evidence/source.txt
           python --version > evidence/python.txt
           uname -a > evidence/platform.txt
-      - name: Full comparison suite
+      - name: Full repaired combined suite
         run: python -m pytest -q -p no:cacheprovider --junitxml=evidence/results.xml > evidence/tests.log 2>&1
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ${{ matrix.state }}
+          name: repaired-combined-c
           path: evidence/
