@@ -65,7 +65,7 @@ def context():
 @pytest.mark.parametrize("loaded_first", [True,False])
 def test_exact_strategy_survives_options_loading(app, loaded_first):
     page=StrategyLabPage()
-    options={"strategies":[{"id":"other","name":"Other"},{"id":SID,"name":"Exact","revision":"fixture-revision-1"}],"faithful_count":2}
+    options={"strategies":[{"id":"other","name":"Other"},{"id":SID,"name":"Exact"}],"faithful_count":2}
     if loaded_first:page.set_options(options)
     page.select_strategy_id(SID)
     if not loaded_first:page.set_options(options)
@@ -95,7 +95,7 @@ def test_context_handoff_without_validation_submission(app,active):
 
 
 def test_normal_validation_defaults_unchanged(app):
-    page=StrategyLabPage();page.set_options({"strategies":[{"id":SID,"name":"Exact"}],"faithful_count":1})
+    page=StrategyLabPage();page.set_options({"strategies":[{"id":SID,"name":"Exact","revision":"fixture-revision-1"}],"faithful_count":1})
     page.set_capability_status({"capabilities": {"library": True, "cloud": True}})
     requests=[];page.run_requested.connect(requests.append);page._emit_run();p=requests[0]
     assert (p["training_fraction"],p["validation_fraction"])==(.6,.2)
