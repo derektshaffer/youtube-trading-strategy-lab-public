@@ -21,7 +21,7 @@ jobs:
         run: cp .github/regression-frozen-dependencies.txt /tmp/lab-frozen-dependencies.txt
       - uses: actions/checkout@v4
         with:
-          ref: c98ca72df97f7ee54427407d105605ee8b6ee310
+          ref: 1b6150ab7d412382053d46f85e1a664f093c9b07
           fetch-depth: 0
       - name: Apply exact reviewed persistence patch without merging branches
         run: |
@@ -47,6 +47,8 @@ jobs:
           sha256sum youtube_strategy_engine.py strategy_lab_telemetry.py >> evidence/source.txt
           python --version > evidence/python.txt
           uname -a > evidence/platform.txt
+      - name: Verify corrected UI contracts before the full suite
+        run: python -m pytest -q -p no:cacheprovider test_readonly_validation_native.py test_saved_search_results.py --junitxml=evidence/ui-results.xml > evidence/ui-tests.log 2>&1
       - name: Full repaired combined suite
         run: python -m pytest -q -p no:cacheprovider --junitxml=evidence/results.xml > evidence/tests.log 2>&1
       - uses: actions/upload-artifact@v4
