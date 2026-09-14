@@ -11,6 +11,8 @@ import stock_strategy_finder as finder
 import youtube_strategy_engine as engine
 
 
+from test_optimizer_feature_reuse import empty_backtest_fixture
+
 ET = ZoneInfo("America/New_York")
 
 
@@ -156,7 +158,8 @@ class StockStrategyFinderPolicyTests(unittest.TestCase):
 
 
 class OptimizerLedgerTests(unittest.TestCase):
-    def test_optimizer_returns_unique_exact_configuration_ledger(self):
+    @patch("youtube_strategy_engine.run_backtest", new=empty_backtest_fixture)
+    def test_optimizer_stub_returns_unique_exact_configuration_ledger(self):
         rows = []
         for day in (18, 19, 20, 21, 22, 23):
             for minute in range(8):
@@ -199,7 +202,8 @@ class OptimizerLedgerTests(unittest.TestCase):
 
 
 class OptimizerResumeTests(unittest.TestCase):
-    def test_resume_skips_families_already_completed_in_checkpoint(self):
+    @patch("youtube_strategy_engine.run_backtest", new=empty_backtest_fixture)
+    def test_resume_stub_skips_families_already_completed_in_checkpoint(self):
         rows = []
         for day in (18, 19, 20, 21, 22, 23):
             for minute in range(8):
@@ -367,7 +371,8 @@ class FinderEvidenceTierTests(unittest.TestCase):
             )
         )
 
-    def test_regime_diagnostics_are_descriptive_and_use_frozen_winner(self):
+    @patch("stock_strategy_finder.run_backtest", new=empty_backtest_fixture)
+    def test_regime_stub_diagnostics_are_descriptive_and_use_frozen_winner(self):
         rows = []
         for day in (18, 19, 20, 21, 22, 23):
             for minute in range(8):

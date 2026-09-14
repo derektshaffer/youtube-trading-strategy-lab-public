@@ -6,6 +6,8 @@ import strategy_lab_execution as execution
 import youtube_strategy_engine as engine
 
 
+from test_optimizer_feature_reuse import empty_backtest_fixture
+
 class FakeMarket:
     historical_feed = "iex"
     live_feed = "iex"
@@ -35,7 +37,8 @@ class MemoryMainStore:
 
 
 class StrategyLabExecutionTests(unittest.TestCase):
-    def test_real_optimizer_completes_quick_and_very_deep_profiles(self):
+    @patch("youtube_strategy_engine.run_backtest", new=empty_backtest_fixture)
+    def test_optimizer_orchestration_with_stub_completes_requested_profiles(self):
         rows = []
         start = datetime(2026, 8, 18, 13, 30, tzinfo=timezone.utc)
         for day in range(8):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import unittest
+from unittest.mock import patch
 
 import youtube_strategy_engine as engine
 from trading_intelligence_core import (
@@ -54,7 +55,7 @@ class AvwapIntegrationTests(unittest.TestCase):
         self.assertEqual(rules["avwap_pullback_tolerance_pct"], 0.6)
         self.assertTrue(rules["exit_below_avwap"])
 
-    def test_session_open_avwap_is_available_to_backtest(self):
+    def test_session_open_avwap_features_do_not_authorize_backtest(self):
         strategy = {
             "id": "avwap-session",
             "name": "Session AVWAP research probe",
@@ -70,17 +71,11 @@ class AvwapIntegrationTests(unittest.TestCase):
         frame = engine.add_indicators(engine.bars_to_frame(bars()), strategy)
         self.assertTrue(frame["avwap"].notna().any())
         self.assertTrue(frame["avwap_anchor_active"].fillna(False).any())
-        report = engine.run_backtest(
-            bars(),
-            strategy,
-            "TEST",
-            engine.BacktestSettings(
-                spread_bps=0,
-                slippage_bps=0,
-                allow_extended_hours=False,
-            ),
-        )
-        self.assertIn("metrics", report)
+        with patch.object(engine, "_empty_backtest") as numerical_entry:
+            with self.assertRaisesRegex(engine.AppError, "Legacy performance execution is disabled"):
+                engine.run_backtest(bars(), strategy, "TEST", engine.BacktestSettings(
+                    spread_bps=0, slippage_bps=0, allow_extended_hours=False))
+            numerical_entry.assert_not_called()
 
     def test_saved_rising_avwap_pullback_is_upgraded_without_reupload(self):
         strategy = {

@@ -4,11 +4,20 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pandas as pd
+import pytest
 
 import youtube_strategy_engine as engine
 
 
 UTC = timezone.utc
+
+
+def empty_backtest_fixture(rows, candidate, symbol, settings=None, **prepared):
+    """Inert generated dependency for orchestration tests; never executes rows."""
+    result = engine._empty_backtest(settings or engine.BacktestSettings(), candidate, symbol)
+    result.update(fixture_only=True, numerical_execution=False, certified=False,
+                  production_eligible=False, orders_enabled=False)
+    return result
 
 
 def raw_rows(count: int = 80) -> list[dict]:
@@ -80,7 +89,7 @@ def test_indicator_signature_tracks_anchored_vwap_inputs():
     assert engine.strategy_indicator_signature(baseline) != engine.strategy_indicator_signature(tolerance_change)
 
 
-def test_prepared_record_payload_is_backtest_equivalent():
+def test_prepared_record_payload_does_not_authorize_backtest():
     rows = raw_rows()
     candidate = strategy()
     settings = engine.BacktestSettings(
@@ -93,26 +102,16 @@ def test_prepared_record_payload_is_backtest_equivalent():
     prepared = engine.add_indicators(frame, candidate)
     prepared_records, prepared_sessions = engine.prepare_backtest_payload(prepared)
 
-    baseline = engine.run_backtest(
-        [],
-        candidate,
-        "TEST",
-        settings,
-        prepared_indicators=prepared,
-    )
-    reused = engine.run_backtest(
-        [],
-        candidate,
-        "TEST",
-        settings,
-        prepared_indicators=prepared,
-        prepared_records=prepared_records,
-        prepared_sessions=prepared_sessions,
-    )
-
-    assert reused["metrics"] == baseline["metrics"]
-    assert reused["trades"] == baseline["trades"]
-    assert reused["equity_curve"] == baseline["equity_curve"]
+    # Prepared indicators, records and session caches are all caller supplied.
+    with patch.object(engine, "_empty_backtest") as numerical_entry:
+        for payload in (
+            {"prepared_indicators": prepared},
+            {"prepared_indicators": prepared, "prepared_records": prepared_records,
+             "prepared_sessions": prepared_sessions},
+        ):
+            with pytest.raises(engine.AppError, match="Legacy performance execution is disabled"):
+                engine.run_backtest([], candidate, "TEST", settings, **payload)
+        numerical_entry.assert_not_called()
 
 
 def test_screening_reuses_invariant_indicator_preparation():

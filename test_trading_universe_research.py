@@ -6,6 +6,9 @@ from trading_universe_research import cross_stock_generalization
 from youtube_strategy_engine import BacktestSettings
 
 
+from test_optimizer_feature_reuse import empty_backtest_fixture
+from unittest.mock import patch
+
 def bars(start_price: float, up: bool):
     rows = []
     price = start_price
@@ -26,7 +29,8 @@ def bars(start_price: float, up: bool):
 
 
 class UniverseResearchTests(unittest.TestCase):
-    def test_report_preserves_symbol_count_and_frozen_rules(self):
+    @patch("trading_universe_research.run_backtest", new=empty_backtest_fixture)
+    def test_stub_report_preserves_symbol_count_and_frozen_rules(self):
         strategy = {
             "id": "s1",
             "name": "Simple",

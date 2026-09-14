@@ -128,7 +128,7 @@ def test_persistent_mode_never_retries_provider_rejection_or_integrity(tmp_path,
     assert calls == [1]
 
 
-def test_power_failure_stops_service_before_reference_access(tmp_path, monkeypatch):
+def test_power_failure_stops_service_before_reference_access(tmp_path, monkeypatch, fixture_canonical_source):
     import systematic_trader.collection_runtime as runtime
     class Power:
         process = None

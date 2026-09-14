@@ -128,7 +128,7 @@ def test_target_fixture_bounded_replay_no_promotion(tmp_path,monkeypatch):
     with pytest.raises(ContractError):c.register(a)
 
 
-def test_market_closed_and_next_session_not_fake_sealed(tmp_path):
+def test_market_closed_and_next_session_not_fake_sealed(tmp_path, fixture_canonical_source):
     from systematic_trader.collection_runtime import serve
     now=timestamp_ns('2026-09-07T12:00:00-04:00') # Labor Day; only calendar-provided Tuesday exists.
     def cycle(s,now_ns):freeze_session(s,'2026-09-08',reg(),assets(),now_ns)
@@ -138,7 +138,7 @@ def test_market_closed_and_next_session_not_fake_sealed(tmp_path):
     assert status(tmp_path,now)['phase']=='Awaiting session'
 
 
-def test_scheduler_premarket_rth_postclose_and_seal(tmp_path,monkeypatch):
+def test_scheduler_premarket_rth_postclose_and_seal(tmp_path,monkeypatch, fixture_canonical_source):
     from systematic_trader.collection_runtime import serve
     import systematic_trader.__main__ as main
     import systematic_trader.tradier as tradier

@@ -260,7 +260,9 @@ def test_historical_import_cannot_contaminate_live_capture_journal(tmp_path):
         assert ledger.verify()==before
 
 
-def test_cli_rejects_relative_alias_of_default_live_data_directory(capsys):
-    from systematic_trader.__main__ import main
-    assert main(['--data-dir','.systematic-trader/capture','import-history','--file','unread-file.json'])==2
+def test_cli_rejects_relative_alias_of_default_live_data_directory(capsys, fixture_canonical_source, tmp_path, monkeypatch):
+    import systematic_trader.__main__ as cli
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, 'DEFAULT_DATA', tmp_path/'.systematic-trader/capture')
+    assert cli.main(['--data-dir','.systematic-trader/capture','import-history','--file','unread-file.json'])==2
     assert 'explicit_data_directory' in capsys.readouterr().err

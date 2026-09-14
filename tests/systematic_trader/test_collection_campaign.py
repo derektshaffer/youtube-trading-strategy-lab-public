@@ -214,7 +214,7 @@ def test_reconnecting_disconnect_budget_and_integrity_failure(tmp_path):
     with pytest.raises(ContractError):reconnecting_stream(s,'day','tradier',['fixture-secret'],['FIXTURE'],Stop(),runner=corrupt)
 
 
-def test_runtime_single_cycle_and_stop(tmp_path):
+def test_runtime_single_cycle_and_stop(tmp_path, fixture_canonical_source):
     from systematic_trader.collection_runtime import serve
     def cycle(service,now_ns):
         service.register('day',OPEN,CLOSE,{'FIXTURE':ID},provenance={'source':'fixture-calendar'})
@@ -253,17 +253,25 @@ def test_closed_segment_append_attempt_detected(tmp_path):
     with pytest.raises(ContractError,match='closed_segment_changed'):s.replay()
 
 
-def test_owner_lock_refuses_second_process(tmp_path):
+def test_owner_lock_refuses_second_process(tmp_path, fixture_canonical_source):
     import fcntl
     registered(tmp_path,128)
     with (tmp_path/'owner.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
-        code='from systematic_trader.collection_runtime import serve; import sys; serve(sys.argv[1],once=True)'
-        result=subprocess.run([sys.executable,'-c',code,str(tmp_path)],capture_output=True,text=True)
+        code = """from pathlib import Path
+import sys
+from systematic_trader import service
+from systematic_trader.collection_runtime import serve
+service.CANONICAL_ROOT = Path(sys.argv[2])
+def forbidden(*args, **kwargs):
+    raise AssertionError('lock must precede provider callback')
+serve(sys.argv[1], once=True, cycle=forbidden)
+"""
+        result=subprocess.run([sys.executable,'-c',code,str(tmp_path),str(fixture_canonical_source)],capture_output=True,text=True,timeout=10)
     assert result.returncode!=0 and 'collector_already_running' in result.stderr
 
 
-def test_stop_request_prevents_source_access(tmp_path):
+def test_stop_request_prevents_source_access(tmp_path, fixture_canonical_source):
     from systematic_trader.collection_runtime import serve
     tmp_path.mkdir(exist_ok=True);(tmp_path/'stop.request').write_text('{}')
     def forbidden(*a,**kw):raise AssertionError('stop precedes network')
@@ -271,7 +279,7 @@ def test_stop_request_prevents_source_access(tmp_path):
     assert s.records()[-1]['kind']=='stopped'
 
 
-def test_persisted_reference_cooldown_survives_restart(tmp_path):
+def test_persisted_reference_cooldown_survives_restart(tmp_path, fixture_canonical_source):
     from systematic_trader.collection_runtime import serve
     called=[]
     def cycle(service,now_ns):called.append(now_ns)

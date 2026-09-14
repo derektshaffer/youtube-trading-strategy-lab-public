@@ -95,13 +95,14 @@ def test_context_handoff_without_validation_submission(app,active):
 
 
 def test_normal_validation_defaults_unchanged(app):
-    page=StrategyLabPage();page.set_options({"strategies":[{"id":SID,"name":"Exact"}],"faithful_count":1})
+    page=StrategyLabPage();page.set_options({"strategies":[{"id":SID,"name":"Exact","revision":"fixture-revision-1"}],"faithful_count":1})
     page.set_capability_status({"capabilities": {"library": True, "cloud": True}})
     requests=[];page.run_requested.connect(requests.append);page._emit_run();p=requests[0]
     assert (p["training_fraction"],p["validation_fraction"])==(.6,.2)
     assert (p["minimum_training_trades"],p["minimum_validation_trades"])==(5,2)
     assert p["run_walk_forward"] and (p["wf_folds"],p["wf_history_sessions"],p["wf_test_sessions"])==(3,8,2)
     assert p["search_depth"]==36 and p["history_days"]==30
+    assert p["strategy_revisions"]=={SID:"fixture-revision-1"}
 
 
 def test_view_controller_calls_only_read_endpoint(app, setup):
@@ -122,3 +123,11 @@ def test_view_controller_calls_only_read_endpoint(app, setup):
     assert [(m,p) for m,p,_ in calls]==[("POST","/v1/saved-validations/result")]
     assert [b.text() for b in controller.dialog.findChildren(QPushButton)]==["Close"]
     controller.dialog.close();window.close()
+
+
+def test_missing_strategy_revision_prevents_run_emission(app):
+    page=StrategyLabPage();page.set_options({"strategies":[{"id":SID,"name":"Exact"}],"faithful_count":1})
+    page.set_capability_status({"capabilities": {"library": True, "cloud": True}})
+    requests=[];page.run_requested.connect(requests.append);page._emit_run()
+    assert requests==[]
+    page.close()
