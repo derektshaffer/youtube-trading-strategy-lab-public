@@ -18,6 +18,8 @@ from zoneinfo import ZoneInfo
 import youtube_strategy_engine as engine
 
 
+from test_optimizer_feature_reuse import empty_backtest_fixture
+
 ET = ZoneInfo("America/New_York")
 
 
@@ -154,7 +156,12 @@ class FinalHoldoutIntegrityTests(unittest.TestCase):
         with patch.object(engine, "run_backtest", return_value=fake_result), patch.object(
             engine,
             "behavior_ab_comparison",
-            return_value={},
+            return_value={
+                "legacy_settings": engine.asdict(engine.legacy_behavior_settings(settings)),
+                "optimized_settings": engine.asdict(settings),
+                "legacy_metrics": dict(fake_result["metrics"]),
+                "optimized_metrics": dict(fake_result["metrics"]),
+            },
         ):
             result = engine.finalize_stock_optimization(
                 report,
@@ -470,7 +477,7 @@ class RuleTests(unittest.TestCase):
 
 
 class ParallelOptimizerTests(unittest.TestCase):
-    def test_parallel_family_optimizer_matches_sequential_ranking(self):
+    def test_unscoped_sequential_parallel_and_timeframe_optimizers_are_rejected(self):
         rows = []
         for day in (18, 19, 20, 21, 22, 23):
             for minute in range(10):
@@ -515,38 +522,18 @@ class ParallelOptimizerTests(unittest.TestCase):
             max_execution_variants_per_finalist=1,
             selection_mode="validated",
         )
-        sequential = engine.optimize_stock_strategies(
-            rows,
-            strategies,
-            "TEST",
-            settings,
-            optimizer,
-            finalize_holdout=False,
-        )
-        parallel = engine.optimize_stock_strategies_parallel(
-            rows,
-            strategies,
-            "TEST",
-            settings,
-            optimizer,
-            max_workers=2,
-            finalize_holdout=False,
-        )
+        # Neither a worker process nor a timeframe wrapper owns execution scope.
+        for optimize, extra in (
+            (engine.optimize_stock_strategies, {"finalize_holdout": False}),
+            (engine.optimize_stock_strategies_parallel, {"max_workers": 2, "finalize_holdout": False}),
+            (engine.optimize_stock_timeframes, {"timeframes": ("1Min", "5Min")}),
+        ):
+            with self.subTest(route=optimize.__name__):
+                with self.assertRaisesRegex(engine.AppError, "Legacy performance execution is disabled"):
+                    optimize(rows, strategies, "TEST", settings, optimizer, **extra)
 
-        self.assertEqual(
-            [item["source_strategy_id"] for item in parallel["rankings"]],
-            [item["source_strategy_id"] for item in sequential["rankings"]],
-        )
-        self.assertEqual(
-            parallel["winner"]["source_strategy_id"],
-            sequential["winner"]["source_strategy_id"],
-        )
-        self.assertEqual(parallel["strategies_tested"], sequential["strategies_tested"])
-        self.assertEqual(parallel["unique_configurations_tested"], sequential["unique_configurations_tested"])
-        self.assertEqual(parallel["parallelized_by"], "strategy_family")
-        self.assertGreaterEqual(parallel["parallel_workers"], 2)
-
-    def test_distributed_family_and_timeframe_merge_matches_single_process(self):
+    @patch("youtube_strategy_engine.run_backtest", new=empty_backtest_fixture)
+    def test_distributed_stub_ledger_matches_single_process_aggregation(self):
         rows = []
         for day in (18, 19, 20, 21, 22, 23):
             for minute in range(20):
@@ -704,43 +691,60 @@ class BacktestTests(unittest.TestCase):
             slippage_bps=0,
         )
 
-    def test_entry_uses_next_bar_open(self):
+    def test_next_bar_entry_rows_do_not_authorize_legacy_execution(self):
         rows = [bar(18, 0, 100, 101, 99, 100), bar(18, 1, 103, 104, 102, 103), bar(18, 2, 103, 104, 102, 103)]
-        result = engine.run_backtest(rows, simple_strategy(), "TEST", self.settings)
-        self.assertEqual(result["trades"][0]["entry_price"], 103.0)
+        # Fabricated rows/settings confer no owned execution scope.
+        with patch.object(engine, "_empty_backtest") as numerical_entry:
+            with self.assertRaisesRegex(engine.AppError, "Legacy performance execution is disabled"):
+                engine.run_backtest(rows, simple_strategy(), "TEST", self.settings)
+            numerical_entry.assert_not_called()
 
-    def test_same_bar_stop_and_target_uses_conservative_stop(self):
+    def test_ambiguous_exit_rows_do_not_authorize_legacy_execution(self):
         rows = [bar(18, 0, 100, 101, 99, 100), bar(18, 1, 100, 101, 99, 100), bar(18, 2, 100, 106, 94, 100)]
-        result = engine.run_backtest(rows, simple_strategy(), "TEST", self.settings)
-        self.assertEqual(result["trades"][0]["reason"], "Stop loss")
-        self.assertLess(result["trades"][0]["pnl"], 0)
+        # Fabricated rows/settings confer no owned execution scope.
+        with patch.object(engine, "_empty_backtest") as numerical_entry:
+            with self.assertRaisesRegex(engine.AppError, "Legacy performance execution is disabled"):
+                engine.run_backtest(rows, simple_strategy(), "TEST", self.settings)
+            numerical_entry.assert_not_called()
 
-    def test_adverse_opening_gap_uses_gap_price(self):
+    def test_opening_gap_rows_do_not_authorize_legacy_execution(self):
         rows = [bar(18, 0, 100, 101, 99, 100), bar(18, 1, 100, 101, 99, 100), bar(18, 2, 90, 94, 89, 92)]
-        result = engine.run_backtest(rows, simple_strategy(), "TEST", self.settings)
-        self.assertEqual(result["trades"][0]["exit_price"], 90.0)
+        # Fabricated rows/settings confer no owned execution scope.
+        with patch.object(engine, "_empty_backtest") as numerical_entry:
+            with self.assertRaisesRegex(engine.AppError, "Legacy performance execution is disabled"):
+                engine.run_backtest(rows, simple_strategy(), "TEST", self.settings)
+            numerical_entry.assert_not_called()
 
-    def test_costs_reduce_return(self):
+    def test_cost_settings_do_not_authorize_legacy_execution(self):
         rows = [bar(18, 0, 100, 101, 99, 100), bar(18, 1, 100, 101, 99, 100), bar(18, 2, 100, 106, 99, 105)]
-        free = engine.run_backtest(rows, simple_strategy(), "TEST", self.settings)
-        expensive = engine.run_backtest(rows, simple_strategy(), "TEST", engine.BacktestSettings(spread_bps=30, slippage_bps=20, fee_per_order=1))
-        self.assertGreater(free["metrics"]["net_pnl"], expensive["metrics"]["net_pnl"])
+        # Fabricated rows/settings confer no owned execution scope.
+        with patch.object(engine, "_empty_backtest") as numerical_entry:
+            with self.assertRaisesRegex(engine.AppError, "Legacy performance execution is disabled"):
+                engine.run_backtest(rows, simple_strategy(), "TEST", self.settings)
+            with self.assertRaisesRegex(engine.AppError, "Legacy performance execution is disabled"):
+                engine.run_backtest(rows, simple_strategy(), "TEST", engine.BacktestSettings(spread_bps=30, slippage_bps=20, fee_per_order=1))
+            numerical_entry.assert_not_called()
 
-    def test_short_strategy_is_rejected(self):
+    def test_execution_scope_is_required_before_short_strategy_validation(self):
         strategy = simple_strategy()
         strategy["direction"] = "short"
-        with self.assertRaisesRegex(engine.AppError, "Short-only"):
-            engine.run_backtest([bar(18, 0, 10, 11, 9, 10)], strategy, "TEST")
+        # Fabricated rows/settings confer no owned execution scope.
+        with patch.object(engine, "_empty_backtest") as numerical_entry:
+            with self.assertRaisesRegex(engine.AppError, "Legacy performance execution is disabled"):
+                engine.run_backtest([bar(18, 0, 10, 11, 9, 10)], strategy, "TEST")
+            numerical_entry.assert_not_called()
 
-    def test_holdout_is_chronological(self):
+    def test_partitioned_rows_do_not_authorize_legacy_holdout_execution(self):
         rows = []
         for day in (18, 19, 20, 21):
             rows.extend([bar(day, 0, 100, 101, 99, 100), bar(day, 1, 100, 101, 99, 100), bar(day, 2, 100, 106, 99, 105)])
-        result = engine.run_backtest(rows, simple_strategy(), "TEST", self.settings)
-        self.assertEqual(result["holdout_start"], "2026-08-20")
-        self.assertGreater(result["out_of_sample"]["trade_count"], 0)
+        # Fabricated rows/settings confer no owned execution scope.
+        with patch.object(engine, "_empty_backtest") as numerical_entry:
+            with self.assertRaisesRegex(engine.AppError, "Legacy performance execution is disabled"):
+                engine.run_backtest(rows, simple_strategy(), "TEST", self.settings)
+            numerical_entry.assert_not_called()
 
-    def test_layered_entries_can_overlap_without_multiplying_total_allocation(self):
+    def test_layered_entry_settings_do_not_authorize_legacy_execution(self):
         rows = [
             bar(18, 0, 100, 101, 99, 100),
             bar(18, 1, 100, 101, 99, 100),
@@ -757,15 +761,13 @@ class BacktestTests(unittest.TestCase):
             max_concurrent_positions=3,
             allow_extended_hours=False,
         )
-        result = engine.run_backtest(rows, simple_strategy(stop_loss_pct=20, reward_risk=10), "TEST", settings)
-        self.assertEqual(result["metrics"]["trade_count"], 3)
-        self.assertEqual([trade["trade_id"] for trade in result["trades"]], [1, 2, 3])
-        self.assertLessEqual(
-            sum(trade["entry_price"] * trade["quantity"] for trade in result["trades"]),
-            settings.starting_cash * settings.max_position_pct / 100.0 + 1,
-        )
+        # Fabricated rows/settings confer no owned execution scope.
+        with patch.object(engine, "_empty_backtest") as numerical_entry:
+            with self.assertRaisesRegex(engine.AppError, "Legacy performance execution is disabled"):
+                engine.run_backtest(rows, simple_strategy(stop_loss_pct=20, reward_risk=10), "TEST", settings)
+            numerical_entry.assert_not_called()
 
-    def test_extended_hours_can_trade_at_reduced_size(self):
+    def test_extended_hours_settings_do_not_authorize_legacy_execution(self):
         rows = [
             clock_bar(18, 17, 0, 10, 10.1, 9.9, 10),
             clock_bar(18, 17, 5, 10, 10.1, 9.9, 10),
@@ -790,77 +792,85 @@ class BacktestTests(unittest.TestCase):
             max_concurrent_positions=1,
             allow_extended_hours=False,
         )
-        extended = engine.run_backtest(rows, simple_strategy(), "TEST", enabled)
-        regular_only = engine.run_backtest(rows, simple_strategy(), "TEST", disabled)
-        self.assertEqual(extended["metrics"]["trade_count"], 1)
-        self.assertEqual(extended["trades"][0]["entry_session_type"], "extended")
-        self.assertEqual(regular_only["metrics"]["trade_count"], 0)
+        # Fabricated rows/settings confer no owned execution scope.
+        with patch.object(engine, "_empty_backtest") as numerical_entry:
+            with self.assertRaisesRegex(engine.AppError, "Legacy performance execution is disabled"):
+                engine.run_backtest(rows, simple_strategy(), "TEST", enabled)
+            with self.assertRaisesRegex(engine.AppError, "Legacy performance execution is disabled"):
+                engine.run_backtest(rows, simple_strategy(), "TEST", disabled)
+            numerical_entry.assert_not_called()
 
-    def test_strategy_end_time_can_be_ignored(self):
+    def test_session_end_settings_do_not_authorize_legacy_execution(self):
         rows = [
             clock_bar(18, 12, 0, 10, 10.1, 9.9, 10),
             clock_bar(18, 12, 5, 10, 10.1, 9.9, 10),
             clock_bar(18, 12, 10, 10, 10.1, 9.9, 10),
         ]
         strategy = simple_strategy(session_end="11:30")
-        ignored = engine.run_backtest(
-            rows,
-            strategy,
-            "TEST",
-            engine.BacktestSettings(
-                spread_bps=0,
-                slippage_bps=0,
-                max_concurrent_positions=1,
-                ignore_strategy_session_end=True,
-            ),
-        )
-        respected = engine.run_backtest(
-            rows,
-            strategy,
-            "TEST",
-            engine.BacktestSettings(
-                spread_bps=0,
-                slippage_bps=0,
-                max_concurrent_positions=1,
-                ignore_strategy_session_end=False,
-            ),
-        )
-        self.assertGreater(ignored["metrics"]["trade_count"], 0)
-        self.assertEqual(respected["metrics"]["trade_count"], 0)
+        # Fabricated rows/settings confer no owned execution scope.
+        with patch.object(engine, "_empty_backtest") as numerical_entry:
+            with self.assertRaisesRegex(engine.AppError, "Legacy performance execution is disabled"):
+                engine.run_backtest(
+                    rows,
+                    strategy,
+                    "TEST",
+                    engine.BacktestSettings(
+                        spread_bps=0,
+                        slippage_bps=0,
+                        max_concurrent_positions=1,
+                        ignore_strategy_session_end=True,
+                    ),
+                )
+            with self.assertRaisesRegex(engine.AppError, "Legacy performance execution is disabled"):
+                engine.run_backtest(
+                    rows,
+                    strategy,
+                    "TEST",
+                    engine.BacktestSettings(
+                        spread_bps=0,
+                        slippage_bps=0,
+                        max_concurrent_positions=1,
+                        ignore_strategy_session_end=False,
+                    ),
+                )
+            numerical_entry.assert_not_called()
 
-    def test_price_band_can_unlock_momentum_continuation_above_max(self):
+    def test_price_extension_settings_do_not_authorize_legacy_execution(self):
         rows = [
             bar(18, 0, 19.0, 19.2, 18.9, 19.0),
             bar(18, 1, 21.0, 21.2, 20.8, 21.0),
             bar(18, 2, 21.2, 21.4, 21.0, 21.2),
         ]
         strategy = simple_strategy(min_price=1.5, max_price=20, session_start="09:31")
-        unlocked = engine.run_backtest(
-            rows,
-            strategy,
-            "TEST",
-            engine.BacktestSettings(
-                spread_bps=0,
-                slippage_bps=0,
-                max_concurrent_positions=1,
-                allow_price_extension_after_qualification=True,
-            ),
-        )
-        locked = engine.run_backtest(
-            rows,
-            strategy,
-            "TEST",
-            engine.BacktestSettings(
-                spread_bps=0,
-                slippage_bps=0,
-                max_concurrent_positions=1,
-                allow_price_extension_after_qualification=False,
-            ),
-        )
-        self.assertEqual(unlocked["metrics"]["trade_count"], 1)
-        self.assertEqual(locked["metrics"]["trade_count"], 0)
+        # Fabricated rows/settings confer no owned execution scope.
+        with patch.object(engine, "_empty_backtest") as numerical_entry:
+            with self.assertRaisesRegex(engine.AppError, "Legacy performance execution is disabled"):
+                engine.run_backtest(
+                    rows,
+                    strategy,
+                    "TEST",
+                    engine.BacktestSettings(
+                        spread_bps=0,
+                        slippage_bps=0,
+                        max_concurrent_positions=1,
+                        allow_price_extension_after_qualification=True,
+                    ),
+                )
+            with self.assertRaisesRegex(engine.AppError, "Legacy performance execution is disabled"):
+                engine.run_backtest(
+                    rows,
+                    strategy,
+                    "TEST",
+                    engine.BacktestSettings(
+                        spread_bps=0,
+                        slippage_bps=0,
+                        max_concurrent_positions=1,
+                        allow_price_extension_after_qualification=False,
+                    ),
+                )
+            numerical_entry.assert_not_called()
 
-    def test_pullback_strategy_requires_pullback_then_breakout(self):
+    def test_pullback_rules_do_not_authorize_legacy_execution(self):
         strategy = simple_strategy()
         strategy["name"] = "Micro Pullback / Bull Flag Test"
         rows = [
@@ -870,20 +880,21 @@ class BacktestTests(unittest.TestCase):
             bar(18, 3, 9.7, 10.6, 9.7, 10.5),
             bar(18, 4, 10.5, 10.7, 10.4, 10.6),
         ]
-        result = engine.run_backtest(
-            rows,
-            strategy,
-            "TEST",
-            engine.BacktestSettings(
-                spread_bps=0,
-                slippage_bps=0,
-                max_concurrent_positions=1,
-                require_pullback_breakout_for_pullback_strategies=True,
-            ),
-        )
-        self.assertEqual(result["metrics"]["trade_count"], 1)
-        entry_time = datetime.fromisoformat(result["trades"][0]["entry_time"].replace("Z", "+00:00")).astimezone(ET)
-        self.assertEqual((entry_time.hour, entry_time.minute), (9, 34))
+        # Fabricated rows/settings confer no owned execution scope.
+        with patch.object(engine, "_empty_backtest") as numerical_entry:
+            with self.assertRaisesRegex(engine.AppError, "Legacy performance execution is disabled"):
+                engine.run_backtest(
+                    rows,
+                    strategy,
+                    "TEST",
+                    engine.BacktestSettings(
+                        spread_bps=0,
+                        slippage_bps=0,
+                        max_concurrent_positions=1,
+                        require_pullback_breakout_for_pullback_strategies=True,
+                    ),
+                )
+            numerical_entry.assert_not_called()
 
     def test_optimizer_execution_variants_cover_entry_behavior_choices(self):
         settings = engine.BacktestSettings(
@@ -2477,11 +2488,8 @@ class StreamlitSmokeTests(unittest.TestCase):
                     "paper_positions": [{"id": "paper1", "symbol": "NVDA", "quantity": 2, "entry_price": 100, "status": "open"}],
                 }
             )
-            result = engine.run_backtest(
-                [bar(18, 0, 100, 101, 99, 100), bar(18, 1, 100, 101, 99, 100), bar(18, 2, 100, 106, 99, 105)],
-                simple_strategy(),
-                "NVDA",
-            )
+            # Saved UI fixture only; no numerical engine or execution authority.
+            result = empty_backtest_fixture([], simple_strategy(), "NVDA")
             snapshot = engine.snapshot_metrics(
                 "NVDA",
                 {"latestTrade": {"p": 100}, "latestQuote": {"bp": 99.9, "ap": 100.1}, "dailyBar": {"v": 10000, "vw": 98, "h": 102}, "prevDailyBar": {"c": 95}},
@@ -2516,7 +2524,7 @@ class DynamicExitBacktestTests(unittest.TestCase):
         self.assertTrue(rules["exit_below_vwap"])
         self.assertTrue(rules["exit_below_fast_ema"])
 
-    def test_trailing_stop_updates_causally_and_can_exit_next_bar(self):
+    def test_trailing_stop_rules_do_not_authorize_legacy_execution(self):
         rows = [
             bar(18, 0, 10.0, 10.1, 9.9, 10.0),
             bar(18, 1, 10.0, 11.0, 9.9, 10.9),
@@ -2527,24 +2535,23 @@ class DynamicExitBacktestTests(unittest.TestCase):
             reward_risk=None,
             trailing_stop_pct=5,
         )
-        result = engine.run_backtest(
-            rows,
-            strategy,
-            "TEST",
-            engine.BacktestSettings(
-                spread_bps=0,
-                slippage_bps=0,
-                max_concurrent_positions=1,
-                allow_extended_hours=False,
-            ),
-        )
-        self.assertEqual(result["metrics"]["trade_count"], 1)
-        trade = result["trades"][0]
-        self.assertEqual(trade["reason"], "Stop loss")
-        self.assertIsNone(trade["target_price"])
-        self.assertGreater(trade["pnl"], 0)
+        # Fabricated rows/settings confer no owned execution scope.
+        with patch.object(engine, "_empty_backtest") as numerical_entry:
+            with self.assertRaisesRegex(engine.AppError, "Legacy performance execution is disabled"):
+                engine.run_backtest(
+                    rows,
+                    strategy,
+                    "TEST",
+                    engine.BacktestSettings(
+                        spread_bps=0,
+                        slippage_bps=0,
+                        max_concurrent_positions=1,
+                        allow_extended_hours=False,
+                    ),
+                )
+            numerical_entry.assert_not_called()
 
-    def test_close_based_vwap_exit_fills_at_next_bar_open(self):
+    def test_caller_prepared_vwap_cannot_authorize_legacy_execution(self):
         rows = [
             bar(18, 0, 10.0, 10.1, 9.9, 10.0),
             bar(18, 1, 10.0, 11.2, 9.8, 11.0),
@@ -2559,30 +2566,24 @@ class DynamicExitBacktestTests(unittest.TestCase):
         prepared = engine.add_indicators(engine.bars_to_frame(rows), strategy)
         prepared.loc[1, "vwap"] = 12.0
 
-        result = engine.run_backtest(
-            rows,
-            strategy,
-            "TEST",
-            engine.BacktestSettings(
-                spread_bps=0,
-                slippage_bps=0,
-                max_concurrent_positions=1,
-                allow_extended_hours=False,
-            ),
-            prepared_indicators=prepared,
-        )
+        # Fabricated rows/settings confer no owned execution scope.
+        with patch.object(engine, "_empty_backtest") as numerical_entry:
+            with self.assertRaisesRegex(engine.AppError, "Legacy performance execution is disabled"):
+                engine.run_backtest(
+                    rows,
+                    strategy,
+                    "TEST",
+                    engine.BacktestSettings(
+                        spread_bps=0,
+                        slippage_bps=0,
+                        max_concurrent_positions=1,
+                        allow_extended_hours=False,
+                    ),
+                    prepared_indicators=prepared,
+                )
+            numerical_entry.assert_not_called()
 
-        self.assertEqual(result["metrics"]["trade_count"], 1)
-        trade = result["trades"][0]
-        self.assertEqual(trade["reason"], "VWAP loss")
-        self.assertEqual(trade["entry_price"], 10.0)
-        self.assertEqual(trade["exit_price"], 9.0)
-        self.assertEqual(
-            trade["exit_time"],
-            rows[2]["t"],
-        )
-
-    def test_time_limit_exit_fills_at_bar_open_when_limit_has_elapsed(self):
+    def test_time_limit_rules_do_not_authorize_legacy_execution(self):
         rows = [
             bar(18, 0, 10.0, 10.1, 9.9, 10.0),
             bar(18, 1, 10.0, 10.2, 9.8, 10.0),
@@ -2593,25 +2594,23 @@ class DynamicExitBacktestTests(unittest.TestCase):
             reward_risk=None,
             max_hold_minutes=1,
         )
-        result = engine.run_backtest(
-            rows,
-            strategy,
-            "TEST",
-            engine.BacktestSettings(
-                spread_bps=0,
-                slippage_bps=0,
-                max_concurrent_positions=1,
-                allow_extended_hours=False,
-            ),
-        )
+        # Fabricated rows/settings confer no owned execution scope.
+        with patch.object(engine, "_empty_backtest") as numerical_entry:
+            with self.assertRaisesRegex(engine.AppError, "Legacy performance execution is disabled"):
+                engine.run_backtest(
+                    rows,
+                    strategy,
+                    "TEST",
+                    engine.BacktestSettings(
+                        spread_bps=0,
+                        slippage_bps=0,
+                        max_concurrent_positions=1,
+                        allow_extended_hours=False,
+                    ),
+                )
+            numerical_entry.assert_not_called()
 
-        self.assertEqual(result["metrics"]["trade_count"], 1)
-        trade = result["trades"][0]
-        self.assertEqual(trade["reason"], "Time limit")
-        self.assertEqual(trade["exit_price"], 8.0)
-        self.assertEqual(trade["exit_time"], rows[2]["t"])
-
-    def test_breakeven_rule_moves_stop_after_r_trigger(self):
+    def test_breakeven_rules_do_not_authorize_legacy_execution(self):
         rows = [
             bar(18, 0, 10.0, 10.1, 9.9, 10.0),
             bar(18, 1, 10.0, 11.2, 9.9, 11.0),
@@ -2622,20 +2621,21 @@ class DynamicExitBacktestTests(unittest.TestCase):
             reward_risk=None,
             move_stop_to_breakeven_at_r=1.0,
         )
-        result = engine.run_backtest(
-            rows,
-            strategy,
-            "TEST",
-            engine.BacktestSettings(
-                spread_bps=0,
-                slippage_bps=0,
-                max_concurrent_positions=1,
-                allow_extended_hours=False,
-            ),
-        )
-        trade = result["trades"][0]
-        self.assertEqual(trade["reason"], "Stop loss")
-        self.assertAlmostEqual(trade["pnl"], 0.0, places=6)
+        # Fabricated rows/settings confer no owned execution scope.
+        with patch.object(engine, "_empty_backtest") as numerical_entry:
+            with self.assertRaisesRegex(engine.AppError, "Legacy performance execution is disabled"):
+                engine.run_backtest(
+                    rows,
+                    strategy,
+                    "TEST",
+                    engine.BacktestSettings(
+                        spread_bps=0,
+                        slippage_bps=0,
+                        max_concurrent_positions=1,
+                        allow_extended_hours=False,
+                    ),
+                )
+            numerical_entry.assert_not_called()
 
     def test_optimizer_does_not_inject_fixed_target_into_dynamic_exit_source(self):
         strategy = simple_strategy(
@@ -2670,7 +2670,7 @@ class DynamicExitBacktestTests(unittest.TestCase):
         self.assertTrue(rules["move_stop_to_breakeven_after_scale_out"])
         self.assertTrue(rules["trail_below_vwap"])
 
-    def test_multi_stage_scale_out_executes_and_moves_remainder_to_breakeven(self):
+    def test_scale_out_rules_do_not_authorize_legacy_execution(self):
         rows = [
             bar(18, 0, 10.0, 10.1, 9.9, 10.0),
             bar(18, 1, 10.0, 12.2, 9.5, 12.0),
@@ -2685,32 +2685,21 @@ class DynamicExitBacktestTests(unittest.TestCase):
             ],
             move_stop_to_breakeven_after_scale_out=True,
         )
-        result = engine.run_backtest(
-            rows,
-            strategy,
-            "TEST",
-            engine.BacktestSettings(
-                spread_bps=0,
-                slippage_bps=0,
-                max_concurrent_positions=1,
-                allow_extended_hours=False,
-            ),
-        )
-        self.assertEqual(result["metrics"]["trade_count"], 1)
-        trade = result["trades"][0]
-        self.assertEqual(trade["reason"], "Stop loss")
-        self.assertEqual(len(trade["partial_exits"]), 2)
-        self.assertIn("stage 1", trade["partial_exits"][0]["reason"].lower())
-        self.assertIn("stage 2", trade["partial_exits"][1]["reason"].lower())
-        self.assertGreater(trade["scaled_out_quantity"], 0)
-        self.assertGreater(trade["pnl"], 0)
-        self.assertGreater(trade["max_favorable_excursion_pct"], 0)
-        self.assertGreaterEqual(trade["max_adverse_excursion_pct"], 0)
-        self.assertEqual(trade["management_event_count"], 2)
-        attribution = result["exit_attribution"]
-        self.assertIn("Stop loss", attribution["final_exit_reasons"])
-        self.assertEqual(len(attribution["partial_exit_reasons"]), 2)
-        self.assertGreater(attribution["partial_exit_net_pnl"], 0)
+        # Fabricated rows/settings confer no owned execution scope.
+        with patch.object(engine, "_empty_backtest") as numerical_entry:
+            with self.assertRaisesRegex(engine.AppError, "Legacy performance execution is disabled"):
+                engine.run_backtest(
+                    rows,
+                    strategy,
+                    "TEST",
+                    engine.BacktestSettings(
+                        spread_bps=0,
+                        slippage_bps=0,
+                        max_concurrent_positions=1,
+                        allow_extended_hours=False,
+                    ),
+                )
+            numerical_entry.assert_not_called()
 
     def test_legacy_single_scale_out_remains_supported(self):
         rules = engine.normalize_machine_rules(

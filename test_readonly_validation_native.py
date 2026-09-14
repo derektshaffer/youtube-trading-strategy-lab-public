@@ -65,7 +65,7 @@ def context():
 @pytest.mark.parametrize("loaded_first", [True,False])
 def test_exact_strategy_survives_options_loading(app, loaded_first):
     page=StrategyLabPage()
-    options={"strategies":[{"id":"other","name":"Other"},{"id":SID,"name":"Exact"}],"faithful_count":2}
+    options={"strategies":[{"id":"other","name":"Other"},{"id":SID,"name":"Exact","revision":"fixture-revision-1"}],"faithful_count":2}
     if loaded_first:page.set_options(options)
     page.select_strategy_id(SID)
     if not loaded_first:page.set_options(options)
@@ -102,6 +102,7 @@ def test_normal_validation_defaults_unchanged(app):
     assert (p["minimum_training_trades"],p["minimum_validation_trades"])==(5,2)
     assert p["run_walk_forward"] and (p["wf_folds"],p["wf_history_sessions"],p["wf_test_sessions"])==(3,8,2)
     assert p["search_depth"]==36 and p["history_days"]==30
+    assert p["strategy_revisions"]=={SID:"fixture-revision-1"}
 
 
 def test_view_controller_calls_only_read_endpoint(app, setup):
@@ -122,3 +123,11 @@ def test_view_controller_calls_only_read_endpoint(app, setup):
     assert [(m,p) for m,p,_ in calls]==[("POST","/v1/saved-validations/result")]
     assert [b.text() for b in controller.dialog.findChildren(QPushButton)]==["Close"]
     controller.dialog.close();window.close()
+
+
+def test_missing_strategy_revision_prevents_run_emission(app):
+    page=StrategyLabPage();page.set_options({"strategies":[{"id":SID,"name":"Exact"}],"faithful_count":1})
+    page.set_capability_status({"capabilities": {"library": True, "cloud": True}})
+    requests=[];page.run_requested.connect(requests.append);page._emit_run()
+    assert requests==[]
+    page.close()

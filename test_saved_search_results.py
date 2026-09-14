@@ -65,7 +65,8 @@ def test_certified_saved_validation_is_read_only_and_fail_closed(window, app, sa
             assert 'No strategy-validation verdict' in controller.page.verdict.text()
             assert not hasattr(controller.page, 'strength')
         else:
-            assert 'FAILED (execution completed)' in controller.page.verdict.text()
+            assert 'DISCOVERY / BACKTESTER CALIBRATION FAILED' in controller.page.verdict.text()
+            assert 'No strategy conclusion permitted' in controller.page.verdict.text()
             assert '13/100' in controller.page.strength.text()
         controller.dialog.close()
     for _ in range(3):
