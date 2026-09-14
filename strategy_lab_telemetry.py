@@ -29,7 +29,7 @@ class CheckpointTelemetry:
 
     def serialize(self, data):
         with self.measure("serialization_seconds"):
-            raw = json.dumps(data, separators=(",", ":"), default=str, allow_nan=False).encode("utf-8")
+            raw = json.dumps(data, separators=(",", ":"), ensure_ascii=False, default=str, allow_nan=False).encode("utf-8")
         if self.active:
             self.parts["checkpoint_bytes"] = max(self.parts.get("checkpoint_bytes", 0), len(raw))
         return raw

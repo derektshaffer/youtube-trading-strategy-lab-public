@@ -2130,6 +2130,14 @@ class GitHubCloudBackup:
     ) -> str:
         """Commit an oversized library with a shallow, conflict-safe Git push."""
 
+        # A deterministic capacity failure is not a concurrent-writer conflict.
+        # Refuse before cloning/pushing; retries cannot make this blob smaller.
+        if len(serialized) > 100 * 1024 * 1024:
+            raise AppError(
+                "The GitHub cloud-backup blob exceeds the 100 MiB file size limit "
+                "[size_limit]. No push was attempted; durable job state is unchanged."
+            )
+
         def run_git(arguments: list[str], *, cwd: Path | None, environment: dict[str, str]) -> str:
             try:
                 result = subprocess.run(
@@ -2149,13 +2157,17 @@ class GitHubCloudBackup:
                 raise AppError("The large GitHub cloud-backup push timed out; no force push was attempted.") from exc
             if result.returncode:
                 detail = f"{result.stderr}\n{result.stdout}".casefold()
-                if any(marker in detail for marker in ("non-fast-forward", "fetch first", "stale info", "rejected")):
+                if arguments[0] == "push" and any(marker in detail for marker in ("non-fast-forward", "fetch first", "stale info")):
                     raise AppError(
                         "The GitHub cloud backup changed while this app was saving. "
                         "Restore or inspect the latest cloud backup before retrying so newer records are not overwritten."
                     )
+                from hybrid_runtime.github_git_upload import _failure_diagnostic
+                category, explanation = _failure_diagnostic(detail)
                 raise AppError(
-                    "The large GitHub cloud-backup Git push failed. The saved library and completed research shards were not discarded."
+                    f"The large GitHub cloud-backup Git operation failed [{category}]. "
+                    + explanation
+                    + " The saved library and completed research shards were not discarded."
                 )
             return str(result.stdout or "").strip()
 
@@ -2352,6 +2364,7 @@ class GitHubCloudBackup:
         serialized = metric.serialize(data) if metric is not None else json.dumps(
             data,
             separators=(",", ":"),
+            ensure_ascii=False,
             default=str,
             allow_nan=False,
         ).encode("utf-8")
