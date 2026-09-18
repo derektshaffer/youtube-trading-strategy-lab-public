@@ -125,6 +125,8 @@ def persist_store(
     try:
         return store.save(data)
     except AppError as exc:
+        if "[size_limit]" in str(exc):
+            raise
         if "Saved locally, but permanent cloud backup failed:" not in str(exc):
             raise
         last_error: Exception = exc
@@ -134,6 +136,8 @@ def persist_store(
         try:
             return store.sync_cloud_backup()
         except AppError as exc:
+            if "[size_limit]" in str(exc):
+                raise
             last_error = exc
     raise AppError(
         f"Research result is saved locally but cloud persistence still failed after retries: {last_error}"
@@ -1332,8 +1336,17 @@ def print_predictive_ml_router_summary(library: dict[str, Any]) -> None:
         )
 
 
+def preflight_research_storage(store: StrategyStore, data: dict[str, Any]) -> None:
+    checker = getattr(getattr(store, "cloud_backup", None), "storage_preflight", None)
+    if callable(checker):
+        status = checker(data)
+        print(f"Cloud storage preflight: {status['stored_bytes']} bytes; "
+              f"{status['headroom_bytes']} bytes safe headroom; all evidence retained.", flush=True)
+
+
 def main() -> int:
     store = build_store()
+    preflight_research_storage(store, store.load_latest())
     outbox_store = build_live_learning_outbox_store()
     live_learning = drain_live_learning_outbox(store, outbox_store)
     if live_learning.get("queued"):
@@ -1502,6 +1515,7 @@ def main() -> int:
                 + ".",
                 flush=True,
             )
+        preflight_research_storage(store, data)
         data, job = claim_next_research_job(
             data,
             worker_id,

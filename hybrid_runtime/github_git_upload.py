@@ -139,6 +139,11 @@ def write_large_library(
     expected_revision: str, message: str,
 ) -> str:
     """Publish one verified blob; never merge, rebase, force, or replay a push."""
+    from cloud_library_storage import CloudStorageError, check_write_size
+    try:
+        check_write_size(len(serialized))
+    except CloudStorageError as exc:
+        raise GitHubLibraryError(str(exc)) from exc
     expected = _sha(expected_revision)
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", config.repository):
         raise GitHubLibraryError("Large-library repository must use owner/name form.")
