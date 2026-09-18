@@ -13,13 +13,19 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import plistlib
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 from typing import Any
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from hybrid_runtime.build_identity import read_build_identity, stamp_bundle_identity
 
 
 APP_NAME = "Trading Intelligence"
@@ -68,16 +74,27 @@ def build_number(raw: str) -> str:
     return (digits[-12:] if digits else "1") or "1"
 
 
-def update_bundle_version(app: Path, version: str, build: str) -> None:
-    info = app / "Contents" / "Info.plist"
-    with info.open("rb") as handle:
-        data = plistlib.load(handle)
-    data["CFBundleDisplayName"] = APP_NAME
-    data["CFBundleName"] = APP_NAME
-    data["CFBundleShortVersionString"] = bundle_short_version(version)
-    data["CFBundleVersion"] = build_number(build)
-    with info.open("wb") as handle:
-        plistlib.dump(data, handle, sort_keys=True)
+def update_bundle_version(
+    app: Path,
+    version: str,
+    build: str,
+    *,
+    commit: str = "",
+) -> dict[str, str]:
+    """Stamp both Apple's numeric fields and the exact internal-beta identity."""
+
+    clean = clean_version(version)
+    short = bundle_short_version(clean)
+    number = build_number(build)
+    return stamp_bundle_identity(
+        app,
+        version_label=clean,
+        channel="internal_beta",
+        commit=commit,
+        bundle_short_version=short,
+        bundle_build=number,
+        display_name=APP_NAME,
+    )
 
 
 def signature_metadata(app: Path) -> dict[str, Any]:
@@ -113,7 +130,6 @@ def signature_metadata(app: Path) -> dict[str, Any]:
         ),
         "",
     )
-    # Ad-hoc signatures have no Developer ID authority chain and no usable team.
     developer_id = any("Developer ID Application" in authority for authority in authorities)
     return {
         "codesign_valid": verification.returncode == 0,
@@ -155,8 +171,29 @@ def main(argv: list[str] | None = None) -> int:
     version = clean_version(args.version)
     short_version = bundle_short_version(version)
     build = build_number(args.build_number)
+    commit = str(args.commit or "").strip()
 
-    update_bundle_version(app, short_version, build)
+    expected_identity = update_bundle_version(
+        app,
+        version,
+        build,
+        commit=commit,
+    )
+    embedded_identity = read_build_identity(
+        info_plist=app / "Contents" / "Info.plist",
+        environment={},
+    )
+    for key, expected in (
+        ("version", expected_identity["version_label"]),
+        ("bundle_short_version", expected_identity["bundle_short_version"]),
+        ("build_number", expected_identity["build_number"]),
+        ("channel", expected_identity["channel"]),
+        ("commit", expected_identity["commit"]),
+    ):
+        if str(embedded_identity.get(key) or "") != str(expected or ""):
+            raise SystemExit(
+                f"The embedded beta build identity does not match the requested {key}."
+            )
     # Updating Info.plist invalidates the previous ad-hoc signature. Re-sign the
     # internal beta before verifying. A future Developer ID release workflow must
     # re-sign with its own identity after this packaging metadata is applied.
@@ -206,7 +243,8 @@ def main(argv: list[str] | None = None) -> int:
         "version": version,
         "bundle_short_version": short_version,
         "build_number": build,
-        "commit": str(args.commit or "").strip(),
+        "commit": commit,
+        "bundle_identity": embedded_identity,
         "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "architecture": "arm64",
         "app_bytes": directory_size(app),

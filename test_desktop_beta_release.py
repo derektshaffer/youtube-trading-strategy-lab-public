@@ -17,6 +17,7 @@ def test_beta_packaging_sources_parse_and_version_helpers_are_bounded():
     for path in (
         "scripts/package_desktop_beta.py",
         "scripts/check_desktop_release_readiness.py",
+        "hybrid_runtime/build_identity.py",
     ):
         ast.parse(read(path), filename=path)
     assert clean_version(" 0.2.0 beta / unsafe ") == "0.2.0betaunsafe"
@@ -42,6 +43,7 @@ def test_internal_beta_workflow_is_structurally_gated_and_never_publishes_a_rele
     assert "retention-days: 30" in workflow
     assert "internal_beta_only" in workflow
     assert "public_distribution_ready" in workflow
+    assert "--commit \"$GITHUB_SHA\"" in workflow
     assert "gh release" not in workflow
     assert "create-release" not in workflow.lower()
     assert "APPLE_ID" not in workflow
@@ -49,10 +51,20 @@ def test_internal_beta_workflow_is_structurally_gated_and_never_publishes_a_rele
     assert "APPLE_DEVELOPER_ID" not in workflow
 
 
-def test_packager_records_exact_distribution_state_and_checksums():
+def test_packager_records_exact_distribution_state_checksums_and_bundle_identity():
     source = read("scripts/package_desktop_beta.py")
-    assert '"channel": "internal_beta"' in source
+    identity = read("hybrid_runtime/build_identity.py")
+    assert 'channel="internal_beta"' in source
     assert '"bundle_short_version": short_version' in source
+    # The manifest must record what was read back from the actual Info.plist,
+    # not merely the values the packager attempted to write.
+    assert 'embedded_identity = read_build_identity(' in source
+    assert '"bundle_identity": embedded_identity' in source
+    assert "The embedded beta build identity does not match" in source
+    assert "stamp_bundle_identity(" in source
+    assert 'VERSION_LABEL_KEY = "TradingIntelligenceVersionLabel"' in identity
+    assert 'CHANNEL_KEY = "TradingIntelligenceBuildChannel"' in identity
+    assert 'SOURCE_COMMIT_KEY = "TradingIntelligenceSourceCommit"' in identity
     assert '"public_distribution_ready"' in source
     assert '"developer_id_signed"' in source
     assert '"stapled_ticket_valid"' in source

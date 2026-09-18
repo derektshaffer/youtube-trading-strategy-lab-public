@@ -29,12 +29,28 @@ def test_distribution_helpers_parse_and_stamp_numeric_bundle_metadata(tmp_path):
     info = contents / "Info.plist"
     with info.open("wb") as handle:
         plistlib.dump({"CFBundleIdentifier": "com.derektshaffer.trading-intelligence"}, handle)
-    result = stamp(app, version="0.3.0-beta.8", build="run-0042")
+    commit = "f" * 40
+    result = stamp(
+        app,
+        version="0.3.0-beta.8",
+        build="run-0042",
+        commit=commit,
+    )
     with info.open("rb") as handle:
         data = plistlib.load(handle)
-    assert result == {"bundle_short_version": "0.3.0", "bundle_build": "0042"}
+    assert result == {
+        "version_label": "0.3.0-beta.8",
+        "channel": "notarized_candidate",
+        "commit": commit,
+        "bundle_short_version": "0.3.0",
+        "build_number": "0042",
+    }
     assert data["CFBundleShortVersionString"] == "0.3.0"
     assert data["CFBundleVersion"] == "0042"
+    assert data["CFBundleDisplayName"] == "Trading Intelligence"
+    assert data["TradingIntelligenceVersionLabel"] == "0.3.0-beta.8"
+    assert data["TradingIntelligenceBuildChannel"] == "notarized_candidate"
+    assert data["TradingIntelligenceSourceCommit"] == commit
 
 
 def test_notarized_candidate_workflow_is_manual_only_never_publishes_and_scopes_secrets():

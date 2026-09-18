@@ -9,6 +9,7 @@ from typing import Any
 
 from PySide6.QtWidgets import QApplication, QFileDialog, QPushButton
 
+from hybrid_runtime.build_identity import read_build_identity
 from hybrid_runtime.security import write_private_text_file
 from hybrid_runtime.support_snapshot import build_support_snapshot, snapshot_json
 
@@ -114,11 +115,16 @@ class MainWindow(ResearchMLMainWindow):
             runtime_health = self.runtime.request_json("GET", "/health")
             from hybrid_runtime.system_health_summary import build_system_health_summary
 
-            result = build_system_health_summary(
-                self.runtime.data_dir,
-                library_summary=library,
-                runtime_health=runtime_health,
+            result = dict(
+                build_system_health_summary(
+                    self.runtime.data_dir,
+                    library_summary=library,
+                    runtime_health=runtime_health,
+                )
             )
+            # Read this in the GUI process so it identifies the exact .app the
+            # user launched, not merely the packaged Python sidecar.
+            result["build"] = read_build_identity()
             self.active_job_id = ""
             self.active_purpose = ""
             self.last_system_health_result = dict(result)

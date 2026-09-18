@@ -81,6 +81,24 @@ def _repository_name(value: Any) -> str:
     return _clean_text(raw.rsplit("/", 1)[-1] if raw else "", limit=120)
 
 
+def _safe_build_identity(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, Mapping) else {}
+    commit = _clean_text(source.get("commit"), limit=64)
+    return {
+        "version": _clean_text(source.get("version"), limit=64),
+        "bundle_short_version": _clean_text(
+            source.get("bundle_short_version"), limit=32
+        ),
+        "build_number": _clean_text(source.get("build_number"), limit=32),
+        "channel": _clean_text(source.get("channel"), limit=48),
+        "commit": commit,
+        "commit_short": _clean_text(
+            source.get("commit_short") or commit[:12], limit=16
+        ),
+        "packaged": bool(source.get("packaged")),
+    }
+
+
 def build_support_snapshot(
     health: Mapping[str, Any],
     *,
@@ -160,6 +178,7 @@ def build_support_snapshot(
         "created_at": current.isoformat().replace("+00:00", "Z"),
         "product": "Trading Intelligence Desktop",
         "research_only": True,
+        "build": _safe_build_identity(source.get("build")),
         "platform": {
             "system": platform.system(),
             "release": platform.release(),
