@@ -23,6 +23,9 @@ from urllib.request import Request, urlopen
 import zlib
 
 from .contracts import canonical_json
+from cloud_library_storage import (
+    CloudStorageError, compression_enabled, decode_library, encode_library,
+)
 
 
 GITHUB_API_URL = "https://api.github.com"
@@ -238,7 +241,10 @@ class GitHubJSONFile:
         if digest.hexdigest() != blob_sha:
             raise GitHubLibraryError("The downloaded research library failed Git blob integrity verification.")
         try:
+            raw, self._compressed_storage = decode_library(raw)
             decoded = json.loads(raw.decode("utf-8"))
+        except CloudStorageError as exc:
+            raise GitHubLibraryError(str(exc)) from exc
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise GitHubLibraryError("The remote research library is not valid UTF-8 JSON.") from exc
         if not isinstance(decoded, dict):
@@ -260,7 +266,13 @@ class GitHubJSONFile:
             raise GitHubLibraryConflict("GitHub branch moved before the research-library update.")
 
         compact = canonical_json(dict(document))
-        serialized = compact.encode("utf-8")
+        try:
+            serialized = encode_library(
+                compact.encode("utf-8"),
+                compress=(compression_enabled() or getattr(self, "_compressed_storage", False)),
+            )
+        except CloudStorageError as exc:
+            raise GitHubLibraryError(str(exc)) from exc
         if len(serialized) > GITHUB_LIBRARY_API_SAFE_BYTES:
             from .github_git_upload import write_large_library
 
@@ -278,7 +290,7 @@ class GitHubJSONFile:
         blob = self._request(
             self._api("git/blobs"),
             method="POST",
-            payload={"content": compact, "encoding": "utf-8"},
+            payload={"content": serialized.decode("utf-8"), "encoding": "utf-8"},
             expected_statuses=(201,),
         )
         blob_sha = str((blob or {}).get("sha") or "").strip()

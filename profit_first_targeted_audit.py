@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 from copy import deepcopy
 import json
+from cloud_library_storage import decode_library
 import os
 from pathlib import Path
 from typing import Any
@@ -216,7 +217,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    library = json.loads(Path(args.library).read_text(encoding="utf-8"))
+    library = json.loads(decode_library(Path(args.library).read_bytes())[0])
     requested = next(
         (
             item

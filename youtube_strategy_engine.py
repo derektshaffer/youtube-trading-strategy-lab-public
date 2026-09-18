@@ -34,6 +34,17 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 from strategy_lab_telemetry import timed_checkpoint_io
+from cloud_library_storage import (
+    CloudStorageError,
+    HARD_LIMIT_BYTES,
+    WRITE_LIMIT_BYTES,
+    WORK_RESERVE_BYTES,
+    check_write_size,
+    compression_enabled,
+    decode_library,
+    encode_library,
+    storage_preflight,
+)
 
 from anchored_vwap_engine import (
     SUPPORTED_AVWAP_ANCHOR_MODES,
@@ -2294,7 +2305,10 @@ class GitHubCloudBackup:
                     raise AppError("GitHub returned the cloud backup in an unsupported encoding.")
                 content = "".join(str(blob.get("content") or "").split())
                 raw = base64.b64decode(content, validate=True)
+            raw, self._compressed_storage = decode_library(raw)
             library = json.loads(raw.decode("utf-8"))
+        except CloudStorageError as exc:
+            raise AppError(str(exc)) from exc
         except (binascii.Error, UnicodeDecodeError, ValueError) as exc:
             raise AppError("The GitHub cloud backup is damaged or is not a valid JSON strategy library.") from exc
         if not isinstance(library, dict) or not isinstance(library.get("strategies"), list):
@@ -2322,6 +2336,17 @@ class GitHubCloudBackup:
         if include_raw:
             result["_raw_bytes"] = raw
         return result
+
+    def storage_preflight(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Check capacity before claiming work; never mutate a library or queue."""
+        raw = json.dumps(data, separators=(",", ":"), ensure_ascii=False,
+                         default=str, allow_nan=False).encode("utf-8")
+        try:
+            return storage_preflight(
+                raw, compress=(compression_enabled() or getattr(self, "_compressed_storage", False)),
+            )
+        except CloudStorageError as exc:
+            raise AppError(str(exc)) from exc
 
     def save_library(
         self,
@@ -2368,6 +2393,13 @@ class GitHubCloudBackup:
             default=str,
             allow_nan=False,
         ).encode("utf-8")
+        try:
+            serialized = encode_library(
+                serialized,
+                compress=(compression_enabled() or getattr(self, "_compressed_storage", False)),
+            )
+        except CloudStorageError as exc:
+            raise AppError(str(exc)) from exc
         if len(serialized) > GITHUB_CONTENTS_API_SAFE_BYTES:
             sha = self._save_large_library(
                 serialized,
@@ -2630,6 +2662,14 @@ class StrategyStore:
                 if callable(revision_reader):
                     revision = revision_reader()
                     library_exists = revision is not None
+                    if revision is not None and isinstance(revision.get("size"), int):
+                        status["storage_bytes"] = revision["size"]
+                        status["storage_hard_limit_bytes"] = HARD_LIMIT_BYTES
+                        status["storage_safe_limit_bytes"] = WRITE_LIMIT_BYTES
+                        try:
+                            check_write_size(revision["size"], reserve_bytes=WORK_RESERVE_BYTES)
+                        except CloudStorageError as exc:
+                            verification_error = str(exc)
                 else:
                     # Compatibility for tests/custom backup adapters that predate
                     # the lightweight metadata API.
@@ -2662,6 +2702,7 @@ class StrategyStore:
             and verified
             and status.get("write_verified")
             and not status.get("last_error")
+            and not verification_error
         )
         status["verification_error"] = verification_error
         status["local_path"] = str(self.path)
